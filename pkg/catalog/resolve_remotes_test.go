@@ -10,6 +10,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRemoteCatalogsFromContext_NilConfig(t *testing.T) {
@@ -62,4 +63,19 @@ func TestRemoteCatalogsFromContext_CreatesRemotes(t *testing.T) {
 	assert.Len(t, remotes, 2)
 	assert.Equal(t, "reg-1", remotes[0].Name())
 	assert.Equal(t, "reg-2", remotes[1].Name())
+}
+
+func TestRemoteCatalogsFromContext_PropagatesInsecure(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{Name: "reg-1", Type: config.CatalogTypeOCI, URL: "oci://127.0.0.1:5000/scafctl", Insecure: true},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	remotes := RemoteCatalogsFromContext(ctx, logr.Discard())
+	require.Len(t, remotes, 1)
+	assert.True(t, remotes[0].(*RemoteCatalog).insecure)
 }

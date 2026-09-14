@@ -4,9 +4,14 @@
 package catalog
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -769,6 +774,108 @@ func TestLocalCatalog_SaveLoad_RoundTrip(t *testing.T) {
 		// Verify annotations are preserved
 		assert.Equal(t, "custom-value", info.Annotations["custom-key"])
 	})
+}
+
+func makeBundleTarForTest(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+
+	manifest := map[string]any{
+		"version": 1,
+		"root":    ".",
+		"files":   make([]map[string]any, 0, len(files)),
+	}
+
+	for relPath, content := range files {
+		data := []byte(content)
+		manifest["files"] = append(manifest["files"].([]map[string]any), map[string]any{
+			"path":   filepath.ToSlash(relPath),
+			"size":   len(data),
+			"digest": digest.FromBytes(data).String(),
+		})
+
+		header := &tar.Header{
+			Name: filepath.ToSlash(relPath),
+			Mode: 0o644,
+			Size: int64(len(data)),
+		}
+		require.NoError(t, tw.WriteHeader(header))
+		_, err := tw.Write(data)
+		require.NoError(t, err)
+	}
+
+	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
+	require.NoError(t, err)
+
+	manifestHeader := &tar.Header{
+		Name: ".scafctl/bundle-manifest.json",
+		Mode: 0o644,
+		Size: int64(len(manifestJSON)),
+	}
+	require.NoError(t, tw.WriteHeader(manifestHeader))
+	_, err = tw.Write(manifestJSON)
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+
+	return buf.Bytes()
+}
+
+func TestLocalCatalog_FetchWithBundle_PreservesBundledFiles_and_LockFile(t *testing.T) {
+	ctx := context.Background()
+	cat := newTestCatalog(t)
+
+	expectedFiles := map[string]string{
+		"config/app.yaml": "name: demo\nversion: 1.0.0\n",
+		"scripts/run.sh":  "#!/bin/sh\necho hello\n",
+	}
+	bundleData := makeBundleTarForTest(t, expectedFiles)
+	lockData := []byte("lockfile content")
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "bundle-roundtrip",
+		Version: semver.MustParse("1.2.3"),
+	}
+	content := []byte("name: bundle-roundtrip\nversion: 1.2.3\n")
+	Layers := []Layer{
+		{
+			MediaType: MediaTypeSolutionBundle,
+			Data:      bundleData,
+		},
+		{
+			MediaType: MediaTypeSolutionLock,
+			Data:      lockData,
+		},
+	}
+	_, err := cat.Store(ctx, ref, content, bundleData, nil, false, Layers...)
+	require.NoError(t, err)
+
+	fetchedContent, fetchedLayers, info, err := cat.FetchWithLayer(ctx, ref, MediaTypeSolutionBundle, MediaTypeSolutionLock)
+	require.NoError(t, err)
+	assert.Equal(t, content, fetchedContent)
+	assert.Len(t, fetchedLayers, 2)
+	assert.NotEmpty(t, fetchedLayers[MediaTypeSolutionBundle])
+	assert.Equal(t, lockData, fetchedLayers[MediaTypeSolutionLock])
+	assert.Equal(t, ref.Name, info.Reference.Name)
+	assert.Equal(t, ref.Version.String(), info.Reference.Version.String())
+
+	tr := tar.NewReader(bytes.NewReader(fetchedLayers[MediaTypeSolutionBundle]))
+	actualFiles := map[string]string{}
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		if header.Name == ".scafctl/bundle-manifest.json" {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		require.NoError(t, err)
+		actualFiles[header.Name] = string(data)
+	}
+	assert.Equal(t, expectedFiles, actualFiles)
 }
 
 func TestIsTarMediaType(t *testing.T) {

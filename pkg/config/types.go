@@ -74,6 +74,7 @@ type CatalogConfig struct {
 	Type              string            `json:"type" yaml:"type" mapstructure:"type" doc:"Catalog type" example:"filesystem" maxLength:"50"`
 	Path              string            `json:"path,omitempty" yaml:"path,omitempty" mapstructure:"path" doc:"Path for filesystem catalogs" maxLength:"4096" example:"~/.config/scafctl/catalog"`
 	URL               string            `json:"url,omitempty" yaml:"url,omitempty" mapstructure:"url" doc:"URL for remote catalogs" maxLength:"2048" example:"https://catalog.example.com"`
+	Insecure          bool              `json:"insecure,omitempty" yaml:"insecure,omitempty" mapstructure:"insecure" doc:"Allow insecure TLS/HTTP for local development and test registries"`
 	Auth              *AuthConfig       `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration"`
 	AuthProvider      string            `json:"authProvider,omitempty" yaml:"authProvider,omitempty" mapstructure:"authProvider" doc:"Auth handler name for automatic token injection (e.g. github, gcp, entra)" maxLength:"64" example:"github"`
 	AuthScope         string            `json:"authScope,omitempty" yaml:"authScope,omitempty" mapstructure:"authScope" doc:"OAuth scope for auth provider token requests" maxLength:"1024" example:"https://management.azure.com/.default"`

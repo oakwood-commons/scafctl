@@ -1,0 +1,85 @@
+# e2e fixture: solution using only built-in providers + bundle.include.
+# Copied and adapted from examples/catalog/bundling-example/solution.yaml;
+# owned by e2e/testdata so example-doc edits can't silently break these specs.
+#
+# Build: scafctl package solution -f solution.yaml --dry-run
+# Build: scafctl package solution -f solution.yaml --version 1.0.0
+# Run:   scafctl run resolver builtin-bundle -r environment=dev
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: builtin-bundle
+  displayName: Builtin Bundle E2E Fixture
+  category: developer-tools
+  tags:
+    - bundling
+    - e2e
+  description: |
+    E2E fixture: bundle configuration with include patterns, static file
+    references (auto-discovered), and dynamic file paths (explicit includes),
+    using only built-in providers.
+
+# Bundle configuration controls what files are packaged
+bundle:
+  # Explicit patterns for files that can't be auto-discovered
+  # (e.g., files loaded via dynamic CEL expressions)
+  include:
+    - "configs/**/*.yaml"
+
+spec:
+  resolvers:
+    # User provides the target environment
+    environment:
+      type: string
+      description: "Target environment (dev, staging, prod)"
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: environment
+          - provider: static
+            inputs:
+              value: dev
+
+    # STATIC PATH: This file reference is auto-discovered during build
+    # No bundle.include needed - scafctl finds it automatically
+    deployment-template:
+      type: string
+      description: "Kubernetes deployment template"
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              path: "templates/deployment.yaml"
+
+    # DYNAMIC PATH: This path is computed at runtime using CEL
+    # Requires bundle.include pattern because scafctl can't analyze it
+    # The dry-run output will show a "dynamic path warning" for this
+    config-file:
+      type: any
+      description: "Environment-specific configuration"
+      dependsOn:
+        - environment
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              path:
+                expr: "'configs/' + _.environment + '.yaml'"
+
+    # Combine template with config values
+    rendered-deployment:
+      type: string
+      description: "Rendered deployment manifest"
+      dependsOn:
+        - deployment-template
+        - config-file
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template:
+                rslvr: deployment-template
+              data:
+                rslvr: config-file
