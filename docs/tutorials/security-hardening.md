@@ -334,7 +334,10 @@ authentication can make the server run a solution.
 - [ ] Keep `apiServer.host` at `127.0.0.1` unless the server is deliberately exposed
 - [ ] Set `apiServer.allowedHosts` -- empty accepts any `Host` (no DNS-rebinding protection)
 - [ ] Enable `apiServer.tls`, or terminate TLS at an authenticating proxy
-- [ ] Enable `apiServer.rateLimit.global` -- rate limiting is OFF unless configured
-- [ ] Block `/v1/admin/` at the proxy when fronting the server with one
+- [ ] Tune `apiServer.rateLimit.global` -- a 100-request/minute per-IP limit applies by default
+- [ ] Block the admin routes at the proxy when fronting the server with one -- the
+      prefix follows `apiServer.apiVersion` (`/v1/admin/` by default). The startup
+      warning prints the resolved path, but only when the server binds a
+      non-loopback address with authentication disabled
 - [ ] Enable `apiServer.audit` to retain a record of executed solutions
 - [ ] Do not expose `/metrics` publicly -- it bypasses API middleware by design

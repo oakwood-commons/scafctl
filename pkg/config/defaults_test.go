@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 func TestDefaultsYAML_IsValidConfig(t *testing.T) {
@@ -708,4 +710,40 @@ func TestMergeAuthDefaults_CustomOAuth2_AddsNew(t *testing.T) {
 	// New handler should be added.
 	second, _ := customOAuth2[1].(map[string]any)
 	assert.Equal(t, "new-handler", second["name"])
+}
+
+// TestAPIRateLimitConfig_EffectiveGlobal pins the "unset means default, not
+// disabled" contract that every server entry point relies on. Manager.Load
+// installs the same values through Viper, so this is what keeps an embedder's
+// directly-constructed config from silently running without a limiter.
+func TestAPIRateLimitConfig_EffectiveGlobal(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unset falls back to the built-in default", func(t *testing.T) {
+		t.Parallel()
+
+		got := APIRateLimitConfig{}.EffectiveGlobal()
+		require.NotNil(t, got, "EffectiveGlobal must never return nil")
+		assert.Equal(t, settings.DefaultAPIRateLimitMaxRequests, got.MaxRequests)
+		assert.Equal(t, settings.DefaultAPIRateLimitWindow, got.Window)
+		assert.False(t, got.TrustProxy, "proxy headers must not be trusted by default")
+	})
+
+	t.Run("configured value is returned unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		configured := &APIRateLimitEntry{MaxRequests: 7, Window: "30s", TrustProxy: true}
+		got := APIRateLimitConfig{Global: configured}.EffectiveGlobal()
+		assert.Same(t, configured, got, "a configured limit must not be copied or replaced")
+	})
+
+	t.Run("an explicit zero is preserved, not treated as unset", func(t *testing.T) {
+		t.Parallel()
+
+		// MaxRequests 0 denies every request. That is a footgun, but it must not
+		// be silently rewritten into the permissive default.
+		got := APIRateLimitConfig{Global: &APIRateLimitEntry{}}.EffectiveGlobal()
+		require.NotNil(t, got)
+		assert.Zero(t, got.MaxRequests)
+	})
 }

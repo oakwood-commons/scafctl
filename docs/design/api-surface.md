@@ -313,8 +313,9 @@ The API server is configured via the `apiServer` section in the scafctl config f
 | `auth.azureOIDC.enabled` | bool | `false` | Enable Entra OIDC auth |
 | `auth.azureOIDC.tenantId` | string | — | Azure AD tenant ID |
 | `auth.azureOIDC.clientId` | string | — | Azure AD client ID |
-| `rateLimit.global.maxRequests` | int | — | Max requests per window |
-| `rateLimit.global.window` | string | — | Rate limit window duration |
+| `rateLimit.global.maxRequests` | int | `100` | Max requests per window. Applied by default -- unset does not mean disabled, and `0` denies every request, so running unlimited means setting a very high value |
+| `rateLimit.global.window` | string | `1m` | Rate limit window duration |
+| `rateLimit.global.trustProxy` | bool | `false` | Key the limiter on `X-Forwarded-For`/`X-Real-IP` instead of `RemoteAddr`. Only enable behind a proxy that sanitizes those headers, or clients can spoof their IP to bypass the limit |
 | `audit.enabled` | bool | `false` | Enable audit logging |
 | `tracing.enabled` | bool | `false` | Enable OpenTelemetry tracing |
 

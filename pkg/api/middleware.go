@@ -156,10 +156,12 @@ func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServer
 	router.Use(makePrefixOnly(adminPrefix, middleware.AdminAuthorization(cfg.Auth.AzureOIDC.Enabled, lgr)))
 
 	// 5. Rate limiting
-	if cfg.RateLimit.Global != nil {
-		window := parseTimeoutOrDefault(cfg.RateLimit.Global.Window, settings.DefaultAPIRateLimitWindow)
-		router.Use(makeVersionedOnly(middleware.RateLimit(ctx, cfg.RateLimit.Global.MaxRequests, window, cfg.RateLimit.Global.TrustProxy)))
-	}
+	// EffectiveGlobal substitutes the built-in default when none is configured,
+	// so an embedder passing a zero-valued config gets the same limiter as
+	// `scafctl serve` rather than no limiter at all.
+	globalLimit := cfg.RateLimit.EffectiveGlobal()
+	window := parseTimeoutOrDefault(globalLimit.Window, settings.DefaultAPIRateLimitWindow)
+	router.Use(makeVersionedOnly(middleware.RateLimit(ctx, globalLimit.MaxRequests, window, globalLimit.TrustProxy)))
 
 	// 6. Request size limits
 	maxReqSize := cfg.MaxRequestSize
