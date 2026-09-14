@@ -296,11 +296,11 @@ The API server is configured via the `apiServer` section in the scafctl config f
 | `apiVersion` | string | `v1` | URL path version prefix |
 | `requestTimeout` | string | `60s` | Per-request timeout (also used for `ReadTimeout`/`WriteTimeout`) |
 | `idleTimeout` | string | `60s` | Keep-alive idle connection timeout. When unset, Go falls back to `ReadTimeout`, so the default matches `requestTimeout` rather than extending it. |
-| `maxHeaderBytes` | int | `1048576` | Max size of request headers in bytes (max configurable: 4 MB) |
+| `maxHeaderBytes` | int | `1048576` | Max size of request headers in bytes. Capped at 4 MB; a larger value is **rejected at startup** by config validation. |
 | `shutdownTimeout` | string | `30s` | Graceful shutdown window |
 | `maxConcurrent` | int | `1000` | Max concurrent in-flight requests |
 | `maxRequestSize` | int64 | `10485760` | Max request body size (bytes) |
-| `allowedHosts` | []string | -- | Permitted `Host` header values (DNS-rebinding protection). **Empty means every Host is accepted.** Supports `*.example.com` wildcards (subdomains at any depth, but **not** the bare apex -- list it separately). Applies to `/v1/*` only; `/health` and `/metrics` are exempt so k8s probes keep working. |
+| `allowedHosts` | []string | -- | Permitted `Host` header values (DNS-rebinding protection). **Empty means every Host is accepted.** Supports `*.example.com` wildcards (subdomains at any depth, but **not** the bare apex -- list it separately). A bare `*` is the explicit accept-everything opt-out; a non-empty list whose entries are *all* blank or malformed is **rejected at startup** rather than silently disabling the check. Applies to `/v1/*` only; `/health` and `/metrics` are exempt so k8s probes keep working. |
 | `compression.level` | int | `6` | Gzip compression level |
 | `cors.enabled` | bool | `false` | Enable CORS |
 | `cors.allowedOrigins` | []string | — | Allowed origins |

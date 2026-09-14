@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -537,6 +538,81 @@ func TestLoggingConfig_Validate(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+		})
+	}
+}
+
+// TestAPIServerConfig_Validate_MaxHeaderBytes asserts the advertised 4MB
+// ceiling is actually enforced. The `maximum` struct tag documents it for
+// schema consumers but the config loader never applies struct tags, so without
+// this check an operator could configure an unbounded per-connection header
+// buffer despite the documented guarantee.
+func TestAPIServerConfig_Validate_MaxHeaderBytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		value   int
+		wantErr bool
+	}{
+		{"unset uses the default", 0, false},
+		{"below the cap", 1 << 20, false},
+		{"exactly at the cap", settings.MaxAPIMaxHeaderBytes, false},
+		{"one byte over the cap", settings.MaxAPIMaxHeaderBytes + 1, true},
+		{"far over the cap", 1 << 30, true},
+		{"negative", -1, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{APIServer: APIServerConfig{MaxHeaderBytes: tt.value}}
+
+			err := cfg.Validate()
+			if !tt.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "apiServer")
+			assert.Contains(t, err.Error(), "maxHeaderBytes")
+		})
+	}
+}
+
+// TestAPIServerConfig_Validate_AllowedHosts asserts an allowlist that would be
+// configured-but-inert is rejected at startup rather than silently accepting
+// every Host, while both documented opt-outs stay valid.
+func TestAPIServerConfig_Validate_AllowedHosts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		hosts   []string
+		wantErr bool
+	}{
+		{"unset", nil, false},
+		{"explicit wildcard opt-out", []string{"*"}, false},
+		{"usable entries", []string{"api.example.com", "*.internal.example.com"}, false},
+		{"only blanks", []string{"", "   "}, true},
+		{"only the malformed wildcard", []string{"*."}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{APIServer: APIServerConfig{AllowedHosts: tt.hosts}}
+
+			err := cfg.Validate()
+			if !tt.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "apiServer")
+			assert.Contains(t, err.Error(), "allowedHosts")
 		})
 	}
 }

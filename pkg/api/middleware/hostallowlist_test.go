@@ -7,10 +7,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 )
@@ -207,19 +209,65 @@ func TestHostAllowlist(t *testing.T) {
 		assert.True(t, reached, "blank entries must not corrupt the allowlist")
 	})
 
-	t.Run("an allowlist of only blanks does not lock everything out", func(t *testing.T) {
-		// Normalizing away every entry leaves an empty list, which means
-		// "disabled" rather than "deny all" -- matching the documented default.
-		var reached bool
-		mw := middleware.HostAllowlist([]string{"", "  "}, logr.Discard())
+	t.Run("an allowlist with no usable entries fails closed", func(t *testing.T) {
+		// Regression test for a fail-open security hole. An operator who
+		// supplied entries asked for the check to be ON; if every entry
+		// normalizes away, accepting all hosts would silently deliver the exact
+		// opposite of the request. Config validation rejects this at startup,
+		// so this path only runs for a direct caller -- which must still deny.
+		unusable := [][]string{
+			{"", "  "},
+			{"*."},
+			{"", "*.", "\t"},
+		}
 
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/providers", nil)
-		req.Host = "anything.example.com"
-		rec := httptest.NewRecorder()
+		for _, hosts := range unusable {
+			t.Run(strings.Join(hosts, ","), func(t *testing.T) {
+				var reached bool
+				mw := middleware.HostAllowlist(hosts, logr.Discard())
 
-		mw(okHandler(&reached)).ServeHTTP(rec, req)
+				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/providers", nil)
+				req.Host = "anything.example.com"
+				rec := httptest.NewRecorder()
 
-		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.True(t, reached)
+				mw(okHandler(&reached)).ServeHTTP(rec, req)
+
+				assert.Equal(t, http.StatusForbidden, rec.Code)
+				assert.False(t, reached, "an inert allowlist must not fail open")
+				assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+			})
+		}
 	})
+}
+
+// TestValidateAllowedHosts asserts configuration validation rejects an
+// allowlist that would leave the control configured but inert, while leaving
+// both documented opt-outs (unset, and a bare "*") valid.
+func TestValidateAllowedHosts(t *testing.T) {
+	tests := []struct {
+		name    string
+		hosts   []string
+		wantErr bool
+	}{
+		{"unset is the documented default", nil, false},
+		{"empty slice is the documented default", []string{}, false},
+		{"bare wildcard is the explicit opt-out", []string{"*"}, false},
+		{"usable entry", []string{"api.example.com"}, false},
+		{"usable entry alongside a blank", []string{"", "api.example.com"}, false},
+		{"wildcard subdomain entry", []string{"*.example.com"}, false},
+		{"only blanks", []string{"", "   "}, true},
+		{"only the malformed wildcard", []string{"*."}, true},
+		{"blanks and malformed wildcard", []string{" ", "*.", ""}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := middleware.ValidateAllowedHosts(tt.hosts)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
 }

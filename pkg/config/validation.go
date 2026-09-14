@@ -11,6 +11,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // Validate validates the entire configuration.
@@ -240,6 +241,22 @@ func (b *BuildConfig) Validate() error {
 
 // Validate validates the API server configuration.
 func (c *APIServerConfig) Validate() error {
+	// Struct tags document the ceiling for schema consumers, but the config
+	// loader does not enforce them, so the bound has to be checked here or an
+	// operator can configure an arbitrarily large per-connection header buffer.
+	if c.MaxHeaderBytes > settings.MaxAPIMaxHeaderBytes {
+		return fmt.Errorf("maxHeaderBytes: %d exceeds the maximum of %d bytes", c.MaxHeaderBytes, settings.MaxAPIMaxHeaderBytes)
+	}
+	if c.MaxHeaderBytes < 0 {
+		return fmt.Errorf("maxHeaderBytes: must not be negative, got %d", c.MaxHeaderBytes)
+	}
+
+	// An allowlist made entirely of blank or malformed entries would leave this
+	// security control configured but inert; refuse to start instead.
+	if err := middleware.ValidateAllowedHosts(c.AllowedHosts); err != nil {
+		return fmt.Errorf("allowedHosts: %w", err)
+	}
+
 	if c.TokenPassThrough != nil {
 		if err := c.TokenPassThrough.Validate(); err != nil {
 			return fmt.Errorf("tokenPassThrough: %w", err)

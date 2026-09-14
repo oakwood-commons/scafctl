@@ -426,12 +426,20 @@ func (s *Server) buildHTTPServer() string {
 	// to anyone who can reach the port. The default (127.0.0.1) is safe; this
 	// fires only when an operator has explicitly widened the bind address.
 	if !isLoopbackHost(host) && !apiCfg.Auth.AzureOIDC.Enabled {
+		// The admin prefix follows the configured API version, so build the
+		// remediation path from it -- a hardcoded "/v1/admin/" would tell an
+		// operator running apiVersion: v2 to block the wrong route.
+		apiVersion := apiCfg.APIVersion
+		if apiVersion == "" {
+			apiVersion = settings.DefaultAPIVersion
+		}
+		adminPrefix := "/" + apiVersion + "/admin/"
 		s.logger.Info("WARNING: API server is binding a non-loopback address with authentication DISABLED. "+
 			"This exposes solution execution to any caller that can reach this port. "+
 			"Enable apiServer.auth.azureOIDC, or bind 127.0.0.1 and front the server with an authenticating proxy. "+
-			"If you use a same-host proxy, also block /v1/admin/ at the proxy: with auth disabled the admin gate "+
+			"If you use a same-host proxy, also block "+adminPrefix+" at the proxy: with auth disabled the admin gate "+
 			"falls back to a loopback peer-address check, which a same-host proxy makes indistinguishable from a local caller.",
-			"host", host, "addr", addr)
+			"host", host, "addr", addr, "adminPrefix", adminPrefix)
 	}
 
 	maxHeaderBytes := apiCfg.MaxHeaderBytes

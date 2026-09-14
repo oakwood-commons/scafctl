@@ -388,3 +388,59 @@ func BenchmarkParseTimeoutOrDefault(b *testing.B) {
 		parseTimeoutOrDefault("30s", "60s")
 	}
 }
+
+// TestServer_ExposureWarning_AdminPrefixFollowsAPIVersion asserts the
+// remediation path in the exposure warning is built from the configured API
+// version. A hardcoded "/v1/admin/" would tell an operator running a different
+// apiVersion to block a route that does not exist, leaving the real admin
+// surface exposed.
+func TestServer_ExposureWarning_AdminPrefixFollowsAPIVersion(t *testing.T) {
+	tests := []struct {
+		name       string
+		apiVersion string
+		wantPrefix string
+	}{
+		{"unset falls back to the default version", "", "/" + settings.DefaultAPIVersion + "/admin/"},
+		{"explicit v1", "v1", "/v1/admin/"},
+		{"explicit v2", "v2", "/v2/admin/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sink messageSink
+			srv, err := NewServer(
+				WithServerConfig(&config.Config{
+					APIServer: config.APIServerConfig{
+						Host:       "0.0.0.0",
+						APIVersion: tt.apiVersion,
+					},
+				}),
+				WithServerLogger(logr.New(&sink)),
+			)
+			require.NoError(t, err)
+
+			srv.buildHTTPServer()
+
+			require.NotEmpty(t, sink.messages, "the exposure warning must fire for a non-loopback bind")
+			joined := strings.Join(sink.messages, "\n")
+			assert.Contains(t, joined, tt.wantPrefix)
+		})
+	}
+}
+
+// messageSink is a logr.LogSink that records every Info message, so a test can
+// assert on the warning's rendered content rather than just its presence.
+type messageSink struct {
+	messages []string
+}
+
+func (s *messageSink) Init(logr.RuntimeInfo)       {}
+func (s *messageSink) Enabled(int) bool            { return true }
+func (s *messageSink) Error(error, string, ...any) {}
+
+func (s *messageSink) Info(_ int, msg string, _ ...any) {
+	s.messages = append(s.messages, msg)
+}
+
+func (s *messageSink) WithValues(...any) logr.LogSink { return s }
+func (s *messageSink) WithName(string) logr.LogSink   { return s }

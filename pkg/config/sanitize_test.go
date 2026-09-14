@@ -294,3 +294,28 @@ func TestSanitizeConfig(t *testing.T) {
 		assert.Equal(t, "30s", sanitized.Plugins.FetchCooldown)
 	})
 }
+
+// TestSanitizeAPIServer_PreservesNonSecretFields is a regression guard for the
+// sanitized view silently dropping fields. `config view` uses a fail-closed
+// allowlist, so every non-secret field must be mirrored explicitly or it
+// disappears from the operator's view of their own configuration -- which is
+// exactly how the idle/header/host hardening settings went missing.
+func TestSanitizeAPIServer_PreservesNonSecretFields(t *testing.T) {
+	t.Parallel()
+
+	in := APIServerConfig{
+		Host:           "0.0.0.0",
+		Port:           9090,
+		IdleTimeout:    "45s",
+		MaxHeaderBytes: 4096,
+		AllowedHosts:   []string{"api.example.com", "*.internal.example.com"},
+	}
+
+	out := sanitizeAPIServer(in)
+
+	assert.Equal(t, in.IdleTimeout, out.IdleTimeout, "idleTimeout must survive sanitization")
+	assert.Equal(t, in.MaxHeaderBytes, out.MaxHeaderBytes, "maxHeaderBytes must survive sanitization")
+	assert.Equal(t, in.AllowedHosts, out.AllowedHosts, "allowedHosts must survive sanitization")
+	assert.Equal(t, in.Host, out.Host)
+	assert.Equal(t, in.Port, out.Port)
+}

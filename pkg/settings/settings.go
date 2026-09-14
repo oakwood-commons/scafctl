@@ -321,6 +321,14 @@ const (
 	// makes the limit explicit and configurable.
 	DefaultAPIMaxHeaderBytes = 1 << 20
 
+	// MaxAPIMaxHeaderBytes is the ceiling accepted for the configurable
+	// apiServer.maxHeaderBytes (4MB). Header bytes are buffered per connection
+	// before any request handling, so an unbounded allowance is a cheap
+	// memory-exhaustion vector; configuration validation rejects anything above
+	// this. It must stay in sync with the `maximum` struct tag on
+	// APIServerConfig.MaxHeaderBytes.
+	MaxAPIMaxHeaderBytes = 4 << 20
+
 	// DefaultAPIMaxRequestSize is the default maximum request body size in bytes (10MB).
 	DefaultAPIMaxRequestSize int64 = 10 * 1024 * 1024
 
