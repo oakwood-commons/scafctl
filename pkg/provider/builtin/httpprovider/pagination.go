@@ -313,7 +313,7 @@ func (p *HTTPProvider) executePaginated(
 		// Execute the request for this page
 		resp, err := p.doRequest(ctx, client, method, currentURL, bodyContent, headers)
 		if err != nil {
-			return nil, fmt.Errorf("%s: page %d request failed: %w", ProviderName, pageCount, err)
+			return nil, fmt.Errorf("%s: page %d request failed: %w", ProviderName, pageCount, httpc.ExplainBlocked(err))
 		}
 		lastResponse = resp
 
@@ -478,12 +478,6 @@ func (p *HTTPProvider) doRequest(
 	method, urlStr, bodyContent string,
 	headers map[string]any,
 ) (*paginatedResponse, error) {
-	if !privateIPsAllowed(ctx) {
-		if err := validateURLNotPrivate(urlStr); err != nil {
-			return nil, fmt.Errorf("%s: %w", ProviderName, err)
-		}
-	}
-
 	var bodyReader io.Reader
 	if bodyContent != "" {
 		bodyReader = strings.NewReader(bodyContent)

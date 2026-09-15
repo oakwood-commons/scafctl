@@ -417,7 +417,9 @@ shown as `(not present)`.
 | `httpClient.retry.maxRetries` | int | `3` | Max HTTP retries |
 | `httpClient.caching.enabled` | bool | `true` | Enable HTTP response caching |
 | `httpClient.maxResponseBodySize` | int | `104857600` | Max HTTP response body size (bytes, default 100 MB) |
-| `httpClient.allowPrivateIPs` | bool | `false` | Allow requests to private/loopback IPs (SSRF protection) |
+| `httpClient.allowPrivateIPs` | bool | `false` | Allow requests to every private/loopback IP range at once. Prefer `allowedPrivateCIDRs` |
+| `httpClient.allowedPrivateCIDRs` | []string | unset | Private ranges (or bare addresses) this client may reach. Checked against the resolved address when the connection is opened. Overrides `allowPrivateIPs` when set. Cloud metadata is never permitted |
+| `httpClient.trustProxyResolution` | bool | `false` | For proxied requests, allow a target that does not resolve locally to proceed. Defaults to failing closed |
 | `settings.requireSecureKeyring` | bool | `false` | Fail if OS keyring unavailable instead of insecure fallback |
 | `resolver.timeout` | duration | `5m` | Overall resolver timeout |
 | `resolver.concurrency` | int | `4` | Max parallel resolver execution |

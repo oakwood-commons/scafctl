@@ -5,49 +5,119 @@ package httpprovider
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
-	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
-func TestValidateURLNotPrivate(t *testing.T) {
+// ctxWithAllowedCIDRs returns a context carrying an application config that
+// exempts the given ranges from private-address blocking.
+func ctxWithAllowedCIDRs(cidrs ...string) context.Context {
+	return config.WithConfig(context.Background(), &config.Config{
+		HTTPClient: config.HTTPClientConfig{AllowedPrivateCIDRs: cidrs},
+	})
+}
+
+// A solution must not be able to reach the cloud metadata endpoint, and no
+// configuration may re-enable it -- not the blanket allowPrivateIPs switch, and
+// not an allowlist entry that covers the address.
+func TestHTTPProvider_Execute_MetadataAddressIsNeverReachable(t *testing.T) {
+	t.Parallel()
+
+	allow := true
+	cases := map[string]*config.Config{
+		"default deny": {},
+		"allowPrivateIPs=true": {
+			HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow},
+		},
+		"allowlist covering the metadata range": {
+			HTTPClient: config.HTTPClientConfig{
+				AllowedPrivateCIDRs: []string{"169.254.0.0/16"},
+			},
+		},
+	}
+
+	for name, cfg := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := config.WithConfig(context.Background(), cfg)
+
+			p := NewHTTPProvider()
+			_, err := p.Execute(ctx, map[string]any{
+				"url":    "http://169.254.169.254/latest/meta-data/",
+				"method": "GET",
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, httpc.ErrBlockedByPolicy)
+		})
+	}
+}
+
+// Without an explicit exception a solution cannot reach a private address.
+func TestHTTPProvider_Execute_BlocksPrivateIPByDefault(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := NewHTTPProvider()
+	_, err := p.Execute(context.Background(), map[string]any{
+		"url":    srv.URL,
+		"method": "GET",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, httpc.ErrBlockedByPolicy)
+}
+
+// Naming the range is what makes an internal endpoint reachable. This is the
+// counterpart to the test above: it proves the deny is configuration-driven and
+// not a blanket refusal, so a failure here means the allowlist does not work.
+func TestHTTPProvider_Execute_AllowsConfiguredRange(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	p := NewHTTPProvider()
+	out, err := p.Execute(ctxWithAllowedCIDRs("127.0.0.0/8", "::1/128"), map[string]any{
+		"url":    srv.URL,
+		"method": "GET",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+}
+
+func TestValidateNextURLHost(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name    string
-		url     string
-		wantErr bool
+		name     string
+		original string
+		next     string
+		wantErr  bool
 	}{
-		// Should be blocked
-		{name: "IPv4 loopback", url: "http://127.0.0.1/", wantErr: true},
-		{name: "IPv4 loopback alt", url: "http://127.1.2.3/", wantErr: true},
-		{name: "RFC1918 10.x", url: "http://10.0.0.1/api", wantErr: true},
-		{name: "RFC1918 172.16.x", url: "http://172.16.0.1/", wantErr: true},
-		{name: "RFC1918 172.31.x", url: "http://172.31.255.255/", wantErr: true},
-		{name: "RFC1918 192.168.x", url: "http://192.168.1.1/", wantErr: true},
-		{name: "link-local IMDS", url: "http://169.254.169.254/latest/meta-data/", wantErr: true},
-		{name: "CGNAT", url: "http://100.64.0.1/", wantErr: true},
-		{name: "IPv6 loopback", url: "http://[::1]/", wantErr: true},
-		{name: "decimal IP 2130706433", url: "http://2130706433/", wantErr: true},
-		{name: "hex IP 0x7f000001", url: "http://0x7f000001/", wantErr: true},
-		{name: "octal IP 0177.0.0.1", url: "http://0177.0.0.1/", wantErr: true},
-		{name: "pure octal 017700000001", url: "http://017700000001/", wantErr: true},
-		{name: "localhost hostname", url: "http://localhost/api", wantErr: true},
-		{name: "localhost.localdomain", url: "http://localhost.localdomain/api", wantErr: true},
-		{name: "metadata.google.internal", url: "http://metadata.google.internal/computeMetadata/v1/", wantErr: true},
-
-		// Should be allowed
-		{name: "public IP", url: "https://8.8.8.8/", wantErr: false},
-		{name: "hostname", url: "https://api.example.com/", wantErr: false},
-		{name: "public HTTPS", url: "https://graph.microsoft.com/v1.0/me", wantErr: false},
-		{name: "invalid URL", url: "://bad", wantErr: true},
+		{name: "same host", original: "https://api.example.com/a", next: "https://api.example.com/b"},
+		{name: "relative next", original: "https://api.example.com/a", next: "/page/2"},
+		{name: "case-insensitive host", original: "https://API.example.com/a", next: "https://api.example.com/b"},
+		{name: "cross host rejected", original: "https://api.example.com/a", next: "http://169.254.169.254/", wantErr: true},
+		{name: "invalid original", original: "://bad", next: "https://api.example.com/", wantErr: true},
+		{name: "invalid next", original: "https://api.example.com/", next: "://bad", wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateURLNotPrivate(tt.url)
+			err := validateNextURLHost(tt.original, tt.next)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -57,61 +127,12 @@ func TestValidateURLNotPrivate(t *testing.T) {
 	}
 }
 
-func TestPrivateIPsAllowed(t *testing.T) {
-	t.Parallel()
-	falseVal := false
-	trueVal := true
-
-	t.Run("nil config defaults to denied", func(t *testing.T) {
-		t.Parallel()
-		assert.False(t, privateIPsAllowed(context.Background()))
-	})
-
-	t.Run("config with nil AllowPrivateIPs defaults to denied", func(t *testing.T) {
-		t.Parallel()
-		ctx := config.WithConfig(context.Background(), &config.Config{})
-		assert.False(t, privateIPsAllowed(ctx))
-	})
-
-	t.Run("config with AllowPrivateIPs=true", func(t *testing.T) {
-		t.Parallel()
-		cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &trueVal}}
-		ctx := config.WithConfig(context.Background(), cfg)
-		assert.True(t, privateIPsAllowed(ctx))
-	})
-
-	t.Run("config with AllowPrivateIPs=false", func(t *testing.T) {
-		t.Parallel()
-		cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &falseVal}}
-		ctx := config.WithConfig(context.Background(), cfg)
-		assert.False(t, privateIPsAllowed(ctx))
-	})
-}
-
-func BenchmarkValidateURLNotPrivate(b *testing.B) {
-	urls := []string{
-		"https://api.example.com/users",
-		"http://169.254.169.254/latest/meta-data/",
-		"http://10.0.0.1/internal",
-		"https://graph.microsoft.com/v1.0/me",
-	}
+func BenchmarkPolicyFromContext(b *testing.B) {
+	ctx := ctxWithAllowedCIDRs("10.0.0.0/8", "192.168.0.0/16")
+	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = validateURLNotPrivate(urls[i%len(urls)])
+
+	for b.Loop() {
+		_ = httpc.PolicyFromContext(ctx)
 	}
-}
-
-func TestHTTPProvider_Execute_BlocksPrivateIP(t *testing.T) {
-	t.Parallel()
-	falseVal := false
-	cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &falseVal}}
-	ctx := config.WithConfig(context.Background(), cfg)
-
-	p := NewHTTPProvider()
-	_, err := p.Execute(ctx, map[string]any{
-		"url":    "http://169.254.169.254/latest/meta-data/",
-		"method": "GET",
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "AllowPrivateIPs")
 }

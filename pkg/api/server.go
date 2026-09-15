@@ -453,6 +453,26 @@ func (s *Server) buildHTTPServer() string {
 			"host", host, "addr", addr, "adminPrefix", adminPrefix)
 	}
 
+	// The destination-address policy is global config, shared with the CLI, and
+	// can be set from the environment as well as the config file. That is a
+	// reasonable local-development convenience, but the two cases are not
+	// equivalent: on a workstation it grants the operator access they already
+	// have, while on a server that fetches caller-supplied URLs it lends the
+	// server's network position to whoever supplies them. Announce it, so a
+	// setting inherited from a local config or a stray environment variable
+	// cannot widen a deployment silently.
+	//
+	// Only the blanket flag warrants this. A narrow allowedPrivateCIDRs list is
+	// the recommended way to reach an internal host and is deliberate by
+	// construction, so warning on it would train operators to ignore the
+	// warning that matters.
+	if s.cfg.HTTPClient.AllowPrivateIPs != nil && *s.cfg.HTTPClient.AllowPrivateIPs {
+		s.logger.Info("WARNING: httpClient.allowPrivateIPs is enabled, so this server may fetch URLs that resolve " +
+			"into private, loopback, and link-local address space. On a server handling caller-supplied URLs this " +
+			"exposes internal services. Prefer httpClient.allowedPrivateCIDRs, which permits only the ranges you " +
+			"name. (Cloud metadata addresses remain blocked regardless.)")
+	}
+
 	maxHeaderBytes := apiCfg.MaxHeaderBytes
 	if maxHeaderBytes <= 0 {
 		maxHeaderBytes = settings.DefaultAPIMaxHeaderBytes

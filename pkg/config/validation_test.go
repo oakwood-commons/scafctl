@@ -669,3 +669,96 @@ func TestAPIServerConfig_TagsMatchRuntimeLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeCIDR(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		entry string
+		want  string
+		// wantErrContains is checked when the entry must be rejected.
+		wantErrContains string
+	}{
+		{name: "IPv4 CIDR passes through", entry: "10.0.0.0/8", want: "10.0.0.0/8"},
+		{name: "IPv6 CIDR passes through", entry: "fd00::/8", want: "fd00::/8"},
+		{name: "surrounding space is tolerated", entry: "  10.0.0.0/8  ", want: "10.0.0.0/8"},
+		{name: "bare IPv4 widens to /32", entry: "10.0.0.5", want: "10.0.0.5/32"},
+		{name: "bare IPv6 widens to /128", entry: "fd00::1", want: "fd00::1/128"},
+		{
+			name:            "empty entry is rejected",
+			entry:           "",
+			wantErrContains: "empty",
+		},
+		{
+			name:            "whitespace-only entry is rejected",
+			entry:           "   ",
+			wantErrContains: "empty",
+		},
+		{
+			name:            "hostname is rejected",
+			entry:           "example.com",
+			wantErrContains: "not a valid IP address or CIDR block",
+		},
+		{
+			name:            "out-of-range prefix is rejected",
+			entry:           "10.0.0.0/33",
+			wantErrContains: "not a valid CIDR block",
+		},
+		{
+			name:            "malformed CIDR is rejected",
+			entry:           "10.0.0.0/",
+			wantErrContains: "not a valid CIDR block",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := NormalizeCIDR(tt.entry)
+
+			if tt.wantErrContains != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrContains)
+				assert.Empty(t, got)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestHTTPClientConfig_Validate_AllowedPrivateCIDRs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid entries are accepted", func(t *testing.T) {
+		t.Parallel()
+		cfg := &HTTPClientConfig{
+			AllowedPrivateCIDRs: []string{"10.0.0.0/8", "192.168.1.5", "fd00::/8"},
+		}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	t.Run("an empty list is accepted", func(t *testing.T) {
+		t.Parallel()
+		cfg := &HTTPClientConfig{AllowedPrivateCIDRs: []string{}}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	// A malformed entry must fail loudly at startup rather than being dropped,
+	// which would silently narrow the allowlist the operator asked for.
+	t.Run("a malformed entry is rejected and located", func(t *testing.T) {
+		t.Parallel()
+		cfg := &HTTPClientConfig{
+			AllowedPrivateCIDRs: []string{"10.0.0.0/8", "nonsense"},
+		}
+		err := cfg.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "allowedPrivateCIDRs[1]",
+			"the error must say which entry is wrong")
+		assert.Contains(t, err.Error(), "nonsense")
+	})
+}

@@ -314,6 +314,21 @@ func (m *Manager) setDefaults() {
 	m.v.SetDefault("httpClient.circuitBreakerMaxFailures", settings.DefaultCircuitBreakerMaxFailures)
 	m.v.SetDefault("httpClient.circuitBreakerOpenTimeout", settings.DefaultCircuitBreakerOpenTimeout.String())
 	m.v.SetDefault("httpClient.circuitBreakerHalfOpenMaxRequests", settings.DefaultCircuitBreakerHalfOpenRequests)
+
+	// Destination-address policy has no SetDefault: "unset" is meaningful and
+	// distinct from false, and an unset allowlist is distinct from an empty
+	// one. AutomaticEnv only reaches keys Viper already knows, and Unmarshal
+	// skips the rest, so these are bound explicitly -- otherwise they could be
+	// set only from a config file. The local-development override
+	// (<PREFIX>_HTTPCLIENT_ALLOWPRIVATEIPS=true) depends on this binding.
+	for _, key := range []string{
+		"httpClient.allowPrivateIPs",
+		"httpClient.allowedPrivateCIDRs",
+		"httpClient.trustProxyResolution",
+	} {
+		// Errors only when called with no key, which cannot happen here.
+		_ = m.v.BindEnv(key)
+	}
 	m.v.SetDefault("httpClient.enableCompression", true)
 
 	// CEL defaults - all values from settings package

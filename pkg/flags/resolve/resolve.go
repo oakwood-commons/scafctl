@@ -23,17 +23,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// defaultFlagHTTPClient is a shared httpc.Client used for fetching http(s):// flag values.
-// Caching is disabled so that flag values are always fresh at invocation time.
-var defaultFlagHTTPClient = httpc.NewClient(&httpc.ClientConfig{
-	Timeout:           settings.DefaultHTTPTimeout,
-	RetryMax:          settings.DefaultHTTPRetryMax,
-	RetryWaitMin:      settings.DefaultHTTPRetryWaitMinimum,
-	RetryWaitMax:      settings.DefaultHTTPRetryWaitMaximum,
-	EnableCache:       false,
-	EnableCompression: true,
-})
-
 // ResolveValue validates and resolves a value based on its scheme prefix.
 // The scheme prefix is stripped from the result, and the data is fetched/parsed.
 // Returns the resolved data as any (parsed JSON/YAML, decoded base64, raw bytes for files/http).
@@ -129,9 +118,10 @@ func fetchURL(ctx context.Context, urlStr string) ([]byte, error) {
 	}
 	req.Header.Set("User-Agent", userAgentName+"-flags-resolver/1.0")
 
-	resp, err := defaultFlagHTTPClient.Do(req)
+	// Shared across fetches with the same policy, so it is not closed here.
+	resp, err := httpc.FetchClient(ctx).Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch URL: %w", err)
+		return nil, fmt.Errorf("failed to fetch URL: %w", httpc.ExplainBlocked(err))
 	}
 	defer resp.Body.Close()
 

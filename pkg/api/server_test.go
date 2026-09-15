@@ -522,3 +522,56 @@ func (s *messageSink) Info(_ int, msg string, _ ...any) {
 
 func (s *messageSink) WithValues(...any) logr.LogSink { return s }
 func (s *messageSink) WithName(string) logr.LogSink   { return s }
+
+func (s *messageSink) sawAllowPrivateWarning() bool {
+	for _, m := range s.messages {
+		if strings.Contains(m, "httpClient.allowPrivateIPs is enabled") {
+			return true
+		}
+	}
+	return false
+}
+
+// The address policy is global config shared with the CLI and settable from the
+// environment, so a server can inherit a permissive local setting. Starting one
+// that way must be announced, or a deployment widens silently.
+func TestServer_AllowPrivateIPsWarning(t *testing.T) {
+	enabled := true
+	disabled := false
+
+	tests := []struct {
+		name        string
+		httpClient  config.HTTPClientConfig
+		wantWarning bool
+	}{
+		{"allowPrivateIPs true warns", config.HTTPClientConfig{AllowPrivateIPs: &enabled}, true},
+		{"allowPrivateIPs false is silent", config.HTTPClientConfig{AllowPrivateIPs: &disabled}, false},
+		{"unset is silent", config.HTTPClientConfig{}, false},
+		{
+			"narrow allowlist is silent",
+			config.HTTPClientConfig{AllowedPrivateCIDRs: []string{"10.42.0.0/16"}},
+			false,
+		},
+		{
+			"allowlist alongside the flag still warns",
+			config.HTTPClientConfig{AllowPrivateIPs: &enabled, AllowedPrivateCIDRs: []string{"10.42.0.0/16"}},
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sink messageSink
+			srv, err := NewServer(
+				WithServerConfig(&config.Config{HTTPClient: tt.httpClient}),
+				WithServerLogger(logr.New(&sink)),
+			)
+			require.NoError(t, err)
+
+			srv.buildHTTPServer()
+
+			assert.Equal(t, tt.wantWarning, sink.sawAllowPrivateWarning(),
+				"allowPrivateIPs warning presence mismatch")
+		})
+	}
+}
