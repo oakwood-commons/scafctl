@@ -212,6 +212,14 @@ func WithSolutionDiscovery(folders, fileNames []string) Option {
 // WithAppConfig returns an Option that configures the HTTP client using the application configuration.
 // It creates an HTTP client with settings from the provided config.HTTPClientConfig.
 // The logger is used for HTTP client logging.
+//
+// The client is built per Getter. Since httpc v0.3.0 each client owns its own
+// connection pool, so a Getter built per request (as the API server does) does
+// not reuse connections and abandons a pool that nothing closes. Sharing one
+// client per configuration was tried and reverted: a pooled connection outlives
+// the endpoint it was opened to, which is fine for a long-lived server but
+// breaks when an ephemeral port is recycled. Fixing this properly needs a
+// lifetime the Getter does not currently have.
 func WithAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) Option {
 	return func(g *Getter) {
 		g.httpClient = httpc.NewClientFromAppConfig(cfg, logger)
@@ -248,6 +256,13 @@ func NewGetter(opts ...Option) *Getter {
 func NewGetterFromContext(ctx context.Context, opts ...Option) *Getter {
 	var ctxOpts []Option
 	if ctx != nil {
+		// Build the HTTP client from application configuration so the
+		// destination-address policy reflects it. Without this the Getter would
+		// use the default deny policy and no allowlist entry could ever take
+		// effect on the solution-fetch path.
+		if appCfg := config.FromContext(ctx); appCfg != nil {
+			ctxOpts = append(ctxOpts, WithAppConfig(&appCfg.HTTPClient, logr.Discard()))
+		}
 		if s, ok := settings.FromContext(ctx); ok {
 			if s.BinaryName != "" && s.BinaryName != settings.CliBinaryName {
 				ctxOpts = append(ctxOpts, WithSolutionDiscovery(
@@ -935,32 +950,19 @@ func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, e
 	)
 	defer span.End()
 
-	// SSRF guard: refuse to fetch a solution from a private, loopback, or
-	// link-local address unless the application config explicitly permits it.
-	// This mirrors the check the http provider applies to solution-authored
-	// requests. It is required here because httpc.NewClient sets
-	// AllowPrivateIPs=true on the transport and delegates SSRF validation to
-	// call sites; without this guard the solution-fetch path is the one place a
-	// caller-supplied URL reaches internal infrastructure unchecked.
+	// Destination-address policy is enforced by the HTTP client at dial time,
+	// against the address actually resolved. That covers IP literals, hostnames
+	// whose records point at a private or metadata address, and every redirect
+	// hop -- none of which a pre-flight URL check can catch, because the client
+	// resolves DNS again when it opens the socket.
 	//
-	// KNOWN RESIDUAL: this covers IP literals and a small set of well-known
-	// hostnames only. httpc.ValidateURLNotPrivate deliberately does not resolve
-	// DNS (pre-resolution checks are TOCTOU-prone), so a hostname whose A record
-	// points at a private or metadata address is still fetched. Closing that
-	// needs a resolve-and-pin dialer rather than a pre-flight URL check, and the
-	// same residual applies to every caller of this shared validator.
-	if !httpc.PrivateIPsAllowed(ctx) {
-		if privErr := httpc.ValidateURLNotPrivate(url); privErr != nil {
-			o.logger.Error(privErr, "Blocked solution fetch to private address", "url", url)
-			span.RecordError(privErr)
-			span.SetStatus(codes.Error, privErr.Error())
-			return nil, fmt.Errorf("unable to get the solution. Refusing to fetch from URL '%s': %w", url, privErr)
-		}
-	}
+	// Denials surface from the Get call below as errors wrapping
+	// httpc.ErrBlockedByPolicy.
 
 	o.logger.V(1).Info("Fetching solution from URL", "url", url)
 	resp, err := o.httpClient.Get(ctx, url)
 	if err != nil {
+		err = httpc.ExplainBlocked(err)
 		o.logger.Error(err, "Failed to fetch solution from URL", "url", url)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

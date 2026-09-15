@@ -11,11 +11,23 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/flags/resolve"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// allowLoopback layers an application config permitting loopback onto ctx.
+// httptest servers bind loopback, and http(s):// flag resolution denies private
+// addresses unless configuration names the range.
+func allowLoopback(ctx context.Context) context.Context {
+	return config.WithConfig(ctx, &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			AllowedPrivateCIDRs: []string{"127.0.0.0/8", "::1/128"},
+		},
+	})
+}
 
 func TestResolveValue_JSON(t *testing.T) {
 	ctx := context.Background()
@@ -107,7 +119,7 @@ func TestResolveValue_File(t *testing.T) {
 }
 
 func TestResolveValue_HTTP(t *testing.T) {
-	ctx := context.Background()
+	ctx := allowLoopback(context.Background())
 
 	testContent := []byte("server response content")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +148,7 @@ func TestResolveValue_HTTP_UserAgent(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		ctx := context.Background()
+		ctx := allowLoopback(context.Background())
 		_, err := resolve.ResolveValue(ctx, "test", srv.URL)
 		require.NoError(t, err)
 		assert.Equal(t, "scafctl-flags-resolver/1.0", gotUA)
@@ -152,7 +164,7 @@ func TestResolveValue_HTTP_UserAgent(t *testing.T) {
 		defer srv.Close()
 
 		run := &settings.Run{BinaryName: "mycli"}
-		ctx := settings.IntoContext(context.Background(), run)
+		ctx := allowLoopback(settings.IntoContext(context.Background(), run))
 		_, err := resolve.ResolveValue(ctx, "test", srv.URL)
 		require.NoError(t, err)
 		assert.Equal(t, "mycli-flags-resolver/1.0", gotUA)

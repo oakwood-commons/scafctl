@@ -617,7 +617,7 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	authProvider, _ := inputs["authProvider"].(string)
 	scope, _ := inputs["scope"].(string)
 	retryCfg := parseRetryConfig(inputs)
-	httpcCfg := buildHTTPClientConfig(timeoutDuration, retryCfg)
+	httpcCfg := buildHTTPClientConfig(ctx, timeoutDuration, retryCfg)
 
 	if authProvider != "" {
 		token, err := getToken(ctx, authProvider, scope, timeoutDuration, httpcCfg)
@@ -648,6 +648,11 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	}
 
 	httpClient := httpc.NewClient(httpcCfg)
+	// Each client owns its transport, and therefore its own idle connection
+	// pool. Without this the pool survives for the life of the process and every
+	// execution adds another one. Close reclaims only idle connections, so
+	// in-flight requests and already-read bodies are unaffected.
+	defer func() { _ = httpClient.Close() }()
 
 	autoParseJSON, _ := inputs["autoParseJson"].(bool)
 
@@ -727,13 +732,17 @@ func handlerToken(ctx context.Context, authProvider, scope string, timeoutDurati
 // (matching the original http.Client behaviour).
 // When retryCfg is provided, retries are configured and the last HTTP response is always
 // returned to the caller even after retries are exhausted (network errors are still propagated).
-func buildHTTPClientConfig(timeout time.Duration, retryCfg *retryConfig) *httpc.ClientConfig {
+func buildHTTPClientConfig(ctx context.Context, timeout time.Duration, retryCfg *retryConfig) *httpc.ClientConfig {
 	cfg := &httpc.ClientConfig{
 		Timeout:              timeout,
 		RetryMax:             0,
 		EnableCache:          false,
 		EnableCompression:    true,
 		EnableCircuitBreaker: false,
+		// Which destination addresses a solution-authored request may reach.
+		// Enforced at dial time against the resolved address, so it covers
+		// hostnames pointing at internal infrastructure and redirects into it.
+		IPPolicy: httpc.PolicyFromContext(ctx),
 	}
 	if retryCfg == nil {
 		// No retry: block — single attempt, never retry on any HTTP status.
@@ -780,12 +789,6 @@ func (p *HTTPProvider) execute(
 ) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
 
-	if !privateIPsAllowed(ctx) {
-		if err := validateURLNotPrivate(urlStr); err != nil {
-			return nil, fmt.Errorf("%s: %w", ProviderName, err)
-		}
-	}
-
 	var bodyReader io.Reader
 	if bodyContent != "" {
 		bodyReader = strings.NewReader(bodyContent)
@@ -812,7 +815,7 @@ func (p *HTTPProvider) execute(
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s: request failed: %w", ProviderName, err)
+		return nil, fmt.Errorf("%s: request failed: %w", ProviderName, httpc.ExplainBlocked(err))
 	}
 	defer resp.Body.Close()
 

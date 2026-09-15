@@ -1942,9 +1942,9 @@ inputs:
 
 The HTTP provider enforces several security measures:
 
-- **SSRF protection**: Requests to private, loopback, and link-local IP addresses (e.g., `169.254.169.254`) are blocked by default. Set `httpClient.allowPrivateIPs: true` in config to allow private network access for on-premises endpoints.
+- **SSRF protection**: Requests to private, loopback, and link-local addresses are blocked by default. The check runs at dial time against the resolved IP, so a hostname that resolves into private space is blocked too. To reach an on-premises endpoint, name its range in `httpClient.allowedPrivateCIDRs` (`httpClient.allowPrivateIPs: true` unblocks every private range at once and is the blunter option). Cloud metadata addresses such as `169.254.169.254` are never permitted under any configuration.
 - **Response body size limit**: Each response is limited to `httpClient.maxResponseBodySize` (default: 100 MB). This prevents denial-of-service via unbounded responses from malicious or misconfigured servers. Applies to both direct requests and each page in paginated requests.
-- **Redirect validation**: Each redirect target is checked against the SSRF private IP blocklist. A maximum of 10 redirects is enforced.
+- **Redirect validation**: Every redirect hop is checked at dial time, so a redirect from a public URL into private space is refused. A maximum of 10 redirects is enforced.
 - **Pagination host validation**: Pagination next URLs must stay on the same hostname as the original request to prevent open redirect attacks.
 - **Token security**: Authentication tokens are injected via the `Authorization` header and are never logged. Token refresh on 401 responses is handled transparently.
 

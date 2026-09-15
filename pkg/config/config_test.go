@@ -1133,3 +1133,47 @@ func TestManager_Delete_MissingFileIsNoOp(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, removed)
 }
+
+// The destination-address policy fields carry no SetDefault, because "unset" is
+// distinct from false and an unset allowlist is distinct from an empty one.
+// Viper's AutomaticEnv only reaches keys it already knows, so without an
+// explicit BindEnv these could be set from a config file alone -- which would
+// leave no way to relax the policy for local development without editing
+// committed configuration.
+func TestManager_Load_AddressPolicyFromEnv(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	t.Run("unset by default", func(t *testing.T) {
+		cfg, err := NewManager(filepath.Join(t.TempDir(), "config.yaml")).Load()
+		require.NoError(t, err)
+		assert.Nil(t, cfg.HTTPClient.AllowPrivateIPs)
+		assert.Nil(t, cfg.HTTPClient.AllowedPrivateCIDRs,
+			"must stay nil, not an empty slice: an absent allowlist leaves allowPrivateIPs in force, "+
+				"while a present-but-empty one overrides it")
+		assert.Nil(t, cfg.HTTPClient.TrustProxyResolution)
+	})
+
+	t.Run("allowPrivateIPs", func(t *testing.T) {
+		t.Setenv("SCAFCTL_HTTPCLIENT_ALLOWPRIVATEIPS", "true")
+		cfg, err := NewManager(configPath).Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg.HTTPClient.AllowPrivateIPs)
+		assert.True(t, *cfg.HTTPClient.AllowPrivateIPs)
+	})
+
+	t.Run("allowedPrivateCIDRs", func(t *testing.T) {
+		t.Setenv("SCAFCTL_HTTPCLIENT_ALLOWEDPRIVATECIDRS", "127.0.0.0/8")
+		cfg, err := NewManager(configPath).Load()
+		require.NoError(t, err)
+		assert.Equal(t, []string{"127.0.0.0/8"}, cfg.HTTPClient.AllowedPrivateCIDRs)
+	})
+
+	t.Run("trustProxyResolution", func(t *testing.T) {
+		t.Setenv("SCAFCTL_HTTPCLIENT_TRUSTPROXYRESOLUTION", "true")
+		cfg, err := NewManager(configPath).Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg.HTTPClient.TrustProxyResolution)
+		assert.True(t, *cfg.HTTPClient.TrustProxyResolution)
+	})
+}

@@ -10,8 +10,6 @@
 package httpc
 
 import (
-	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/hashicorp/go-retryablehttp"
@@ -31,6 +29,7 @@ type (
 	FileCacheConfig      = upstream.FileCacheConfig
 	FileCache            = upstream.FileCache
 	CacheStats           = upstream.CacheStats
+	IPPolicy             = upstream.IPPolicy
 	Metrics              = upstream.Metrics
 	NoopMetrics          = upstream.NoopMetrics
 	RequestHook          = upstream.RequestHook
@@ -67,9 +66,15 @@ var (
 //
 // The caller's config is not mutated; a shallow copy is made internally.
 //
-// AllowPrivateIPs is set to true on the upstream client because scafctl handles
-// SSRF protection via context-based checks (PrivateIPsAllowed + ValidateURLNotPrivate)
-// at the call sites that need it (httpprovider, parameterprovider, etc.).
+// Which destination addresses the client may reach is decided by cfg.IPPolicy,
+// enforced by the upstream transport as each connection is dialed -- after DNS
+// resolution, against the address actually being connected to. A nil IPPolicy
+// denies private, loopback, and link-local addresses. Build one from
+// application configuration with PolicyFromAppConfig.
+//
+// Because the check runs at dial time it also covers redirect hops and
+// hostnames that resolve to private addresses, neither of which a pre-flight
+// URL check can catch.
 func NewClient(cfg *ClientConfig) *Client {
 	var local ClientConfig
 	if cfg != nil {
@@ -86,27 +91,8 @@ func NewClient(cfg *ClientConfig) *Client {
 	if local.CacheKeyPrefix == "" {
 		local.CacheKeyPrefix = settings.HTTPCacheKeyPrefixFor(paths.AppName())
 	}
-	// scafctl performs SSRF validation at the application layer via
-	// PrivateIPsAllowed(ctx) and ValidateURLNotPrivate(url) before issuing
-	// requests. Disable the upstream transport-level check to avoid double-gating
-	// and to preserve the original context-aware behaviour.
-	local.AllowPrivateIPs = true
 
-	maxRedirects := local.MaxRedirects
-	if maxRedirects <= 0 {
-		maxRedirects = DefaultMaxRedirects
-	}
-
-	client := upstream.NewClient(&local)
-
-	// Override the upstream CheckRedirect with a context-aware variant.
-	// The upstream redirect policy is static (uses the AllowPrivateIPs config
-	// field captured at construction), but scafctl needs per-request checks via
-	// PrivateIPsAllowed(ctx). This prevents SSRF bypasses where a public URL
-	// 302-redirects to a private/link-local address (e.g. 169.254.169.254).
-	client.RetryableClient().HTTPClient.CheckRedirect = ssrfSafeRedirectPolicy(maxRedirects)
-
-	return client
+	return upstream.NewClient(&local)
 }
 
 // BuildStatusCodeCheckRetry returns a retryablehttp.CheckRetry function
@@ -118,22 +104,6 @@ func BuildStatusCodeCheckRetry(statusCodes []int) retryablehttp.CheckRetry {
 // BuildNamedBackoff returns a retryablehttp.Backoff function for the named strategy.
 func BuildNamedBackoff(strategy string, initialWait, maxWait time.Duration) retryablehttp.Backoff {
 	return upstream.BuildNamedBackoff(strategy, initialWait, maxWait)
-}
-
-// ssrfSafeRedirectPolicy returns a CheckRedirect function that enforces both
-// a maximum redirect count and context-aware SSRF validation on redirect targets.
-func ssrfSafeRedirectPolicy(maxRedirects int) func(*http.Request, []*http.Request) error {
-	return func(req *http.Request, via []*http.Request) error {
-		if len(via) >= maxRedirects {
-			return fmt.Errorf("stopped after %d redirects", len(via))
-		}
-		if !PrivateIPsAllowed(req.Context()) {
-			if err := ValidateURLNotPrivate(req.URL.String()); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 }
 
 // DefaultConfig returns a ClientConfig with scafctl-specific defaults:

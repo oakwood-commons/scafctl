@@ -4,7 +4,6 @@
 package httpc
 
 import (
-	"context"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -90,27 +89,27 @@ func NewClientFromAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) *C
 	if cfg.EnableCompression != nil {
 		clientCfg.EnableCompression = *cfg.EnableCompression
 	}
-	// NOTE: cfg.AllowPrivateIPs from app config is consumed only by
-	// PrivateIPsAllowed(ctx) at the application layer; it is NOT forwarded to
-	// the upstream transport, which is always set to AllowPrivateIPs=true by
-	// NewClient() to avoid double-gating.
+
+	// Which destination addresses this client may reach. Enforced upstream at
+	// dial time, against the resolved address.
+	//
+	// A malformed entry fails closed: the client keeps the default deny-all
+	// policy rather than starting with weaker protection than the operator
+	// asked for. Config validation rejects malformed entries at startup, so
+	// reaching this branch means validation was bypassed.
+	policy, policyErr := PolicyFromAppConfig(cfg)
+	if policyErr != nil {
+		if logger.GetSink() != nil {
+			logger.Error(policyErr, "invalid address allowlist; denying all private addresses",
+				"field", AllowedPrivateCIDRsKey)
+		}
+		policy = &IPPolicy{}
+	}
+	clientCfg.IPPolicy = policy
+
 	if cfg.MaxResponseBodySize > 0 {
 		clientCfg.MaxResponseBodySize = cfg.MaxResponseBodySize
 	}
 
 	return NewClient(clientCfg)
-}
-
-// PrivateIPsAllowed returns true when the application config stored in ctx permits
-// HTTP requests to private/loopback/link-local IP addresses.
-// Returns false (deny) when no config is present -- secure by default.
-func PrivateIPsAllowed(ctx context.Context) bool {
-	cfg := config.FromContext(ctx)
-	if cfg == nil {
-		return false
-	}
-	if cfg.HTTPClient.AllowPrivateIPs != nil {
-		return *cfg.HTTPClient.AllowPrivateIPs
-	}
-	return false
 }

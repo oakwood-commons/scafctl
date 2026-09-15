@@ -1600,9 +1600,13 @@ func HostStaticProviderConfig(binaryName, entrypoint string) plugin.ProviderConf
 	return cfg
 }
 
-// injectHTTPClientSettings propagates httpClient configuration (e.g.
-// allowPrivateIPs) from the app config to ProviderConfig.Settings["httpClient"]
-// so external plugins can apply the same network policies as the host.
+// injectHTTPClientSettings propagates httpClient network policy from the app
+// config to ProviderConfig.Settings["httpClient"] so external plugins can apply
+// the same rules as the host.
+//
+// The field names match the host's own configuration keys, so a plugin reading
+// them gets the same precedence: allowedPrivateCIDRs, when present, narrows the
+// plugin to those ranges regardless of allowPrivateIPs.
 func injectHTTPClientSettings(ctx context.Context, cfg *plugin.ProviderConfig) {
 	if cfg == nil {
 		return
@@ -1613,18 +1617,26 @@ func injectHTTPClientSettings(ctx context.Context, cfg *plugin.ProviderConfig) {
 		return
 	}
 
-	// Only inject if there's something to communicate.
-	if appCfg.HTTPClient.AllowPrivateIPs == nil {
+	// Only inject if there's something to communicate. An operator who sets
+	// only the allowlist must still have it reach the plugin, so both settings
+	// have to be absent before this is a no-op.
+	if appCfg.HTTPClient.AllowPrivateIPs == nil && appCfg.HTTPClient.AllowedPrivateCIDRs == nil {
 		return
 	}
 
 	type httpClientSettings struct {
-		AllowPrivateIPs bool `json:"allowPrivateIPs"`
+		AllowPrivateIPs     bool     `json:"allowPrivateIPs"`
+		AllowedPrivateCIDRs []string `json:"allowedPrivateCIDRs,omitempty"`
 	}
 
-	raw, err := json.Marshal(httpClientSettings{
-		AllowPrivateIPs: *appCfg.HTTPClient.AllowPrivateIPs,
-	})
+	settings := httpClientSettings{
+		AllowedPrivateCIDRs: appCfg.HTTPClient.AllowedPrivateCIDRs,
+	}
+	if appCfg.HTTPClient.AllowPrivateIPs != nil {
+		settings.AllowPrivateIPs = *appCfg.HTTPClient.AllowPrivateIPs
+	}
+
+	raw, err := json.Marshal(settings)
 	if err != nil {
 		return
 	}

@@ -30,7 +30,7 @@ func (p *HTTPProvider) executeStateLoad(ctx context.Context, client *httpc.Clien
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("state load: request failed: %w", err)
+		return nil, fmt.Errorf("state load: request failed: %w", httpc.ExplainBlocked(err))
 	}
 	defer resp.Body.Close()
 
@@ -101,7 +101,7 @@ func (p *HTTPProvider) executeStateSave(
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("state save: request failed: %w", err)
+		return nil, fmt.Errorf("state save: request failed: %w", httpc.ExplainBlocked(err))
 	}
 	defer resp.Body.Close()
 
@@ -128,7 +128,7 @@ func (p *HTTPProvider) executeStateDelete(ctx context.Context, client *httpc.Cli
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("state delete: request failed: %w", err)
+		return nil, fmt.Errorf("state delete: request failed: %w", httpc.ExplainBlocked(err))
 	}
 	defer resp.Body.Close()
 
@@ -185,13 +185,6 @@ func (p *HTTPProvider) dispatchStateOperation(ctx context.Context, operation str
 		return p.executeStateDryRun(operation)
 	}
 
-	// SSRF protection
-	if !privateIPsAllowed(ctx) {
-		if err := validateURLNotPrivate(urlStr); err != nil {
-			return nil, fmt.Errorf("%s: %w", ProviderName, err)
-		}
-	}
-
 	// Build timeout
 	timeout := 30
 	if t, ok := inputs["timeout"].(int); ok && t > 0 {
@@ -221,7 +214,7 @@ func (p *HTTPProvider) dispatchStateOperation(ctx context.Context, operation str
 
 	// Build httpc client
 	retryCfg := parseRetryConfig(inputs)
-	httpcCfg := buildHTTPClientConfig(timeoutDuration, retryCfg)
+	httpcCfg := buildHTTPClientConfig(ctx, timeoutDuration, retryCfg)
 
 	// Wire 401 token-refresh when an auth provider is configured.
 	if authProvider != "" {
@@ -229,6 +222,11 @@ func (p *HTTPProvider) dispatchStateOperation(ctx context.Context, operation str
 	}
 
 	client := httpc.NewClient(httpcCfg)
+	// See the matching comment in http.go: each client owns an idle connection
+	// pool that leaks for the process lifetime unless it is released. This
+	// client cannot be shared between executions because OnUnauthorized above
+	// captures the current request's context.
+	defer func() { _ = client.Close() }()
 
 	switch operation {
 	case "state_load":

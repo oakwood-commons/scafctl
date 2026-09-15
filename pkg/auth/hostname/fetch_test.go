@@ -15,6 +15,17 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 )
 
+// ctxAllowingLoopback carries an application config permitting loopback, which
+// every httptest server binds to. The HTTP client denies private addresses by
+// default, so without this it refuses the test server before sending anything.
+func ctxAllowingLoopback() context.Context {
+	return config.WithConfig(context.Background(), &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			AllowedPrivateCIDRs: []string{"127.0.0.0/8", "::1/128"},
+		},
+	})
+}
+
 func TestDefaultFetch_Success(t *testing.T) {
 	t.Parallel()
 
@@ -32,7 +43,7 @@ func TestDefaultFetch_Success(t *testing.T) {
 		Headers: map[string]string{"X-Custom": "custom-value"},
 	}
 
-	body, err := defaultFetch(context.Background(), src, "secret")
+	body, err := defaultFetch(ctxAllowingLoopback(), src, "secret")
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok": true}`, string(body))
 }
@@ -46,7 +57,7 @@ func TestDefaultFetch_NoBearer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := defaultFetch(context.Background(), config.HostnameResolverSource{URL: srv.URL}, "")
+	_, err := defaultFetch(ctxAllowingLoopback(), config.HostnameResolverSource{URL: srv.URL}, "")
 	require.NoError(t, err)
 }
 
@@ -58,7 +69,7 @@ func TestDefaultFetch_NonOKStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := defaultFetch(context.Background(), config.HostnameResolverSource{URL: srv.URL}, "")
+	_, err := defaultFetch(ctxAllowingLoopback(), config.HostnameResolverSource{URL: srv.URL}, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "status 404")
 }
@@ -75,7 +86,7 @@ func TestDefaultFetch_InvalidURL(t *testing.T) {
 	for _, u := range tests {
 		t.Run(u, func(t *testing.T) {
 			t.Parallel()
-			_, err := defaultFetch(context.Background(), config.HostnameResolverSource{URL: u}, "")
+			_, err := defaultFetch(ctxAllowingLoopback(), config.HostnameResolverSource{URL: u}, "")
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "invalid inventory source URL")
 		})
@@ -87,7 +98,7 @@ func TestDefaultFetch_RejectsBearerOverPlaintextHTTP(t *testing.T) {
 
 	// A bearer token must never be sent to a non-HTTPS, non-loopback host.
 	src := config.HostnameResolverSource{URL: "http://inventory.example.com/clusters"}
-	_, err := defaultFetch(context.Background(), src, "secret")
+	_, err := defaultFetch(ctxAllowingLoopback(), src, "secret")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "non-HTTPS")
@@ -104,6 +115,6 @@ func TestDefaultFetch_AllowsBearerOverLoopbackHTTP(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := defaultFetch(context.Background(), config.HostnameResolverSource{URL: srv.URL}, "secret")
+	_, err := defaultFetch(ctxAllowingLoopback(), config.HostnameResolverSource{URL: srv.URL}, "secret")
 	require.NoError(t, err)
 }

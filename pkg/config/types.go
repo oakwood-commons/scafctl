@@ -310,12 +310,46 @@ type HTTPClientConfig struct {
 	EnableCompression *bool `json:"enableCompression,omitempty" yaml:"enableCompression,omitempty" mapstructure:"enableCompression" doc:"Enable automatic gzip compression"`
 
 	// AllowPrivateIPs controls whether HTTP requests to private, loopback, and
-	// link-local IP addresses are permitted. Checked against IP literals only
-	// (hostnames are not pre-resolved). When false (default), requests to RFC 1918
-	// ranges (10.x, 172.16.x, 192.168.x), loopback (127.x, ::1), link-local
-	// (169.254.x), and CGNAT (100.64.x) are blocked. Set to true to allow private
-	// network access (e.g., for on-premises endpoints or local development).
-	AllowPrivateIPs *bool `json:"allowPrivateIPs,omitempty" yaml:"allowPrivateIPs,omitempty" mapstructure:"allowPrivateIPs" doc:"Allow HTTP requests to private/loopback/link-local IP literals (default: false). Set true to allow private network access." example:"false"`
+	// link-local addresses are permitted. When false (default), requests to
+	// RFC 1918 ranges (10.x, 172.16.x, 192.168.x), loopback (127.x, ::1),
+	// link-local (169.254.x), and CGNAT (100.64.x) are blocked.
+	//
+	// The check runs when the connection is opened, against the address the
+	// request actually resolves to, so a hostname pointing into private space
+	// is blocked as well.
+	//
+	// This opens every private range at once. Prefer AllowedPrivateCIDRs, which
+	// grants only the ranges you name.
+	AllowPrivateIPs *bool `json:"allowPrivateIPs,omitempty" yaml:"allowPrivateIPs,omitempty" mapstructure:"allowPrivateIPs" doc:"Allow HTTP requests to every private/loopback/link-local range at once (default: false). Prefer allowedPrivateCIDRs." example:"false"`
+
+	// AllowedPrivateCIDRs carves specific address ranges out of the private-address
+	// blocklist, so an internal endpoint can be reached without opening the whole
+	// private network the way AllowPrivateIPs does. Prefer it over AllowPrivateIPs.
+	//
+	// Entries are CIDR blocks ("10.42.7.0/24") or bare addresses ("10.42.7.9",
+	// treated as a single-address range). Both IPv4 and IPv6 are accepted. Every
+	// entry must parse, or startup fails -- a silently-dropped entry would appear
+	// to grant access it does not.
+	//
+	// When set, this WINS over AllowPrivateIPs and narrows the client to just
+	// these ranges, so adding an allowlist to a legacy AllowPrivateIPs: true
+	// configuration tightens it rather than doing nothing. A present but empty
+	// list means "no exceptions" and also overrides AllowPrivateIPs; omit the
+	// field entirely to leave AllowPrivateIPs in force.
+	//
+	// Cloud metadata addresses (169.254.169.254 and the provider-specific
+	// equivalents) can NOT be re-enabled by this field or by AllowPrivateIPs.
+	AllowedPrivateCIDRs []string `json:"allowedPrivateCIDRs,omitempty" yaml:"allowedPrivateCIDRs,omitempty" mapstructure:"allowedPrivateCIDRs" doc:"Address ranges exempted from private-IP blocking, as CIDR blocks or bare IPs (e.g. 10.42.7.0/24). Overrides allowPrivateIPs. Cloud metadata addresses can never be exempted." maxItems:"100"`
+
+	// TrustProxyResolution allows a proxied request whose target hostname cannot
+	// be resolved locally to proceed, leaving egress policy to the proxy.
+	//
+	// When a proxy is in use the destination address is not dialed directly, so
+	// the target is checked by resolving it here instead. That fails closed: in
+	// a proxy-only environment with no direct resolver, every request is refused.
+	// Enable this only where the proxy itself is trusted to enforce egress
+	// policy.
+	TrustProxyResolution *bool `json:"trustProxyResolution,omitempty" yaml:"trustProxyResolution,omitempty" mapstructure:"trustProxyResolution" doc:"Allow a proxied request whose target does not resolve locally to proceed, leaving egress policy to the proxy (default: false, which fails closed)." example:"false"`
 
 	// MaxResponseBodySize is the maximum number of bytes the HTTP provider will
 	// read from a single response body. Prevents denial-of-service via unbounded

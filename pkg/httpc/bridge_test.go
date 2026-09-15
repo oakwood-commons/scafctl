@@ -88,6 +88,9 @@ func TestNewClientFromAppConfig_MakesRequests(t *testing.T) {
 	cfg := &config.HTTPClientConfig{
 		Timeout:     "5s",
 		EnableCache: boolPtr(false),
+		// httptest binds loopback, which the default policy denies. Naming the
+		// range here is what a user would do to reach an internal endpoint.
+		AllowedPrivateCIDRs: []string{"127.0.0.0/8", "::1/128"},
 	}
 	client := NewClientFromAppConfig(cfg, logr.Discard())
 
