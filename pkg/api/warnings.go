@@ -67,15 +67,33 @@ func StartupWarnings(cfg *config.Config) []string {
 	// setting inherited from a local config or a stray environment variable
 	// cannot widen a deployment silently.
 	//
-	// Only the blanket flag warrants this. A narrow allowedPrivateCIDRs list is
-	// the recommended way to reach an internal host and is deliberate by
-	// construction, so warning on it would train operators to ignore the
+	// Only the blanket flag warrants this, and only when it is actually in
+	// effect: an explicit allowedPrivateCIDRs list (empty or not) WINS over
+	// AllowPrivateIPs per HTTPClientConfig's documented precedence, so the
+	// effective policy in that case is the narrow list, not the blanket flag.
+	// A narrow allowedPrivateCIDRs list is the recommended way to reach an
+	// internal host and is deliberate by construction, so warning on it (or
+	// on a superseded AllowPrivateIPs) would train operators to ignore the
 	// warning that matters.
-	if cfg.HTTPClient.AllowPrivateIPs != nil && *cfg.HTTPClient.AllowPrivateIPs {
+	_, cidrsSet := cfg.HTTPClient.PrivateCIDRs()
+	if cfg.HTTPClient.AllowPrivateIPs != nil && *cfg.HTTPClient.AllowPrivateIPs && !cidrsSet {
 		warnings = append(warnings, "httpClient.allowPrivateIPs is enabled, so this server may fetch URLs that "+
 			"resolve into private, loopback, and link-local address space. On a server handling caller-supplied "+
 			"URLs this exposes internal services. Prefer httpClient.allowedPrivateCIDRs, which permits only the "+
 			"ranges you name. (Cloud metadata addresses remain blocked regardless.)")
+	}
+
+	// trustProxyResolution hands the address decision for locally
+	// unresolvable proxied hostnames to the proxy, which can weaken the
+	// otherwise unconditional metadata/private-address guarantee if that
+	// proxy does not enforce its own egress policy (see the field's doc
+	// comment). Warn operators the same way, since it is the other setting
+	// that can widen effective network exposure.
+	if cfg.HTTPClient.TrustProxyResolution != nil && *cfg.HTTPClient.TrustProxyResolution {
+		warnings = append(warnings, "httpClient.trustProxyResolution is enabled, so requests whose target hostname "+
+			"cannot be resolved locally are still forwarded to the configured proxy, which decides the destination "+
+			"address instead of this client. If that proxy does not enforce its own egress policy, it may reach "+
+			"private or metadata addresses on this server's behalf.")
 	}
 
 	return warnings

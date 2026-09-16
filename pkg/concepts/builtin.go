@@ -508,7 +508,7 @@ For the runtime evaluation environment these tools operate against, see 'context
 		Title:    "Network Policy (SSRF Protection)",
 		Category: "security",
 		Summary:  "Which destination addresses a solution's HTTP requests may reach, enforced when the connection is opened.",
-		Explanation: `Every HTTP request scafctl makes -- the http provider, parameter fetches, ` + "`fetch:`" + ` flag values, and solution URLs -- is checked against a destination-address policy.
+		Explanation: `Every solution-controlled HTTP request scafctl makes -- the http provider, parameter fetches, ` + "`fetch:`" + ` flag values, and solution URLs -- is checked against a destination-address policy. (Some internal scafctl subsystems -- catalog enumeration and OAuth2 handlers, for example -- use their own plain HTTP clients for scafctl's own outbound calls and are not gated by this policy.)
 
 Private, loopback, link-local and CGNAT addresses are blocked by default. This prevents a solution from probing internal services or reading cloud instance credentials.
 
@@ -520,7 +520,7 @@ Configuration (in the application config file, not the solution):
 - ` + "`httpClient.allowPrivateIPs`" + ` -- opens every private range at once. Blunt; prefer the list above. When both are set, allowedPrivateCIDRs WINS and narrows access to just the listed ranges.
 - ` + "`httpClient.trustProxyResolution`" + ` -- for proxied requests whose target does not resolve locally. Defaults to false (fails closed).
 
-**Cloud metadata addresses can never be permitted.** 169.254.169.254, 169.254.170.23 (EKS Pod Identity), and 100.100.100.200 (Alibaba) are blocked under every configuration, because reaching them yields instance credentials.
+**Cloud metadata addresses can never be permitted via direct policy settings.** 169.254.169.254, 169.254.170.23 (EKS Pod Identity), and 100.100.100.200 (Alibaba) are blocked under every ` + "`allowPrivateIPs`" + `/` + "`allowedPrivateCIDRs`" + ` configuration, because reaching them yields instance credentials. The one exception is ` + "`httpClient.trustProxyResolution`" + `: for a proxied hostname that cannot be resolved locally, that setting hands the address decision to the configured proxy, so the metadata guarantee then depends on the proxy enforcing its own egress policy rather than on this client.
 
 A blocked request reports 'blocked by SSRF policy' and names the setting that would permit it. If a solution fails this way, the destination was reaching private address space -- decide whether that was intended before widening the policy.`,
 		Examples: []string{

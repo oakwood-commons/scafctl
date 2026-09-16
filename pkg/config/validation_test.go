@@ -761,4 +761,32 @@ func TestHTTPClientConfig_Validate_AllowedPrivateCIDRs(t *testing.T) {
 			"the error must say which entry is wrong")
 		assert.Contains(t, err.Error(), "nonsense")
 	})
+
+	// The runtime check and the advertised `maxItems` schema cap must not
+	// drift apart: exactly at the limit must pass, and one over must be
+	// rejected with a message naming both the actual and maximum count.
+	t.Run("exactly the maximum entries is accepted", func(t *testing.T) {
+		t.Parallel()
+		entries := make([]string, settings.MaxAllowedPrivateCIDRs)
+		for i := range entries {
+			entries[i] = fmt.Sprintf("10.%d.0.0/16", i%256)
+		}
+		cfg := &HTTPClientConfig{AllowedPrivateCIDRs: PrivateCIDRList(entries...)}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	t.Run("one entry over the maximum is rejected", func(t *testing.T) {
+		t.Parallel()
+		entries := make([]string, settings.MaxAllowedPrivateCIDRs+1)
+		for i := range entries {
+			entries[i] = fmt.Sprintf("10.%d.0.0/16", i%256)
+		}
+		cfg := &HTTPClientConfig{AllowedPrivateCIDRs: PrivateCIDRList(entries...)}
+		err := cfg.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "allowedPrivateCIDRs")
+		assert.Contains(t, err.Error(), fmt.Sprintf("%d", settings.MaxAllowedPrivateCIDRs+1))
+		assert.Contains(t, err.Error(), fmt.Sprintf("%d", settings.MaxAllowedPrivateCIDRs))
+	})
 }
