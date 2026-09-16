@@ -239,6 +239,148 @@ func TestManagerLoad(t *testing.T) {
 	}
 }
 
+// TestManagerLoad_ResultFields verifies the LoadResult enrichment fields
+// (FirstRun, LoadedParams, LoadedResolvers, Location) that command-layer
+// callers use to report what state was found before a run.
+func TestManagerLoad_ResultFields(t *testing.T) {
+	t.Parallel()
+
+	t.Run("first run reports FirstRun true and zero counts", func(t *testing.T) {
+		t.Parallel()
+		// No loadData: the mock returns NewData(), a fresh document with a
+		// zero CreatedAt -- exactly what a backend with nothing saved yet
+		// produces.
+		backend := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(backend))
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		result, err := mgr.Load(context.Background(), nil, CommandInfo{})
+		require.NoError(t, err)
+		assert.True(t, result.FirstRun)
+		assert.Equal(t, 0, result.LoadedParams)
+		assert.Equal(t, 0, result.LoadedResolvers)
+		assert.Equal(t, "state.json", result.Location)
+	})
+
+	t.Run("replay reports FirstRun false with prior counts", func(t *testing.T) {
+		t.Parallel()
+		existing := NewData()
+		existing.Metadata.CreatedAt = time.Now().Add(-time.Hour)
+		existing.Parameters["env"] = "prod"
+		existing.Parameters["app"] = "demo"
+		existing.Resolvers["deployment_id"] = &PersistedEntry{Value: "abc", Type: "string", Immutable: true}
+
+		backend := &mockBackendProvider{loadData: existing}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(backend))
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		result, err := mgr.Load(context.Background(), nil, CommandInfo{})
+		require.NoError(t, err)
+		assert.False(t, result.FirstRun)
+		assert.Equal(t, 2, result.LoadedParams)
+		assert.Equal(t, 1, result.LoadedResolvers)
+		assert.Equal(t, "state.json", result.Location)
+	})
+
+	t.Run("location falls back to the url input when path is absent", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(backend))
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"url": literalValueRef("https://example.com/state")},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		result, err := mgr.Load(context.Background(), nil, CommandInfo{})
+		require.NoError(t, err)
+		assert.Equal(t, "https://example.com/state", result.Location)
+	})
+
+	t.Run("location is empty when the backend uses neither path nor url", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(backend))
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"bucket": literalValueRef("my-bucket")},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		result, err := mgr.Load(context.Background(), nil, CommandInfo{})
+		require.NoError(t, err)
+		assert.Empty(t, result.Location)
+	})
+
+	t.Run("Provider is populated from the backend config", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(backend))
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		result, err := mgr.Load(context.Background(), nil, CommandInfo{})
+		require.NoError(t, err)
+		assert.Equal(t, "mock-state", result.Provider)
+	})
+
+	t.Run("a replayed intent document is not mistaken for a first run", func(t *testing.T) {
+		t.Parallel()
+		// The lean "intent" projection deliberately omits CreatedAt (see
+		// projectState/Intent), so a document produced by that format has a
+		// zero CreatedAt even though it carries replayed parameters. FirstRun
+		// must not key off CreatedAt alone, or replaying a committed intent
+		// document (the --state-file headline path) would be misreported as
+		// "no prior state" while parameters were actually reused.
+		intentLike := NewData()
+		// CreatedAt intentionally left zero, matching a decoded intent doc.
+		intentLike.Parameters["appName"] = "my-app"
+		intentLike.Parameters["environment"] = "sandbox"
+
+		backend := &mockBackendProvider{loadData: intentLike}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(backend))
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("intent.json")},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		result, err := mgr.Load(context.Background(), nil, CommandInfo{})
+		require.NoError(t, err)
+		assert.False(t, result.FirstRun, "loaded parameters must override a zero CreatedAt")
+		assert.Equal(t, 2, result.LoadedParams)
+	})
+}
+
 func TestManagerSave(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -396,7 +538,7 @@ func TestManagerSave(t *testing.T) {
 			rctx, resolvers := tt.setup()
 			solMeta := SolutionMeta{Name: "my-app", Version: "2.0.0"}
 
-			err := mgr.Save(context.Background(), tt.state, rctx, resolvers, tt.params, nil, solMeta)
+			_, err := mgr.Save(context.Background(), tt.state, rctx, resolvers, tt.params, nil, solMeta)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -475,7 +617,7 @@ func TestManagerSaveImmutablesAndParams(t *testing.T) {
 		sd := NewData()
 		params := map[string]any{"appName": "demo", "region": "us-east1"}
 
-		err := mgr.SaveParams(context.Background(), sd, params, nil, solMeta)
+		_, err := mgr.SaveParams(context.Background(), sd, params, nil, solMeta)
 		require.NoError(t, err)
 
 		assert.Equal(t, params, sd.Parameters)
@@ -487,7 +629,68 @@ func TestManagerSaveImmutablesAndParams(t *testing.T) {
 		sd := NewData()
 
 		require.NoError(t, mgr.SaveImmutables(context.Background(), sd, resolver.NewContext(), nil, nil, nil, solMeta, nil))
-		require.NoError(t, mgr.SaveParams(context.Background(), sd, nil, nil, solMeta))
+		_, err := mgr.SaveParams(context.Background(), sd, nil, nil, solMeta)
+		require.NoError(t, err)
+	})
+}
+
+// TestManagerSaveImmutablesAndParams_EmitWrittenOnce verifies that an Emit
+// target is written exactly once per run -- from the final SaveParams commit
+// -- even though SaveImmutables (the interim pre-action lock commit) runs
+// first and also commits to the primary backend. A side-effecting emit
+// backend (e.g. a REST endpoint) must not be invoked twice for one
+// successful run, and must not be invoked at all when SaveImmutables is the
+// only commit that happens (e.g. because a later action fails and
+// SaveParams is never reached).
+func TestManagerSaveImmutablesAndParams_EmitWrittenOnce(t *testing.T) {
+	t.Parallel()
+
+	newMgr := func(t *testing.T) (*Manager, *mockBackendProvider, *mockBackendProvider) {
+		t.Helper()
+		primary := &mockBackendProvider{}
+		emit := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(namedMockBackend("mock-primary", primary)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit", emit)))
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{Provider: "mock-primary", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("state.json")}},
+			Emit: []EmitTarget{
+				{Backend: Backend{Provider: "mock-emit", Format: FormatIntent, Inputs: map[string]*spec.ValueRef{"path": literalValueRef("intent.json")}}},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		return mgr, primary, emit
+	}
+	solMeta := SolutionMeta{Name: "app", Version: "1.0.0"}
+
+	t.Run("a full solution/action run writes the emit target exactly once", func(t *testing.T) {
+		t.Parallel()
+		mgr, primary, emit := newMgr(t)
+		sd := NewData()
+
+		// Mirrors run solution/run action: SaveImmutables runs before actions,
+		// SaveParams runs after actions succeed.
+		require.NoError(t, mgr.SaveImmutables(context.Background(), sd, resolver.NewContext(), nil, nil, nil, solMeta, nil))
+		result, err := mgr.SaveParams(context.Background(), sd, map[string]any{"env": "prod"}, nil, solMeta)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		assert.Len(t, primary.saveCalls, 2, "the primary is intentionally saved at both the interim lock commit and the final commit")
+		assert.Len(t, emit.saveCalls, 1, "the emit target must be saved exactly once, at the final commit")
+		require.Len(t, result.Emits, 1)
+		assert.False(t, result.Emits[0].Skipped)
+	})
+
+	t.Run("SaveImmutables alone (e.g. a later action fails) never writes the emit target", func(t *testing.T) {
+		t.Parallel()
+		mgr, primary, emit := newMgr(t)
+		sd := NewData()
+
+		require.NoError(t, mgr.SaveImmutables(context.Background(), sd, resolver.NewContext(), nil, nil, nil, solMeta, nil))
+
+		assert.Len(t, primary.saveCalls, 1, "the interim lock commit still saves the primary")
+		assert.Empty(t, emit.saveCalls, "a run that never reaches SaveParams must not publish an emit target")
 	})
 }
 
@@ -516,7 +719,7 @@ func TestManagerSave_Immutable(t *testing.T) {
 		sd := NewData()
 		solMeta := SolutionMeta{Name: "my-app", Version: "1.0.0"}
 
-		err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
+		_, err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
 		assert.NoError(t, err)
 		assert.Contains(t, sd.Resolvers, "cluster_id")
 		assert.Equal(t, "uuid-1234", sd.Resolvers["cluster_id"].Value)
@@ -547,7 +750,7 @@ func TestManagerSave_Immutable(t *testing.T) {
 		}
 		solMeta := SolutionMeta{Name: "my-app", Version: "1.0.0"}
 
-		err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
+		_, err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
 		assert.NoError(t, err)
 		// CreatedAt should remain unchanged (entry was skipped)
 		assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), sd.Resolvers["cluster_id"].CreatedAt)
@@ -577,7 +780,7 @@ func TestManagerSave_Immutable(t *testing.T) {
 		}
 		solMeta := SolutionMeta{Name: "my-app", Version: "1.0.0"}
 
-		err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
+		_, err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrImmutableEntry)
 		assert.Contains(t, err.Error(), "cluster_id")
@@ -603,7 +806,7 @@ func TestManagerSave_Immutable(t *testing.T) {
 		sd := NewData()
 		solMeta := SolutionMeta{Name: "my-app", Version: "1.0.0"}
 
-		err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
+		_, err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
 		assert.NoError(t, err)
 		assert.NotContains(t, sd.Resolvers, "env")
 	})
@@ -1027,7 +1230,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
-		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		_, err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
 		assert.NoError(t, err)
 		assert.Len(t, backend.saveCalls, 1)
 		assert.Equal(t, "state.json", backend.saveCalls[0]["path"])
@@ -1050,7 +1253,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
-		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		_, err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
 		assert.NoError(t, err)
 		assert.Len(t, backend.saveCalls, 1)
 		assert.Equal(t, "feature-branch", backend.saveCalls[0]["branch"])
@@ -1076,7 +1279,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 		sd := NewData()
 		rctx := resolver.NewContext()
 		resolverData := map[string]any{"featureBranch": "feat/my-feature"}
-		err := mgr.Save(context.Background(), sd, rctx, nil, nil, resolverData, SolutionMeta{Name: "app", Version: "1.0.0"})
+		_, err := mgr.Save(context.Background(), sd, rctx, nil, nil, resolverData, SolutionMeta{Name: "app", Version: "1.0.0"})
 		assert.NoError(t, err)
 		assert.Len(t, backend.saveCalls, 1)
 		assert.Equal(t, "feat/my-feature", backend.saveCalls[0]["branch"])
@@ -1101,7 +1304,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 		sd := NewData()
 		rctx := resolver.NewContext()
 		resolverData := map[string]any{"appName": "my-app"}
-		err := mgr.Save(context.Background(), sd, rctx, nil, nil, resolverData, SolutionMeta{Name: "app", Version: "1.0.0"})
+		_, err := mgr.Save(context.Background(), sd, rctx, nil, nil, resolverData, SolutionMeta{Name: "app", Version: "1.0.0"})
 		assert.NoError(t, err)
 		assert.Len(t, backend.saveCalls, 1)
 		assert.Equal(t, "feat/my-app", backend.saveCalls[0]["branch"])
@@ -1127,7 +1330,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
-		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		_, err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
 		assert.NoError(t, err)
 		assert.Len(t, backend.saveCalls, 1)
 		// saveOverrides value should win
@@ -1177,7 +1380,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
-		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		_, err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "save overrides")
 	})
@@ -1199,12 +1402,398 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
-		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		_, err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
 		assert.NoError(t, err)
 		assert.Len(t, backend.saveCalls, 1)
 		// nil saveOverride should be skipped, not overwrite
 		_, hasBranch := backend.saveCalls[0]["branch"]
 		assert.False(t, hasBranch)
+	})
+}
+
+// TestManagerSave_Format verifies that Backend.Format controls what shape the
+// primary backend's state_save receives.
+func TestManagerSave_Format(t *testing.T) {
+	t.Parallel()
+
+	t.Run("full format saves the complete document", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Format:   FormatFull,
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		sd := NewData()
+		sd.Resolvers["cluster_id"] = &PersistedEntry{Value: "abc", Type: "string", Immutable: true}
+		_, err := mgr.Save(context.Background(), sd, resolver.NewContext(), nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+		require.Len(t, backend.saveCalls, 1)
+
+		data, ok := backend.saveCalls[0]["data"].(map[string]any)
+		require.True(t, ok)
+		assert.Contains(t, data, "resolvers", "full format must retain resolver locks")
+	})
+
+	t.Run("intent format drops resolver locks", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Format:   FormatIntent,
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("intent.json")},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		sd := NewData()
+		sd.Resolvers["cluster_id"] = &PersistedEntry{Value: "abc", Type: "string", Immutable: true}
+		_, err := mgr.Save(context.Background(), sd, resolver.NewContext(), nil, map[string]any{"env": "prod"}, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+		require.Len(t, backend.saveCalls, 1)
+
+		data, ok := backend.saveCalls[0]["data"].(map[string]any)
+		require.True(t, ok)
+		assert.NotContains(t, data, "resolvers", "intent format must omit resolver locks")
+		params, ok := data["parameters"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "prod", params["env"])
+	})
+
+	t.Run("unknown format fails the save", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Format:   "bogus",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		_, err := mgr.Save(context.Background(), NewData(), resolver.NewContext(), nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown backend format")
+		assert.Empty(t, backend.saveCalls, "the backend must not be called when projection fails")
+	})
+}
+
+// TestManagerSave_Emit verifies the save-only Emit mechanism: multiple
+// projected targets, each independently formatted and independently gated.
+func TestManagerSave_Emit(t *testing.T) {
+	t.Parallel()
+
+	t.Run("primary and emit targets are both saved", func(t *testing.T) {
+		t.Parallel()
+		primary := &mockBackendProvider{}
+		emitTarget := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(namedMockBackend("mock-primary", primary)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit", emitTarget)))
+
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-primary",
+				Format:   FormatFull,
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef(".scafctl/state.json")},
+			},
+			Emit: []EmitTarget{
+				{
+					Backend: Backend{
+						Provider: "mock-emit",
+						Format:   FormatIntent,
+						Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("intent/sandbox.json")},
+					},
+				},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		sd := NewData()
+		sd.Resolvers["cluster_id"] = &PersistedEntry{Value: "abc", Type: "string", Immutable: true}
+		_, err := mgr.Save(context.Background(), sd, resolver.NewContext(), nil, map[string]any{"env": "prod"}, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+
+		require.Len(t, primary.saveCalls, 1)
+		primaryData, _ := primary.saveCalls[0]["data"].(map[string]any)
+		assert.Contains(t, primaryData, "resolvers", "primary (full) save must retain resolver locks")
+
+		require.Len(t, emitTarget.saveCalls, 1, "the emit target must also be saved")
+		emitData, _ := emitTarget.saveCalls[0]["data"].(map[string]any)
+		assert.NotContains(t, emitData, "resolvers", "emit (intent) save must omit resolver locks")
+		emitParams, _ := emitData["parameters"].(map[string]any)
+		assert.Equal(t, "prod", emitParams["env"])
+	})
+
+	t.Run("multiple emit targets are all saved", func(t *testing.T) {
+		t.Parallel()
+		primary := &mockBackendProvider{}
+		emitA := &mockBackendProvider{}
+		emitB := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(namedMockBackend("mock-primary", primary)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit-a", emitA)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit-b", emitB)))
+
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{Provider: "mock-primary", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("state.json")}},
+			Emit: []EmitTarget{
+				{Backend: Backend{Provider: "mock-emit-a", Format: FormatIntent, Inputs: map[string]*spec.ValueRef{"path": literalValueRef("a.json")}}},
+				{Backend: Backend{Provider: "mock-emit-b", Format: FormatIntent, Inputs: map[string]*spec.ValueRef{"path": literalValueRef("b.json")}}},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		_, err := mgr.Save(context.Background(), NewData(), resolver.NewContext(), nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+
+		assert.Len(t, primary.saveCalls, 1)
+		assert.Len(t, emitA.saveCalls, 1)
+		assert.Len(t, emitB.saveCalls, 1)
+	})
+
+	t.Run("emit enabled false skips that target", func(t *testing.T) {
+		t.Parallel()
+		primary := &mockBackendProvider{}
+		emitTarget := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(namedMockBackend("mock-primary", primary)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit", emitTarget)))
+
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{Provider: "mock-primary", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("state.json")}},
+			Emit: []EmitTarget{
+				{
+					Backend: Backend{Provider: "mock-emit", Format: FormatIntent, Inputs: map[string]*spec.ValueRef{"path": literalValueRef("intent.json")}},
+					Enabled: literalValueRef(false),
+				},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		_, err := mgr.Save(context.Background(), NewData(), resolver.NewContext(), nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+
+		assert.Len(t, primary.saveCalls, 1, "the primary backend must still be saved")
+		assert.Empty(t, emitTarget.saveCalls, "a disabled emit target must not be saved")
+	})
+
+	t.Run("emit enabled absent defaults to true", func(t *testing.T) {
+		t.Parallel()
+		primary := &mockBackendProvider{}
+		emitTarget := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(namedMockBackend("mock-primary", primary)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit", emitTarget)))
+
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{Provider: "mock-primary", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("state.json")}},
+			Emit: []EmitTarget{
+				{Backend: Backend{Provider: "mock-emit", Format: FormatIntent, Inputs: map[string]*spec.ValueRef{"path": literalValueRef("intent.json")}}},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		_, err := mgr.Save(context.Background(), NewData(), resolver.NewContext(), nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+
+		assert.Len(t, emitTarget.saveCalls, 1, "an emit target with no Enabled field must default to always-emit")
+	})
+
+	t.Run("emit enabled can reference any resolver, unlike the primary Enabled", func(t *testing.T) {
+		t.Parallel()
+		primary := &mockBackendProvider{}
+		emitTarget := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(namedMockBackend("mock-primary", primary)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit", emitTarget)))
+
+		expr := celexp.Expression("_.environment == 'sandbox'")
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{Provider: "mock-primary", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("state.json")}},
+			Emit: []EmitTarget{
+				{
+					Backend: Backend{Provider: "mock-emit", Format: FormatIntent, Inputs: map[string]*spec.ValueRef{"path": literalValueRef("intent.json")}},
+					Enabled: &spec.ValueRef{Expr: &expr},
+				},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+
+		// resolverData ("_") carries the "environment" resolver's output, which
+		// is exactly the kind of reference the primary Config.Enabled cannot make
+		// at load time (it runs before all resolvers), but an Emit target's
+		// Enabled can, because it is evaluated at save time after every resolver
+		// has run.
+		resolverData := map[string]any{"environment": "sandbox"}
+		_, err := mgr.Save(context.Background(), NewData(), resolver.NewContext(), nil, nil, resolverData, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+		assert.Len(t, emitTarget.saveCalls, 1)
+	})
+
+	t.Run("emit target save error aborts remaining emit targets but not the primary result", func(t *testing.T) {
+		t.Parallel()
+		primary := &mockBackendProvider{}
+		failingEmit := &mockBackendProvider{saveErr: assert.AnError}
+		neverReached := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(namedMockBackend("mock-primary", primary)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit-fail", failingEmit)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit-never", neverReached)))
+
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{Provider: "mock-primary", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("state.json")}},
+			Emit: []EmitTarget{
+				{Backend: Backend{Provider: "mock-emit-fail", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("a.json")}}},
+				{Backend: Backend{Provider: "mock-emit-never", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("b.json")}}},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		_, err := mgr.Save(context.Background(), NewData(), resolver.NewContext(), nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "emit[0]")
+
+		assert.Len(t, primary.saveCalls, 1, "the primary backend save already succeeded and is not undone")
+		assert.Empty(t, neverReached.saveCalls, "an emit target after a failing one must not run")
+	})
+
+	t.Run("no emit targets behaves exactly as before emit existed", func(t *testing.T) {
+		t.Parallel()
+		primary := &mockBackendProvider{}
+		reg := newTestRegistry(t, primary)
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("state.json")}},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		_, err := mgr.Save(context.Background(), NewData(), resolver.NewContext(), nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+		assert.Len(t, primary.saveCalls, 1)
+	})
+}
+
+// namedMockBackend wraps a *mockBackendProvider so its Descriptor() reports a
+// caller-chosen name, letting a single test registry host several distinct
+// mock backends (e.g. a primary and one or more emit targets).
+type namedMockBackendProvider struct {
+	*mockBackendProvider
+	name string
+}
+
+func (n *namedMockBackendProvider) Descriptor() *provider.Descriptor {
+	desc := *n.mockBackendProvider.Descriptor()
+	desc.Name = n.name
+	return &desc
+}
+
+func namedMockBackend(name string, p *mockBackendProvider) provider.Provider {
+	return &namedMockBackendProvider{mockBackendProvider: p, name: name}
+}
+
+// TestManagerSave_SaveResult verifies that Save and SaveParams return a
+// SaveResult describing every backend actually written -- the primary and
+// each Emit target, including targets skipped by their Enabled condition --
+// so command-layer callers can report a save confirmation without
+// re-deriving it from the state Config.
+func TestManagerSave_SaveResult(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reports the primary write's location and format", func(t *testing.T) {
+		t.Parallel()
+		primary := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(namedMockBackend("mock-primary", primary)))
+
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-primary",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		result, err := mgr.Save(context.Background(), NewData(), resolver.NewContext(), nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, "mock-primary", result.Primary.Provider)
+		assert.Equal(t, "state.json", result.Primary.Location)
+		assert.Equal(t, FormatFull, result.Primary.Format, "an unset Format normalizes to FormatFull")
+		assert.False(t, result.Primary.Skipped)
+		assert.Empty(t, result.Emits)
+	})
+
+	t.Run("reports each emit target, including one skipped by its Enabled condition", func(t *testing.T) {
+		t.Parallel()
+		primary := &mockBackendProvider{}
+		enabledEmit := &mockBackendProvider{}
+		disabledEmit := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(namedMockBackend("mock-primary", primary)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit-on", enabledEmit)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit-off", disabledEmit)))
+
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{Provider: "mock-primary", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("state.json")}},
+			Emit: []EmitTarget{
+				{Backend: Backend{Provider: "mock-emit-on", Format: FormatIntent, Inputs: map[string]*spec.ValueRef{"path": literalValueRef("intent.json")}}},
+				{
+					Backend: Backend{Provider: "mock-emit-off", Format: FormatIntent, Inputs: map[string]*spec.ValueRef{"path": literalValueRef("skipped.json")}},
+					Enabled: literalValueRef(false),
+				},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		result, err := mgr.Save(context.Background(), NewData(), resolver.NewContext(), nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Len(t, result.Emits, 2)
+
+		assert.Equal(t, "mock-emit-on", result.Emits[0].Provider)
+		assert.Equal(t, "intent.json", result.Emits[0].Location)
+		assert.Equal(t, FormatIntent, result.Emits[0].Format)
+		assert.False(t, result.Emits[0].Skipped)
+
+		assert.Equal(t, "mock-emit-off", result.Emits[1].Provider)
+		assert.Equal(t, FormatIntent, result.Emits[1].Format, "a skipped target still reports its declared Format")
+		assert.True(t, result.Emits[1].Skipped)
+		assert.Empty(t, disabledEmit.saveCalls, "a skipped target must not actually be saved")
+	})
+
+	t.Run("SaveParams also returns a SaveResult", func(t *testing.T) {
+		t.Parallel()
+		primary := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(namedMockBackend("mock-primary", primary)))
+
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{Provider: "mock-primary", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("state.json")}},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		result, err := mgr.SaveParams(context.Background(), NewData(), nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, "state.json", result.Primary.Location)
+	})
+
+	t.Run("nil config yields a nil SaveResult and nil error", func(t *testing.T) {
+		t.Parallel()
+		mgr := NewManager(nil, provider.NewRegistry(), settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+		result, err := mgr.Save(context.Background(), NewData(), resolver.NewContext(), nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+		assert.Nil(t, result)
 	})
 }
 

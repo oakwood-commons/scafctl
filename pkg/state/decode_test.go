@@ -4,6 +4,7 @@
 package state
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -23,6 +24,54 @@ func TestDecodeData_ValidRoundTrip(t *testing.T) {
 	assert.NotNil(t, sd.Resolvers)
 	assert.NotNil(t, sd.Fingerprints)
 	assert.NotNil(t, sd.Command.Parameters)
+}
+
+// TestDecodeData_AttestationPreserved verifies that an opaque attestation field
+// supplied on an intent document survives decoding verbatim, so a downstream
+// verifier can read it back unchanged. scafctl must never interpret it.
+func TestDecodeData_AttestationPreserved(t *testing.T) {
+	t.Parallel()
+	raw := fmt.Appendf(nil,
+		`{"schemaVersion":%d,"parameters":{"env":"prod"},"attestation":{"principal":"svc-deployer","issuer":"https://issuer.example.com","digest":"sha256:abc"}}`,
+		SchemaVersionCurrent)
+
+	sd, err := DecodeData(raw)
+	require.NoError(t, err)
+	require.NotEmpty(t, sd.Attestation, "attestation must be preserved on decode")
+
+	var att map[string]any
+	require.NoError(t, json.Unmarshal(sd.Attestation, &att))
+	assert.Equal(t, "svc-deployer", att["principal"])
+	assert.Equal(t, "https://issuer.example.com", att["issuer"])
+	assert.Equal(t, "sha256:abc", att["digest"])
+}
+
+// TestDecodeData_AttestationAbsentIsEmpty verifies a document without an
+// attestation decodes to an empty (not spuriously populated) field.
+func TestDecodeData_AttestationAbsentIsEmpty(t *testing.T) {
+	t.Parallel()
+	raw := fmt.Appendf(nil, `{"schemaVersion":%d,"parameters":{"env":"prod"}}`, SchemaVersionCurrent)
+
+	sd, err := DecodeData(raw)
+	require.NoError(t, err)
+	assert.Empty(t, sd.Attestation)
+}
+
+// TestData_AttestationRoundTrip verifies the attestation survives a full
+// marshal -> decode cycle, mirroring the load -> regenerate-full-state path a
+// run performs when it is pointed at an intent file.
+func TestData_AttestationRoundTrip(t *testing.T) {
+	t.Parallel()
+	original := NewData()
+	original.SchemaVersion = SchemaVersionCurrent
+	original.Attestation = json.RawMessage(`{"principal":"svc-deployer"}`)
+
+	encoded, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	decoded, err := DecodeData(encoded)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"principal":"svc-deployer"}`, string(decoded.Attestation))
 }
 
 func TestDecodeData_ContentlessIsFreshState(t *testing.T) {

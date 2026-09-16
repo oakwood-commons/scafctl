@@ -123,14 +123,16 @@ State is declared via a top-level `state` field on the `Solution` struct, as a p
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `enabled` | `ValueRef` | Yes | Dynamic activation -- literal bool, CEL expression, or Go template. Resolver references (`rslvr:`) are not supported because state loads before resolvers run |
-| `backend` | `Backend` | Yes | Backend provider configuration |
+| `backend` | `Backend` | Yes | The **primary** backend: the only one used for load, and always saved to |
+| `emit` | `[]EmitTarget` | No | Additional **save-only** projected state emissions, each written through its own backend. See [Emit Targets](#emit-targets) |
 
 ### Backend Type
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `provider` | `string` | Yes | Name of a registered provider with `CapabilityState` (e.g., `"file"`) |
-| `inputs` | `map[string]*ValueRef` | Yes | Provider-specific inputs resolved at **both** load and save time. Must only use `literal`, `__params` expressions, or templates -- resolver references (`rslvr:`) and `_` in CEL are not available at load time. |
+| `format` | `string` | No | Save-time projection: `"full"` (default) saves the complete state document; `"intent"` saves the lean, replay-relevant projection. Does not affect load. See [Emit Targets](#emit-targets) |
+| `inputs` | `map[string]*ValueRef` | Yes | Provider-specific inputs resolved at **both** load and save time. Must only use `literal`, `__params` expressions, or templates -- resolver references (`rslvr:`) and `_` in CEL are not available at load time. **Exception:** an `Emit` target's `inputs` are save-only (like `saveOverrides`), so they may use `_` and resolver references freely. |
 | `saveOverrides` | `map[string]*ValueRef` | No | Provider-specific inputs resolved **only** at save time. Can use resolver references (`rslvr:`), `_` in CEL, and all other ValueRef forms. Keys that overlap with `inputs` override them at save time. |
 
 ### Save-Time Inputs (`saveOverrides`)
@@ -191,6 +193,132 @@ spec:
               key: "cluster_id"
 ~~~
 
+## Emit Targets
+
+A solution is not limited to a single saved copy of its state. `Config.Emit` is
+a list of additional, **save-only** projections of the same state document,
+each written through its own backend -- the primary `Backend` is always the
+one used for load; `Emit` targets are extra outputs produced only when saving.
+
+This is the mechanism for keeping a **full-fidelity state file locally** (so
+immutable locks and action fingerprints persist across runs) while also
+publishing a **lean, human-readable, signable "intent" document** intended to
+be committed -- for example by a managed pipeline that replays that intent to
+regenerate trusted output:
+
+~~~yaml
+state:
+  enabled: true
+  backend:                                # full-fidelity primary
+    provider: file
+    inputs:
+      path: ".scafctl/state.json"
+  emit:
+    - provider: file
+      format: intent
+      inputs:
+        path: "intent/sandbox.json"
+~~~
+
+Both files are written on every save from this one solution: `.scafctl/state.json`
+keeps everything (resolver locks, fingerprints, command info), while
+`intent/sandbox.json` gets only `schemaVersion`, `metadata.solution`/`version`,
+`parameters`, and `attestation` (see [Backend Format](#backend-format) below).
+
+### Emit target fields
+
+Each entry in `emit` is a `Backend` (`provider`, `format`, `inputs`,
+`saveOverrides`) plus one addition:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | `ValueRef` | No | Gates this specific emission, independent of the top-level `state.enabled`. Defaults to `true` (always emit) when unset. |
+
+`enabled` is resolved at **save time**, after every resolver has run. This
+means it may reference **any** resolver -- unlike the primary `state.enabled`,
+which is a load-time, pre-resolver-execution field and can only reference
+state-independent resolvers (see [Dynamic `enabled` Field](#dynamic-enabled-field)).
+There is no acyclic constraint to honor at save time, because every resolver
+(state-dependent or not) has already produced its final value:
+
+~~~yaml
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs: { path: ".scafctl/state.json" }
+  emit:
+    - provider: file
+      format: intent
+      inputs: { path: "intent/sandbox.json" }
+      # Only publish the intent for environments meant to be committed.
+      enabled: { expr: "_.environment == 'sandbox'" }
+~~~
+
+### Failure semantics
+
+A failure saving the **primary** backend aborts before any `emit` target is
+attempted. A failure saving one `emit` target aborts the **remaining** `emit`
+targets (in declaration order) but does **not** undo the primary save, which
+has already succeeded by that point, nor any earlier `emit` targets that
+already succeeded.
+
+### Backend Format
+
+`Backend.Format` (used by both the primary backend and each `emit` target)
+controls what shape of the state document that backend receives at save time:
+
+| Value | Meaning |
+|-------|---------|
+| `"full"` (default; empty string behaves identically) | The complete state document: `schemaVersion`, `metadata` (including the volatile `createdAt`/`lastUpdatedAt`/`runtime` fields), `command`, `parameters`, `resolvers`, `fingerprints`, `attestation`. |
+| `"intent"` | The lean, replay-relevant projection: `schemaVersion`, `metadata.solution`, `metadata.version`, `parameters`, and `attestation` (when present). Omits `command`, `resolvers`, `fingerprints`, and the volatile `metadata` sub-fields. |
+
+`format` never affects **load** -- decoding a state document already tolerates
+a lean document missing sections (see [State Data Schema](#state-data-schema)),
+so an intent-format file loads back cleanly regardless of which backend wrote
+it.
+
+The `intent` projection is deliberately deterministic and free of timestamps:
+saving the same parameters twice produces byte-identical JSON (modulo map key
+ordering, which `encoding/json` already sorts), which is what makes an intent
+document a stable, signable artifact -- a signature over it survives repeated,
+unchanged replays without spuriously invalidating.
+
+### The lossy shortcut, and its guardrail
+
+Setting `format: intent` directly on the **primary** backend (with no `emit`
+at all) is a valid, supported shortcut for the case where the intent document
+*is* the only state that matters -- for example, a managed pipeline whose
+entire job is replaying a committed intent file. But it is **lossy**:
+immutable resolver locks live in the `resolvers` section, which the intent
+projection omits, so an immutable value's cross-run consistency silently stops
+being enforced against that backend alone.
+
+~~~yaml
+# Lossy: works, but an immutable resolver's lock is never actually persisted.
+state:
+  enabled: true
+  backend:
+    provider: file
+    format: intent
+    inputs: { path: "intent.json" }
+spec:
+  resolvers:
+    cluster_id:
+      type: string
+      immutable: true
+      resolve: { with: [{ provider: parameter, inputs: { key: cluster_id } }] }
+~~~
+
+`scafctl lint` warns on this combination (`state-format-lossy-with-immutable`).
+The two ways to resolve the warning:
+
+- Keep the primary backend in the default `full` format and move
+  `format: intent` to an `emit` target instead (the recommended pattern above)
+  -- the full-fidelity primary still enforces the immutable lock.
+- Remove `immutable: true` if that resolver's cross-run consistency genuinely
+  does not need enforcing.
+
 ### Dynamic `enabled` Field
 
 The `enabled` field is a `ValueRef`, which means it supports:
@@ -226,6 +354,111 @@ The `run solution`, `run resolver`, `run action`, and `render solution` commands
 - `Save` is never called (no post-execution write).
 
 Because the gate lives in the command layer (the `stateMgr` stays `nil`), no changes are required in `pkg/state`. When the solution declares a `state` block and `--no-state` is passed, a one-line stderr notice is emitted (respecting `--quiet`). Resolvers that read the `state` provider receive the provider's no-state fallback. The flag is intended for CI/offline runs; it deliberately disables immutability enforcement for that run.
+
+### Explicit State File (`--state-file`)
+
+The `run solution`, `run resolver`, and `run action` commands accept a
+`--state-file <path>` flag that points the run at an explicit state file using
+the builtin `file` backend. It is an **alternate input source** for state; the
+solution's own `state` block remains the primary way to configure state.
+
+Behavior:
+
+- **When the solution declares no `state` block**, the flag enables state for
+  the run. This lets a solution be driven by an external state file without
+  being authored for it.
+- **When the solution declares a `state` block**, the flag overrides it
+  entirely (provider, format, and `emit` targets included) and a one-line
+  stderr notice reports what was replaced, so a user is never silently
+  switched off a configured backend (for example a `github` backend). When the
+  replaced block declared `emit` targets, the notice also reports how many
+  were dropped (e.g. `(2 emit target(s) dropped)`), since those targets are
+  otherwise silently lost.
+- The synthesized config **inherits the `format` the solution's own primary
+  backend declared** (or `"full"` when the solution declares no state block),
+  so a solution's chosen save shape survives being pointed at an explicit
+  file. It carries **no `emit` targets**: pointing a run at an explicit file is
+  a complete substitution for state, not an additional output.
+- State is **read from and written back to** the path, so successive runs
+  accumulate into it exactly as a solution-configured file backend would.
+- It is **mutually exclusive with `--no-state`**; combining them is an error.
+
+The path is deliberately a flag rather than a `-r` parameter. Routing it
+through a parameter (`path: { expr: "__params.statePath" }`) would merge the
+plumbing key into the saved parameter set and persist it, permanently
+polluting the document. The flag keeps `parameters` clean.
+
+#### Intent documents: a state file is a superset of its own inputs
+
+A state file loads through `DecodeData`, which tolerates missing sections
+(unset maps are normalized to empty) and only enforces the schema-version
+guard. So a **subset** document carrying just the fields the `intent` format
+produces -- `schemaVersion`, `metadata.solution`/`metadata.version`, and
+`parameters` -- is a valid state input:
+
+~~~json
+{
+  "schemaVersion": 3,
+  "metadata": { "solution": "deploy-app", "version": "1.5.4" },
+  "parameters": { "appName": "my-app", "environmentName": "sandbox" }
+}
+~~~
+
+A run pointed at it via `--state-file` replays the parameters and, at save
+time, **regenerates the full state document in place** (stamping runtime
+metadata, timestamps, resolver locks, etc., unless the inherited format is
+itself `intent`, in which case the regenerated document stays lean). No
+separate "expand intent to state" step is required -- load subset, run, save.
+
+When a loaded state document records a `metadata.solution` or
+`metadata.version` that differs from the solution being run, an **advisory
+stderr warning** is emitted; it never fails the run, because an intent may
+legitimately omit metadata and running a newer solution version against older
+state is a normal upgrade path.
+
+### Run-Time Feedback
+
+The state lifecycle is not silent: `run solution`, `run resolver`, and `run
+action` each print a one-line stderr notice before execution (what was
+loaded) and after a successful save (what was written). This is separate from
+the advisory notices above (the `--no-state` notice, the `--state-file`
+override notice, the solution/version mismatch warning) -- those report
+*anomalies*; this reports the *steady-state* outcome, so state's effect on a
+run is never invisible.
+
+**Load** (printed once, before resolver/action execution, when state is
+enabled and not skipped):
+
+- First run (no prior state found): `state: no prior state at <location> (first run)`
+- Replay: `state: reusing <N> parameter(s) and <M> locked value(s) from <location>`
+
+**Save** (printed once per backend actually written, after a successful save):
+
+- Primary backend: `state: updated <location> (<format>)`
+- Each enabled `emit` target: `state: emitted <location> (<format>)`
+
+`<location>` is the backend's resolved `path` or `url` input when it has one
+(a file path or a REST endpoint), otherwise a generic `<provider> backend`
+label. `<format>` is the backend's declared `format` (`full` or `intent`).
+
+An `emit` target skipped by its own `enabled` condition produces **no** line:
+an explicitly disabled target is not news, and reporting it would make a
+solution with several conditional targets noisy on every run.
+
+Like every other state notice, these are written to stderr via the shared
+`Writer`, so they respect `--quiet` (fully suppressed) and never appear in
+structured stdout (`-o json`/`-o yaml`) -- a machine consumer never has to
+filter them out of the document it parses.
+
+The `SaveImmutables` commit that runs before workflow actions (see
+[Immutable Resolvers](#immutable-resolvers)) is intentionally **not**
+reported: it is an interim lock-in ahead of side effects, not the run's
+user-facing save confirmation, which is reported once from the post-action
+`SaveParams` commit. For the same reason, `SaveImmutables` never writes
+`emit` targets -- only the primary backend. A side-effecting emit backend
+(e.g. an HTTP endpoint) is written **at most once per run**, from the final
+commit; writing it from the interim commit too would double-publish on
+success and publish an intent for a run whose actions later fail.
 
 
 ---
@@ -263,6 +496,11 @@ State is persisted as JSON. The schema includes a `schemaVersion` field for forw
       "type": "string",
       "createdAt": "2026-02-12T10:00:00Z"
     }
+  },
+  "attestation": {
+    "principal": "svc-deployer",
+    "issuer": "https://issuer.example.com",
+    "digest": "sha256:..."
   }
 }
 ~~~
@@ -284,6 +522,7 @@ State is persisted as JSON. The schema includes a `schemaVersion` field for forw
 | `command.parameters` | Key-value pairs from the most recent invocation's `-r/--resolver` flags |
 | `parameters` | Merged set of all CLI parameters across runs (drives replay) |
 | `immutables` | Map of immutable resolver name to locked `Entry` |
+| `attestation` | Optional, opaque producer attestation carried with an intent document. scafctl never interprets or verifies it; it is stored verbatim and round-tripped across load, projection (see [Backend Format](#backend-format)), and save so a downstream verifier can read it back unchanged. Any cryptographic signature over the document is expected to be **detached** (stored beside the file), since a signature cannot cover bytes that contain the signature. |
 
 ### Entry
 

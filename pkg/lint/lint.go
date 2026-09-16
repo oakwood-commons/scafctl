@@ -2731,32 +2731,49 @@ func lintState(sol *solution.Solution, result *Result, registry providerLookup) 
 	lintStateRefs(sol, result, registry)
 	lintStateSaveOverrides(sol, result)
 	lintStateGitHubNoSaveBranch(sol, result)
+	lintStateEmit(sol, result, registry)
+	lintStateFormatLossy(sol, result)
 }
 
 // lintStateBackend validates the backend provider configuration.
 // Returns false if further state linting should be skipped (e.g., backend is missing).
 func lintStateBackend(sol *solution.Solution, result *Result, registry providerLookup) bool {
-	location := "state"
-
-	backendName := sol.State.Backend.Provider
-	if backendName == "" {
-		result.addFinding(SeverityError, "state", location+".backend.provider",
-			"state backend provider is not specified",
-			"Set backend.provider to a registered provider with CapabilityState (e.g., 'file')",
-			"missing-state-backend")
+	if !lintBackendProviderAndFormat(sol.State.Backend, "state.backend", result, registry,
+		"missing-state-backend", "invalid-state-backend") {
 		return false
 	}
 
-	prov, found := registry.Get(backendName)
+	lintNilInputs(sol.State.Backend.Inputs, "state.backend", result)
+	return true
+}
+
+// lintBackendProviderAndFormat validates that a Backend's provider is
+// registered with CapabilityState and that its Format (if set) is a
+// recognized value. location is the config path of the backend itself (e.g.
+// "state.backend" or "state.emit[0]"); missingRule/invalidRule name the
+// findings for a missing/unregistered provider so each call site can report
+// under its own established rule name. Returns false when the provider name is
+// empty, so the caller can skip further backend-dependent checks (there is
+// nothing more to validate against an unspecified provider).
+func lintBackendProviderAndFormat(backend state.Backend, location string, result *Result, registry providerLookup, missingRule, invalidRule string) bool {
+	if backend.Provider == "" {
+		result.addFinding(SeverityError, "state", location+".provider",
+			"state backend provider is not specified",
+			"Set backend.provider to a registered provider with CapabilityState (e.g., 'file')",
+			missingRule)
+		return false
+	}
+
+	prov, found := registry.Get(backend.Provider)
 	if !found {
 		// If the provider is declared in bundle.plugins (or is an official
 		// provider), it will be resolved at runtime. We cannot verify
 		// capabilities at lint time, so skip the finding.
-		if !registry.Has(backendName) {
-			result.addFinding(SeverityError, "state", location+".backend.provider",
-				fmt.Sprintf("state backend provider '%s' not found in registry", backendName),
+		if !registry.Has(backend.Provider) {
+			result.addFinding(SeverityError, "state", location+".provider",
+				fmt.Sprintf("state backend provider '%s' not found in registry", backend.Provider),
 				"Use a registered provider with CapabilityState such as 'file' or 'http'. External providers like 'github' require an installed plugin",
-				"invalid-state-backend")
+				invalidRule)
 		}
 	} else {
 		desc := prov.Descriptor()
@@ -2768,15 +2785,67 @@ func lintStateBackend(sol *solution.Solution, result *Result, registry providerL
 			}
 		}
 		if !hasState {
-			result.addFinding(SeverityError, "state", location+".backend.provider",
-				fmt.Sprintf("provider '%s' does not have CapabilityState", backendName),
+			result.addFinding(SeverityError, "state", location+".provider",
+				fmt.Sprintf("provider '%s' does not have CapabilityState", backend.Provider),
 				"Use a provider that implements CapabilityState",
-				"invalid-state-backend")
+				invalidRule)
 		}
 	}
 
-	lintNilInputs(sol.State.Backend.Inputs, location+".backend", result)
+	if backend.Format != "" && backend.Format != state.FormatFull && backend.Format != state.FormatIntent {
+		result.addFinding(SeverityError, "state", location+".format",
+			fmt.Sprintf("unknown state backend format %q", backend.Format),
+			fmt.Sprintf("Use %q (default) or %q", state.FormatFull, state.FormatIntent),
+			"invalid-state-format")
+	}
+
 	return true
+}
+
+// lintStateEmit validates each Config.Emit target: provider registration and
+// CapabilityState, format enum, and nil inputs. Each target is independent of
+// the primary backend and of every other target, so a problem with one does
+// not block validating the rest.
+func lintStateEmit(sol *solution.Solution, result *Result, registry providerLookup) {
+	for i, target := range sol.State.Emit {
+		location := fmt.Sprintf("state.emit[%d]", i)
+		if !lintBackendProviderAndFormat(target.Backend, location, result, registry,
+			"missing-state-emit-backend", "invalid-state-emit-backend") {
+			continue
+		}
+		lintNilInputs(target.Backend.Inputs, location, result)
+	}
+}
+
+// lintStateFormatLossy warns when the PRIMARY backend saves in the lean
+// "intent" format while the solution has immutable resolvers. Immutable locks
+// live in the "resolvers" section, which the intent projection omits, so
+// cross-run immutable enforcement silently stops working against that backend
+// alone -- a resolver value can drift between runs with no error. This is a
+// warning, not an error: format: intent on the primary is a deliberate,
+// supported shortcut (a solution whose only state consumer is a pipeline that
+// wants the intent file to BE the state); it is just lossy, and the author
+// should know that going in.
+func lintStateFormatLossy(sol *solution.Solution, result *Result) {
+	if sol.State.Backend.Format != state.FormatIntent {
+		return
+	}
+
+	hasImmutable := false
+	for _, res := range sol.Spec.Resolvers {
+		if res != nil && res.Immutable {
+			hasImmutable = true
+			break
+		}
+	}
+	if !hasImmutable {
+		return
+	}
+
+	result.addFinding(SeverityWarning, "state", "state.backend.format",
+		`the primary state backend saves in the lean "intent" format, but the solution has immutable resolvers`,
+		`Immutable resolver locks live in the "resolvers" section, which the intent format omits, so cross-run immutable enforcement will not persist against this backend alone. Either keep the primary backend in the default "full" format and move format: intent to an emit target instead, or remove immutable: true if that resolver's cross-run consistency does not need enforcing.`,
+		"state-format-lossy-with-immutable")
 }
 
 // lintStateRefs validates that state config fields evaluated at load time

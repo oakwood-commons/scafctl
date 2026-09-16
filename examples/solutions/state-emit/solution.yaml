@@ -1,0 +1,121 @@
+# =============================================================================
+# State Emit Targets Example
+# =============================================================================
+# Demonstrates `state.emit`: publishing an additional, save-only projection of
+# the same state document alongside the primary (full-fidelity) backend.
+#
+# How it works:
+#   - The PRIMARY backend saves the complete state document (schemaVersion,
+#     metadata, command, parameters, resolvers, fingerprints) -- including the
+#     locked value of the immutable `deployment_id` resolver.
+#   - An EMIT target saves the SAME state, but projected into the lean
+#     "intent" format: just schemaVersion, metadata.solution/version, and
+#     parameters. No timestamps, no resolver locks, no fingerprints --
+#     deterministic and stable enough to commit and sign.
+#   - Both files are written on every save. Only the intent file is meant to
+#     be committed; the full state file is a local working copy.
+#
+# This is the pattern for a workflow where a human iterates locally (state
+# accumulates in the full file, immutable locks persist across runs) and then
+# publishes the lean intent file for a pipeline to later replay via
+# `--state-file` (see docs/tutorials/state-tutorial.md, "Pointing at a State
+# File").
+#
+# Usage:
+#   # First run -- provide inputs via CLI parameters
+#   scafctl run resolver -f solution.yaml -r appName=my-app -r deploymentId=deploy-abc123
+#
+#   # Stderr reports what happened (first run, then both writes):
+#   #   state: no prior state at state-emit-full.json (first run)
+#   #   state: updated state-emit-full.json (full)
+#   #   state: emitted state-emit-intent.json (intent)
+#
+#   # Inspect both files
+#   cat state-emit-full.json      # full document: has "resolvers" (the lock)
+#   cat state-emit-intent.json    # lean document: no "resolvers" section
+#
+#   # Second run -- parameters replay from the FULL file (the primary, used
+#   # for load); the immutable deploymentId is verified against its lock.
+#   # Stderr now reports a replay instead of a first run:
+#   #   state: reusing 2 parameter(s) and 1 locked value(s) from state-emit-full.json
+#   scafctl run resolver -f solution.yaml
+#
+#   # Replay from the committed INTENT file instead, as a pipeline would:
+#   scafctl run resolver -f solution.yaml --state-file state-emit-intent.json
+#
+# Lint check -- flags the lossy shortcut (format: intent on the PRIMARY
+# backend combined with an immutable resolver) if you remove the full-fidelity
+# primary and rely on the emit target alone:
+#   scafctl lint -f solution.yaml
+# =============================================================================
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-emit-example
+  displayName: State Emit Targets
+  version: 1.0.0
+  category: solutions
+  tags:
+    - state
+    - emit
+    - intent
+  description: Demonstrates publishing a lean "intent" projection alongside full state via emit
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: "state-emit-full.json"
+  emit:
+    - provider: file
+      format: intent
+      inputs:
+        path: "state-emit-intent.json"
+
+spec:
+  resolvers:
+    # =========================================================================
+    # Mutable resolver -- replayed from parameters, overridable each run
+    # =========================================================================
+    appName:
+      description: Application name
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "appName"
+          - provider: static
+            inputs:
+              value: "demo-app"
+
+    # =========================================================================
+    # Immutable resolver -- locked in the FULL state, absent from the intent
+    # =========================================================================
+    # The lock lives in the primary backend's "resolvers" section. The intent
+    # projection omits that section entirely, so this value's cross-run
+    # consistency is enforced only via the full-fidelity primary -- exactly
+    # the reason this example keeps a full primary alongside the intent emit,
+    # rather than using format: intent directly on the primary (which would
+    # silently drop the lock; see the "Lossy Shortcut" note in
+    # docs/tutorials/state-tutorial.md).
+    deploymentId:
+      description: Unique deployment identifier (locked after first generation)
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "deploymentId"
+
+  workflow:
+    actions:
+      show-deployment:
+        description: Display the current deployment info
+        provider: message
+        inputs:
+          message:
+            expr: "'app=' + _.appName + ' deployment=' + _.deploymentId"
+          type: success

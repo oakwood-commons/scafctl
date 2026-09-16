@@ -75,6 +75,33 @@ type LoadResult struct {
 
 	// Skipped is true when state is disabled or the enabled ValueRef is falsy.
 	Skipped bool
+
+	// FirstRun is true when no prior state was found for this backend: a fresh
+	// Data document (zero CreatedAt) with no persisted parameters or resolver
+	// entries. All three conditions are required -- CreatedAt alone is not
+	// enough because the lean "intent" format deliberately omits it, so a
+	// document produced by that format looks first-run by timestamp alone even
+	// when it carries replayed parameters. False (and the rest of the
+	// enrichment fields below) are meaningless when Skipped is true.
+	FirstRun bool
+
+	// LoadedParams is the number of parameters present in the previously saved
+	// state, before merging with CLI params.
+	LoadedParams int
+
+	// LoadedResolvers is the number of persisted resolver entries (including
+	// immutable locks) present in the previously saved state.
+	LoadedResolvers int
+
+	// Provider is the backend provider name state was loaded from (e.g.,
+	// "file", "http"). Used as a fallback label when Location is empty.
+	Provider string
+
+	// Location is a human-readable destination the state was loaded from --
+	// the resolved "path" or "url" backend input when the backend uses one,
+	// otherwise empty. Callers should fall back to displaying the provider
+	// name (Provider) when Location is empty.
+	Location string
 }
 
 // Load executes the pre-execution state lifecycle:
@@ -119,7 +146,7 @@ func (m *Manager) load(ctx context.Context, resolverData, params map[string]any,
 	}
 
 	// Resolve backend inputs -- resolverData is exposed as _, CLI params as __params.
-	backendInputs, err := m.resolveBackendInputs(ctx, resolverData, params)
+	backendInputs, err := m.resolveBackendInputs(ctx, m.config.Backend, resolverData, params)
 	if err != nil {
 		if missing := MissingParams(ctx, m.config, params); len(missing) > 0 {
 			return nil, &MissingParamsError{
@@ -131,7 +158,7 @@ func (m *Manager) load(ctx context.Context, resolverData, params map[string]any,
 	}
 
 	// Look up backend provider
-	backendProvider, err := m.getBackendProvider()
+	backendProvider, err := m.getBackendProvider(m.config.Backend.Provider)
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +177,17 @@ func (m *Manager) load(ctx context.Context, resolverData, params map[string]any,
 		return nil, fmt.Errorf("state: extract loaded data: %w", err)
 	}
 
+	// Capture load-time facts before command/context mutation below: a fresh
+	// Data document (extractStateData's NewData() fallback for a first run)
+	// has a zero CreatedAt, and its Parameters/Resolvers maps start empty.
+	// All three conditions must hold for FirstRun -- CreatedAt.IsZero() alone
+	// is not enough, because the lean "intent" format omits CreatedAt, so a
+	// replayed intent document would otherwise be misreported as a first run
+	// despite carrying loaded parameters.
+	loadedParams := len(stateData.Parameters)
+	loadedResolvers := len(stateData.Resolvers)
+	firstRun := stateData.Metadata.CreatedAt.IsZero() && loadedParams == 0 && loadedResolvers == 0
+
 	// Merge saved parameters with CLI params (CLI wins)
 	mergedParams := MergeParameters(stateData.Parameters, params)
 
@@ -160,10 +198,49 @@ func (m *Manager) load(ctx context.Context, resolverData, params map[string]any,
 	enrichedCtx := WithState(ctx, stateData)
 
 	return &LoadResult{
-		Ctx:          enrichedCtx,
-		Data:         stateData,
-		MergedParams: mergedParams,
+		Ctx:             enrichedCtx,
+		Data:            stateData,
+		MergedParams:    mergedParams,
+		FirstRun:        firstRun,
+		LoadedParams:    loadedParams,
+		LoadedResolvers: loadedResolvers,
+		Provider:        m.config.Backend.Provider,
+		Location:        resolveLocation(backendInputs),
 	}, nil
+}
+
+// BackendWrite reports the outcome of a single state_save call against one
+// backend -- which provider received it, where, in what format, and whether it
+// was skipped. Command-layer callers use this to render a save confirmation.
+type BackendWrite struct {
+	// Provider is the backend provider name (e.g., "file", "http").
+	Provider string
+
+	// Location is a human-readable destination for this write -- the resolved
+	// "path" or "url" backend input when the backend uses one, otherwise
+	// empty. Callers should fall back to displaying the provider name when
+	// Location is empty.
+	Location string
+
+	// Format is the backend's declared Format, normalized ("" reports as
+	// FormatFull, matching the zero-value contract in Backend.Format and
+	// projectState).
+	Format string
+
+	// Skipped is true for an Emit target whose Enabled condition evaluated to
+	// false; the write was never attempted. Always false for Primary.
+	Skipped bool
+}
+
+// SaveResult reports what commit actually wrote, for callers that want to
+// surface a save confirmation to the user.
+type SaveResult struct {
+	// Primary is the primary backend's write outcome.
+	Primary BackendWrite
+
+	// Emits reports each configured Emit target, in declaration order,
+	// including targets skipped by their Enabled condition.
+	Emits []BackendWrite
 }
 
 // Save executes the post-execution state lifecycle:
@@ -174,9 +251,9 @@ func (m *Manager) load(ctx context.Context, resolverData, params map[string]any,
 //
 // params are the merged parameters for this execution. resolverData contains
 // resolver outputs, available as _ in CEL expressions for backend inputs.
-func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, mergedParams, resolverData map[string]any, solMeta SolutionMeta) error {
+func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, mergedParams, resolverData map[string]any, solMeta SolutionMeta) (*SaveResult, error) {
 	if m.config == nil || stateData == nil {
-		return nil
+		return nil, nil
 	}
 
 	// Save the merged parameter set
@@ -184,10 +261,10 @@ func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolv
 
 	// Record persisted and immutable resolver values
 	if err := PersistResolvers(stateData, resolverCtx, resolvers, nil); err != nil {
-		return err
+		return nil, err
 	}
 
-	return m.commit(ctx, stateData, resolverData, mergedParams, solMeta)
+	return m.commit(ctx, stateData, resolverData, mergedParams, solMeta, true)
 }
 
 // SaveImmutables checks and persists immutable resolver locks without touching
@@ -198,6 +275,14 @@ func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolv
 //
 // skip contains resolver names whose deferred validation failed; their
 // immutable values are not locked.
+//
+// This is an interim commit ahead of actions, not the run's user-facing save
+// confirmation -- so its SaveResult is discarded (not returned), and, more
+// importantly, it never writes Emit targets. An Emit target may be a
+// side-effecting backend (e.g. a REST endpoint), so it must be written at
+// most once per run, from the run's single final commit (SaveParams) --
+// never from this interim commit, which runs before an action might still
+// fail and would otherwise publish an emit for a run that never completes.
 func (m *Manager) SaveImmutables(ctx context.Context, stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, mergedParams, resolverData map[string]any, solMeta SolutionMeta, skip map[string]bool) error {
 	if m.config == nil || stateData == nil {
 		return nil
@@ -209,25 +294,38 @@ func (m *Manager) SaveImmutables(ctx context.Context, stateData *Data, resolverC
 		return err
 	}
 
-	return m.commit(ctx, stateData, resolverData, mergedParams, solMeta)
+	_, err := m.commit(ctx, stateData, resolverData, mergedParams, solMeta, false)
+	return err
 }
 
 // SaveParams persists the merged parameter set. It is called after actions
 // complete so that ordinary (mutable) parameters are only saved on a fully
 // successful run.
-func (m *Manager) SaveParams(ctx context.Context, stateData *Data, mergedParams, resolverData map[string]any, solMeta SolutionMeta) error {
+func (m *Manager) SaveParams(ctx context.Context, stateData *Data, mergedParams, resolverData map[string]any, solMeta SolutionMeta) (*SaveResult, error) {
 	if m.config == nil || stateData == nil {
-		return nil
+		return nil, nil
 	}
 
 	stateData.Parameters = mergedParams
 
-	return m.commit(ctx, stateData, resolverData, mergedParams, solMeta)
+	return m.commit(ctx, stateData, resolverData, mergedParams, solMeta, true)
 }
 
-// commit updates state metadata and writes the current state document to the
-// configured backend.
-func (m *Manager) commit(ctx context.Context, stateData *Data, resolverData, mergedParams map[string]any, solMeta SolutionMeta) error {
+// commit updates state metadata and saves the current state document to the
+// primary backend. When writeEmits is true, it also saves to each configured
+// Emit target (each independently projected per its own Format and gated by
+// its own Enabled condition).
+//
+// writeEmits is false for the interim pre-action commit (SaveImmutables) and
+// true for the run's single user-facing save (Save for run resolver;
+// SaveParams for run solution/run action) -- see SaveImmutables for why an
+// Emit target must be written at most once per run, at the final commit.
+//
+// A failure saving to the primary backend aborts before any Emit target is
+// attempted. A failure saving to an Emit target aborts the remaining Emit
+// targets but does not undo the primary save, which has already succeeded by
+// that point.
+func (m *Manager) commit(ctx context.Context, stateData *Data, resolverData, mergedParams map[string]any, solMeta SolutionMeta, writeEmits bool) (*SaveResult, error) {
 	// Update metadata
 	now := time.Now().UTC()
 	// Stamp the current schema version so a state file loaded under an older
@@ -243,18 +341,57 @@ func (m *Manager) commit(ctx context.Context, stateData *Data, resolverData, mer
 	stateData.Metadata.Version = solMeta.Version
 	stateData.Metadata.Runtime = runtimeMetadata(m.runtime)
 
+	primaryWrite, err := m.saveToBackend(ctx, m.config.Backend, stateData, resolverData, mergedParams)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &SaveResult{Primary: primaryWrite}
+
+	if !writeEmits {
+		return result, nil
+	}
+
+	for i, target := range m.config.Emit {
+		enabled, err := m.evaluateEmitEnabled(ctx, target, resolverData, mergedParams)
+		if err != nil {
+			return nil, fmt.Errorf("state: evaluate emit[%d] enabled: %w", i, err)
+		}
+		if !enabled {
+			result.Emits = append(result.Emits, BackendWrite{
+				Provider: target.Backend.Provider,
+				Format:   normalizeFormat(target.Backend.Format),
+				Skipped:  true,
+			})
+			continue
+		}
+		emitWrite, err := m.saveToBackend(ctx, target.Backend, stateData, resolverData, mergedParams)
+		if err != nil {
+			return nil, fmt.Errorf("state: emit[%d]: %w", i, err)
+		}
+		result.Emits = append(result.Emits, emitWrite)
+	}
+
+	return result, nil
+}
+
+// saveToBackend projects stateData per backend.Format and writes it through
+// backend's provider via state_save. It is shared by the primary backend save
+// and every Emit target save in commit, so format handling and input/override
+// resolution behave identically regardless of which backend is being written.
+func (m *Manager) saveToBackend(ctx context.Context, backend Backend, stateData *Data, resolverData, mergedParams map[string]any) (BackendWrite, error) {
 	// Resolve backend inputs for save -- resolver outputs are available as _
 	// and CLI params as __params in backend input expressions.
-	backendInputs, err := m.resolveBackendInputs(ctx, resolverData, mergedParams)
+	backendInputs, err := m.resolveBackendInputs(ctx, backend, resolverData, mergedParams)
 	if err != nil {
-		return fmt.Errorf("state: resolve backend inputs for save: %w", err)
+		return BackendWrite{}, fmt.Errorf("state: resolve backend inputs for save: %w", err)
 	}
 
 	// Resolve save-only overrides (can use rslvr: and _ since resolvers have run)
-	if len(m.config.Backend.SaveOverrides) > 0 {
-		overrides, err := m.resolveSaveOverrides(ctx, resolverData, mergedParams)
+	if len(backend.SaveOverrides) > 0 {
+		overrides, err := m.resolveSaveOverrides(ctx, backend, resolverData, mergedParams)
 		if err != nil {
-			return fmt.Errorf("state: resolve save overrides: %w", err)
+			return BackendWrite{}, fmt.Errorf("state: resolve save overrides: %w", err)
 		}
 		// Merge: saveOverrides keys override inputs keys
 		for k, v := range overrides {
@@ -263,26 +400,74 @@ func (m *Manager) commit(ctx context.Context, stateData *Data, resolverData, mer
 	}
 
 	// Look up backend provider
-	backendProvider, err := m.getBackendProvider()
+	backendProvider, err := m.getBackendProvider(backend.Provider)
 	if err != nil {
-		return err
+		return BackendWrite{}, err
 	}
 
-	// Execute save -- convert stateData to map[string]any so that the provider
-	// executor's JSON-schema validator can inspect the value (it cannot
-	// validate Go structs directly).
-	backendInputs["operation"] = "state_save"
-	dataMap, err := structToMap(stateData)
+	// Project stateData into the shape this backend's Format calls for, then
+	// convert to map[string]any so the provider executor's JSON-schema
+	// validator can inspect the value (it cannot validate Go structs directly).
+	dataMap, err := projectState(stateData, backend.Format)
 	if err != nil {
-		return fmt.Errorf("state: marshal state data: %w", err)
+		return BackendWrite{}, fmt.Errorf("state: project state data: %w", err)
 	}
+
+	// Capture the write's reporting facts before backendInputs is mutated with
+	// the operation/data keys below.
+	write := BackendWrite{
+		Provider: backend.Provider,
+		Location: resolveLocation(backendInputs),
+		Format:   normalizeFormat(backend.Format),
+	}
+
+	backendInputs["operation"] = "state_save"
 	backendInputs["data"] = dataMap
 	execCtx := provider.WithExecutionMode(ctx, provider.CapabilityState)
 	if _, err := provider.Execute(execCtx, backendProvider, backendInputs); err != nil {
-		return fmt.Errorf("state: backend save: %w", err)
+		return BackendWrite{}, fmt.Errorf("state: backend save: %w", err)
 	}
 
-	return nil
+	return write, nil
+}
+
+// resolveLocation extracts a human-readable location from resolved backend
+// inputs, for status reporting. It checks the common "path" (file backend)
+// and "url" (http backend) input keys; other backend providers report an
+// empty location, and callers fall back to displaying the provider name.
+func resolveLocation(backendInputs map[string]any) string {
+	if path, ok := backendInputs["path"].(string); ok && path != "" {
+		return path
+	}
+	if url, ok := backendInputs["url"].(string); ok && url != "" {
+		return url
+	}
+	return ""
+}
+
+// normalizeFormat returns format if non-empty, otherwise FormatFull -- mirroring
+// the zero-value contract in Backend.Format and projectState (an unset Format
+// behaves exactly as state behaved before Format existed).
+func normalizeFormat(format string) string {
+	if format == "" {
+		return FormatFull
+	}
+	return format
+}
+
+// evaluateEmitEnabled resolves an Emit target's Enabled condition, defaulting
+// to true (always emit) when unset. It is evaluated at save time, so unlike
+// the primary Config.Enabled it may reference any resolver -- all resolvers
+// have run by save time, so there is no pre-load acyclic constraint to honor.
+func (m *Manager) evaluateEmitEnabled(ctx context.Context, target EmitTarget, resolverData, params map[string]any) (bool, error) {
+	if target.Enabled == nil {
+		return true, nil
+	}
+	val, err := resolveWithParams(ctx, target.Enabled, resolverData, params)
+	if err != nil {
+		return false, err
+	}
+	return isTruthy(val), nil
 }
 
 // VerifyImmutables checks that resolved immutable values have not changed
@@ -320,12 +505,14 @@ func (m *Manager) evaluateEnabled(ctx context.Context, resolverData, params map[
 	return isTruthy(val), nil
 }
 
-// resolveBackendInputs resolves all backend input ValueRefs.
-// resolverData becomes _ in CEL; params becomes __params.
-func (m *Manager) resolveBackendInputs(ctx context.Context, resolverData, params map[string]any) (map[string]any, error) {
-	resolved := make(map[string]any, len(m.config.Backend.Inputs))
+// resolveBackendInputs resolves all of backend's input ValueRefs.
+// resolverData becomes _ in CEL; params becomes __params. Used for both the
+// primary Config.Backend (at load and save) and each Config.Emit target's
+// Backend (at save only).
+func (m *Manager) resolveBackendInputs(ctx context.Context, backend Backend, resolverData, params map[string]any) (map[string]any, error) {
+	resolved := make(map[string]any, len(backend.Inputs))
 
-	for key, vr := range m.config.Backend.Inputs {
+	for key, vr := range backend.Inputs {
 		if vr == nil {
 			continue
 		}
@@ -339,12 +526,12 @@ func (m *Manager) resolveBackendInputs(ctx context.Context, resolverData, params
 	return resolved, nil
 }
 
-// resolveSaveOverrides resolves all SaveOverrides ValueRefs.
+// resolveSaveOverrides resolves all of backend's SaveOverrides ValueRefs.
 // These are only called at save time when resolver data (_) is available.
-func (m *Manager) resolveSaveOverrides(ctx context.Context, resolverData, params map[string]any) (map[string]any, error) {
-	resolved := make(map[string]any, len(m.config.Backend.SaveOverrides))
+func (m *Manager) resolveSaveOverrides(ctx context.Context, backend Backend, resolverData, params map[string]any) (map[string]any, error) {
+	resolved := make(map[string]any, len(backend.SaveOverrides))
 
-	for key, vr := range m.config.Backend.SaveOverrides {
+	for key, vr := range backend.SaveOverrides {
 		if vr == nil {
 			continue
 		}
@@ -402,9 +589,9 @@ func resolveWithParams(ctx context.Context, vr *spec.ValueRef, resolverData, par
 	return nil, fmt.Errorf("empty value reference")
 }
 
-// getBackendProvider looks up the backend provider from the registry.
-func (m *Manager) getBackendProvider() (provider.Provider, error) {
-	name := m.config.Backend.Provider
+// getBackendProvider looks up a backend provider by name from the registry.
+// Used for both the primary Config.Backend and each Config.Emit target.
+func (m *Manager) getBackendProvider(name string) (provider.Provider, error) {
 	if name == "" {
 		return nil, fmt.Errorf("state: backend provider name is empty")
 	}
