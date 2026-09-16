@@ -59,11 +59,11 @@ func PolicyFromAppConfig(cfg *config.HTTPClientConfig) (*upstream.IPPolicy, erro
 		policy = upstream.AllowAllPrivateIPs()
 	}
 
-	// Non-nil is the test, not non-empty: an explicitly empty list is a
+	// "Set" is the test, not "non-empty": an explicitly empty list is a
 	// deliberate "no exceptions" and must override allowPrivateIPs.
-	if cfg.AllowedPrivateCIDRs != nil {
-		normalized := make([]string, 0, len(cfg.AllowedPrivateCIDRs))
-		for i, entry := range cfg.AllowedPrivateCIDRs {
+	if entries, set := cfg.PrivateCIDRs(); set {
+		normalized := make([]string, 0, len(entries))
+		for i, entry := range entries {
 			cidr, err := NormalizeCIDR(entry)
 			if err != nil {
 				return nil, fmt.Errorf("%s[%d] %q: %w", AllowedPrivateCIDRsKey, i, entry, err)

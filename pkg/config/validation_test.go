@@ -736,14 +736,14 @@ func TestHTTPClientConfig_Validate_AllowedPrivateCIDRs(t *testing.T) {
 	t.Run("valid entries are accepted", func(t *testing.T) {
 		t.Parallel()
 		cfg := &HTTPClientConfig{
-			AllowedPrivateCIDRs: []string{"10.0.0.0/8", "192.168.1.5", "fd00::/8"},
+			AllowedPrivateCIDRs: PrivateCIDRList("10.0.0.0/8", "192.168.1.5", "fd00::/8"),
 		}
 		assert.NoError(t, cfg.Validate())
 	})
 
 	t.Run("an empty list is accepted", func(t *testing.T) {
 		t.Parallel()
-		cfg := &HTTPClientConfig{AllowedPrivateCIDRs: []string{}}
+		cfg := &HTTPClientConfig{AllowedPrivateCIDRs: PrivateCIDRList()}
 		assert.NoError(t, cfg.Validate())
 	})
 
@@ -752,7 +752,7 @@ func TestHTTPClientConfig_Validate_AllowedPrivateCIDRs(t *testing.T) {
 	t.Run("a malformed entry is rejected and located", func(t *testing.T) {
 		t.Parallel()
 		cfg := &HTTPClientConfig{
-			AllowedPrivateCIDRs: []string{"10.0.0.0/8", "nonsense"},
+			AllowedPrivateCIDRs: PrivateCIDRList("10.0.0.0/8", "nonsense"),
 		}
 		err := cfg.Validate()
 

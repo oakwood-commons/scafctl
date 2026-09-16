@@ -1142,7 +1142,7 @@ func TestDefaultHTTPClient_Get(t *testing.T) {
 	// range is how a user reaches an internal endpoint.
 	ctx := config.WithConfig(context.Background(), &config.Config{
 		HTTPClient: config.HTTPClientConfig{
-			AllowedPrivateCIDRs: []string{"127.0.0.0/8", "::1/128"},
+			AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
 		},
 	})
 

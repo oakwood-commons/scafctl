@@ -167,7 +167,7 @@ func ctxAllowPrivateIPs() context.Context {
 // opt in explicitly.
 func allowLoopbackPolicy() *httpc.IPPolicy {
 	policy, err := httpc.PolicyFromAppConfig(&config.HTTPClientConfig{
-		AllowedPrivateCIDRs: []string{"127.0.0.0/8", "::1/128"},
+		AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
 	})
 	if err != nil {
 		panic(err)
@@ -456,7 +456,7 @@ func TestFromURL_SSRFGuard(t *testing.T) {
 
 		ctx := config.WithConfig(context.Background(), &config.Config{
 			HTTPClient: config.HTTPClientConfig{
-				AllowedPrivateCIDRs: []string{"127.0.0.0/8", "::1/128"},
+				AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
 			},
 		})
 
@@ -487,7 +487,7 @@ func TestFromURL_SSRFGuard(t *testing.T) {
 		allow := true
 		policy, err := httpc.PolicyFromAppConfig(&config.HTTPClientConfig{
 			AllowPrivateIPs:     &allow,
-			AllowedPrivateCIDRs: []string{"169.254.0.0/16"},
+			AllowedPrivateCIDRs: config.PrivateCIDRList("169.254.0.0/16"),
 		})
 		require.NoError(t, err)
 

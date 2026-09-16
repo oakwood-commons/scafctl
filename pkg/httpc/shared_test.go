@@ -33,7 +33,7 @@ func TestFetchClient_ReusesClientForSamePolicy(t *testing.T) {
 	resetSharedClients(t)
 
 	ctx := ctxWithHTTPConfig(config.HTTPClientConfig{
-		AllowedPrivateCIDRs: []string{"10.0.0.0/8"},
+		AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8"),
 	})
 
 	first := FetchClient(ctx)
@@ -53,10 +53,10 @@ func TestFetchClient_IdenticalConfigShares(t *testing.T) {
 	resetSharedClients(t)
 
 	a := FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
-		AllowedPrivateCIDRs: []string{"10.0.0.0/8", "192.168.1.5"},
+		AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8", "192.168.1.5"),
 	}))
 	b := FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
-		AllowedPrivateCIDRs: []string{"10.0.0.0/8", "192.168.1.5"},
+		AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8", "192.168.1.5"),
 	}))
 
 	assert.Same(t, a, b, "identical allowlists should share one client")
@@ -75,12 +75,12 @@ func TestFetchClient_DoesNotShareAcrossPolicies(t *testing.T) {
 	}))
 	restrictive := FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{}))
 	narrow := FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
-		AllowedPrivateCIDRs: []string{"10.0.0.0/8"},
+		AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8"),
 	}))
 	// Empty is a distinct policy from absent: it overrides AllowPrivateIPs.
 	empty := FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
 		AllowPrivateIPs:     &allow,
-		AllowedPrivateCIDRs: []string{},
+		AllowedPrivateCIDRs: config.PrivateCIDRList(),
 	}))
 	proxied := FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
 		TrustProxyResolution: &trust,
@@ -121,7 +121,7 @@ func TestFetchClient_EnforcesPolicy(t *testing.T) {
 
 	t.Run("reaches an allowed address", func(t *testing.T) {
 		ctx := ctxWithHTTPConfig(config.HTTPClientConfig{
-			AllowedPrivateCIDRs: []string{"127.0.0.0/8", "::1/128"},
+			AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
 		})
 		resp, err := FetchClient(ctx).Get(ctx, srv.URL)
 		require.NoError(t, err)
@@ -147,7 +147,7 @@ func TestFetchClient_BoundsCachedClients(t *testing.T) {
 	for i := range maxCachedClients * 3 {
 		cidr := "10." + string(rune('0'+i%10)) + ".0.0/16"
 		_ = FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
-			AllowedPrivateCIDRs: []string{"10.0.0.0/8", cidr},
+			AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8", cidr),
 		}))
 	}
 
@@ -163,7 +163,7 @@ func TestFetchClient_ConcurrentCallersShareOneClient(t *testing.T) {
 	resetSharedClients(t)
 
 	ctx := ctxWithHTTPConfig(config.HTTPClientConfig{
-		AllowedPrivateCIDRs: []string{"10.0.0.0/8"},
+		AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8"),
 	})
 
 	const goroutines = 32
@@ -196,8 +196,8 @@ func TestConfigKey(t *testing.T) {
 		"zero":           configKey(&config.Config{}),
 		"allow true":     configKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow}}),
 		"allow false":    configKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &deny}}),
-		"empty list":     configKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowedPrivateCIDRs: []string{}}}),
-		"populated list": configKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowedPrivateCIDRs: []string{"10.0.0.0/8"}}}),
+		"empty list":     configKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowedPrivateCIDRs: config.PrivateCIDRList()}}),
+		"populated list": configKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8")}}),
 	}
 
 	seen := make(map[string]string, len(keys))
@@ -214,7 +214,7 @@ func BenchmarkFetchClient(b *testing.B) {
 	ctx := config.WithConfig(context.Background(), &config.Config{
 		HTTPClient: config.HTTPClientConfig{
 			AllowPrivateIPs:     &allow,
-			AllowedPrivateCIDRs: []string{"10.0.0.0/8", "192.168.0.0/16"},
+			AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8", "192.168.0.0/16"),
 		},
 	})
 

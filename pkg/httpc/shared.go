@@ -8,10 +8,16 @@ import (
 	"encoding/json"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
+
+// unkeyableSeq makes each un-marshalable configuration produce a distinct cache
+// key, so such a caller never shares a client with anyone else. See
+// httpConfigKey.
+var unkeyableSeq atomic.Uint64
 
 // maxCachedClients bounds how many distinct configurations shared clients are
 // held for. Application configuration is loaded once per process, so in
@@ -52,9 +58,27 @@ func sharedClient(key string, build func() *Client) *Client {
 	}
 
 	client := build()
-	if len(sharedClients) < maxCachedClients {
-		sharedClients[key] = client
+
+	// At the bound, evict an existing entry rather than handing back a client
+	// nobody owns. FetchClient's contract forbids callers from closing the
+	// result, so an uncached client would abandon its transport and idle pool
+	// on every call -- the exact leak this cache exists to prevent.
+	//
+	// Evicting is safe: Close only reaps idle connections, so a request already
+	// in flight on the evicted client finishes normally, and a later caller
+	// with that configuration simply builds a fresh one. Go map iteration order
+	// is unspecified, which is an acceptable victim choice here -- every entry
+	// is equivalent, and the bound is reached only by a process rotating
+	// through more distinct policies than it keeps clients.
+	if len(sharedClients) >= maxCachedClients {
+		for k, victim := range sharedClients {
+			delete(sharedClients, k)
+			_ = victim.Close()
+			break
+		}
 	}
+	sharedClients[key] = client
+
 	return client
 }
 
@@ -101,12 +125,13 @@ func configKey(cfg *config.Config) string {
 // caller a client built under different rules. Go's JSON encoder emits struct
 // fields in declaration order, so the result is stable for a given build.
 //
-// JSON alone is not sufficient: `omitempty` erases the difference between an
-// absent field and an empty one. That distinction is load-bearing for
-// AllowedPrivateCIDRs -- an empty list means "no exceptions" and overrides
-// AllowPrivateIPs, while an absent list leaves it in force -- so it is encoded
-// explicitly. A future field whose absent and empty forms mean different things
-// needs the same treatment.
+// JSON's `omitempty` erases the difference between an absent field and an empty
+// one, which would be fatal here: for AllowedPrivateCIDRs an empty list means
+// "no exceptions" and overrides AllowPrivateIPs, while an absent list leaves it
+// in force. That field is a *[]string precisely so the two survive -- a nil
+// pointer is omitted, a pointer to an empty slice encodes as "[]". Any future
+// field whose absent and empty forms differ needs the same treatment, or it
+// will collide here and hand a caller a client built under other rules.
 //
 // Slice order is preserved deliberately: two allowlists differing only in order
 // describe the same policy, but treating them as distinct costs at most one
@@ -116,22 +141,13 @@ func httpConfigKey(cfg *config.HTTPClientConfig) string {
 		return "nilhttp"
 	}
 
-	var cidrs string
-	switch {
-	case cfg.AllowedPrivateCIDRs == nil:
-		cidrs = "unset"
-	case len(cfg.AllowedPrivateCIDRs) == 0:
-		cidrs = "empty"
-	default:
-		cidrs = "set"
-	}
-
 	raw, err := json.Marshal(cfg)
 	if err != nil {
-		// Unreachable for this struct, but a key that never matches is the
-		// safe failure: callers get their own client rather than someone
-		// else's.
-		return "unkeyable-" + strconv.FormatInt(int64(len(cfg.AllowedPrivateCIDRs)), 10)
+		// Unreachable for this struct (it holds no channels or funcs), but a
+		// key that never matches another caller's is the safe failure: they get
+		// their own client rather than one built under rules we could not read.
+		// The cache's own eviction keeps this from growing without bound.
+		return "unkeyable-" + strconv.FormatUint(unkeyableSeq.Add(1), 10)
 	}
-	return string(raw) + "|cidrs=" + cidrs
+	return string(raw)
 }

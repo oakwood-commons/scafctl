@@ -337,9 +337,15 @@ type HTTPClientConfig struct {
 	// list means "no exceptions" and also overrides AllowPrivateIPs; omit the
 	// field entirely to leave AllowPrivateIPs in force.
 	//
+	// It is a POINTER so that "absent" and "present but empty" survive a config
+	// round-trip. As a plain slice, omitempty drops an empty list on Save, and
+	// the next load reads it as absent -- silently restoring a blanket
+	// AllowPrivateIPs: true that the empty list was overriding. A nil pointer is
+	// still omitted; a pointer to an empty slice marshals as "[]".
+	//
 	// Cloud metadata addresses (169.254.169.254 and the provider-specific
 	// equivalents) can NOT be re-enabled by this field or by AllowPrivateIPs.
-	AllowedPrivateCIDRs []string `json:"allowedPrivateCIDRs,omitempty" yaml:"allowedPrivateCIDRs,omitempty" mapstructure:"allowedPrivateCIDRs" doc:"Address ranges exempted from private-IP blocking, as CIDR blocks or bare IPs (e.g. 10.42.7.0/24). Overrides allowPrivateIPs. Cloud metadata addresses can never be exempted." maxItems:"100"`
+	AllowedPrivateCIDRs *[]string `json:"allowedPrivateCIDRs,omitempty" yaml:"allowedPrivateCIDRs,omitempty" mapstructure:"allowedPrivateCIDRs" doc:"Address ranges exempted from private-IP blocking, as CIDR blocks or bare IPs (e.g. 10.42.7.0/24). Overrides allowPrivateIPs. Cloud metadata addresses can never be exempted." maxItems:"100"`
 
 	// TrustProxyResolution allows a proxied request whose target hostname cannot
 	// be resolved locally to proceed, leaving egress policy to the proxy.
@@ -349,12 +355,53 @@ type HTTPClientConfig struct {
 	// a proxy-only environment with no direct resolver, every request is refused.
 	// Enable this only where the proxy itself is trusted to enforce egress
 	// policy.
+	//
+	// This is the one setting that can weaken the otherwise unconditional
+	// metadata and private-address blocks, because it hands the address
+	// decision to the proxy: a proxy willing to resolve a hostname to a
+	// metadata or private address will reach it.
 	TrustProxyResolution *bool `json:"trustProxyResolution,omitempty" yaml:"trustProxyResolution,omitempty" mapstructure:"trustProxyResolution" doc:"Allow a proxied request whose target does not resolve locally to proceed, leaving egress policy to the proxy (default: false, which fails closed)." example:"false"`
 
 	// MaxResponseBodySize is the maximum number of bytes the HTTP provider will
 	// read from a single response body. Prevents denial-of-service via unbounded
 	// responses from malicious or misconfigured servers. Defaults to 100 MB.
 	MaxResponseBodySize int64 `json:"maxResponseBodySize,omitempty" yaml:"maxResponseBodySize,omitempty" mapstructure:"maxResponseBodySize" doc:"Maximum HTTP response body size in bytes (default: 104857600)" maximum:"1073741824" example:"104857600"`
+}
+
+// PrivateCIDRList builds a value for HTTPClientConfig.AllowedPrivateCIDRs.
+//
+// The field is a pointer so that an absent list stays distinguishable from a
+// deliberately empty one, which makes a struct literal awkward to write. Called
+// with no arguments it yields a present-but-empty list, meaning "no exceptions"
+// -- to leave the field absent, do not set it at all.
+func PrivateCIDRList(entries ...string) *[]string {
+	if entries == nil {
+		entries = []string{}
+	}
+	return &entries
+}
+
+// PrivateCIDRs reports the configured address allowlist and whether the field
+// was set at all.
+//
+// The second return is the part that matters: an absent list (set == false)
+// leaves AllowPrivateIPs in force, while a present but empty one (set == true,
+// len(entries) == 0) is a deliberate "no exceptions" that overrides it. Callers
+// that collapse the two -- by testing len() alone -- silently widen an empty
+// allowlist back to every private range.
+//
+// When set is true the returned slice is never nil, so a caller can encode it
+// without reintroducing the null-versus-[] ambiguity. Every dereference of the
+// underlying pointer goes through here rather than being repeated at each call
+// site.
+func (h *HTTPClientConfig) PrivateCIDRs() (entries []string, set bool) {
+	if h == nil || h.AllowedPrivateCIDRs == nil {
+		return nil, false
+	}
+	if *h.AllowedPrivateCIDRs == nil {
+		return []string{}, true
+	}
+	return *h.AllowedPrivateCIDRs, true
 }
 
 // HTTPClientCacheType constants define the supported HTTP cache types.

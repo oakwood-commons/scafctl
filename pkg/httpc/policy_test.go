@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -61,7 +62,7 @@ func TestPolicyFromAppConfig(t *testing.T) {
 		{
 			name: "allowlist permits a named range",
 			cfg: &config.HTTPClientConfig{
-				AllowedPrivateCIDRs: []string{"10.42.0.0/16"},
+				AllowedPrivateCIDRs: config.PrivateCIDRList("10.42.0.0/16"),
 			},
 			probe:       "10.42.7.9",
 			wantAllowed: true,
@@ -69,7 +70,7 @@ func TestPolicyFromAppConfig(t *testing.T) {
 		{
 			name: "allowlist does not permit ranges outside it",
 			cfg: &config.HTTPClientConfig{
-				AllowedPrivateCIDRs: []string{"10.42.0.0/16"},
+				AllowedPrivateCIDRs: config.PrivateCIDRList("10.42.0.0/16"),
 			},
 			probe:       "10.43.0.1",
 			wantAllowed: false,
@@ -77,7 +78,7 @@ func TestPolicyFromAppConfig(t *testing.T) {
 		{
 			name: "bare address is treated as a single host",
 			cfg: &config.HTTPClientConfig{
-				AllowedPrivateCIDRs: []string{"10.42.7.9"},
+				AllowedPrivateCIDRs: config.PrivateCIDRList("10.42.7.9"),
 			},
 			probe:       "10.42.7.9",
 			wantAllowed: true,
@@ -85,7 +86,7 @@ func TestPolicyFromAppConfig(t *testing.T) {
 		{
 			name: "bare address does not widen to its neighbours",
 			cfg: &config.HTTPClientConfig{
-				AllowedPrivateCIDRs: []string{"10.42.7.9"},
+				AllowedPrivateCIDRs: config.PrivateCIDRList("10.42.7.9"),
 			},
 			probe:       "10.42.7.10",
 			wantAllowed: false,
@@ -93,7 +94,7 @@ func TestPolicyFromAppConfig(t *testing.T) {
 		{
 			name: "IPv6 range is honoured",
 			cfg: &config.HTTPClientConfig{
-				AllowedPrivateCIDRs: []string{"fd00::/8"},
+				AllowedPrivateCIDRs: config.PrivateCIDRList("fd00::/8"),
 			},
 			probe:       "fd00::1",
 			wantAllowed: true,
@@ -132,11 +133,11 @@ func TestPolicyFromAppConfig_MetadataNeverAllowed(t *testing.T) {
 	configs := map[string]*config.HTTPClientConfig{
 		"allowPrivateIPs": {AllowPrivateIPs: &allow},
 		"allowlist covering it": {
-			AllowedPrivateCIDRs: []string{"169.254.0.0/16", "100.100.0.0/16"},
+			AllowedPrivateCIDRs: config.PrivateCIDRList("169.254.0.0/16", "100.100.0.0/16"),
 		},
 		"both": {
 			AllowPrivateIPs:     &allow,
-			AllowedPrivateCIDRs: []string{"0.0.0.0/0"},
+			AllowedPrivateCIDRs: config.PrivateCIDRList("0.0.0.0/0"),
 		},
 	}
 
@@ -173,7 +174,7 @@ func TestPolicyFromAppConfig_RejectsMalformedEntry(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			policy, err := PolicyFromAppConfig(&config.HTTPClientConfig{
-				AllowedPrivateCIDRs: []string{tt.entry},
+				AllowedPrivateCIDRs: config.PrivateCIDRList(tt.entry),
 			})
 			require.Error(t, err, "%q must be rejected rather than silently dropped", tt.entry)
 			assert.Nil(t, policy)
@@ -195,7 +196,7 @@ func TestPolicyFromAppConfig_AllowlistOverridesAllowPrivateIPs(t *testing.T) {
 		t.Parallel()
 		policy, err := PolicyFromAppConfig(&config.HTTPClientConfig{
 			AllowPrivateIPs:     &allow,
-			AllowedPrivateCIDRs: []string{"10.42.0.0/16"},
+			AllowedPrivateCIDRs: config.PrivateCIDRList("10.42.0.0/16"),
 		})
 		require.NoError(t, err)
 
@@ -211,7 +212,7 @@ func TestPolicyFromAppConfig_AllowlistOverridesAllowPrivateIPs(t *testing.T) {
 		t.Parallel()
 		policy, err := PolicyFromAppConfig(&config.HTTPClientConfig{
 			AllowPrivateIPs:     &allow,
-			AllowedPrivateCIDRs: []string{},
+			AllowedPrivateCIDRs: config.PrivateCIDRList(),
 		})
 		require.NoError(t, err)
 		assert.Error(t, policy.CheckIP(net.ParseIP("10.0.0.5")))
@@ -257,7 +258,7 @@ func TestPolicyFromAppConfig_TrustProxyResolution(t *testing.T) {
 	t.Run("applies alongside an allowlist", func(t *testing.T) {
 		t.Parallel()
 		policy, err := PolicyFromAppConfig(&config.HTTPClientConfig{
-			AllowedPrivateCIDRs:  []string{"10.42.0.0/16"},
+			AllowedPrivateCIDRs:  config.PrivateCIDRList("10.42.0.0/16"),
 			TrustProxyResolution: &trust,
 		})
 		require.NoError(t, err)
@@ -291,7 +292,7 @@ func TestPolicyFromContext(t *testing.T) {
 		t.Parallel()
 		ctx := config.WithConfig(context.Background(), &config.Config{
 			HTTPClient: config.HTTPClientConfig{
-				AllowedPrivateCIDRs: []string{"10.42.0.0/16"},
+				AllowedPrivateCIDRs: config.PrivateCIDRList("10.42.0.0/16"),
 			},
 		})
 		policy := PolicyFromContext(ctx)
@@ -303,7 +304,7 @@ func TestPolicyFromContext(t *testing.T) {
 		t.Parallel()
 		ctx := config.WithConfig(context.Background(), &config.Config{
 			HTTPClient: config.HTTPClientConfig{
-				AllowedPrivateCIDRs: []string{"nonsense"},
+				AllowedPrivateCIDRs: config.PrivateCIDRList("nonsense"),
 			},
 		})
 		policy := PolicyFromContext(ctx)
@@ -348,7 +349,7 @@ func TestExplainBlocked(t *testing.T) {
 
 func BenchmarkPolicyFromAppConfig(b *testing.B) {
 	cfg := &config.HTTPClientConfig{
-		AllowedPrivateCIDRs: []string{"10.0.0.0/8", "192.168.0.0/16", "fd00::/8"},
+		AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8", "192.168.0.0/16", "fd00::/8"),
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -356,4 +357,70 @@ func BenchmarkPolicyFromAppConfig(b *testing.B) {
 	for b.Loop() {
 		_, _ = PolicyFromAppConfig(cfg)
 	}
+}
+
+// An empty allowlist overrides allowPrivateIPs, so it has to survive a config
+// save/reload. As a plain []string it did not: omitempty dropped the empty list
+// on save, the next load read the field as absent, and the blanket
+// allowPrivateIPs: true it was overriding silently regained force -- a config
+// that looked restrictive behaving permissively. The field is a *[]string so
+// that "absent" and "present but empty" stay distinguishable on disk.
+func TestPolicySurvivesConfigRoundTrip(t *testing.T) {
+	// Cannot use t.Parallel: Manager.Save writes to a shared path per subtest.
+	loopback := net.ParseIP("127.0.0.1")
+	require.NotNil(t, loopback)
+
+	// Saves cfg, reloads it from disk, and reports whether the reloaded policy
+	// still denies loopback.
+	roundTrip := func(t *testing.T, mutate func(*config.HTTPClientConfig)) (denied, set bool, count int) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+
+		mgr := config.NewManager(path)
+		cfg, err := mgr.Load()
+		require.NoError(t, err)
+		mutate(&cfg.HTTPClient)
+		require.NoError(t, mgr.Save())
+
+		reloaded, err := config.NewManager(path).Load()
+		require.NoError(t, err)
+
+		entries, wasSet := reloaded.HTTPClient.PrivateCIDRs()
+		policy, err := PolicyFromAppConfig(&reloaded.HTTPClient)
+		require.NoError(t, err)
+
+		return policy.CheckIP(loopback) != nil, wasSet, len(entries)
+	}
+
+	allow := true
+
+	t.Run("an empty allowlist still overrides allowPrivateIPs after a save", func(t *testing.T) {
+		denied, set, count := roundTrip(t, func(h *config.HTTPClientConfig) {
+			h.AllowPrivateIPs = &allow
+			h.AllowedPrivateCIDRs = config.PrivateCIDRList()
+		})
+		assert.True(t, set, "the empty list must survive the save as 'present'")
+		assert.Equal(t, 0, count)
+		assert.True(t, denied, "loopback must stay denied; the empty allowlist overrides allowPrivateIPs")
+	})
+
+	// The discriminating case: without the allowlist, the same flag DOES permit
+	// loopback. If this passed too, the assertion above would be proving
+	// nothing.
+	t.Run("without an allowlist the same flag permits loopback", func(t *testing.T) {
+		denied, set, _ := roundTrip(t, func(h *config.HTTPClientConfig) {
+			h.AllowPrivateIPs = &allow
+		})
+		assert.False(t, set, "the field was never set, so it must reload as absent")
+		assert.False(t, denied, "allowPrivateIPs alone permits loopback")
+	})
+
+	t.Run("a populated allowlist survives with its entries", func(t *testing.T) {
+		denied, set, count := roundTrip(t, func(h *config.HTTPClientConfig) {
+			h.AllowedPrivateCIDRs = config.PrivateCIDRList("10.42.0.0/16")
+		})
+		assert.True(t, set)
+		assert.Equal(t, 1, count)
+		assert.True(t, denied, "loopback is outside the listed range")
+	})
 }

@@ -20,7 +20,7 @@ import (
 // exempts the given ranges from private-address blocking.
 func ctxWithAllowedCIDRs(cidrs ...string) context.Context {
 	return config.WithConfig(context.Background(), &config.Config{
-		HTTPClient: config.HTTPClientConfig{AllowedPrivateCIDRs: cidrs},
+		HTTPClient: config.HTTPClientConfig{AllowedPrivateCIDRs: config.PrivateCIDRList(cidrs...)},
 	})
 }
 
@@ -38,7 +38,7 @@ func TestHTTPProvider_Execute_MetadataAddressIsNeverReachable(t *testing.T) {
 		},
 		"allowlist covering the metadata range": {
 			HTTPClient: config.HTTPClientConfig{
-				AllowedPrivateCIDRs: []string{"169.254.0.0/16"},
+				AllowedPrivateCIDRs: config.PrivateCIDRList("169.254.0.0/16"),
 			},
 		},
 	}

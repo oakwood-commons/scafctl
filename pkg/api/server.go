@@ -431,47 +431,10 @@ func (s *Server) buildHTTPServer() string {
 
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 
-	// Warn when the server is reachable beyond this machine without
-	// authentication. The API executes caller-submitted solutions by design, so
-	// binding a non-loopback address with auth disabled exposes that capability
-	// to anyone who can reach the port. The default (127.0.0.1) is safe; this
-	// fires only when an operator has explicitly widened the bind address.
-	if !isLoopbackHost(host) && !apiCfg.Auth.AzureOIDC.Enabled {
-		// The admin prefix follows the configured API version, so build the
-		// remediation path from it -- a hardcoded "/v1/admin/" would tell an
-		// operator running apiVersion: v2 to block the wrong route.
-		apiVersion := apiCfg.APIVersion
-		if apiVersion == "" {
-			apiVersion = settings.DefaultAPIVersion
-		}
-		adminPrefix := "/" + apiVersion + "/admin/"
-		s.logger.Info("WARNING: API server is binding a non-loopback address with authentication DISABLED. "+
-			"This exposes solution execution to any caller that can reach this port. "+
-			"Enable apiServer.auth.azureOIDC, or bind 127.0.0.1 and front the server with an authenticating proxy. "+
-			"If you use a same-host proxy, also block "+adminPrefix+" at the proxy: with auth disabled the admin gate "+
-			"falls back to a loopback peer-address check, which a same-host proxy makes indistinguishable from a local caller.",
-			"host", host, "addr", addr, "adminPrefix", adminPrefix)
-	}
-
-	// The destination-address policy is global config, shared with the CLI, and
-	// can be set from the environment as well as the config file. That is a
-	// reasonable local-development convenience, but the two cases are not
-	// equivalent: on a workstation it grants the operator access they already
-	// have, while on a server that fetches caller-supplied URLs it lends the
-	// server's network position to whoever supplies them. Announce it, so a
-	// setting inherited from a local config or a stray environment variable
-	// cannot widen a deployment silently.
-	//
-	// Only the blanket flag warrants this. A narrow allowedPrivateCIDRs list is
-	// the recommended way to reach an internal host and is deliberate by
-	// construction, so warning on it would train operators to ignore the
-	// warning that matters.
-	if s.cfg.HTTPClient.AllowPrivateIPs != nil && *s.cfg.HTTPClient.AllowPrivateIPs {
-		s.logger.Info("WARNING: httpClient.allowPrivateIPs is enabled, so this server may fetch URLs that resolve " +
-			"into private, loopback, and link-local address space. On a server handling caller-supplied URLs this " +
-			"exposes internal services. Prefer httpClient.allowedPrivateCIDRs, which permits only the ranges you " +
-			"name. (Cloud metadata addresses remain blocked regardless.)")
-	}
+	// Exposure warnings are NOT emitted here. They are returned by
+	// StartupWarnings so the caller can put them on stderr, where a human sees
+	// them regardless of logging level -- see that function for why a logger is
+	// the wrong channel for them.
 
 	maxHeaderBytes := apiCfg.MaxHeaderBytes
 	if maxHeaderBytes <= 0 {

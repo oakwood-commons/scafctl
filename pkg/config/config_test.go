@@ -1166,7 +1166,9 @@ func TestManager_Load_AddressPolicyFromEnv(t *testing.T) {
 		t.Setenv("SCAFCTL_HTTPCLIENT_ALLOWEDPRIVATECIDRS", "127.0.0.0/8")
 		cfg, err := NewManager(configPath).Load()
 		require.NoError(t, err)
-		assert.Equal(t, []string{"127.0.0.0/8"}, cfg.HTTPClient.AllowedPrivateCIDRs)
+		entries, set := cfg.HTTPClient.PrivateCIDRs()
+		assert.True(t, set)
+		assert.Equal(t, []string{"127.0.0.0/8"}, entries)
 	})
 
 	t.Run("trustProxyResolution", func(t *testing.T) {

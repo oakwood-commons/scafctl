@@ -49,10 +49,15 @@ func NormalizeCIDR(entry string) (string, error) {
 	if ip == nil {
 		return "", errors.New("not a valid IP address or CIDR block")
 	}
-	if ip.To4() != nil {
-		return trimmed + "/32", nil
+	// Build the CIDR from the canonical address rather than the text supplied.
+	// An IPv4-mapped IPv6 literal such as "::ffff:192.168.1.1" has a non-nil
+	// To4(), but "::ffff:192.168.1.1/32" parses as the IPv6 network ::/32 --
+	// silently exempting a vast range including ::1, rather than the single
+	// host the operator asked for.
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String() + "/32", nil
 	}
-	return trimmed + "/128", nil
+	return ip.String() + "/128", nil
 }
 
 // Validate validates the entire configuration.
@@ -165,12 +170,26 @@ func (h *HTTPClientConfig) Validate() error {
 		return fmt.Errorf("circuitBreakerHalfOpenMaxRequests: must be non-negative, got %d", h.CircuitBreakerHalfOpenMaxRequests)
 	}
 
-	// Reject a malformed address allowlist at startup. A bad entry is refused
-	// loudly here rather than dropped, because an operator who mistypes a range
-	// would otherwise believe they had granted access they had not.
-	for i, entry := range h.AllowedPrivateCIDRs {
-		if _, err := NormalizeCIDR(entry); err != nil {
-			return fmt.Errorf("allowedPrivateCIDRs[%d]: %q: %w", i, entry, err)
+	// The `maxItems` struct tag documents this bound for schema consumers, but
+	// the config loader never applies struct tags, so an advertised cap that is
+	// not checked here is not a cap. Same reasoning as allowedHosts below.
+	//
+	// An absent list is nothing to validate; a present but empty one is a
+	// deliberate "no exceptions" and is valid.
+	if entries, set := h.PrivateCIDRs(); set {
+		if len(entries) > settings.MaxAllowedPrivateCIDRs {
+			return fmt.Errorf("allowedPrivateCIDRs: %d entries exceed the maximum of %d",
+				len(entries), settings.MaxAllowedPrivateCIDRs)
+		}
+
+		// Reject a malformed address allowlist at startup. A bad entry is
+		// refused loudly here rather than dropped, because an operator who
+		// mistypes a range would otherwise believe they had granted access they
+		// had not.
+		for i, entry := range entries {
+			if _, err := NormalizeCIDR(entry); err != nil {
+				return fmt.Errorf("allowedPrivateCIDRs[%d]: %q: %w", i, entry, err)
+			}
 		}
 	}
 

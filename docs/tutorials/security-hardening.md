@@ -96,10 +96,13 @@ Check the file afterwards if you have both in play.
 
 This is a **local-development** convenience. A deployed server should carry its
 policy in configuration, where it is reviewable, rather than in the environment
-of whoever happened to start the process. `scafctl serve` logs a warning at
-startup when `allowPrivateIPs` is enabled, however it was set, so a permissive
-setting inherited from a local config or a stray environment variable cannot
-widen a deployment silently. A narrow `allowedPrivateCIDRs` list is deliberate
+of whoever happened to start the process. `scafctl serve` prints a warning to
+stderr at startup when `allowPrivateIPs` is enabled, however it was set, so a
+permissive setting inherited from a local config or a stray environment variable
+cannot widen a deployment silently. The warning goes to stderr rather than
+through the logger deliberately: the default logging level discards informational
+messages, and an exposure warning must not be silenced by a setting that exists
+to quiet operational noise. A narrow `allowedPrivateCIDRs` list is deliberate
 by construction and does not warn. Note also that neither mechanism can reach
 cloud metadata -- that remains blocked regardless.
 
@@ -108,7 +111,10 @@ the ranges you listed. This is deliberate: adding an allowlist to an existing
 `allowPrivateIPs: true` configuration should *tighten* it, not be silently
 ignored. A present but empty list (`allowedPrivateCIDRs: []`) means "no
 exceptions" and also overrides `allowPrivateIPs`; omit the field entirely to
-leave `allowPrivateIPs` in force.
+leave `allowPrivateIPs` in force. That distinction survives `scafctl config
+set` and any other rewrite of the file -- an empty list is written back as
+`allowedPrivateCIDRs: []`, not dropped, so a configuration that reads as
+restrictive cannot quietly reload as permissive.
 
 #### Behind an HTTP proxy
 
@@ -129,6 +135,13 @@ httpClient:
 blocked under every configuration, including `allowPrivateIPs: true` and an
 `allowedPrivateCIDRs` entry that covers them. Reaching them yields instance
 credentials, so there is no configuration in which allowing them is correct.
+
+The one exception is `trustProxyResolution: true`. That setting exists because
+a proxy-only environment often cannot resolve the target locally, and it works
+by handing the address decision to the proxy -- which means the guarantee above
+becomes the proxy's to keep, not this client's. A proxy that will resolve a
+hostname to a metadata or private address defeats it. Enable it only when the
+proxy itself blocks those destinations.
 
 A denied request names the setting that would permit it, so an operator hitting
 a legitimate internal endpoint is not left guessing:

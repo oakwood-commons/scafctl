@@ -84,7 +84,7 @@ func TestNewClient_PreservesExplicitValues(t *testing.T) {
 func allowLoopback(t *testing.T) *IPPolicy {
 	t.Helper()
 	policy, err := PolicyFromAppConfig(&config.HTTPClientConfig{
-		AllowedPrivateCIDRs: []string{"127.0.0.0/8", "::1/128"},
+		AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
 	})
 	require.NoError(t, err)
 	return policy

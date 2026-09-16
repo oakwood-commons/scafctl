@@ -21,7 +21,7 @@ import (
 func ctxAllowingLoopback() context.Context {
 	return config.WithConfig(context.Background(), &config.Config{
 		HTTPClient: config.HTTPClientConfig{
-			AllowedPrivateCIDRs: []string{"127.0.0.0/8", "::1/128"},
+			AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
 		},
 	})
 }

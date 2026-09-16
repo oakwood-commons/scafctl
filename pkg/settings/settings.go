@@ -338,6 +338,14 @@ const (
 	// APIServerConfig.AllowedHosts.
 	MaxAPIAllowedHosts = 50
 
+	// MaxAllowedPrivateCIDRs is the ceiling accepted for the number of
+	// httpClient.allowedPrivateCIDRs entries. As with MaxAPIAllowedHosts, the
+	// bound catches operator error and honours the advertised schema rather
+	// than guarding performance: the list is compiled once per client, not per
+	// request. It must stay in sync with the `maxItems` struct tag on
+	// HTTPClientConfig.AllowedPrivateCIDRs.
+	MaxAllowedPrivateCIDRs = 100
+
 	// DefaultAPIMaxRequestSize is the default maximum request body size in bytes (10MB).
 	DefaultAPIMaxRequestSize int64 = 10 * 1024 * 1024
 

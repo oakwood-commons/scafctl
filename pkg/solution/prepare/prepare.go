@@ -1618,22 +1618,37 @@ func injectHTTPClientSettings(ctx context.Context, cfg *plugin.ProviderConfig) {
 	}
 
 	// Only inject if there's something to communicate. An operator who sets
-	// only the allowlist must still have it reach the plugin, so both settings
-	// have to be absent before this is a no-op.
-	if appCfg.HTTPClient.AllowPrivateIPs == nil && appCfg.HTTPClient.AllowedPrivateCIDRs == nil {
+	// only one of these must still have it reach the plugin, so all three have
+	// to be absent before this is a no-op.
+	cidrs, cidrsSet := appCfg.HTTPClient.PrivateCIDRs()
+	if appCfg.HTTPClient.AllowPrivateIPs == nil &&
+		!cidrsSet &&
+		appCfg.HTTPClient.TrustProxyResolution == nil {
 		return
 	}
 
+	// No omitempty on the allowlist: a present-but-empty list means "no
+	// exceptions" and overrides allowPrivateIPs, while an absent one leaves the
+	// flag in force. omitempty erases exactly that distinction, so a plugin
+	// given {allowPrivateIPs: true, allowedPrivateCIDRs: []} would see only the
+	// flag and widen back to every private range. nil marshals as null and an
+	// empty slice as [], which keeps the two apart -- and PrivateCIDRs
+	// guarantees a non-nil slice whenever the field was set.
 	type httpClientSettings struct {
-		AllowPrivateIPs     bool     `json:"allowPrivateIPs"`
-		AllowedPrivateCIDRs []string `json:"allowedPrivateCIDRs,omitempty"`
+		AllowPrivateIPs      bool     `json:"allowPrivateIPs"`
+		AllowedPrivateCIDRs  []string `json:"allowedPrivateCIDRs"`
+		TrustProxyResolution bool     `json:"trustProxyResolution"`
 	}
 
-	settings := httpClientSettings{
-		AllowedPrivateCIDRs: appCfg.HTTPClient.AllowedPrivateCIDRs,
+	settings := httpClientSettings{}
+	if cidrsSet {
+		settings.AllowedPrivateCIDRs = cidrs
 	}
 	if appCfg.HTTPClient.AllowPrivateIPs != nil {
 		settings.AllowPrivateIPs = *appCfg.HTTPClient.AllowPrivateIPs
+	}
+	if appCfg.HTTPClient.TrustProxyResolution != nil {
+		settings.TrustProxyResolution = *appCfg.HTTPClient.TrustProxyResolution
 	}
 
 	raw, err := json.Marshal(settings)

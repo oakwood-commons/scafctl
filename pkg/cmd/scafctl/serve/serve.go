@@ -32,6 +32,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
@@ -252,6 +253,16 @@ func runServe(ctx context.Context, opts *Options) error {
 	// Register all endpoints
 	handlerCtx := srv.HandlerCtx()
 	endpoints.RegisterAll(srv.API(), srv.Router(), handlerCtx)
+
+	// Surface exposure warnings on stderr before the server blocks. They go
+	// here rather than through the logger because the default logging level
+	// discards Info, which would make a security warning invisible in exactly
+	// the default configuration an operator is most likely to be running.
+	// stderr also keeps stdout clean for machine-readable output.
+	w := writer.FromContext(ctx)
+	for _, warning := range srv.StartupWarnings() {
+		w.WarnStderrf("%s", warning)
+	}
 
 	// Start server (blocks until SIGINT/SIGTERM)
 	return srv.Start()
