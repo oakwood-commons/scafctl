@@ -80,6 +80,7 @@ All notable changes to this project will be documented in this file.
 
 ### 🐛 Bug Fixes
 
+- *(httpc)* [**breaking**] `solution/get.Getter`'s destination-address (SSRF) policy is now fixed when the Getter is constructed (`NewGetter`/`NewGetterFromContext`), not re-derived per call from the `ctx` passed to `FromURL`/`Get`/`GetWithBundle`/`GetWithLayers`. An embedder that built a bare `NewGetter()` and relied on passing a differently-configured `ctx` on each call to vary the policy will now silently get the policy in effect at construction time. Pass `WithAppConfig(&cfg.HTTPClient, logger)` to `NewGetter` (or use `NewGetterFromContext`, which already applies it) instead (#846)
 - *(provider)* [**breaking**] The `parameter` provider no longer applies `auto` type inference to an authored `default`. A default keeps its YAML-authored type (a quoted `"false"` stays the string `"false"`, `"0123"` keeps its leading zeros, a bare `false`/`42` stays a bool/int), which stops surprising, lossy coercions of quoted string defaults. Inference and `file://`/stdin source resolution now apply only to CLI-supplied values (always untyped strings), matching how Terraform/Helm treat typed defaults vs. stringly-typed overrides. Set an explicit `type` (e.g. `type: int`) to coerce a default. The `parameter-numeric-matches` lint rule now fires only for a *bare* numeric default, and quoting the default is a valid fix.
 - *(auth)* Preserve login-time client ID during token rotation (#79)
 

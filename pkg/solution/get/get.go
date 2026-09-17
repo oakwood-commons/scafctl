@@ -213,6 +213,18 @@ func WithSolutionDiscovery(folders, fileNames []string) Option {
 // It creates an HTTP client with settings from the provided config.HTTPClientConfig.
 // The logger is used for HTTP client logging.
 //
+// BREAKING: the destination-address (SSRF) policy this client enforces is now
+// fixed when the Getter is constructed, not re-derived per call. Earlier
+// versions effectively re-checked the policy against context on each FromURL
+// call; as of httpc v0.3.0 dial-time enforcement, the policy lives on the
+// client's transport, and the client is built once here. An embedder that
+// built a bare NewGetter() and relied on passing a differently-configured
+// context to FromURL/Get/GetWithBundle/GetWithLayers on each call will now
+// silently get the policy in effect when the Getter was constructed instead.
+// Callers that need the policy to reflect an app config must pass this option
+// (or use NewGetterFromContext, which already applies it) when constructing
+// the Getter, not per call.
+//
 // The client is built per Getter. Since httpc v0.3.0 each client owns its own
 // connection pool, so a Getter built per request (as the API server does) does
 // not reuse connections and abandons a pool that nothing closes. Sharing one
@@ -231,6 +243,14 @@ func WithAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) Option {
 // By default, it sets up the Getter with the standard file reading and stat functions,
 // a default HTTP client, and a discard logger. Options can be supplied to customize
 // the behavior of the Getter.
+//
+// The destination-address (SSRF) policy applied to remote fetches (FromURL,
+// and the URL branches of Get/GetWithBundle/GetWithLayers) is fixed at this
+// construction call via WithAppConfig, not re-derived from the ctx passed to
+// those methods later. Pass WithAppConfig here (or use NewGetterFromContext)
+// if the policy should reflect an application config; a plain NewGetter()
+// with no options gets the default (private/loopback/link-local denied)
+// client for the lifetime of the Getter, regardless of ctx.
 func NewGetter(opts ...Option) *Getter {
 	g := &Getter{
 		readFile:          os.ReadFile,
@@ -287,6 +307,11 @@ func NewGetterFromContext(ctx context.Context, opts ...Option) *Getter {
 //   - FromUrl: Loads a Solution from a specified remote URL.
 //   - Get: Loads a Solution from a path (local or URL) with auto-discovery support.
 //   - FindSolution: Searches for a solution file in default locations.
+//
+// BREAKING: the destination-address (SSRF) policy applied to remote fetches
+// is bound to the implementation at construction (see NewGetter's
+// WithAppConfig option), not derived per call from ctx. See FromURL's doc
+// comment for the migration note.
 type Interface interface {
 	FromLocalFileSystem(ctx context.Context, path string) (*solution.Solution, error)
 	FromURL(ctx context.Context, url string) (*solution.Solution, error)
@@ -938,6 +963,13 @@ func (o *Getter) FromLocalFileSystem(ctx context.Context, path string) (*solutio
 //
 //	*solution.Solution - The unmarshalled solution object.
 //	error - An error if the operation fails at any step.
+//
+// BREAKING: the destination-address (SSRF) policy enforced here is the
+// Getter's own httpClient, fixed at construction time (see NewGetter /
+// WithAppConfig), not derived from ctx on this call. A caller that expects
+// per-call policy variance (e.g. previously passing a different app config
+// via ctx to each FromURL call) will now silently get the policy in effect
+// when the Getter was built. Construct a Getter per desired policy instead.
 func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, error) {
 	if !filepath.IsURL(url) {
 		o.logger.Error(nil, "Invalid URL provided", "url", url)
