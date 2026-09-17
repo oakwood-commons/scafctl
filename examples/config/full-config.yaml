@@ -206,9 +206,19 @@ httpClient:
   # Cloud metadata addresses can NEVER be reached, under any combination of
   # the two settings above.
 
-  # Allow a proxied request whose target hostname does not resolve locally to
-  # proceed, leaving egress policy to the proxy. Defaults to false, which fails
-  # closed. Enable only in a proxy-only environment with no direct resolver.
+  # HTTP_PROXY/HTTPS_PROXY proxy routing is DISABLED by default for
+  # policy-protected clients: a proxied request is dialed to the proxy, not
+  # the target, so the dial-time address check above cannot cover that hop.
+  # Set this to true only once the configured proxy is known to enforce an
+  # equivalent destination-address policy itself.
+  # Default: false
+  # trustedProxy: false
+
+  # Additional relaxation for the trusted-proxy path only: allow a proxied
+  # request whose target hostname does not resolve locally to proceed,
+  # leaving egress policy to the proxy. Has no effect unless trustedProxy
+  # above is true. Defaults to false, which fails closed. Enable only in a
+  # proxy-only environment with no direct resolver.
   # trustProxyResolution: false
 
   # Maximum size in bytes the HTTP provider will read from a single response

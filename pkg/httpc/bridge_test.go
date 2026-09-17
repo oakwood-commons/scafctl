@@ -124,4 +124,45 @@ func TestNewClientFromAppConfig_NilSinkLogger(t *testing.T) {
 	require.NotNil(t, client)
 }
 
+// A nil cfg is the documented secure default, so it must get the same
+// protections a fully-specified-but-empty config gets: the default deny
+// policy, and a transport that never routes through an ambient proxy.
+// Before this test's fix, the nil path returned before either was set,
+// silently inheriting http.DefaultTransport's environment-based proxy
+// selection.
+func TestHTTPClientConfigFromAppConfig_NilConfigAppliesSecureDefaults(t *testing.T) {
+	clientCfg := httpClientConfigFromAppConfig(nil, logr.Discard())
+
+	require.NotNil(t, clientCfg.IPPolicy,
+		"nil config must get the default deny policy explicitly, not rely on upstream's own nil handling")
+	assert.Equal(t, &IPPolicy{}, clientCfg.IPPolicy, "nil config must get the same zero-value deny policy as an empty one")
+
+	require.NotNil(t, clientCfg.Transport, "nil config must not inherit http.DefaultTransport's proxy selection")
+	transport, ok := clientCfg.Transport.(*http.Transport)
+	require.True(t, ok, "the nil-config transport should be an *http.Transport")
+	assert.Nil(t, transport.Proxy, "nil config must never route through an ambient HTTP_PROXY/HTTPS_PROXY")
+}
+
+// The transport wiring must follow TrustedProxy the same way for an explicit
+// config as it does for the nil path above: untrusted (the default) disables
+// proxy routing, trusted defers to normal environment-based proxy selection.
+func TestHTTPClientConfigFromAppConfig_TransportFollowsTrustedProxy(t *testing.T) {
+	t.Run("untrusted disables proxy routing", func(t *testing.T) {
+		clientCfg := httpClientConfigFromAppConfig(&config.HTTPClientConfig{}, logr.Discard())
+
+		require.NotNil(t, clientCfg.Transport)
+		transport, ok := clientCfg.Transport.(*http.Transport)
+		require.True(t, ok)
+		assert.Nil(t, transport.Proxy)
+	})
+
+	t.Run("trusted defers to normal proxy selection", func(t *testing.T) {
+		trusted := true
+		clientCfg := httpClientConfigFromAppConfig(&config.HTTPClientConfig{TrustedProxy: &trusted}, logr.Discard())
+
+		assert.Nil(t, clientCfg.Transport,
+			"a trusted proxy leaves Transport unset, so http.DefaultTransport's normal proxy behavior applies")
+	})
+}
+
 func boolPtr(b bool) *bool { return &b }

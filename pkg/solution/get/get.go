@@ -249,14 +249,22 @@ func WithAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) Option {
 // construction call via WithAppConfig, not re-derived from the ctx passed to
 // those methods later. Pass WithAppConfig here (or use NewGetterFromContext)
 // if the policy should reflect an application config; a plain NewGetter()
-// with no options gets the default (private/loopback/link-local denied)
-// client for the lifetime of the Getter, regardless of ctx.
+// with no options gets the default (private/loopback/link-local denied,
+// proxy routing disabled) client for the lifetime of the Getter, regardless
+// of ctx.
 func NewGetter(opts ...Option) *Getter {
 	g := &Getter{
-		readFile:          os.ReadFile,
-		statFunc:          os.Stat,
-		httpClient:        httpc.NewClient(nil), // Use default HTTP client
-		logger:            logr.Discard(),       // Use discard logger by default
+		readFile: os.ReadFile,
+		statFunc: os.Stat,
+		// NewClientFromAppConfig(nil, ...) is the secure-default client
+		// constructor: the same deny-private policy and disabled proxy
+		// routing every other policy-protected client in this package gets.
+		// A bare httpc.NewClient(nil) would leave http.DefaultTransport's
+		// environment-based proxy selection in place, so a bare NewGetter()
+		// (with no WithAppConfig option) would not get the same protection
+		// as a Getter the CLI constructs.
+		httpClient:        httpc.NewClientFromAppConfig(nil, logr.Discard()),
+		logger:            logr.Discard(), // Use discard logger by default
 		solutionFolders:   settings.GetRootSolutionFolders(),
 		solutionFileNames: settings.GetSolutionFileNames(),
 	}

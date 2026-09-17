@@ -75,21 +75,46 @@ func StartupWarnings(cfg *config.Config) []string {
 	// internal host and is deliberate by construction, so warning on it (or
 	// on a superseded AllowPrivateIPs) would train operators to ignore the
 	// warning that matters.
+	trustedProxy := cfg.HTTPClient.TrustedProxy != nil && *cfg.HTTPClient.TrustedProxy
+
 	_, cidrsSet := cfg.HTTPClient.PrivateCIDRs()
 	if cfg.HTTPClient.AllowPrivateIPs != nil && *cfg.HTTPClient.AllowPrivateIPs && !cidrsSet {
+		// The metadata guarantee is unconditional only on the direct-dial
+		// path. With a trusted proxy in play, the proxy -- not this
+		// client -- resolves the destination, so the guarantee depends on
+		// that proxy also refusing metadata; say so instead of promising
+		// something this configuration no longer controls.
+		metadataNote := "Cloud metadata addresses remain blocked regardless."
+		if trustedProxy {
+			metadataNote = "Cloud metadata addresses remain blocked by this client's own policy; with " +
+				"httpClient.trustedProxy enabled, keeping them unreachable also depends on the proxy " +
+				"enforcing its own egress policy."
+		}
 		warnings = append(warnings, "httpClient.allowPrivateIPs is enabled, so this server may fetch URLs that "+
 			"resolve into private, loopback, and link-local address space. On a server handling caller-supplied "+
 			"URLs this exposes internal services. Prefer httpClient.allowedPrivateCIDRs, which permits only the "+
-			"ranges you name. (Cloud metadata addresses remain blocked regardless.)")
+			"ranges you name. ("+metadataNote+")")
 	}
 
-	// trustProxyResolution hands the address decision for locally
-	// unresolvable proxied hostnames to the proxy, which can weaken the
-	// otherwise unconditional metadata/private-address guarantee if that
-	// proxy does not enforce its own egress policy (see the field's doc
-	// comment). Warn operators the same way, since it is the other setting
-	// that can widen effective network exposure.
-	if cfg.HTTPClient.TrustProxyResolution != nil && *cfg.HTTPClient.TrustProxyResolution {
+	// trustedProxy re-enables HTTP_PROXY/HTTPS_PROXY routing for
+	// policy-protected clients, which is disabled by default (see
+	// httpc.ProxyAwareTransport): a proxied request is dialed to the proxy,
+	// not the target, so the dial-time destination check cannot cover that
+	// hop. The proxy -- not this client -- decides where the connection
+	// actually lands, so this is the setting that most directly hands away
+	// the guarantee the rest of this policy provides.
+	if trustedProxy {
+		warnings = append(warnings, "httpClient.trustedProxy is enabled, so requests are routed through the "+
+			"configured HTTP_PROXY/HTTPS_PROXY proxy again. The proxy, not this client, decides the destination "+
+			"address for a proxied request -- if it does not enforce its own egress policy, it may reach private "+
+			"or cloud metadata addresses on this server's behalf.")
+	}
+
+	// trustProxyResolution only has an effect on the trusted-proxy path: with
+	// proxy routing disabled (the default), no request is ever forwarded to a
+	// proxy, so this setting has nothing to relax and would otherwise be a
+	// false-positive warning about behavior that cannot happen.
+	if trustedProxy && cfg.HTTPClient.TrustProxyResolution != nil && *cfg.HTTPClient.TrustProxyResolution {
 		warnings = append(warnings, "httpClient.trustProxyResolution is enabled, so requests whose target hostname "+
 			"cannot be resolved locally are still forwarded to the configured proxy, which decides the destination "+
 			"address instead of this client. If that proxy does not enforce its own egress policy, it may reach "+

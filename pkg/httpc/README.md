@@ -5,7 +5,7 @@ Thin adapter over [`github.com/oakwood-commons/httpc`](https://github.com/oakwoo
 - **XDG cache directory** via `pkg/paths` instead of `os.UserCacheDir`
 - **App-name-derived cache key prefix** via `pkg/settings` (for example, `scafctl:` for the default binary name)
 - **OTel metrics bridge** -- `OTelMetrics` implements the upstream `Metrics` interface using `pkg/metrics` OTel instruments
-- **Context-based SSRF checks** -- `PrivateIPsAllowed(ctx)` reads `config.FromContext(ctx)` to decide whether private IPs are allowed
+- **Dial-time SSRF policy** -- `PolicyFromAppConfig`/`PolicyFromContext` build an `IPPolicy` enforced by the transport when each connection is dialed
 - **`config.HTTPClientConfig` bridge** -- `NewClientFromAppConfig` converts the string-based app config to a typed `ClientConfig`
 
 ## Usage
@@ -45,9 +45,12 @@ actually dialed is checked, not just the address a URL initially resolved to.
 - `ExplainBlocked(err)` rewrites a policy denial to name the configuration key
   that would permit it, instead of the upstream library's internal field name.
 
-The removed `PrivateIPsAllowed(ctx)` / `ValidateURLNotPrivate(url)` preflight
-helpers are gone -- callers no longer enforce SSRF themselves at the call site;
-the policy above is applied once, on the transport, and enforced on every dial.
+The `PrivateIPsAllowed(ctx)` preflight helper is gone -- callers no longer
+enforce SSRF themselves at the call site; the policy above is applied once,
+on the transport, and enforced on every dial. (`ValidateURLNotPrivate(url)`
+is still re-exported for ad-hoc, call-site text checks, but policy-protected
+call sites in this repo no longer rely on it -- the dial-time check
+supersedes it.)
 
 ### Proxy routing is disabled unless explicitly trusted
 

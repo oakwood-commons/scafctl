@@ -32,13 +32,34 @@ func parseDurationOr(s string, fallback time.Duration, logger logr.Logger, field
 // It uses scafctl-specific defaults (XDG cache dir, app-name-based prefix, OTel metrics)
 // as the base, then overlays the string-based config values.
 //
-// The cfg parameter can be nil, in which case scafctl defaults are used.
+// The cfg parameter can be nil, in which case scafctl defaults are used --
+// including the same default deny-private policy and disabled proxy routing
+// an explicit, all-fields-unset configuration gets below.
 func NewClientFromAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) *Client {
+	return NewClient(httpClientConfigFromAppConfig(cfg, logger))
+}
+
+// httpClientConfigFromAppConfig builds the ClientConfig that
+// NewClientFromAppConfig hands to NewClient. Split out from
+// NewClientFromAppConfig so tests can assert on the resolved IPPolicy and
+// Transport directly, rather than reaching through the client's wrapped
+// transport chain (OTel, retry, cache) to find them.
+func httpClientConfigFromAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) *ClientConfig {
 	clientCfg := DefaultConfig()
 	clientCfg.Logger = logger
 
 	if cfg == nil {
-		return NewClient(clientCfg)
+		// nil is the documented secure default, so it must get the same
+		// protections as an explicit, all-fields-unset configuration: the
+		// default deny-private policy (PolicyFromAppConfig(nil)'s result)
+		// and a transport that never routes through an ambient proxy
+		// (TrustedProxy(nil) is false). Returning before these were set left
+		// http.DefaultTransport's environment-based proxy selection in force
+		// for exactly the callers -- such as hostname inventory fetches --
+		// with no trustedProxy opt-in to have relied on it.
+		clientCfg.IPPolicy = &IPPolicy{}
+		clientCfg.Transport = ProxyAwareTransport(false)
+		return clientCfg
 	}
 
 	clientCfg.Timeout = parseDurationOr(cfg.Timeout, clientCfg.Timeout, logger, "timeout")
@@ -119,5 +140,5 @@ func NewClientFromAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) *C
 		clientCfg.MaxResponseBodySize = cfg.MaxResponseBodySize
 	}
 
-	return NewClient(clientCfg)
+	return clientCfg
 }

@@ -19,10 +19,13 @@ import (
 // NormalizeCIDR converts a single address-allowlist entry into CIDR form,
 // returning an error describing why an entry is unusable.
 //
-// A CIDR block is returned unchanged once validated. A bare address is widened
-// to the single-address range covering it (/32 for IPv4, /128 for IPv6), since
-// naming one host is the obvious way to express "just this host" and rejecting
-// it would be a needless papercut.
+// A CIDR block is returned in canonical form, not the text supplied:
+// net.ParseCIDR accepts host bits (for example "10.42.7.9/24"), and the
+// masked network -- what the entry actually covers -- is what is stored, so
+// that example comes back as "10.42.7.0/24". A bare address is widened to
+// the single-address range covering it (/32 for IPv4, /128 for IPv6), since
+// naming one host is the obvious way to express "just this host" and
+// rejecting it would be a needless papercut.
 //
 // This is the single definition shared by configuration validation and by the
 // code that builds the runtime policy, so an entry accepted at startup can

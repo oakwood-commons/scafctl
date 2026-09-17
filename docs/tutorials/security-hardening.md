@@ -44,9 +44,13 @@ connect. Checking the resolved address closes that gap, and closes DNS
 rebinding with it -- there is no window between the check and the connection
 for an answer to change.
 
-One consequence worth knowing: the same check applies on every redirect hop and
-to every request scafctl makes, because it lives in the dialer rather than in
-any one call site.
+One consequence worth knowing: the same check applies on every redirect hop
+and to every policy-protected request scafctl makes -- solution fetches, the
+`http` provider, and parameter fetches -- because it lives in the dialer
+rather than in any one call site. It does not govern every outbound request
+scafctl makes: a few internal subsystems, such as catalog enumeration and the
+OAuth handlers, use their own plain clients and are not fetching
+caller-supplied URLs, so this policy does not apply to them.
 
 #### Permitting specific destinations
 
@@ -118,15 +122,34 @@ restrictive cannot quietly reload as permissive.
 
 #### Behind an HTTP proxy
 
-When a proxy is in use, scafctl never dials the destination itself, so it
-checks the target by resolving the hostname locally instead. That **fails
-closed**: in a proxy-only environment with no direct resolver, every request is
-refused. If the proxy itself enforces egress policy, opt out:
+Proxy routing (`HTTP_PROXY`/`HTTPS_PROXY`) is **disabled by default**. A
+proxied request is dialed to the proxy, not the target, so the dial-time
+check above never runs for that hop -- the target is instead checked once
+against a local DNS answer before the request is handed to the proxy, and a
+proxy whose own resolution differs (split-horizon DNS, a rebind between check
+and hand-off) could reach somewhere that local check never saw. Rather than
+accept that gap silently, no proxy is used until you say the configured proxy
+can be trusted:
 
 ```yaml
 httpClient:
-  trustProxyResolution: true
+  trustedProxy: true
 ```
+
+With a trusted proxy in use, scafctl still resolves the target hostname
+locally first and refuses one that resolves into blocked space. That **fails
+closed**: in a proxy-only environment with no direct resolver, every request
+is refused. If the proxy itself enforces egress policy and target names may
+not resolve locally at all, additionally relax just that case:
+
+```yaml
+httpClient:
+  trustedProxy: true          # required: re-enables proxy routing
+  trustProxyResolution: true  # optional: also allow a target that fails to resolve locally
+```
+
+`trustProxyResolution` has no effect on its own -- without `trustedProxy:
+true`, proxy routing stays disabled and nothing is ever forwarded to a proxy.
 
 #### Cloud metadata is never reachable
 
@@ -136,12 +159,15 @@ blocked under every configuration, including `allowPrivateIPs: true` and an
 `allowedPrivateCIDRs` entry that covers them. Reaching them yields instance
 credentials, so there is no configuration in which allowing them is correct.
 
-The one exception is `trustProxyResolution: true`. That setting exists because
-a proxy-only environment often cannot resolve the target locally, and it works
-by handing the address decision to the proxy -- which means the guarantee above
-becomes the proxy's to keep, not this client's. A proxy that will resolve a
-hostname to a metadata or private address defeats it. Enable it only when the
-proxy itself blocks those destinations.
+The exception is the trusted-proxy path. `trustedProxy: true` is what
+re-enables proxy routing at all, and doing so hands the actual connection
+decision to the proxy -- even when local DNS resolves a target outside
+blocked space, the proxy dials it, and the guarantee above becomes the
+proxy's to keep, not this client's. `trustProxyResolution: true` widens that
+further, letting a target that fails to resolve locally through as well. A
+proxy that will resolve a hostname to a metadata or private address defeats
+the guarantee either way. Enable either setting only when the proxy itself
+blocks those destinations.
 
 A denied request names the setting that would permit it, so an operator hitting
 a legitimate internal endpoint is not left guessing:

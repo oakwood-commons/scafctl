@@ -131,11 +131,10 @@ func TestStartupWarnings_AllowPrivateIPs(t *testing.T) {
 	}
 }
 
-// trustProxyResolution hands the address decision for locally unresolvable
-// proxied hostnames to the proxy, which can reach private/metadata space if
-// that proxy does not enforce its own egress policy. This is the other
-// setting that can widen effective exposure, so it needs its own warning
-// independent of allowPrivateIPs/allowedPrivateCIDRs.
+// trustProxyResolution only has an effect once a proxy is actually trusted
+// (httpClient.trustedProxy: true); with proxy routing disabled (the
+// default), nothing is ever forwarded to a proxy, so the setting alone must
+// stay silent rather than warn about behavior that cannot happen.
 func TestStartupWarnings_TrustProxyResolution(t *testing.T) {
 	t.Parallel()
 
@@ -147,9 +146,19 @@ func TestStartupWarnings_TrustProxyResolution(t *testing.T) {
 		httpClient config.HTTPClientConfig
 		want       bool
 	}{
-		{"trustProxyResolution true warns", config.HTTPClientConfig{TrustProxyResolution: &enabled}, true},
+		{"trustProxyResolution alone is silent (proxy routing disabled)", config.HTTPClientConfig{TrustProxyResolution: &enabled}, false},
 		{"trustProxyResolution false is silent", config.HTTPClientConfig{TrustProxyResolution: &disabled}, false},
 		{"unset is silent", config.HTTPClientConfig{}, false},
+		{
+			"trustProxyResolution warns once trustedProxy is also enabled",
+			config.HTTPClientConfig{TrustProxyResolution: &enabled, TrustedProxy: &enabled},
+			true,
+		},
+		{
+			"trustedProxy alone does not trigger the trustProxyResolution warning",
+			config.HTTPClientConfig{TrustedProxy: &enabled},
+			false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -159,6 +168,61 @@ func TestStartupWarnings_TrustProxyResolution(t *testing.T) {
 			assert.Equal(t, tt.want, containing(got, "httpClient.trustProxyResolution is enabled"))
 		})
 	}
+}
+
+// trustedProxy re-enables HTTP_PROXY/HTTPS_PROXY routing, so enabling it must
+// warn on its own, independent of trustProxyResolution.
+func TestStartupWarnings_TrustedProxy(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	disabled := false
+
+	tests := []struct {
+		name       string
+		httpClient config.HTTPClientConfig
+		want       bool
+	}{
+		{"trustedProxy true warns", config.HTTPClientConfig{TrustedProxy: &enabled}, true},
+		{"trustedProxy false is silent", config.HTTPClientConfig{TrustedProxy: &disabled}, false},
+		{"unset is silent", config.HTTPClientConfig{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := StartupWarnings(&config.Config{HTTPClient: tt.httpClient})
+			assert.Equal(t, tt.want, containing(got, "httpClient.trustedProxy is enabled"))
+		})
+	}
+}
+
+// The allowPrivateIPs warning's metadata parenthetical promises an
+// unconditional guarantee that is no longer this client's to keep once a
+// trusted proxy is in play -- it must say so instead of overstating the
+// guarantee.
+func TestStartupWarnings_AllowPrivateIPsMetadataNoteReflectsTrustedProxy(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+
+	t.Run("without a trusted proxy the guarantee is unconditional", func(t *testing.T) {
+		t.Parallel()
+		got := StartupWarnings(&config.Config{
+			HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &enabled},
+		})
+		assert.True(t, containing(got, "Cloud metadata addresses remain blocked regardless."))
+	})
+
+	t.Run("with a trusted proxy the guarantee depends on the proxy", func(t *testing.T) {
+		t.Parallel()
+		got := StartupWarnings(&config.Config{
+			HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &enabled, TrustedProxy: &enabled},
+		})
+		assert.True(t, containing(got, "depends on the proxy enforcing its own egress policy"))
+		assert.False(t, containing(got, "Cloud metadata addresses remain blocked regardless."),
+			"the unqualified guarantee must not appear once a trusted proxy can decide the destination")
+	})
 }
 
 // Both conditions can hold at once, and each has its own remedy, so neither may
@@ -177,22 +241,24 @@ func TestStartupWarnings_ReportsEveryCondition(t *testing.T) {
 	assert.True(t, containing(got, "httpClient.allowPrivateIPs is enabled"))
 }
 
-// allowPrivateIPs and trustProxyResolution are independent settings that can
-// each widen exposure on their own; both firing together must produce both
-// warnings, not just one.
-func TestStartupWarnings_AllowPrivateIPsAndTrustProxyResolutionBothFire(t *testing.T) {
+// allowPrivateIPs, trustedProxy, and trustProxyResolution are independent
+// settings that can each widen exposure on their own; all three firing
+// together must produce three warnings, not fewer.
+func TestStartupWarnings_AllExposureWarningsFireTogether(t *testing.T) {
 	t.Parallel()
 
 	enabled := true
 	got := StartupWarnings(&config.Config{
 		HTTPClient: config.HTTPClientConfig{
 			AllowPrivateIPs:      &enabled,
+			TrustedProxy:         &enabled,
 			TrustProxyResolution: &enabled,
 		},
 	})
 
-	assert.Len(t, got, 2)
+	assert.Len(t, got, 3)
 	assert.True(t, containing(got, "httpClient.allowPrivateIPs is enabled"))
+	assert.True(t, containing(got, "httpClient.trustedProxy is enabled"))
 	assert.True(t, containing(got, "httpClient.trustProxyResolution is enabled"))
 }
 
