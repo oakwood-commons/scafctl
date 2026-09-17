@@ -29,8 +29,22 @@ via type aliases and `var` assignments. Consumers should not need to import
 
 ## SSRF protection
 
-The upstream library has transport-level SSRF protection (`AllowPrivateIPs` field
-on `ClientConfig`). This adapter disables it (`AllowPrivateIPs = true` on every client)
-because scafctl performs SSRF validation at the application layer via
-`PrivateIPsAllowed(ctx)` and `ValidateURLNotPrivate(url)` in the providers that
-need it (httpprovider, parameterprovider).
+SSRF enforcement happens at **dial time** in the upstream library (httpc v0.3.0+),
+via an `IPPolicy` attached to the client's transport. This closes the
+TOCTOU/DNS-rebinding gap an earlier, preflight-only design had: the address
+actually dialed is checked, not just the address a URL initially resolved to.
+
+- `PolicyFromAppConfig(cfg *config.HTTPClientConfig) (*upstream.IPPolicy, error)`
+  builds the policy from application configuration (`httpClient.allowPrivateIPs`,
+  `httpClient.allowedPrivateCIDRs`, `httpClient.trustProxyResolution`).
+- `PolicyFromContext(ctx)` derives the same policy from `config.FromContext(ctx)`,
+  for callers that only have a context.
+- The zero-value policy denies private, loopback, and link-local addresses; cloud
+  metadata addresses are denied unconditionally and cannot be re-enabled by any
+  configuration.
+- `ExplainBlocked(err)` rewrites a policy denial to name the configuration key
+  that would permit it, instead of the upstream library's internal field name.
+
+The removed `PrivateIPsAllowed(ctx)` / `ValidateURLNotPrivate(url)` preflight
+helpers are gone -- callers no longer enforce SSRF themselves at the call site;
+the policy above is applied once, on the transport, and enforced on every dial.

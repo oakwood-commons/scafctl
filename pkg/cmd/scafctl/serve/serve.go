@@ -254,18 +254,26 @@ func runServe(ctx context.Context, opts *Options) error {
 	handlerCtx := srv.HandlerCtx()
 	endpoints.RegisterAll(srv.API(), srv.Router(), handlerCtx)
 
-	// Surface exposure warnings on stderr before the server blocks. They go
-	// here rather than through the logger because the default logging level
-	// discards Info, which would make a security warning invisible in exactly
-	// the default configuration an operator is most likely to be running.
-	// stderr also keeps stdout clean for machine-readable output.
-	w := writer.FromContext(ctx)
-	for _, warning := range srv.StartupWarnings() {
-		w.WarnStderrf("%s", warning)
-	}
+	// Surface exposure warnings on stderr before the server blocks.
+	emitStartupWarnings(writer.FromContext(ctx), srv.StartupWarnings())
 
 	// Start server (blocks until SIGINT/SIGTERM)
 	return srv.Start()
+}
+
+// emitStartupWarnings writes each startup warning to stderr via w.
+//
+// These go through the writer's stderr stream rather than the logger because
+// the default logging level discards Info, which would make a security
+// warning invisible in exactly the default configuration an operator is most
+// likely to be running. stderr also keeps stdout clean for machine-readable
+// output. Extracted as its own function so the emission path (which stream,
+// which format) has direct test coverage independent of the rest of the
+// server bring-up in runServe.
+func emitStartupWarnings(w *writer.Writer, warnings []string) {
+	for _, warning := range warnings {
+		w.WarnStderrf("%s", warning)
+	}
 }
 
 func createPluginPool(ctx context.Context, officialReg *official.Registry, pluginFetcher *plugin.Fetcher, perCatalog map[string]catalog.PluginPolicy, reg *provider.Registry, lgr *logr.Logger, cfg *config.Config, bareNames []string) *plugin.Pool { //nolint:unused //will remove when versioned pool is fully integrated
