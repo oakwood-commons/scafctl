@@ -361,7 +361,9 @@ func TestProxyAwareTransport_DoesNotRouteThroughProxy(t *testing.T) {
 		proxyHit = false
 		explicit := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 		client := &http.Client{Transport: explicit}
-		resp, err := client.Get(target.URL)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target.URL, nil)
+		require.NoError(t, err)
+		resp, err := client.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.True(t, proxyHit, "the control transport must have gone through the proxy")
@@ -371,7 +373,9 @@ func TestProxyAwareTransport_DoesNotRouteThroughProxy(t *testing.T) {
 		proxyHit = false
 		rt := ProxyAwareTransport(false)
 		client := &http.Client{Transport: rt}
-		resp, err := client.Get(target.URL)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target.URL, nil)
+		require.NoError(t, err)
+		resp, err := client.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.False(t, proxyHit, "an untrusted transport must never route through a proxy")
