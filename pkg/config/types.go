@@ -362,6 +362,29 @@ type HTTPClientConfig struct {
 	// metadata or private address will reach it.
 	TrustProxyResolution *bool `json:"trustProxyResolution,omitempty" yaml:"trustProxyResolution,omitempty" mapstructure:"trustProxyResolution" doc:"Allow a proxied request whose target does not resolve locally to proceed, leaving egress policy to the proxy (default: false, which fails closed)." example:"false"`
 
+	// TrustedProxy marks a configured HTTP/HTTPS proxy (HTTP_PROXY, HTTPS_PROXY,
+	// or a caller-supplied Transport) as trusted to enforce its own
+	// destination-address egress policy.
+	//
+	// Independent of TrustProxyResolution above: that field only relaxes what
+	// happens when a proxied hostname fails to resolve locally. This field
+	// addresses a different, always-present gap -- when a request goes
+	// through a proxy, the upstream transport dials the PROXY, not the
+	// target, so the dial-time IP check never runs for that hop; the target
+	// is instead checked once against a LOCAL DNS answer before handing the
+	// request to the proxy. If the proxy's own resolution differs (split-
+	// horizon DNS, a rebind between check and connect), the proxy can still
+	// connect somewhere the local check never saw, even with
+	// TrustProxyResolution left at its default false.
+	//
+	// Defaults to false, which disables proxy routing entirely for
+	// policy-protected clients: no HTTP_PROXY/HTTPS_PROXY environment
+	// variable is honoured, closing the gap by not using a proxy at all.
+	// Set this to true only when the configured proxy is known to enforce an
+	// equivalent (or stricter) destination-address policy itself, restoring
+	// normal environment-based proxy behaviour.
+	TrustedProxy *bool `json:"trustedProxy,omitempty" yaml:"trustedProxy,omitempty" mapstructure:"trustedProxy" doc:"Trust a configured HTTP/HTTPS proxy to enforce its own egress policy (default: false, which disables proxy routing for policy-protected clients since the proxy hop cannot be checked at dial time)." example:"false"`
+
 	// MaxResponseBodySize is the maximum number of bytes the HTTP provider will
 	// read from a single response body. Prevents denial-of-service via unbounded
 	// responses from malicious or misconfigured servers. Defaults to 100 MB.

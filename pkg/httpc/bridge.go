@@ -107,6 +107,14 @@ func NewClientFromAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) *C
 	}
 	clientCfg.IPPolicy = policy
 
+	// A proxied request is dialed to the proxy, not the target, so it never
+	// reaches the dial-time check the rest of this policy relies on. Disable
+	// proxy routing by default (TrustedProxy unset/false) rather than accept
+	// that gap silently; see ProxyAwareTransport for the full reasoning.
+	if clientCfg.Transport == nil {
+		clientCfg.Transport = ProxyAwareTransport(TrustedProxy(cfg))
+	}
+
 	if cfg.MaxResponseBodySize > 0 {
 		clientCfg.MaxResponseBodySize = cfg.MaxResponseBodySize
 	}

@@ -743,6 +743,11 @@ func buildHTTPClientConfig(ctx context.Context, timeout time.Duration, retryCfg 
 		// Enforced at dial time against the resolved address, so it covers
 		// hostnames pointing at internal infrastructure and redirects into it.
 		IPPolicy: httpc.PolicyFromContext(ctx),
+		// A proxied request bypasses the dial-time check above (the transport
+		// dials the proxy, not the target), so proxy routing is disabled here
+		// too unless httpClient.trustedProxy explicitly says the proxy
+		// enforces its own policy. See httpc.ProxyAwareTransport.
+		Transport: httpc.ProxyAwareTransport(httpc.TrustedProxyFromContext(ctx)),
 	}
 	if retryCfg == nil {
 		// No retry: block — single attempt, never retry on any HTTP status.

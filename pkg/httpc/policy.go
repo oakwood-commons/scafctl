@@ -109,6 +109,37 @@ func PolicyFromContext(ctx context.Context) *upstream.IPPolicy {
 	return policy
 }
 
+// TrustedProxy reports whether cfg marks a configured proxy as trusted to
+// enforce its own destination-address egress policy.
+//
+// A proxied request is dialed to the proxy, not the target, so the dial-time
+// IP check never runs for that hop -- only a local-DNS pre-check does, ahead
+// of handing the request to the proxy. When the proxy's own resolution can
+// differ from that local answer (split-horizon DNS, a rebind between check
+// and hand-off), the proxy can still connect somewhere the local check never
+// saw. Defaulting to false (nil cfg or unset field) disables proxy routing
+// entirely for a policy-protected client rather than accept that gap
+// silently; set TrustedProxy explicitly once the proxy is known to enforce
+// an equivalent policy itself.
+func TrustedProxy(cfg *config.HTTPClientConfig) bool {
+	if cfg == nil || cfg.TrustedProxy == nil {
+		return false
+	}
+	return *cfg.TrustedProxy
+}
+
+// TrustedProxyFromContext derives the trusted-proxy setting from the
+// application configuration carried on ctx, defaulting to false (proxy
+// routing disabled) when configuration is missing -- the same fail-safe
+// posture as PolicyFromContext.
+func TrustedProxyFromContext(ctx context.Context) bool {
+	appCfg := config.FromContext(ctx)
+	if appCfg == nil {
+		return false
+	}
+	return TrustedProxy(&appCfg.HTTPClient)
+}
+
 // ExplainBlocked annotates a destination-address denial with the configuration
 // key that would permit it, and returns every other error unchanged.
 //

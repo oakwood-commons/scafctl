@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"testing"
 	"time"
 
@@ -291,4 +292,88 @@ func TestIPPolicy_EnforcesMaxRedirects(t *testing.T) {
 	}
 	require.Error(t, err, "should hit max redirect limit")
 	assert.Contains(t, err.Error(), "3 redirect", "error should mention redirect count")
+}
+
+// TestProxyAwareTransport_Untrusted proves the untrusted (default) path
+// disables proxy selection outright: net/http treats a Transport with a nil
+// Proxy field as "never use a proxy", regardless of HTTP_PROXY/HTTPS_PROXY,
+// so this is a structural guarantee rather than something that depends on
+// racing against process-wide proxy-env caching.
+func TestProxyAwareTransport_Untrusted(t *testing.T) {
+	rt := ProxyAwareTransport(false)
+	require.NotNil(t, rt, "an untrusted proxy must still get a usable transport")
+
+	transport, ok := rt.(*http.Transport)
+	require.True(t, ok, "the returned transport should be an *http.Transport")
+	assert.Nil(t, transport.Proxy, "Proxy must be nil so no request is ever routed through one")
+}
+
+// TestProxyAwareTransport_Trusted proves the trusted path is a deliberate
+// no-op: it returns nil so the caller's ClientConfig.Transport stays unset,
+// letting http.DefaultTransport's normal environment-based proxy selection
+// apply exactly as it did before this change.
+func TestProxyAwareTransport_Trusted(t *testing.T) {
+	assert.Nil(t, ProxyAwareTransport(true))
+}
+
+// TestNoProxyTransport_PreservesOtherDefaults proves the untrusted transport
+// is a clone of http.DefaultTransport with only Proxy changed, not a bare
+// *http.Transport{} that would silently drop timeouts, TLS config, and
+// connection pool sizing.
+func TestNoProxyTransport_PreservesOtherDefaults(t *testing.T) {
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	require.True(t, ok, "http.DefaultTransport must be an *http.Transport for this test to be meaningful")
+
+	rt := ProxyAwareTransport(false)
+	transport, ok := rt.(*http.Transport)
+	require.True(t, ok)
+
+	assert.Equal(t, defaultTransport.MaxIdleConns, transport.MaxIdleConns)
+	assert.Equal(t, defaultTransport.IdleConnTimeout, transport.IdleConnTimeout)
+	assert.Equal(t, defaultTransport.TLSHandshakeTimeout, transport.TLSHandshakeTimeout)
+	assert.Nil(t, transport.Proxy)
+}
+
+// TestProxyAwareTransport_DoesNotRouteThroughProxy is an end-to-end proof,
+// not just a struct-field check: an *http.Transport with an explicit
+// http.ProxyURL DOES route requests through that proxy (this half of the test
+// is the control, proving the proxy mechanism itself works), while a request
+// made through ProxyAwareTransport(false) against the same target reaches the
+// target directly and the proxy handler is never invoked -- exactly the
+// TOCTOU-closing behavior the policy.go:86 review thread asked for.
+func TestProxyAwareTransport_DoesNotRouteThroughProxy(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	var proxyHit bool
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxyHit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer proxy.Close()
+
+	proxyURL, err := neturl.Parse(proxy.URL)
+	require.NoError(t, err)
+
+	t.Run("control: an explicit proxy transport does route through it", func(t *testing.T) {
+		proxyHit = false
+		explicit := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+		client := &http.Client{Transport: explicit}
+		resp, err := client.Get(target.URL)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.True(t, proxyHit, "the control transport must have gone through the proxy")
+	})
+
+	t.Run("untrusted ProxyAwareTransport reaches the target directly", func(t *testing.T) {
+		proxyHit = false
+		rt := ProxyAwareTransport(false)
+		client := &http.Client{Transport: rt}
+		resp, err := client.Get(target.URL)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.False(t, proxyHit, "an untrusted transport must never route through a proxy")
+	})
 }

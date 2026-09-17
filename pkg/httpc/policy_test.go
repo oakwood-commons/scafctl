@@ -314,6 +314,50 @@ func TestPolicyFromContext(t *testing.T) {
 	})
 }
 
+func TestTrustedProxy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil cfg is false", func(t *testing.T) {
+		t.Parallel()
+		assert.False(t, TrustedProxy(nil))
+	})
+
+	t.Run("unset field is false", func(t *testing.T) {
+		t.Parallel()
+		assert.False(t, TrustedProxy(&config.HTTPClientConfig{}))
+	})
+
+	t.Run("explicit false", func(t *testing.T) {
+		t.Parallel()
+		trusted := false
+		assert.False(t, TrustedProxy(&config.HTTPClientConfig{TrustedProxy: &trusted}))
+	})
+
+	t.Run("explicit true", func(t *testing.T) {
+		t.Parallel()
+		trusted := true
+		assert.True(t, TrustedProxy(&config.HTTPClientConfig{TrustedProxy: &trusted}))
+	})
+}
+
+func TestTrustedProxyFromContext(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no config defaults to false", func(t *testing.T) {
+		t.Parallel()
+		assert.False(t, TrustedProxyFromContext(context.Background()))
+	})
+
+	t.Run("config is honoured", func(t *testing.T) {
+		t.Parallel()
+		trusted := true
+		ctx := config.WithConfig(context.Background(), &config.Config{
+			HTTPClient: config.HTTPClientConfig{TrustedProxy: &trusted},
+		})
+		assert.True(t, TrustedProxyFromContext(ctx))
+	})
+}
+
 func TestExplainBlocked(t *testing.T) {
 	t.Parallel()
 

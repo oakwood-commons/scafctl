@@ -104,6 +104,10 @@ func FetchClient(ctx context.Context) *Client {
 			// A nil policy denies private, loopback, and link-local
 			// addresses, so a missing or unusable configuration fails closed.
 			IPPolicy: PolicyFromContext(ctx),
+			// Proxy routing bypasses the dial-time check above (the proxy is
+			// what actually gets dialed), so it stays disabled here too
+			// unless httpClient.trustedProxy explicitly opts in.
+			Transport: ProxyAwareTransport(TrustedProxyFromContext(ctx)),
 		})
 	})
 }

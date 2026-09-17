@@ -1618,12 +1618,13 @@ func injectHTTPClientSettings(ctx context.Context, cfg *plugin.ProviderConfig) {
 	}
 
 	// Only inject if there's something to communicate. An operator who sets
-	// only one of these must still have it reach the plugin, so all three have
+	// only one of these must still have it reach the plugin, so all four have
 	// to be absent before this is a no-op.
 	cidrs, cidrsSet := appCfg.HTTPClient.PrivateCIDRs()
 	if appCfg.HTTPClient.AllowPrivateIPs == nil &&
 		!cidrsSet &&
-		appCfg.HTTPClient.TrustProxyResolution == nil {
+		appCfg.HTTPClient.TrustProxyResolution == nil &&
+		appCfg.HTTPClient.TrustedProxy == nil {
 		return
 	}
 
@@ -1638,6 +1639,7 @@ func injectHTTPClientSettings(ctx context.Context, cfg *plugin.ProviderConfig) {
 		AllowPrivateIPs      bool     `json:"allowPrivateIPs"`
 		AllowedPrivateCIDRs  []string `json:"allowedPrivateCIDRs"`
 		TrustProxyResolution bool     `json:"trustProxyResolution"`
+		TrustedProxy         bool     `json:"trustedProxy"`
 	}
 
 	settings := httpClientSettings{}
@@ -1649,6 +1651,9 @@ func injectHTTPClientSettings(ctx context.Context, cfg *plugin.ProviderConfig) {
 	}
 	if appCfg.HTTPClient.TrustProxyResolution != nil {
 		settings.TrustProxyResolution = *appCfg.HTTPClient.TrustProxyResolution
+	}
+	if appCfg.HTTPClient.TrustedProxy != nil {
+		settings.TrustedProxy = *appCfg.HTTPClient.TrustedProxy
 	}
 
 	raw, err := json.Marshal(settings)

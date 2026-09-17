@@ -1378,6 +1378,29 @@ func TestInjectHTTPClientSettings_InjectsTrustProxyResolution(t *testing.T) {
 	assert.Equal(t, false, settings["allowPrivateIPs"])
 }
 
+func TestInjectHTTPClientSettings_InjectsTrustedProxy(t *testing.T) {
+	cfg := &plugin.ProviderConfig{}
+	trusted := true
+	appCfg := &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			TrustedProxy: &trusted,
+		},
+	}
+	ctx := config.WithConfig(context.Background(), appCfg)
+	injectHTTPClientSettings(ctx, cfg)
+
+	require.NotNil(t, cfg.Settings)
+	raw, ok := cfg.Settings["httpClient"]
+	require.True(t, ok)
+
+	var settings map[string]any
+	require.NoError(t, json.Unmarshal(raw, &settings))
+	assert.Equal(t, true, settings["trustedProxy"])
+	// A plugin must default to the same disabled-proxy posture as the host
+	// when the host never set TrustedProxy at all.
+	assert.Equal(t, false, settings["trustProxyResolution"])
+}
+
 func TestInjectHTTPClientSettings_AbsentAllowlistMarshalsAsNull(t *testing.T) {
 	cfg := &plugin.ProviderConfig{}
 	allow := true

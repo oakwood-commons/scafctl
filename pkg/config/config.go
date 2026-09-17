@@ -325,6 +325,7 @@ func (m *Manager) setDefaults() {
 		"httpClient.allowPrivateIPs",
 		"httpClient.allowedPrivateCIDRs",
 		"httpClient.trustProxyResolution",
+		"httpClient.trustedProxy",
 	} {
 		// Errors only when called with no key, which cannot happen here.
 		_ = m.v.BindEnv(key)

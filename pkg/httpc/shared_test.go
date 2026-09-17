@@ -85,8 +85,11 @@ func TestFetchClient_DoesNotShareAcrossPolicies(t *testing.T) {
 	proxied := FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
 		TrustProxyResolution: &trust,
 	}))
+	trustedProxy := FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
+		TrustedProxy: &trust,
+	}))
 
-	distinct := []*Client{permissive, restrictive, narrow, empty, proxied}
+	distinct := []*Client{permissive, restrictive, narrow, empty, proxied, trustedProxy}
 	for i := range distinct {
 		for j := i + 1; j < len(distinct); j++ {
 			assert.NotSame(t, distinct[i], distinct[j],

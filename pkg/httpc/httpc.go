@@ -10,6 +10,7 @@
 package httpc
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/hashicorp/go-retryablehttp"
@@ -114,4 +115,47 @@ func DefaultConfig() *ClientConfig {
 	cfg.CacheKeyPrefix = settings.HTTPCacheKeyPrefixFor(paths.AppName())
 	cfg.Metrics = &OTelMetrics{}
 	return cfg
+}
+
+// ProxyAwareTransport returns the *http.Transport a policy-protected client
+// should dial through, given whether the caller has explicitly marked its
+// configured proxy as trusted to enforce destination-address policy itself.
+//
+// The upstream client dials a proxy directly and validates the target only
+// once, against a local DNS answer, before handing the request off -- the
+// dial-time IP check that protects every other request never runs for that
+// hop. When the proxy's own resolution can differ from that local answer
+// (split-horizon DNS, a rebind between check and hand-off), an untrusted
+// proxy can still connect somewhere the local check never saw.
+//
+// trustedProxy=false (the default posture; see config.HTTPClientConfig's
+// TrustedProxy field) returns a transport with proxy selection disabled, so
+// no HTTP_PROXY/HTTPS_PROXY environment variable is honoured and every
+// request dials its target directly, where the ordinary dial-time check
+// applies in full. trustedProxy=true returns nil, leaving the caller's
+// Transport unset so http.DefaultTransport's normal environment-based proxy
+// behaviour applies.
+func ProxyAwareTransport(trustedProxy bool) http.RoundTripper {
+	if trustedProxy {
+		return nil
+	}
+	return noProxyTransport()
+}
+
+// noProxyTransport returns a clone of http.DefaultTransport with proxy
+// selection disabled. Cloning (rather than building a bare *http.Transport)
+// preserves every other default -- timeouts, TLS config, connection pool
+// sizing -- so this changes exactly one thing: no request is ever routed
+// through an ambient HTTP_PROXY/HTTPS_PROXY.
+func noProxyTransport() *http.Transport {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		// http.DefaultTransport has been replaced with something that isn't a
+		// *http.Transport (unusual, but possible). Fall back to a transport
+		// built from scratch rather than panic; it still has no proxy.
+		base = &http.Transport{}
+	}
+	clone := base.Clone()
+	clone.Proxy = nil
+	return clone
 }

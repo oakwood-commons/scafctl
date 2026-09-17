@@ -48,3 +48,24 @@ actually dialed is checked, not just the address a URL initially resolved to.
 The removed `PrivateIPsAllowed(ctx)` / `ValidateURLNotPrivate(url)` preflight
 helpers are gone -- callers no longer enforce SSRF themselves at the call site;
 the policy above is applied once, on the transport, and enforced on every dial.
+
+### Proxy routing is disabled unless explicitly trusted
+
+A proxied request is dialed to the proxy, not the target, so the dial-time
+check above never runs for that hop -- the target is instead checked once
+against a local DNS answer before the request is handed to the proxy. A
+proxy whose own resolution differs (split-horizon DNS, a rebind between
+check and hand-off) can still connect somewhere that local check never saw.
+
+- `ProxyAwareTransport(trustedProxy bool) http.RoundTripper` returns a
+  transport with proxy selection disabled (`trustedProxy=false`, the
+  default) or `nil` (`trustedProxy=true`, leaving `http.DefaultTransport`'s
+  normal `HTTP_PROXY`/`HTTPS_PROXY` behavior in place).
+- `TrustedProxy(cfg)` / `TrustedProxyFromContext(ctx)` read
+  `httpClient.trustedProxy` from application configuration; both default to
+  `false`.
+- `NewClientFromAppConfig` and every other policy-protected client
+  constructor in this package wire `ProxyAwareTransport` in automatically
+  when the caller has not already supplied its own `Transport`. Set
+  `httpClient.trustedProxy: true` only once the configured proxy is known
+  to enforce an equivalent destination-address policy itself.
