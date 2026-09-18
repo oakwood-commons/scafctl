@@ -64,12 +64,37 @@ func sharedClient(key string, build func() *Client) *Client {
 	// result, so an uncached client would abandon its transport and idle pool
 	// on every call -- the exact leak this cache exists to prevent.
 	//
-	// Evicting is safe: Close only reaps idle connections, so a request already
-	// in flight on the evicted client finishes normally, and a later caller
-	// with that configuration simply builds a fresh one. Go map iteration order
-	// is unspecified, which is an acceptable victim choice here -- every entry
-	// is equivalent, and the bound is reached only by a process rotating
-	// through more distinct policies than it keeps clients.
+	// A borrower holds no lease, so an evicted (and Closed) client can still
+	// sit in a caller's hands -- a FetchClient(ctx).Get(...) pair can even
+	// straddle the eviction. That race is bounded and deliberately NOT fixed
+	// with an acquire/release API:
+	//
+	//   - Close is a cleanup hint, not a lifecycle terminator: upstream it
+	//     only reaps currently-idle connections. It does not mark the client
+	//     unusable, and a dial of a new connection proceeds unaffected, so
+	//     the borrower's post-eviction request completes normally.
+	//   - The worst the race can leave behind is one extra idle pool: the
+	//     borrower's post-Close request dials fresh, and those connections
+	//     then idle on a client nobody will close again. Every pooled
+	//     transport here is a DefaultTransport clone, so IdleConnTimeout
+	//     (90s) is preserved: that pool self-reaps, after which the transport
+	//     holds no resources and is garbage-collectible.
+	//   - The bound is reached only by an embedder rotating through more than
+	//     maxCachedClients distinct policies (a CLI process holds one or
+	//     two), so the lingering cost is a handful of sockets for at most 90
+	//     seconds, in a process already swapping policies frequently.
+	//
+	// Closing at map removal still earns its keep in the common case -- idle
+	// sockets reaped immediately instead of 90 seconds later. A lease API
+	// would close the race window entirely but would change FetchClient's
+	// exported shape for every caller; against a self-reaping 90-second pool,
+	// the documented tradeoff wins. (General client-pooling work is tracked
+	// in #847.)
+	//
+	// Go map iteration order is unspecified, which is an acceptable victim
+	// choice here -- every entry is equivalent, and the bound is reached only
+	// by a process rotating through more distinct policies than it keeps
+	// clients.
 	if len(sharedClients) >= maxCachedClients {
 		for k, victim := range sharedClients {
 			delete(sharedClients, k)

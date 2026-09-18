@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -160,6 +161,61 @@ func TestFetchClient_BoundsCachedClients(t *testing.T) {
 
 	assert.LessOrEqual(t, size, maxCachedClients,
 		"the shared map must not grow without bound")
+}
+
+// TestFetchClient_EvictedClientStillServicesBorrower pins the other half of
+// the eviction contract: the cache owns bookkeeping, not the client's
+// lifetime. A borrower that already holds a client when a different policy
+// trips the bound loses nothing -- Close at eviction is a cleanup hint that
+// reaps currently-idle connections only, so the borrower's next request dials
+// fresh and completes normally. (The idle pool such a raced request reopens
+// is bounded by IdleConnTimeout; see the eviction comment in shared.go for
+// the full reasoning and why no lease API is used.)
+func TestFetchClient_EvictedClientStillServicesBorrower(t *testing.T) {
+	resetSharedClients(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// Fill the cache to exactly its bound with distinct policies, holding
+	// the borrower's reference to each client FetchClient returns.
+	borrowed := make([]*Client, 0, maxCachedClients)
+	for i := range maxCachedClients {
+		// A distinct allowlist yields a distinct cache key, so each insert
+		// lands in its own entry; the loopback ranges keep the test server
+		// reachable under every policy.
+		borrowed = append(borrowed, FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
+			AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128", "10."+strconv.Itoa(i)+".0.0/16"),
+		})))
+	}
+
+	// One more entry trips the bound and evicts exactly one of the eight
+	// above -- the map held only this test's keys, so pigeonhole puts the
+	// victim inside `borrowed`, whatever map iteration picked.
+	_ = FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
+		AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128", "10.200.0.0/16"),
+	}))
+
+	sharedClientsMu.Lock()
+	size := len(sharedClients)
+	sharedClientsMu.Unlock()
+	assert.LessOrEqual(t, size, maxCachedClients, "the eviction must have kept the map at its bound")
+
+	// Every borrowed client -- including whichever one was evicted and
+	// Closed -- must still service a request: Close reaped idle sockets only
+	// and never marked the client unusable.
+	for i, c := range borrowed {
+		resp, err := c.Get(t.Context(), srv.URL)
+		require.NoError(t, err, "borrowed client %d must still service requests after eviction+Close", i)
+		require.NotNil(t, resp)
+		require.NotNil(t, resp.Body)
+		status := resp.StatusCode
+		require.NoError(t, resp.Body.Close())
+		assert.Equal(t, http.StatusOK, status,
+			"borrowed client %d's post-eviction request must complete normally", i)
+	}
 }
 
 func TestFetchClient_ConcurrentCallersShareOneClient(t *testing.T) {
