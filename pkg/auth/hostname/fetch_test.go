@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 )
 
 // ctxAllowingLoopback carries an application config permitting loopback, which
@@ -72,6 +73,27 @@ func TestDefaultFetch_NonOKStatus(t *testing.T) {
 	_, err := defaultFetch(ctxAllowingLoopback(), config.HostnameResolverSource{URL: srv.URL}, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "status 404")
+}
+
+// TestDefaultFetch_BlockedDestinationNamesConfigKey proves a policy refusal
+// reaches the caller in operator terms: the raw upstream denial names the Go
+// struct field it toggleable in code, while the error this path returns must
+// name httpClient.allowedPrivateCIDRs, the configuration key an operator can
+// actually change. defaultFetch builds a policy-protected client, so its Do
+// error must pass through httpc.ExplainBlocked like every other fetch path.
+func TestDefaultFetch_BlockedDestinationNamesConfigKey(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	// No app config on the context: the default deny policy refuses the
+	// loopback test server before any request is sent.
+	_, err := defaultFetch(context.Background(), config.HostnameResolverSource{URL: srv.URL}, "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, httpc.ErrBlockedByPolicy)
+	assert.Contains(t, err.Error(), "httpClient.allowedPrivateCIDRs",
+		"a blocked inventory URL must point at the config key, not upstream field wording")
 }
 
 func TestDefaultFetch_InvalidURL(t *testing.T) {

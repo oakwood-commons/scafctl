@@ -777,6 +777,135 @@ func TestManager_Set_AllBranches(t *testing.T) {
 	mgr2.Set("logging.level", "debug")
 }
 
+// TestManager_Set_AddressPolicyKeysPersist proves that `config set` on the
+// four destination-address policy keys survives a save and reload.
+//
+// Viper stores whatever Set is given, but Save overwrites the whole httpClient
+// subtree from m.config, so a key Set does not also synchronize into m.config
+// is silently dropped: the command reports success and the value is gone the
+// next time the file is loaded. These keys are security-sensitive, so the
+// persistence must be proven end to end, not just in memory.
+func TestManager_Set_AddressPolicyKeysPersist(t *testing.T) {
+	newSavedConfig := func(t *testing.T) string {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		mgr := NewManager(path)
+		_, err := mgr.Load()
+		require.NoError(t, err)
+		return path
+	}
+
+	// setSaveReload runs the full `config set` + save + reload round trip and
+	// returns the reloaded configuration.
+	setSaveReload := func(t *testing.T, path, key string, value any) *Config {
+		mgr := NewManager(path)
+		_, err := mgr.Load()
+		require.NoError(t, err)
+
+		mgr.Set(key, value)
+		require.NoError(t, mgr.Save())
+
+		reloaded, err := NewManager(path).Load()
+		require.NoError(t, err)
+		return reloaded
+	}
+
+	t.Run("trustedProxy survives set, save, reload", func(t *testing.T) {
+		path := newSavedConfig(t)
+		reloaded := setSaveReload(t, path, "httpClient.trustedProxy", true)
+		require.NotNil(t, reloaded.HTTPClient.TrustedProxy)
+		assert.True(t, *reloaded.HTTPClient.TrustedProxy)
+	})
+
+	t.Run("trustedProxy explicit false stays distinct from unset", func(t *testing.T) {
+		path := newSavedConfig(t)
+		reloaded := setSaveReload(t, path, "httpClient.trustedProxy", false)
+		require.NotNil(t, reloaded.HTTPClient.TrustedProxy,
+			"an explicit false must reload as a present pointer, not collapse to unset")
+		assert.False(t, *reloaded.HTTPClient.TrustedProxy)
+	})
+
+	t.Run("trustProxyResolution survives set, save, reload", func(t *testing.T) {
+		path := newSavedConfig(t)
+		reloaded := setSaveReload(t, path, "httpClient.trustProxyResolution", true)
+		require.NotNil(t, reloaded.HTTPClient.TrustProxyResolution)
+		assert.True(t, *reloaded.HTTPClient.TrustProxyResolution)
+	})
+
+	t.Run("allowPrivateIPs survives set, save, reload", func(t *testing.T) {
+		path := newSavedConfig(t)
+		reloaded := setSaveReload(t, path, "httpClient.allowPrivateIPs", true)
+		require.NotNil(t, reloaded.HTTPClient.AllowPrivateIPs)
+		assert.True(t, *reloaded.HTTPClient.AllowPrivateIPs)
+	})
+
+	t.Run("allowPrivateIPs CLI string value is coerced", func(t *testing.T) {
+		path := newSavedConfig(t)
+		// A CLI `config set` parse failure (or a programmatic caller) hands
+		// the raw string through; the sync must coerce it, not skip it.
+		reloaded := setSaveReload(t, path, "httpClient.allowPrivateIPs", "true")
+		require.NotNil(t, reloaded.HTTPClient.AllowPrivateIPs)
+		assert.True(t, *reloaded.HTTPClient.AllowPrivateIPs)
+	})
+
+	t.Run("allowedPrivateCIDRs from a CLI comma-separated string", func(t *testing.T) {
+		path := newSavedConfig(t)
+		reloaded := setSaveReload(t, path, "httpClient.allowedPrivateCIDRs", "10.42.7.0/24, 192.168.0.0/16")
+		entries, set := reloaded.HTTPClient.PrivateCIDRs()
+		require.True(t, set)
+		assert.Equal(t, []string{"10.42.7.0/24", "192.168.0.0/16"}, entries)
+	})
+
+	t.Run("allowedPrivateCIDRs empty string clears to absent", func(t *testing.T) {
+		path := newSavedConfig(t)
+		// Seed a present list first, then clear it the way a CLI user would.
+		setSaveReload(t, path, "httpClient.allowedPrivateCIDRs", "10.42.7.0/24")
+
+		mgr := NewManager(path)
+		_, err := mgr.Load()
+		require.NoError(t, err)
+		mgr.Set("httpClient.allowedPrivateCIDRs", "")
+		require.NoError(t, mgr.Save())
+
+		reloaded, err := NewManager(path).Load()
+		require.NoError(t, err)
+		assert.Nil(t, reloaded.HTTPClient.AllowedPrivateCIDRs,
+			"clearing via an empty string must omit the field (absent), not store an empty list")
+	})
+
+	t.Run("allowedPrivateCIDRs empty list round-trips as present-empty", func(t *testing.T) {
+		path := newSavedConfig(t)
+		// The deliberate "no exceptions" form: a present but empty list that
+		// overrides allowPrivateIPs. It must survive as [] and not collapse
+		// to absent, or a blanket allowPrivateIPs: true would silently
+		// spring back into force.
+		mgr := NewManager(path)
+		_, err := mgr.Load()
+		require.NoError(t, err)
+		mgr.Set("httpClient.allowedPrivateCIDRs", []string{})
+		require.NoError(t, mgr.Save())
+
+		reloaded, err := NewManager(path).Load()
+		require.NoError(t, err)
+		entries, set := reloaded.HTTPClient.PrivateCIDRs()
+		require.True(t, set, "an empty list must reload as present, distinct from absent")
+		assert.Empty(t, entries)
+	})
+
+	t.Run("unrecognized bool value yields unset, not a lost-not-guess", func(t *testing.T) {
+		path := newSavedConfig(t)
+		mgr := NewManager(path)
+		_, err := mgr.Load()
+		require.NoError(t, err)
+		mgr.Set("httpClient.trustedProxy", 42) // neither bool nor bool-like string
+		require.NoError(t, mgr.Save())
+
+		reloaded, err := NewManager(path).Load()
+		require.NoError(t, err)
+		assert.Nil(t, reloaded.HTTPClient.TrustedProxy,
+			"an unrecognizable value must not be guessed into a security setting")
+	})
+}
+
 func TestBuildConfig_IsCacheEnabled(t *testing.T) {
 	b := &BuildConfig{}
 	assert.True(t, b.IsCacheEnabled()) // default nil = true
@@ -1152,6 +1281,7 @@ func TestManager_Load_AddressPolicyFromEnv(t *testing.T) {
 			"must stay nil, not an empty slice: an absent allowlist leaves allowPrivateIPs in force, "+
 				"while a present-but-empty one overrides it")
 		assert.Nil(t, cfg.HTTPClient.TrustProxyResolution)
+		assert.Nil(t, cfg.HTTPClient.TrustedProxy)
 	})
 
 	t.Run("allowPrivateIPs", func(t *testing.T) {
@@ -1177,5 +1307,22 @@ func TestManager_Load_AddressPolicyFromEnv(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, cfg.HTTPClient.TrustProxyResolution)
 		assert.True(t, *cfg.HTTPClient.TrustProxyResolution)
+	})
+
+	t.Run("trustedProxy", func(t *testing.T) {
+		t.Setenv("SCAFCTL_HTTPCLIENT_TRUSTEDPROXY", "true")
+		cfg, err := NewManager(configPath).Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg.HTTPClient.TrustedProxy)
+		assert.True(t, *cfg.HTTPClient.TrustedProxy)
+	})
+
+	t.Run("trustedProxy false stays a present nil-vs-false answer", func(t *testing.T) {
+		t.Setenv("SCAFCTL_HTTPCLIENT_TRUSTEDPROXY", "false")
+		cfg, err := NewManager(configPath).Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg.HTTPClient.TrustedProxy,
+			"an explicit false must bind as a present pointer, distinct from unset")
+		assert.False(t, *cfg.HTTPClient.TrustedProxy)
 	})
 }

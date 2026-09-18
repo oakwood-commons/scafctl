@@ -61,7 +61,11 @@ func defaultFetch(ctx context.Context, src config.HostnameResolverSource, bearer
 
 	resp, err := client.Do(req) //nolint:gosec // URL from trusted admin config (auth.handlers.<name>.hostname.resolver.source.url)
 	if err != nil {
-		return nil, fmt.Errorf("inventory request failed: %w", err)
+		// ExplainBlocked leaves non-policy errors unchanged and rewrites a
+		// destination-address denial to name httpClient.allowedPrivateCIDRs,
+		// the configuration key an operator can actually change, instead of
+		// the upstream library's Go field wording.
+		return nil, fmt.Errorf("inventory request failed: %w", httpc.ExplainBlocked(err))
 	}
 	defer resp.Body.Close()
 

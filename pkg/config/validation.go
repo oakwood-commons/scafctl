@@ -37,9 +37,23 @@ func NormalizeCIDR(entry string) (string, error) {
 	}
 
 	if strings.Contains(trimmed, "/") {
-		_, network, err := net.ParseCIDR(trimmed)
+		ip, network, err := net.ParseCIDR(trimmed)
 		if err != nil {
 			return "", fmt.Errorf("not a valid CIDR block: %w", err)
+		}
+		// IPv4-mapped IPv6 notation is ambiguous in CIDR form, so refuse it
+		// rather than guess. ParseCIDR masks the 16-byte form, so
+		// "::ffff:127.0.0.1/32" does not name that one host -- it is the
+		// network ::/32, silently exempting a vast range including ::1. The
+		// plain-address branch narrows mapped literals to /32 (see below);
+		// narrowing a masked network instead would silently do the opposite
+		// of what its text says. The equivalent IPv4 CIDR says exactly what
+		// the operator means, so require it.
+		if strings.Contains(trimmed, ":") && ip.To4() != nil {
+			return "", fmt.Errorf(
+				"IPv4-mapped IPv6 CIDR notation %q covers %s once masked, not the mapped host it names; write the equivalent IPv4 CIDR instead",
+				trimmed, network.String(),
+			)
 		}
 		// Return the masked network rather than the text supplied. "10.42.7.9/24"
 		// is accepted by ParseCIDR but covers 10.42.7.0/24, and an operator who

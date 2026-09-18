@@ -6,9 +6,12 @@ package httpc
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	neturl "net/url"
+	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -298,7 +301,9 @@ func TestIPPolicy_EnforcesMaxRedirects(t *testing.T) {
 // disables proxy selection outright: net/http treats a Transport with a nil
 // Proxy field as "never use a proxy", regardless of HTTP_PROXY/HTTPS_PROXY,
 // so this is a structural guarantee rather than something that depends on
-// racing against process-wide proxy-env caching.
+// racing against process-wide proxy-env caching. It also carries no
+// preinstalled dialer, so upstream installs its enforcing dialer and a
+// blocked address is refused before the connection exists.
 func TestProxyAwareTransport_Untrusted(t *testing.T) {
 	rt := ProxyAwareTransport(false)
 	require.NotNil(t, rt, "an untrusted proxy must still get a usable transport")
@@ -306,18 +311,32 @@ func TestProxyAwareTransport_Untrusted(t *testing.T) {
 	transport, ok := rt.(*http.Transport)
 	require.True(t, ok, "the returned transport should be an *http.Transport")
 	assert.Nil(t, transport.Proxy, "Proxy must be nil so no request is ever routed through one")
+	assert.Nil(t, transport.DialContext, "no preinstalled dialer: upstream's enforcing dialer must own the dial")
+	assert.Nil(t, transport.DialTLSContext, "a preinstalled TLS dialer would bypass the enforcing dialer exactly where protection matters most")
 }
 
-// TestProxyAwareTransport_Trusted proves the trusted path is a deliberate
-// no-op: it returns nil so the caller's ClientConfig.Transport stays unset,
-// letting http.DefaultTransport's normal environment-based proxy selection
-// apply exactly as it did before this change.
+// TestProxyAwareTransport_Trusted proves the trusted path is an explicit
+// transport, not an omission: it wires http.ProxyFromEnvironment back in
+// deliberately, so restoring ambient proxy routing is a visible choice at
+// the constructor call site rather than something a bare nil Transport
+// silently inherits.
 func TestProxyAwareTransport_Trusted(t *testing.T) {
-	assert.Nil(t, ProxyAwareTransport(true))
+	rt := ProxyAwareTransport(true)
+	require.NotNil(t, rt, "a trusted proxy must get an explicit transport")
+
+	transport, ok := rt.(*http.Transport)
+	require.True(t, ok, "the returned transport should be an *http.Transport")
+	assert.Equal(t,
+		reflect.ValueOf(http.ProxyFromEnvironment).Pointer(),
+		reflect.ValueOf(transport.Proxy).Pointer(),
+		"a trusted proxy restores http.DefaultTransport's environment-based proxy selection explicitly")
+	assert.Nil(t, transport.DialContext,
+		"no preinstalled dialer: direct dials still get upstream's enforcing dialer")
 }
 
 // TestNoProxyTransport_PreservesOtherDefaults proves the untrusted transport
-// is a clone of http.DefaultTransport with only Proxy changed, not a bare
+// is a clone of http.DefaultTransport with only Proxy (and the dial hooks,
+// which upstream replaces with its own enforcing dialer) changed, not a bare
 // *http.Transport{} that would silently drop timeouts, TLS config, and
 // connection pool sizing.
 func TestNoProxyTransport_PreservesOtherDefaults(t *testing.T) {
@@ -332,6 +351,91 @@ func TestNoProxyTransport_PreservesOtherDefaults(t *testing.T) {
 	assert.Equal(t, defaultTransport.IdleConnTimeout, transport.IdleConnTimeout)
 	assert.Equal(t, defaultTransport.TLSHandshakeTimeout, transport.TLSHandshakeTimeout)
 	assert.Nil(t, transport.Proxy)
+}
+
+// TestLocalClientConfig_DefaultsTransportToNoProxy proves NewClient treats an
+// omitted Transport as a proxy-trust decision the caller never made: it gets
+// the no-proxy transport by default, so a direct NewClient(nil) or a
+// policy-bearing NewClient(cfg) cannot route through an ambient
+// HTTP_PROXY/HTTPS_PROXY without passing ProxyAwareTransport(true)
+// explicitly.
+func TestLocalClientConfig_DefaultsTransportToNoProxy(t *testing.T) {
+	t.Run("nil config", func(t *testing.T) {
+		clientCfg := localClientConfig(nil)
+		require.NotNil(t, clientCfg.Transport, "an omitted Transport must not fall through to http.DefaultTransport")
+		transport, ok := clientCfg.Transport.(*http.Transport)
+		require.True(t, ok)
+		assert.Nil(t, transport.Proxy, "the default transport never routes through an ambient proxy")
+	})
+
+	t.Run("policy-bearing config without a Transport", func(t *testing.T) {
+		clientCfg := localClientConfig(&ClientConfig{IPPolicy: &IPPolicy{}})
+		require.NotNil(t, clientCfg.Transport)
+		transport, ok := clientCfg.Transport.(*http.Transport)
+		require.True(t, ok)
+		assert.Nil(t, transport.Proxy)
+	})
+
+	t.Run("explicit Transport is kept", func(t *testing.T) {
+		explicit := &http.Transport{}
+		clientCfg := localClientConfig(&ClientConfig{Transport: explicit})
+		assert.Same(t, explicit, clientCfg.Transport, "a caller-supplied Transport must not be replaced")
+	})
+}
+
+// TestPolicyProtectedClient_RefusesBeforeConnect is the end-to-end proof of
+// the pre-connect guarantee this package documents: a deny-all policy must
+// refuse a loopback request BEFORE any TCP connection is established, not
+// connect and reject afterwards. Before the dial-hook fix, the no-proxy
+// transport carried http.DefaultTransport's DialContext, which upstream
+// treats as a caller dialer and follows a connect-then-check path -- the
+// listener below would then see (and count) a connection the policy was
+// about to reject anyway, revealing that the port was open.
+func TestPolicyProtectedClient_RefusesBeforeConnect(t *testing.T) {
+	//nolint:gosec // loopback-only test listener
+	var listenCfg net.ListenConfig
+	listener, err := listenCfg.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	// Synchronize the accept-goroutine start before the request.
+	listenerReady := make(chan struct{})
+	var accepts atomic.Int32
+	go func() {
+		close(listenerReady)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepts.Add(1)
+			_ = conn.Close()
+		}
+	}()
+	<-listenerReady
+
+	client := NewClient(&ClientConfig{
+		Timeout:           5 * time.Second,
+		RetryMax:          0,
+		EnableCache:       false,
+		EnableCompression: false,
+		IPPolicy:          &IPPolicy{}, // zero value denies loopback
+	})
+
+	resp, err := client.Get(t.Context(), "http://"+listener.Addr().String()+"/blocked")
+	require.Error(t, err)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	assert.ErrorIs(t, err, ErrBlockedByPolicy)
+
+	// Give the accept loop a moment to observe any stray connection before
+	// asserting none arrived: a connect-then-check path would leave one
+	// sitting in the kernel's accept queue even if it was rejected
+	// immediately after.
+	time.Sleep(100 * time.Millisecond)
+	assert.Zero(t, accepts.Load(),
+		"the policy must refuse before dialing: the listener must never see a connection")
 }
 
 // TestProxyAwareTransport_DoesNotRouteThroughProxy is an end-to-end proof,

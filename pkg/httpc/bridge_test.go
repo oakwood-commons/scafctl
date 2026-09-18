@@ -6,6 +6,7 @@ package httpc
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -156,12 +157,20 @@ func TestHTTPClientConfigFromAppConfig_TransportFollowsTrustedProxy(t *testing.T
 		assert.Nil(t, transport.Proxy)
 	})
 
-	t.Run("trusted defers to normal proxy selection", func(t *testing.T) {
+	t.Run("trusted restores environment proxy selection explicitly", func(t *testing.T) {
 		trusted := true
 		clientCfg := httpClientConfigFromAppConfig(&config.HTTPClientConfig{TrustedProxy: &trusted}, logr.Discard())
 
-		assert.Nil(t, clientCfg.Transport,
-			"a trusted proxy leaves Transport unset, so http.DefaultTransport's normal proxy behavior applies")
+		require.NotNil(t, clientCfg.Transport,
+			"a trusted proxy must be an explicit transport, not an omitted Transport that silently inherits one")
+		transport, ok := clientCfg.Transport.(*http.Transport)
+		require.True(t, ok)
+		assert.Equal(t,
+			reflect.ValueOf(http.ProxyFromEnvironment).Pointer(),
+			reflect.ValueOf(transport.Proxy).Pointer(),
+			"a trusted proxy explicitly restores http.DefaultTransport's environment-based proxy selection")
+		assert.Nil(t, transport.DialContext,
+			"the trusted transport carries no preinstalled dialer, so upstream installs its enforcing dialer for direct dials")
 	})
 }
 

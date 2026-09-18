@@ -62,8 +62,14 @@ check and hand-off) can still connect somewhere that local check never saw.
 
 - `ProxyAwareTransport(trustedProxy bool) http.RoundTripper` returns a
   transport with proxy selection disabled (`trustedProxy=false`, the
-  default) or `nil` (`trustedProxy=true`, leaving `http.DefaultTransport`'s
-  normal `HTTP_PROXY`/`HTTPS_PROXY` behavior in place).
+  default) or one that explicitly restores `http.DefaultTransport`'s normal
+  `HTTP_PROXY`/`HTTPS_PROXY` behaviour (`trustedProxy=true`). `NewClient`
+  defaults an omitted `Transport` to the disabled variant, so ambient proxy
+  routing is always an explicit opt-in.
+- Neither variant preinstalls a dialer: the upstream library installs its
+  own enforcing dialer instead, whose Control hook refuses a blocked address
+  before the connection is established (`ProxyAwareTransport(false)` would
+  otherwise connect first and reject only afterwards).
 - `TrustedProxy(cfg)` / `TrustedProxyFromContext(ctx)` read
   `httpClient.trustedProxy` from application configuration; both default to
   `false`.

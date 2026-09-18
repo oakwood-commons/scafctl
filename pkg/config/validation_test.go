@@ -682,9 +682,11 @@ func TestNormalizeCIDR(t *testing.T) {
 	}{
 		{name: "IPv4 CIDR passes through", entry: "10.0.0.0/8", want: "10.0.0.0/8"},
 		{name: "IPv6 CIDR passes through", entry: "fd00::/8", want: "fd00::/8"},
+		{name: "IPv6 CIDR with a dotted-quad tail is not mapped, passes", entry: "64:ff9b::/96", want: "64:ff9b::/96"},
 		{name: "surrounding space is tolerated", entry: "  10.0.0.0/8  ", want: "10.0.0.0/8"},
 		{name: "bare IPv4 widens to /32", entry: "10.0.0.5", want: "10.0.0.5/32"},
 		{name: "bare IPv6 widens to /128", entry: "fd00::1", want: "fd00::1/128"},
+		{name: "bare IPv4-mapped literal narrows to the IPv4 /32", entry: "::ffff:192.168.1.5", want: "192.168.1.5/32"},
 		{
 			name:            "empty entry is rejected",
 			entry:           "",
@@ -709,6 +711,26 @@ func TestNormalizeCIDR(t *testing.T) {
 			name:            "malformed CIDR is rejected",
 			entry:           "10.0.0.0/",
 			wantErrContains: "not a valid CIDR block",
+		},
+		{
+			// Go parses "::ffff:127.0.0.1/32" as the IPv6 network ::/32 -- a
+			// vast range including ::1 -- rather than the single mapped host
+			// the text names. The operator wrote the mapped form meaning one
+			// host as an exception; refusing it (and naming the equivalent
+			// IPv4 form) is the only reading that fails closed.
+			name:            "IPv4-mapped IPv6 CIDR is rejected instead of silently widening",
+			entry:           "::ffff:127.0.0.1/32",
+			wantErrContains: "write the equivalent IPv4 CIDR",
+		},
+		{
+			name:            "IPv4-mapped IPv6 CIDR with host bits is rejected",
+			entry:           "::ffff:10.42.7.9/24",
+			wantErrContains: "write the equivalent IPv4 CIDR",
+		},
+		{
+			name:            "hex-form IPv4-mapped CIDR is rejected too",
+			entry:           "::ffff:a00:0/120",
+			wantErrContains: "write the equivalent IPv4 CIDR",
 		},
 	}
 
