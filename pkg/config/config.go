@@ -572,9 +572,17 @@ func restoreAuthProfileEntries(v *viper.Viper, cfg *Config) {
 // Save saves the current configuration to file.
 // It syncs m.config to viper before writing, then uses viper's WriteConfig.
 // This allows both direct config modification AND Set() calls to be persisted.
+//
+// The configuration is validated first and refused if it would fail Load:
+// `config set` (and direct edits) must not be able to write a file the
+// process could not load back.
 func (m *Manager) Save() error {
 	if m.config == nil {
 		return fmt.Errorf("no configuration loaded")
+	}
+
+	if err := m.config.Validate(); err != nil {
+		return fmt.Errorf("refusing to save invalid config: %w", err)
 	}
 
 	configPath := m.v.ConfigFileUsed()
@@ -612,9 +620,15 @@ func (m *Manager) Save() error {
 }
 
 // SaveAs saves the configuration to a specific path.
+// The configuration is validated first, for the same reason as Save: no
+// written file may be one Load would reject.
 func (m *Manager) SaveAs(path string) error {
 	if m.config == nil {
 		return fmt.Errorf("no configuration loaded")
+	}
+
+	if err := m.config.Validate(); err != nil {
+		return fmt.Errorf("refusing to save invalid config: %w", err)
 	}
 
 	// Ensure directory exists

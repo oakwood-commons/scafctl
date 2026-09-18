@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	upstream "github.com/oakwood-commons/httpc"
 
@@ -146,9 +147,19 @@ func TrustedProxyFromContext(ctx context.Context) bool {
 // The upstream message names a Go struct field, which is accurate for a library
 // consumer and useless to someone editing a configuration file. Call this where
 // an error reaches the user.
+//
+// Upstream also has non-exemptible denials -- cloud metadata addresses and
+// IPv6 transition prefixes -- which it marks "cannot be allowed by policy"
+// (including through the embedded-IPv4 wrap, which retains the inner text).
+// Pointing an operator at the allowlist there would be contradictory (the
+// denial already said no policy can allow it), so those get a plain
+// "no setting permits this" instead.
 func ExplainBlocked(err error) error {
 	if err == nil || !errors.Is(err, ErrBlockedByPolicy) {
 		return err
+	}
+	if strings.Contains(err.Error(), "cannot be allowed by policy") {
+		return fmt.Errorf("%w (no configuration setting can permit this destination)", err)
 	}
 	return fmt.Errorf("%w (to permit this destination, add its address range to %s; "+
 		"cloud metadata addresses can never be permitted)", err, AllowedPrivateCIDRsKey)

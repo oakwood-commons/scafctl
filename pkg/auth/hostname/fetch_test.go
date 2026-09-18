@@ -76,11 +76,12 @@ func TestDefaultFetch_NonOKStatus(t *testing.T) {
 }
 
 // TestDefaultFetch_BlockedDestinationNamesConfigKey proves a policy refusal
-// reaches the caller in operator terms: the raw upstream denial names the Go
-// struct field it toggleable in code, while the error this path returns must
-// name httpClient.allowedPrivateCIDRs, the configuration key an operator can
-// actually change. defaultFetch builds a policy-protected client, so its Do
-// error must pass through httpc.ExplainBlocked like every other fetch path.
+// reaches the caller in operator terms: the raw upstream denial names a Go
+// struct field that can only be toggled in code, while the error this path
+// returns must name httpClient.allowedPrivateCIDRs, the configuration key an
+// operator can actually change. defaultFetch builds a policy-protected
+// client, so its Do error must pass through httpc.ExplainBlocked like every
+// other fetch path.
 func TestDefaultFetch_BlockedDestinationNamesConfigKey(t *testing.T) {
 	t.Parallel()
 

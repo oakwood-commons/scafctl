@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	upstream "github.com/oakwood-commons/httpc"
+
 	"github.com/oakwood-commons/scafctl/pkg/config"
 )
 
@@ -388,6 +390,33 @@ func TestExplainBlocked(t *testing.T) {
 		orig := errors.Join(errors.New("dial tcp"), ErrBlockedByPolicy)
 		got := ExplainBlocked(orig)
 		assert.Contains(t, got.Error(), AllowedPrivateCIDRsKey)
+	})
+
+	// The remaining subtests drive ExplainBlocked with the real upstream
+	// denials rather than synthesized text, so they pin the branch behavior
+	// against the exact messages the pinned httpc version produces.
+	t.Run("exemptible private denial names the allowlist setting", func(t *testing.T) {
+		t.Parallel()
+		orig := (&upstream.IPPolicy{}).CheckIP(net.ParseIP("10.42.7.1"))
+		require.ErrorIs(t, orig, ErrBlockedByPolicy)
+
+		got := ExplainBlocked(orig)
+		assert.Contains(t, got.Error(), AllowedPrivateCIDRsKey,
+			"a private address an operator can allow must be told how")
+		assert.ErrorIs(t, got, ErrBlockedByPolicy)
+	})
+
+	t.Run("cloud metadata denial does not point at the allowlist", func(t *testing.T) {
+		t.Parallel()
+		orig := (&upstream.IPPolicy{}).CheckIP(net.ParseIP("169.254.169.254"))
+		require.ErrorIs(t, orig, ErrBlockedByPolicy)
+
+		got := ExplainBlocked(orig)
+		assert.Contains(t, got.Error(), "no configuration setting",
+			"a non-exemptible denial must say no setting permits it")
+		assert.NotContains(t, got.Error(), AllowedPrivateCIDRsKey,
+			"telling the operator to add an allowlist entry for metadata would be contradictory")
+		assert.ErrorIs(t, got, ErrBlockedByPolicy)
 	})
 }
 

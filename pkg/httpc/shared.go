@@ -22,8 +22,9 @@ var unkeyableSeq atomic.Uint64
 // maxCachedClients bounds how many distinct configurations shared clients are
 // held for. Application configuration is loaded once per process, so in
 // practice there are one or two. The bound only guards against an embedder that
-// swaps configuration repeatedly; past it, callers get an unshared client
-// rather than growing the map without limit.
+// swaps configuration repeatedly; past it, an existing entry is evicted (and
+// closed) to store the new client, rather than the map growing without limit
+// -- see sharedClient for the eviction tradeoff.
 const maxCachedClients = 8
 
 // Client shapes. Each shape is built differently, so a configuration key alone
@@ -111,9 +112,10 @@ func sharedClient(key string, build func() *Client) *Client {
 // destination-address policy carried on ctx.
 //
 // The returned client is shared. Do NOT call Close on it: that would shut down
-// connections still in use by other callers. Its idle connections persist for
-// the life of the process, which is the normal lifetime for a shared HTTP
-// client.
+// connections still in use by other callers. Its idle connections normally
+// persist for the life of the process, the usual lifetime for a shared HTTP
+// client; eviction past the cache bound is the one exception (see
+// sharedClient), where the entry is closed so its idle pool is reaped early.
 func FetchClient(ctx context.Context) *Client {
 	cfg := config.FromContext(ctx)
 	key := shapeFetch + "|" + configKey(cfg)

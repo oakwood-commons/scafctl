@@ -792,3 +792,81 @@ func TestCommandConfig_UnknownSubcommandErrors(t *testing.T) {
 	cmd2.SilenceUsage = true
 	assert.NoError(t, cmd2.Execute())
 }
+
+// TestSetOptions_Run_InvalidCIDRIsRejectedNotPersisted proves the user-visible
+// half of Manager.Save's validation: `config set` with a value the loader would
+// refuse must exit with an error that names the offending key, and must leave
+// the configuration file untouched -- not "succeed" and brick the next Load.
+func TestSetOptions_Run_InvalidCIDRIsRejectedNotPersisted(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &SetOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+		Key:        "httpClient.allowedPrivateCIDRs",
+		Value:      "nonsense",
+	}
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	err := opts.Run(ctx)
+	require.Error(t, err, "an invalid CIDR must be rejected, not reported as success")
+	assert.Contains(t, err.Error(), "allowedPrivateCIDRs",
+		"the failure must name the key the operator set")
+
+	// The refused value must not be on disk, and the file must still load.
+	reloaded, loadErr := appconfig.NewManager(configPath).Load()
+	require.NoError(t, loadErr, "a refused set must leave the config loadable")
+	_, set := reloaded.HTTPClient.PrivateCIDRs()
+	assert.False(t, set, "the refused value must not have persisted")
+}
+
+// TestInitOptions_Run_FullTemplateDocumentsSecuritySettings pins the other
+// documentation surface for the destination-address policy: `config init
+// --full` reads templates/full.yaml, and that template must document the same
+// controls examples/config/full-config.yaml does, or the security posture
+// this PR ships is invisible to everyone who starts from the generated file.
+func TestInitOptions_Run_FullTemplateDocumentsSecuritySettings(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "config.yaml")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &InitOptions{
+		IOStreams: ioStreams,
+		CliParams: cliParams,
+		Output:    outputPath,
+		Full:      true,
+		Force:     true,
+	}
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	require.NoError(t, opts.Run(ctx))
+
+	generated, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	for _, key := range []string{"allowedPrivateCIDRs", "trustedProxy", "trustProxyResolution"} {
+		assert.Contains(t, string(generated), key,
+			"config init --full must document the %s control", key)
+	}
+
+	// The generated file must actually work: it has to load back cleanly.
+	_, loadErr := appconfig.NewManager(outputPath).Load()
+	require.NoError(t, loadErr, "the generated full configuration must pass validation")
+}

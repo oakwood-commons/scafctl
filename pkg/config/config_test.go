@@ -11,6 +11,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -903,6 +904,101 @@ func TestManager_Set_AddressPolicyKeysPersist(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, reloaded.HTTPClient.TrustedProxy,
 			"an unrecognizable value must not be guessed into a security setting")
+	})
+}
+
+// TestManager_Save_RefusesInvalidConfig proves Set cannot persist a value the
+// loader would reject. Without the Save-time validation, `config set
+// httpClient.allowedPrivateCIDRs nonsense` reports success, writes a file
+// every subsequent Load refuses, and leaves the user with an un-bootable
+// configuration -- and nothing names the offending value at the moment it was
+// set. Save must reject the write instead, leaving the file as it was.
+func TestManager_Save_RefusesInvalidConfig(t *testing.T) {
+	newSavedConfig := func(t *testing.T) string {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		mgr := NewManager(path)
+		_, err := mgr.Load()
+		require.NoError(t, err)
+		require.NoError(t, mgr.Save())
+		return path
+	}
+
+	t.Run("invalid CIDR entry is rejected before the file is touched", func(t *testing.T) {
+		path := newSavedConfig(t)
+		before, err := os.ReadFile(path)
+		require.NoError(t, err)
+
+		mgr := NewManager(path)
+		_, err = mgr.Load()
+		require.NoError(t, err)
+
+		mgr.Set("httpClient.allowedPrivateCIDRs", "nonsense")
+		saveErr := mgr.Save()
+		require.Error(t, saveErr)
+		assert.ErrorContains(t, saveErr, "allowedPrivateCIDRs",
+			"the rejection must name the key the operator set")
+		assert.ErrorContains(t, saveErr, "nonsense",
+			"the rejection must name the offending value")
+
+		after, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, string(before), string(after),
+			"a refused save must not modify the file on disk")
+
+		// The file still loads, and a valid Set afterwards succeeds.
+		reloaded, err := NewManager(path).Load()
+		require.NoError(t, err)
+		_, set := reloaded.HTTPClient.PrivateCIDRs()
+		assert.False(t, set, "the refused value must not have persisted")
+
+		mgr2 := NewManager(path)
+		_, err = mgr2.Load()
+		require.NoError(t, err)
+		mgr2.Set("httpClient.allowedPrivateCIDRs", "10.42.7.0/24")
+		require.NoError(t, mgr2.Save())
+	})
+
+	t.Run("an over-limit allowlist is also rejected", func(t *testing.T) {
+		path := newSavedConfig(t)
+		mgr := NewManager(path)
+		_, err := mgr.Load()
+		require.NoError(t, err)
+
+		entries := make([]string, settings.MaxAllowedPrivateCIDRs+1)
+		for i := range entries {
+			entries[i] = fmt.Sprintf("10.%d.%d.0/24", i/255%256, i%256)
+		}
+		mgr.Set("httpClient.allowedPrivateCIDRs", entries)
+		saveErr := mgr.Save()
+		require.Error(t, saveErr)
+		assert.ErrorContains(t, saveErr, "exceed the maximum",
+			"the advertised entry cap must hold at the persistence boundary too")
+
+		reloaded, err := NewManager(path).Load()
+		require.NoError(t, err)
+		_, set := reloaded.HTTPClient.PrivateCIDRs()
+		assert.False(t, set)
+	})
+
+	t.Run("SaveAs refuses invalid in-memory state too", func(t *testing.T) {
+		path := newSavedConfig(t)
+		mgr := NewManager(path)
+		_, err := mgr.Load()
+		require.NoError(t, err)
+
+		mgr.Set("httpClient.allowedPrivateCIDRs", "600.42.7.0/24")
+		other := filepath.Join(t.TempDir(), "copy.yaml")
+		saveErr := mgr.SaveAs(other)
+		require.Error(t, saveErr)
+
+		_, err = os.Stat(other)
+		assert.True(t, os.IsNotExist(err),
+			"a refused SaveAs must not write the target file")
+
+		reloaded, err := NewManager(path).Load()
+		require.NoError(t, err)
+		_, set := reloaded.HTTPClient.PrivateCIDRs()
+		assert.False(t, set)
 	})
 }
 

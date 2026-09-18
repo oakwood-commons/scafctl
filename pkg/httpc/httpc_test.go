@@ -443,8 +443,10 @@ func TestPolicyProtectedClient_RefusesBeforeConnect(t *testing.T) {
 // http.ProxyURL DOES route requests through that proxy (this half of the test
 // is the control, proving the proxy mechanism itself works), while a request
 // made through ProxyAwareTransport(false) against the same target reaches the
-// target directly and the proxy handler is never invoked -- exactly the
-// TOCTOU-closing behavior the policy.go:86 review thread asked for.
+// target directly and the proxy handler is never invoked -- pinning the
+// direct-routing guarantee itself: with the proxy untrusted, ambient proxy
+// configuration cannot interpose between a policy-protected client and its
+// target.
 func TestProxyAwareTransport_DoesNotRouteThroughProxy(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
