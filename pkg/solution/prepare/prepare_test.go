@@ -1355,6 +1355,107 @@ func TestInjectHTTPClientSettings_InjectsValue(t *testing.T) {
 	assert.Equal(t, true, settings["allowPrivateIPs"])
 }
 
+func TestInjectHTTPClientSettings_InjectsTrustProxyResolution(t *testing.T) {
+	cfg := &plugin.ProviderConfig{}
+	trust := true
+	appCfg := &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			TrustProxyResolution: &trust,
+		},
+	}
+	ctx := config.WithConfig(context.Background(), appCfg)
+	injectHTTPClientSettings(ctx, cfg)
+
+	require.NotNil(t, cfg.Settings)
+	raw, ok := cfg.Settings["httpClient"]
+	require.True(t, ok)
+
+	var settings map[string]any
+	require.NoError(t, json.Unmarshal(raw, &settings))
+	assert.Equal(t, true, settings["trustProxyResolution"])
+	// allowPrivateIPs was never set on the host config, so the plugin must not
+	// see it silently defaulted to true.
+	assert.Equal(t, false, settings["allowPrivateIPs"])
+}
+
+func TestInjectHTTPClientSettings_InjectsTrustedProxy(t *testing.T) {
+	cfg := &plugin.ProviderConfig{}
+	trusted := true
+	appCfg := &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			TrustedProxy: &trusted,
+		},
+	}
+	ctx := config.WithConfig(context.Background(), appCfg)
+	injectHTTPClientSettings(ctx, cfg)
+
+	require.NotNil(t, cfg.Settings)
+	raw, ok := cfg.Settings["httpClient"]
+	require.True(t, ok)
+
+	var settings map[string]any
+	require.NoError(t, json.Unmarshal(raw, &settings))
+	assert.Equal(t, true, settings["trustedProxy"])
+	// A plugin must default to the same disabled-proxy posture as the host
+	// when the host never set TrustedProxy at all.
+	assert.Equal(t, false, settings["trustProxyResolution"])
+}
+
+func TestInjectHTTPClientSettings_AbsentAllowlistMarshalsAsNull(t *testing.T) {
+	cfg := &plugin.ProviderConfig{}
+	allow := true
+	appCfg := &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			AllowPrivateIPs: &allow,
+			// AllowedPrivateCIDRs left nil: absent, not an empty override.
+		},
+	}
+	ctx := config.WithConfig(context.Background(), appCfg)
+	injectHTTPClientSettings(ctx, cfg)
+
+	require.NotNil(t, cfg.Settings)
+	raw, ok := cfg.Settings["httpClient"]
+	require.True(t, ok)
+	assert.Contains(t, string(raw), `"allowedPrivateCIDRs":null`,
+		"an absent allowlist must marshal as null, not be omitted or widened to []")
+
+	var settings map[string]any
+	require.NoError(t, json.Unmarshal(raw, &settings))
+	assert.Nil(t, settings["allowedPrivateCIDRs"])
+	assert.Equal(t, true, settings["allowPrivateIPs"])
+}
+
+// This is the precedence regression the pointer-backed AllowedPrivateCIDRs
+// field exists to prevent: allowPrivateIPs:true combined with an explicit
+// empty allowlist must reach the plugin as a present-but-empty list ([], not
+// null and not omitted), so the plugin narrows to "no exceptions" instead of
+// silently widening back to every private range.
+func TestInjectHTTPClientSettings_PresentEmptyAllowlistOverridesAllowPrivateIPs(t *testing.T) {
+	cfg := &plugin.ProviderConfig{}
+	allow := true
+	appCfg := &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			AllowPrivateIPs:     &allow,
+			AllowedPrivateCIDRs: config.PrivateCIDRList(),
+		},
+	}
+	ctx := config.WithConfig(context.Background(), appCfg)
+	injectHTTPClientSettings(ctx, cfg)
+
+	require.NotNil(t, cfg.Settings)
+	raw, ok := cfg.Settings["httpClient"]
+	require.True(t, ok)
+	assert.Contains(t, string(raw), `"allowedPrivateCIDRs":[]`,
+		"a present-but-empty allowlist must marshal as [], not null")
+
+	var settings map[string]any
+	require.NoError(t, json.Unmarshal(raw, &settings))
+	cidrs, ok := settings["allowedPrivateCIDRs"].([]any)
+	require.True(t, ok)
+	assert.Empty(t, cidrs)
+	assert.Equal(t, true, settings["allowPrivateIPs"])
+}
+
 func TestWithOfficialAuthHandlers(t *testing.T) {
 	reg := authofficial.NewRegistry()
 	var cfg prepareConfig

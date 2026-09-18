@@ -502,4 +502,31 @@ In the test report, a case shown as PASS* is a RELAXED pass: it passed but masks
 For the runtime evaluation environment these tools operate against, see 'context-variables' and 'phase-execution'. These tools are the source of truth for schemas, functions, and providers — reference them rather than relying on static copies, which drift.`,
 		SeeAlso: []string{"resolver", "provider", "functional-testing", "context-variables", "phase-execution"},
 	},
+	// --- Security ---
+	{
+		Name:     "network-policy",
+		Title:    "Network Policy (SSRF Protection)",
+		Category: "security",
+		Summary:  "Which destination addresses a solution's HTTP requests may reach, enforced when the connection is opened.",
+		Explanation: `Every solution-controlled HTTP request scafctl makes -- the http provider, parameter fetches, ` + "`fetch:`" + ` flag values, and solution URLs -- is checked against a destination-address policy. (Some internal scafctl subsystems -- catalog enumeration and OAuth2 handlers, for example -- use their own plain HTTP clients for scafctl's own outbound calls and are not gated by this policy.)
+
+Private, loopback, link-local and CGNAT addresses are blocked by default. This prevents a solution from probing internal services or reading cloud instance credentials.
+
+**The check runs at dial time, against the resolved address**, not against the text of the URL. A hostname that resolves into private space is therefore blocked too, as is a redirect that lands there. There is no window between the check and the connection, so DNS rebinding does not defeat it.
+
+Configuration (in the application config file, not the solution):
+
+- ` + "`httpClient.allowedPrivateCIDRs`" + ` -- the preferred control. Lists the ranges that may be reached, as CIDR blocks ("10.42.0.0/16") or bare addresses ("10.42.7.9"). Everything else stays blocked.
+- ` + "`httpClient.allowPrivateIPs`" + ` -- opens every private range at once. Blunt; prefer the list above. When both are set, allowedPrivateCIDRs WINS and narrows access to just the listed ranges.
+- ` + "`httpClient.trustedProxy`" + ` -- proxy routing (` + "`HTTP_PROXY`/`HTTPS_PROXY`" + `) is disabled by default, because a proxied request is dialed to the proxy rather than the target, so the dial-time check above never runs for that hop -- only a one-time local DNS check does, before hand-off. Set this to true only once the configured proxy is known to enforce an equivalent policy itself.
+- ` + "`httpClient.trustProxyResolution`" + ` -- once a proxy is trusted, this additionally allows a proxied target that does not resolve locally at all to proceed. Defaults to false (fails closed).
+
+**Cloud metadata addresses can never be permitted via direct policy settings.** 169.254.169.254, 169.254.170.23 (EKS Pod Identity), and 100.100.100.200 (Alibaba) are blocked under every ` + "`allowPrivateIPs`" + `/` + "`allowedPrivateCIDRs`" + ` configuration, because reaching them yields instance credentials. The one path around this is an explicitly trusted proxy (` + "`httpClient.trustedProxy: true`" + `, optionally with ` + "`httpClient.trustProxyResolution: true`" + `): once set, the metadata guarantee depends on that proxy enforcing its own egress policy rather than on this client.
+
+A blocked request reports 'blocked by SSRF policy' and names the setting that would permit it. If a solution fails this way, the destination was reaching private address space -- decide whether that was intended before widening the policy.`,
+		Examples: []string{
+			"# config.yaml -- reach one internal range, nothing else\nhttpClient:\n  allowedPrivateCIDRs:\n    - 10.42.0.0/16",
+		},
+		SeeAlso: []string{"provider", "catalog"},
+	},
 }

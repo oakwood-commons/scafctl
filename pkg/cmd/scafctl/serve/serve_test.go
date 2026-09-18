@@ -4,6 +4,7 @@
 package serve
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,9 +23,41 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestEmitStartupWarnings verifies that startup warnings are written to
+// stderr, never stdout, matching the user-visible behavior runServe relies on
+// under the default logging level (which discards Info and would otherwise
+// swallow a security warning).
+func TestEmitStartupWarnings(t *testing.T) {
+	outBuf := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	io := terminal.NewIOStreams(nil, outBuf, errBuf, false)
+	w := writer.New(io, settings.NewCliParams())
+
+	emitStartupWarnings(w, []string{"private IP ranges are allowed", "proxy resolution is trusted"})
+
+	assert.Empty(t, outBuf.String(), "startup warnings must not be written to stdout")
+	assert.Contains(t, errBuf.String(), "private IP ranges are allowed")
+	assert.Contains(t, errBuf.String(), "proxy resolution is trusted")
+}
+
+// TestEmitStartupWarnings_Empty verifies that no warnings produces no output
+// on either stream.
+func TestEmitStartupWarnings_Empty(t *testing.T) {
+	outBuf := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	io := terminal.NewIOStreams(nil, outBuf, errBuf, false)
+	w := writer.New(io, settings.NewCliParams())
+
+	emitStartupWarnings(w, nil)
+
+	assert.Empty(t, outBuf.String())
+	assert.Empty(t, errBuf.String())
+}
 
 func TestCommandServe(t *testing.T) {
 	cliParams := settings.NewCliParams()

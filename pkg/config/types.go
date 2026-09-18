@@ -310,17 +310,121 @@ type HTTPClientConfig struct {
 	EnableCompression *bool `json:"enableCompression,omitempty" yaml:"enableCompression,omitempty" mapstructure:"enableCompression" doc:"Enable automatic gzip compression"`
 
 	// AllowPrivateIPs controls whether HTTP requests to private, loopback, and
-	// link-local IP addresses are permitted. Checked against IP literals only
-	// (hostnames are not pre-resolved). When false (default), requests to RFC 1918
-	// ranges (10.x, 172.16.x, 192.168.x), loopback (127.x, ::1), link-local
-	// (169.254.x), and CGNAT (100.64.x) are blocked. Set to true to allow private
-	// network access (e.g., for on-premises endpoints or local development).
-	AllowPrivateIPs *bool `json:"allowPrivateIPs,omitempty" yaml:"allowPrivateIPs,omitempty" mapstructure:"allowPrivateIPs" doc:"Allow HTTP requests to private/loopback/link-local IP literals (default: false). Set true to allow private network access." example:"false"`
+	// link-local addresses are permitted. When false (default), requests to
+	// RFC 1918 ranges (10.x, 172.16.x, 192.168.x), loopback (127.x, ::1),
+	// link-local (169.254.x), and CGNAT (100.64.x) are blocked.
+	//
+	// The check runs when the connection is opened, against the address the
+	// request actually resolves to, so a hostname pointing into private space
+	// is blocked as well.
+	//
+	// This opens every private range at once. Prefer AllowedPrivateCIDRs, which
+	// grants only the ranges you name.
+	AllowPrivateIPs *bool `json:"allowPrivateIPs,omitempty" yaml:"allowPrivateIPs,omitempty" mapstructure:"allowPrivateIPs" doc:"Allow HTTP requests to every private/loopback/link-local range at once (default: false). Prefer allowedPrivateCIDRs." example:"false"`
+
+	// AllowedPrivateCIDRs carves specific address ranges out of the private-address
+	// blocklist, so an internal endpoint can be reached without opening the whole
+	// private network the way AllowPrivateIPs does. Prefer it over AllowPrivateIPs.
+	//
+	// Entries are CIDR blocks ("10.42.7.0/24") or bare addresses ("10.42.7.9",
+	// treated as a single-address range). Both IPv4 and IPv6 are accepted. Every
+	// entry must parse, or startup fails -- a silently-dropped entry would appear
+	// to grant access it does not.
+	//
+	// When set, this WINS over AllowPrivateIPs and narrows the client to just
+	// these ranges, so adding an allowlist to a legacy AllowPrivateIPs: true
+	// configuration tightens it rather than doing nothing. A present but empty
+	// list means "no exceptions" and also overrides AllowPrivateIPs; omit the
+	// field entirely to leave AllowPrivateIPs in force.
+	//
+	// It is a POINTER so that "absent" and "present but empty" survive a config
+	// round-trip. As a plain slice, omitempty drops an empty list on Save, and
+	// the next load reads it as absent -- silently restoring a blanket
+	// AllowPrivateIPs: true that the empty list was overriding. A nil pointer is
+	// still omitted; a pointer to an empty slice marshals as "[]".
+	//
+	// Cloud metadata addresses (169.254.169.254 and the provider-specific
+	// equivalents) can NOT be re-enabled by this field or by AllowPrivateIPs.
+	AllowedPrivateCIDRs *[]string `json:"allowedPrivateCIDRs,omitempty" yaml:"allowedPrivateCIDRs,omitempty" mapstructure:"allowedPrivateCIDRs" doc:"Address ranges exempted from private-IP blocking, as CIDR blocks or bare IPs (e.g. 10.42.7.0/24). Overrides allowPrivateIPs. Cloud metadata addresses can never be exempted." maxItems:"100"`
+
+	// TrustProxyResolution allows a proxied request whose target hostname cannot
+	// be resolved locally to proceed, leaving egress policy to the proxy.
+	//
+	// When a proxy is in use the destination address is not dialed directly, so
+	// the target is checked by resolving it here instead. That fails closed: in
+	// a proxy-only environment with no direct resolver, every request is refused.
+	// Enable this only where the proxy itself is trusted to enforce egress
+	// policy.
+	//
+	// This is the one setting that can weaken the otherwise unconditional
+	// metadata and private-address blocks, because it hands the address
+	// decision to the proxy: a proxy willing to resolve a hostname to a
+	// metadata or private address will reach it.
+	TrustProxyResolution *bool `json:"trustProxyResolution,omitempty" yaml:"trustProxyResolution,omitempty" mapstructure:"trustProxyResolution" doc:"Allow a proxied request whose target does not resolve locally to proceed, leaving egress policy to the proxy (default: false, which fails closed)." example:"false"`
+
+	// TrustedProxy marks a configured HTTP/HTTPS proxy (HTTP_PROXY, HTTPS_PROXY,
+	// or a caller-supplied Transport) as trusted to enforce its own
+	// destination-address egress policy.
+	//
+	// Independent of TrustProxyResolution above: that field only relaxes what
+	// happens when a proxied hostname fails to resolve locally. This field
+	// addresses a different, always-present gap -- when a request goes
+	// through a proxy, the upstream transport dials the PROXY, not the
+	// target, so the dial-time IP check never runs for that hop; the target
+	// is instead checked once against a LOCAL DNS answer before handing the
+	// request to the proxy. If the proxy's own resolution differs (split-
+	// horizon DNS, a rebind between check and connect), the proxy can still
+	// connect somewhere the local check never saw, even with
+	// TrustProxyResolution left at its default false.
+	//
+	// Defaults to false, which disables proxy routing entirely for
+	// policy-protected clients: no HTTP_PROXY/HTTPS_PROXY environment
+	// variable is honoured, closing the gap by not using a proxy at all.
+	// Set this to true only when the configured proxy is known to enforce an
+	// equivalent (or stricter) destination-address policy itself, restoring
+	// normal environment-based proxy behaviour.
+	TrustedProxy *bool `json:"trustedProxy,omitempty" yaml:"trustedProxy,omitempty" mapstructure:"trustedProxy" doc:"Trust a configured HTTP/HTTPS proxy to enforce its own egress policy (default: false, which disables proxy routing for policy-protected clients since the proxy hop cannot be checked at dial time)." example:"false"`
 
 	// MaxResponseBodySize is the maximum number of bytes the HTTP provider will
 	// read from a single response body. Prevents denial-of-service via unbounded
 	// responses from malicious or misconfigured servers. Defaults to 100 MB.
 	MaxResponseBodySize int64 `json:"maxResponseBodySize,omitempty" yaml:"maxResponseBodySize,omitempty" mapstructure:"maxResponseBodySize" doc:"Maximum HTTP response body size in bytes (default: 104857600)" maximum:"1073741824" example:"104857600"`
+}
+
+// PrivateCIDRList builds a value for HTTPClientConfig.AllowedPrivateCIDRs.
+//
+// The field is a pointer so that an absent list stays distinguishable from a
+// deliberately empty one, which makes a struct literal awkward to write. Called
+// with no arguments it yields a present-but-empty list, meaning "no exceptions"
+// -- to leave the field absent, do not set it at all.
+func PrivateCIDRList(entries ...string) *[]string {
+	if entries == nil {
+		entries = []string{}
+	}
+	return &entries
+}
+
+// PrivateCIDRs reports the configured address allowlist and whether the field
+// was set at all.
+//
+// The second return is the part that matters: an absent list (set == false)
+// leaves AllowPrivateIPs in force, while a present but empty one (set == true,
+// len(entries) == 0) is a deliberate "no exceptions" that overrides it. Callers
+// that collapse the two -- by testing len() alone -- silently widen an empty
+// allowlist back to every private range.
+//
+// When set is true the returned slice is never nil, so a caller can encode it
+// without reintroducing the null-versus-[] ambiguity. Every dereference of the
+// underlying pointer goes through here rather than being repeated at each call
+// site.
+func (h *HTTPClientConfig) PrivateCIDRs() (entries []string, set bool) {
+	if h == nil || h.AllowedPrivateCIDRs == nil {
+		return nil, false
+	}
+	if *h.AllowedPrivateCIDRs == nil {
+		return []string{}, true
+	}
+	return *h.AllowedPrivateCIDRs, true
 }
 
 // HTTPClientCacheType constants define the supported HTTP cache types.

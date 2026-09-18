@@ -10,7 +10,6 @@
 package httpc
 
 import (
-	"fmt"
 	"net/http"
 	"time"
 
@@ -31,6 +30,7 @@ type (
 	FileCacheConfig      = upstream.FileCacheConfig
 	FileCache            = upstream.FileCache
 	CacheStats           = upstream.CacheStats
+	IPPolicy             = upstream.IPPolicy
 	Metrics              = upstream.Metrics
 	NoopMetrics          = upstream.NoopMetrics
 	RequestHook          = upstream.RequestHook
@@ -67,10 +67,32 @@ var (
 //
 // The caller's config is not mutated; a shallow copy is made internally.
 //
-// AllowPrivateIPs is set to true on the upstream client because scafctl handles
-// SSRF protection via context-based checks (PrivateIPsAllowed + ValidateURLNotPrivate)
-// at the call sites that need it (httpprovider, parameterprovider, etc.).
+// Which destination addresses the client may reach is decided by cfg.IPPolicy,
+// enforced by the upstream transport as each connection is dialed -- after DNS
+// resolution, against the address actually being connected to. A nil IPPolicy
+// denies private, loopback, and link-local addresses. Build one from
+// application configuration with PolicyFromAppConfig.
+//
+// Because the check runs at dial time it also covers redirect hops and
+// hostnames that resolve to private addresses, neither of which a pre-flight
+// URL check can catch.
+//
+// An omitted Transport is defaulted to proxy-disabled
+// (ProxyAwareTransport(false)), the same posture every other
+// policy-protected constructor in this package applies, so a bare
+// NewClient(nil) cannot route through an ambient HTTP_PROXY/HTTPS_PROXY
+// without an explicit opt-in. A caller who has marked a proxy as trusted
+// passes ProxyAwareTransport(true) to restore environment-based proxy
+// selection explicitly.
 func NewClient(cfg *ClientConfig) *Client {
+	return upstream.NewClient(localClientConfig(cfg))
+}
+
+// localClientConfig copies cfg (or the scafctl default when nil) and fills in
+// scafctl-specific defaults. Split from NewClient so tests can assert on the
+// resolved Transport and policy directly, rather than reaching through the
+// client's wrapped transport chain (OTel, retry, cache) to find them.
+func localClientConfig(cfg *ClientConfig) *ClientConfig {
 	var local ClientConfig
 	if cfg != nil {
 		local = *cfg
@@ -86,27 +108,18 @@ func NewClient(cfg *ClientConfig) *Client {
 	if local.CacheKeyPrefix == "" {
 		local.CacheKeyPrefix = settings.HTTPCacheKeyPrefixFor(paths.AppName())
 	}
-	// scafctl performs SSRF validation at the application layer via
-	// PrivateIPsAllowed(ctx) and ValidateURLNotPrivate(url) before issuing
-	// requests. Disable the upstream transport-level check to avoid double-gating
-	// and to preserve the original context-aware behaviour.
-	local.AllowPrivateIPs = true
-
-	maxRedirects := local.MaxRedirects
-	if maxRedirects <= 0 {
-		maxRedirects = DefaultMaxRedirects
+	if local.Transport == nil {
+		// An omitted Transport must not mean "http.DefaultTransport's
+		// environment-based proxy selection": proxy routing is opt-in for
+		// every policy-protected client, and a direct NewClient(nil) caller
+		// has no trustedProxy setting of its own to have opted in with. Let
+		// upstream see its own no-proxy default so an ambient proxy cannot
+		// reintroduce the split-horizon/rebinding gap this package closes.
+		// ProxyAwareTransport(true) restores environment proxying explicitly.
+		local.Transport = ProxyAwareTransport(false)
 	}
 
-	client := upstream.NewClient(&local)
-
-	// Override the upstream CheckRedirect with a context-aware variant.
-	// The upstream redirect policy is static (uses the AllowPrivateIPs config
-	// field captured at construction), but scafctl needs per-request checks via
-	// PrivateIPsAllowed(ctx). This prevents SSRF bypasses where a public URL
-	// 302-redirects to a private/link-local address (e.g. 169.254.169.254).
-	client.RetryableClient().HTTPClient.CheckRedirect = ssrfSafeRedirectPolicy(maxRedirects)
-
-	return client
+	return &local
 }
 
 // BuildStatusCodeCheckRetry returns a retryablehttp.CheckRetry function
@@ -120,22 +133,6 @@ func BuildNamedBackoff(strategy string, initialWait, maxWait time.Duration) retr
 	return upstream.BuildNamedBackoff(strategy, initialWait, maxWait)
 }
 
-// ssrfSafeRedirectPolicy returns a CheckRedirect function that enforces both
-// a maximum redirect count and context-aware SSRF validation on redirect targets.
-func ssrfSafeRedirectPolicy(maxRedirects int) func(*http.Request, []*http.Request) error {
-	return func(req *http.Request, via []*http.Request) error {
-		if len(via) >= maxRedirects {
-			return fmt.Errorf("stopped after %d redirects", len(via))
-		}
-		if !PrivateIPsAllowed(req.Context()) {
-			if err := ValidateURLNotPrivate(req.URL.String()); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-}
-
 // DefaultConfig returns a ClientConfig with scafctl-specific defaults:
 // XDG-based cache directory, app-name-based cache key prefix, and OTel metrics adapter.
 func DefaultConfig() *ClientConfig {
@@ -144,4 +141,92 @@ func DefaultConfig() *ClientConfig {
 	cfg.CacheKeyPrefix = settings.HTTPCacheKeyPrefixFor(paths.AppName())
 	cfg.Metrics = &OTelMetrics{}
 	return cfg
+}
+
+// ProxyAwareTransport returns the *http.Transport a policy-protected client
+// should dial through, given whether the caller has explicitly marked its
+// configured proxy as trusted to enforce destination-address policy itself.
+//
+// The upstream client dials a proxy directly and validates the target only
+// once, against a local DNS answer, before handing the request off -- the
+// dial-time IP check that protects every other request never runs for that
+// hop. When the proxy's own resolution can differ from that local answer
+// (split-horizon DNS, a rebind between check and hand-off), an untrusted
+// proxy can still connect somewhere the local check never saw.
+//
+// trustedProxy=false (the default posture; see config.HTTPClientConfig's
+// TrustedProxy field) returns a transport with proxy selection disabled, so
+// no HTTP_PROXY/HTTPS_PROXY environment variable is honoured and every
+// request dials its target directly, where the ordinary dial-time check
+// applies in full. trustedProxy=true returns a transport that explicitly
+// restores environment-based proxy selection (ProxyFromEnvironment), so the
+// caller opts in visibly rather than by omitting a Transport.
+//
+// Both transports leave dial-hook installation to the upstream library: they
+// carry no dialer of their own, so a policy-protected client's dial is made
+// by upstream's enforcing dialer, whose Control hook refuses a blocked
+// address before the connection exists (see baseTransport).
+func ProxyAwareTransport(trustedProxy bool) http.RoundTripper {
+	if trustedProxy {
+		return trustedProxyTransport()
+	}
+	return noProxyTransport()
+}
+
+// baseTransport returns a clone of http.DefaultTransport with its dial hooks
+// cleared, for ProxyAwareTransport's two variants to specialize.
+//
+// Cloning (rather than building a bare *http.Transport{}) preserves every
+// other default -- timeouts, TLS config, connection pool sizing -- but the
+// dial hooks are cleared on purpose. Upstream treats a transport with a
+// preinstalled dialer as a caller-supplied dialer that must run: it dials
+// first and judges the peer address only afterwards (connect-then-check).
+// With no preinstalled hook, upstream installs its own enforcing dialer,
+// whose Control hook refuses a blocked address BEFORE the connection exists
+// -- the pre-connect guarantee this package advertises. The only dialer
+// settings the clear can lose are http.DefaultTransport's Dialer
+// Timeout/KeepAlive (30s/30s), which are exactly upstream's enforcing
+// dialer's own values, so a permitted request dials identically either way.
+func baseTransport() *http.Transport {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		// http.DefaultTransport has been replaced with something that isn't a
+		// *http.Transport (unusual, but possible). Fall back to a transport
+		// built from scratch rather than panic; it still carries no proxy and
+		// no dial hooks.
+		base = &http.Transport{}
+	}
+	clone := base.Clone()
+	// Clear every preinstalled dial hook so upstream owns the dial. The
+	// deprecated Dial/DialTLS are cleared too: upstream reconstructs a
+	// caller-dialer from either when the modern hooks are nil, and a replaced
+	// http.DefaultTransport could have set them.
+	clone.DialContext = nil    //nolint:staticcheck // assigning nil, not calling
+	clone.DialTLSContext = nil //nolint:staticcheck // assigning nil, not calling
+	clone.Dial = nil           //nolint:staticcheck // deprecated: cleared so it cannot select the caller-dialer path
+	clone.DialTLS = nil        //nolint:staticcheck // deprecated: cleared so it cannot select the caller-dialer path
+	return clone
+}
+
+// noProxyTransport returns a DefaultTransport clone that never routes through
+// an ambient HTTP_PROXY/HTTPS_PROXY: exactly one thing differs from
+// http.DefaultTransport, the Proxy field, which is nil -- net/http treats
+// that as "never use a proxy" regardless of the environment.
+func noProxyTransport() *http.Transport {
+	clone := baseTransport()
+	clone.Proxy = nil
+	return clone
+}
+
+// trustedProxyTransport returns a DefaultTransport clone that explicitly
+// restores environment-based proxy selection for callers that have marked
+// their proxy as trusted. The dial hooks are cleared like the untrusted
+// variant's: a request this transport dials directly (one no proxy was
+// configured for) still gets upstream's pre-connect enforcing dialer, and a
+// proxied dial is exempted by the upstream proxy path, which is what
+// trustedProxy opted into.
+func trustedProxyTransport() *http.Transport {
+	clone := baseTransport()
+	clone.Proxy = http.ProxyFromEnvironment
+	return clone
 }

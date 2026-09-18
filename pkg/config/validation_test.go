@@ -669,3 +669,146 @@ func TestAPIServerConfig_TagsMatchRuntimeLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeCIDR(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		entry string
+		want  string
+		// wantErrContains is checked when the entry must be rejected.
+		wantErrContains string
+	}{
+		{name: "IPv4 CIDR passes through", entry: "10.0.0.0/8", want: "10.0.0.0/8"},
+		{name: "IPv6 CIDR passes through", entry: "fd00::/8", want: "fd00::/8"},
+		{name: "IPv6 CIDR with a dotted-quad tail is not mapped, passes", entry: "64:ff9b::/96", want: "64:ff9b::/96"},
+		{name: "surrounding space is tolerated", entry: "  10.0.0.0/8  ", want: "10.0.0.0/8"},
+		{name: "bare IPv4 widens to /32", entry: "10.0.0.5", want: "10.0.0.5/32"},
+		{name: "bare IPv6 widens to /128", entry: "fd00::1", want: "fd00::1/128"},
+		{name: "bare IPv4-mapped literal narrows to the IPv4 /32", entry: "::ffff:192.168.1.5", want: "192.168.1.5/32"},
+		{
+			name:            "empty entry is rejected",
+			entry:           "",
+			wantErrContains: "empty",
+		},
+		{
+			name:            "whitespace-only entry is rejected",
+			entry:           "   ",
+			wantErrContains: "empty",
+		},
+		{
+			name:            "hostname is rejected",
+			entry:           "example.com",
+			wantErrContains: "not a valid IP address or CIDR block",
+		},
+		{
+			name:            "out-of-range prefix is rejected",
+			entry:           "10.0.0.0/33",
+			wantErrContains: "not a valid CIDR block",
+		},
+		{
+			name:            "malformed CIDR is rejected",
+			entry:           "10.0.0.0/",
+			wantErrContains: "not a valid CIDR block",
+		},
+		{
+			// Go parses "::ffff:127.0.0.1/32" as the IPv6 network ::/32 -- a
+			// vast range including ::1 -- rather than the single mapped host
+			// the text names. The operator wrote the mapped form meaning one
+			// host as an exception; refusing it (and naming the equivalent
+			// IPv4 form) is the only reading that fails closed.
+			name:            "IPv4-mapped IPv6 CIDR is rejected instead of silently widening",
+			entry:           "::ffff:127.0.0.1/32",
+			wantErrContains: "write the equivalent IPv4 CIDR",
+		},
+		{
+			name:            "IPv4-mapped IPv6 CIDR with host bits is rejected",
+			entry:           "::ffff:10.42.7.9/24",
+			wantErrContains: "write the equivalent IPv4 CIDR",
+		},
+		{
+			name:            "hex-form IPv4-mapped CIDR is rejected too",
+			entry:           "::ffff:a00:0/120",
+			wantErrContains: "write the equivalent IPv4 CIDR",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := NormalizeCIDR(tt.entry)
+
+			if tt.wantErrContains != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrContains)
+				assert.Empty(t, got)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestHTTPClientConfig_Validate_AllowedPrivateCIDRs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid entries are accepted", func(t *testing.T) {
+		t.Parallel()
+		cfg := &HTTPClientConfig{
+			AllowedPrivateCIDRs: PrivateCIDRList("10.0.0.0/8", "192.168.1.5", "fd00::/8"),
+		}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	t.Run("an empty list is accepted", func(t *testing.T) {
+		t.Parallel()
+		cfg := &HTTPClientConfig{AllowedPrivateCIDRs: PrivateCIDRList()}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	// A malformed entry must fail loudly at startup rather than being dropped,
+	// which would silently narrow the allowlist the operator asked for.
+	t.Run("a malformed entry is rejected and located", func(t *testing.T) {
+		t.Parallel()
+		cfg := &HTTPClientConfig{
+			AllowedPrivateCIDRs: PrivateCIDRList("10.0.0.0/8", "nonsense"),
+		}
+		err := cfg.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "allowedPrivateCIDRs[1]",
+			"the error must say which entry is wrong")
+		assert.Contains(t, err.Error(), "nonsense")
+	})
+
+	// The runtime check and the advertised `maxItems` schema cap must not
+	// drift apart: exactly at the limit must pass, and one over must be
+	// rejected with a message naming both the actual and maximum count.
+	t.Run("exactly the maximum entries is accepted", func(t *testing.T) {
+		t.Parallel()
+		entries := make([]string, settings.MaxAllowedPrivateCIDRs)
+		for i := range entries {
+			entries[i] = fmt.Sprintf("10.%d.0.0/16", i%256)
+		}
+		cfg := &HTTPClientConfig{AllowedPrivateCIDRs: PrivateCIDRList(entries...)}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	t.Run("one entry over the maximum is rejected", func(t *testing.T) {
+		t.Parallel()
+		entries := make([]string, settings.MaxAllowedPrivateCIDRs+1)
+		for i := range entries {
+			entries[i] = fmt.Sprintf("10.%d.0.0/16", i%256)
+		}
+		cfg := &HTTPClientConfig{AllowedPrivateCIDRs: PrivateCIDRList(entries...)}
+		err := cfg.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "allowedPrivateCIDRs")
+		assert.Contains(t, err.Error(), fmt.Sprintf("%d", settings.MaxAllowedPrivateCIDRs+1))
+		assert.Contains(t, err.Error(), fmt.Sprintf("%d", settings.MaxAllowedPrivateCIDRs))
+	})
+}

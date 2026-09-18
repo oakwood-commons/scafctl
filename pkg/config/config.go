@@ -314,6 +314,22 @@ func (m *Manager) setDefaults() {
 	m.v.SetDefault("httpClient.circuitBreakerMaxFailures", settings.DefaultCircuitBreakerMaxFailures)
 	m.v.SetDefault("httpClient.circuitBreakerOpenTimeout", settings.DefaultCircuitBreakerOpenTimeout.String())
 	m.v.SetDefault("httpClient.circuitBreakerHalfOpenMaxRequests", settings.DefaultCircuitBreakerHalfOpenRequests)
+
+	// Destination-address policy has no SetDefault: "unset" is meaningful and
+	// distinct from false, and an unset allowlist is distinct from an empty
+	// one. AutomaticEnv only reaches keys Viper already knows, and Unmarshal
+	// skips the rest, so these are bound explicitly -- otherwise they could be
+	// set only from a config file. The local-development override
+	// (<PREFIX>_HTTPCLIENT_ALLOWPRIVATEIPS=true) depends on this binding.
+	for _, key := range []string{
+		"httpClient.allowPrivateIPs",
+		"httpClient.allowedPrivateCIDRs",
+		"httpClient.trustProxyResolution",
+		"httpClient.trustedProxy",
+	} {
+		// Errors only when called with no key, which cannot happen here.
+		_ = m.v.BindEnv(key)
+	}
 	m.v.SetDefault("httpClient.enableCompression", true)
 
 	// CEL defaults - all values from settings package
@@ -556,9 +572,17 @@ func restoreAuthProfileEntries(v *viper.Viper, cfg *Config) {
 // Save saves the current configuration to file.
 // It syncs m.config to viper before writing, then uses viper's WriteConfig.
 // This allows both direct config modification AND Set() calls to be persisted.
+//
+// The configuration is validated first and refused if it would fail Load:
+// `config set` (and direct edits) must not be able to write a file the
+// process could not load back.
 func (m *Manager) Save() error {
 	if m.config == nil {
 		return fmt.Errorf("no configuration loaded")
+	}
+
+	if err := m.config.Validate(); err != nil {
+		return fmt.Errorf("refusing to save invalid config: %w", err)
 	}
 
 	configPath := m.v.ConfigFileUsed()
@@ -596,9 +620,15 @@ func (m *Manager) Save() error {
 }
 
 // SaveAs saves the configuration to a specific path.
+// The configuration is validated first, for the same reason as Save: no
+// written file may be one Load would reject.
 func (m *Manager) SaveAs(path string) error {
 	if m.config == nil {
 		return fmt.Errorf("no configuration loaded")
+	}
+
+	if err := m.config.Validate(); err != nil {
+		return fmt.Errorf("refusing to save invalid config: %w", err)
 	}
 
 	// Ensure directory exists
@@ -752,8 +782,88 @@ func (m *Manager) Set(key string, value any) {
 			if v, ok := value.(string); ok {
 				m.config.Settings.DefaultCatalog = v
 			}
+		case "httpClient.allowPrivateIPs":
+			m.config.HTTPClient.AllowPrivateIPs = boolPtrFromValue(value)
+		case "httpClient.trustProxyResolution":
+			m.config.HTTPClient.TrustProxyResolution = boolPtrFromValue(value)
+		case "httpClient.trustedProxy":
+			m.config.HTTPClient.TrustedProxy = boolPtrFromValue(value)
+		case "httpClient.allowedPrivateCIDRs":
+			m.config.HTTPClient.AllowedPrivateCIDRs = stringSlicePtrFromValue(value)
 		}
 	}
+}
+
+// boolPtrFromValue coerces a value passed to Manager.Set into the *bool a
+// destination-address policy field stores, preserving the absent-versus-false
+// distinction those fields rely on.
+//
+// Viper stores whatever Set was given, but Save then overwrites the whole
+// httpClient subtree from m.config, so any field Set does not synchronize into
+// m.config is silently lost on the next save -- a `config set` reports success
+// and the value is gone on reload. Both layers must agree.
+//
+// A value this helper cannot interpret yields nil (unset) rather than a guess:
+// persisting an unrecognized form of a security setting would store a value Load
+// cannot round-trip, and viper's copy is overwritten from m.config on Save
+// regardless.
+func boolPtrFromValue(value any) *bool {
+	switch v := value.(type) {
+	case bool:
+		return &v
+	case string:
+		switch strings.ToLower(v) {
+		case "true":
+			r := true
+			return &r
+		case "false":
+			r := false
+			return &r
+		}
+	}
+	return nil
+}
+
+// stringSlicePtrFromValue coerces a value passed to Manager.Set into the
+// *[]string AllowedPrivateCIDRs stores, preserving the absent-versus-empty
+// distinction that field documents: a nil pointer is omitted from the saved
+// file (allowPrivateIPs stays in force), while a pointer to an empty slice
+// marshals as "[]" (a deliberate "no exceptions" that overrides it).
+//
+// A CLI `config set` passes a single argument, so a string value is read as a
+// comma-separated entry list. An empty or whitespace-only string is treated as
+// clearing the field (absent, nil) rather than an empty list, because
+// "no exceptions" silently narrows an allowPrivateIPs: true configuration and
+// must not happen by accident; physical removal is Delete's job.
+func stringSlicePtrFromValue(value any) *[]string {
+	switch v := value.(type) {
+	case []string:
+		entries := make([]string, len(v))
+		copy(entries, v)
+		return &entries
+	case []any:
+		entries := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			entries = append(entries, s)
+		}
+		return &entries
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		entries := make([]string, 0, strings.Count(v, ",")+1)
+		for _, part := range strings.Split(v, ",") {
+			if entry := strings.TrimSpace(part); entry != "" {
+				entries = append(entries, entry)
+			}
+		}
+		return &entries
+	}
+	return nil
 }
 
 // Delete removes a configuration key from the user's config file on disk.

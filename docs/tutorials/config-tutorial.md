@@ -417,7 +417,10 @@ shown as `(not present)`.
 | `httpClient.retry.maxRetries` | int | `3` | Max HTTP retries |
 | `httpClient.caching.enabled` | bool | `true` | Enable HTTP response caching |
 | `httpClient.maxResponseBodySize` | int | `104857600` | Max HTTP response body size (bytes, default 100 MB) |
-| `httpClient.allowPrivateIPs` | bool | `false` | Allow requests to private/loopback IPs (SSRF protection) |
+| `httpClient.allowPrivateIPs` | bool | `false` | Allow requests to every private/loopback IP range at once. Prefer `allowedPrivateCIDRs` |
+| `httpClient.allowedPrivateCIDRs` | []string | unset | Private ranges (or bare addresses) this client may reach. Checked against the resolved address when the connection is opened. Overrides `allowPrivateIPs` when set. Cloud metadata is never permitted |
+| `httpClient.trustedProxy` | bool | `false` | Trust a configured HTTP/HTTPS proxy (`HTTP_PROXY`/`HTTPS_PROXY`) to enforce its own egress policy. Proxy routing is disabled entirely for policy-protected clients unless this is `true` |
+| `httpClient.trustProxyResolution` | bool | `false` | On the trusted-proxy path, allow a proxied target that does not resolve locally to proceed, leaving egress policy to the proxy. Has no effect unless `httpClient.trustedProxy` is also `true`. Defaults to failing closed |
 | `settings.requireSecureKeyring` | bool | `false` | Fail if OS keyring unavailable instead of insecure fallback |
 | `resolver.timeout` | duration | `5m` | Overall resolver timeout |
 | `resolver.concurrency` | int | `4` | Max parallel resolver execution |

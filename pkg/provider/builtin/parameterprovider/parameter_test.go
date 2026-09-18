@@ -18,7 +18,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
-	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -996,17 +995,30 @@ func TestParameterProvider_Fetch_NonOKStatus(t *testing.T) {
 // TestParameterProvider_Fetch_SSRFBlocked verifies that fetch blocks a
 // private/loopback address when private IPs are not permitted, without issuing
 // the request (the mock fails if called).
-func TestParameterProvider_Fetch_SSRFBlocked(t *testing.T) {
+// A fetch to a private address is refused by the HTTP client at dial time. This
+// uses the real client rather than a mock, because the provider no longer
+// pre-screens the URL -- a mock would prove nothing about the actual guard.
+func TestParameterProvider_Fetch_BlockedByPolicy(t *testing.T) {
 	t.Parallel()
-	deny := false
-	cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &deny}}
-	ctx := config.WithConfig(context.Background(), cfg)
-	mock := &MockHTTPClient{Err: errors.New("network should not be called")}
-	p := NewParameterProvider(WithHTTPClient(mock))
+	p := NewParameterProvider()
 
-	_, err := p.resolveValue(ctx, "http://127.0.0.1/data", TypeFetch)
+	_, err := p.resolveValue(context.Background(), "http://127.0.0.1:9/data", TypeFetch)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "resolver parameter URL blocked")
+	assert.ErrorIs(t, err, httpc.ErrBlockedByPolicy)
+}
+
+// The blanket allowPrivateIPs switch must not reach cloud metadata.
+func TestParameterProvider_Fetch_MetadataNeverAllowed(t *testing.T) {
+	t.Parallel()
+	allow := true
+	ctx := config.WithConfig(context.Background(), &config.Config{
+		HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow},
+	})
+	p := NewParameterProvider()
+
+	_, err := p.resolveValue(ctx, "http://169.254.169.254/latest/meta-data/", TypeFetch)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, httpc.ErrBlockedByPolicy)
 }
 
 // TestParameterProvider_Auto_DoesNotFetchURL is the core regression guard for
@@ -1124,14 +1136,17 @@ func TestDefaultHTTPClient_Get(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &DefaultHTTPClient{client: httpc.NewClient(&httpc.ClientConfig{
-		Timeout:      settings.DefaultHTTPTimeout,
-		RetryMax:     0,
-		RetryWaitMin: settings.DefaultHTTPRetryWaitMinimum,
-		RetryWaitMax: settings.DefaultHTTPRetryWaitMaximum,
-	})}
+	c := &DefaultHTTPClient{}
 
-	resp, err := c.Get(context.Background(), srv.URL)
+	// httptest binds loopback, which the default policy denies. Naming the
+	// range is how a user reaches an internal endpoint.
+	ctx := config.WithConfig(context.Background(), &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+		},
+	})
+
+	resp, err := c.Get(ctx, srv.URL)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)

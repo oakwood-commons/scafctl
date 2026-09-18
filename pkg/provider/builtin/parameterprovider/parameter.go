@@ -24,7 +24,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
-	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 const (
@@ -127,19 +126,31 @@ const keyPattern = `^[A-Za-z_][A-Za-z0-9_.\-]*$`
 // entry at runtime.
 var keyRe = regexp.MustCompile(keyPattern)
 
-// HTTPClient defines the interface for HTTP operations
+// HTTPClient defines the interface for HTTP operations.
+//
+// The caller must close the returned response body, as with any http.Response.
 type HTTPClient interface {
 	Get(ctx context.Context, url string) (*http.Response, error)
 }
 
 // DefaultHTTPClient provides real HTTP operations backed by httpc.
-type DefaultHTTPClient struct {
-	client *httpc.Client
-}
+//
+// The underlying client is obtained per request rather than held on this
+// struct, because its destination-address policy comes from the application
+// configuration carried on the request context. A client created when the
+// provider is registered predates that configuration and would ignore every
+// allowlist entry. httpc.FetchClient reuses one client per policy, so this
+// costs a map lookup rather than a new connection pool.
+type DefaultHTTPClient struct{}
 
-// Get performs an HTTP GET request
+// Get performs an HTTP GET request.
+//
+// Destination-address policy is enforced by the client at dial time. A nil
+// policy denies private, loopback, and link-local addresses, so a missing or
+// unusable configuration fails closed.
 func (d *DefaultHTTPClient) Get(ctx context.Context, url string) (*http.Response, error) {
-	return d.client.Get(ctx, url)
+	// Shared, so it is deliberately not closed here.
+	return httpc.FetchClient(ctx).Get(ctx, url)
 }
 
 // FileOps defines the interface for file operations
@@ -306,15 +317,8 @@ inputs:
 				},
 			},
 		},
-		httpClient: &DefaultHTTPClient{client: httpc.NewClient(&httpc.ClientConfig{
-			Timeout:           settings.DefaultHTTPTimeout,
-			RetryMax:          settings.DefaultHTTPRetryMax,
-			RetryWaitMin:      settings.DefaultHTTPRetryWaitMinimum,
-			RetryWaitMax:      settings.DefaultHTTPRetryWaitMaximum,
-			EnableCache:       false,
-			EnableCompression: true,
-		})},
-		fileOps: &DefaultFileOps{},
+		httpClient: &DefaultHTTPClient{},
+		fileOps:    &DefaultFileOps{},
 	}
 
 	// Apply options
@@ -724,18 +728,17 @@ func isHTTPURL(s string) bool {
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
-// fetchURL performs an SSRF-guarded HTTP GET and returns the response body as a
-// string. It backs TypeFetch; auto never fetches. Requests to
-// private/loopback/link-local addresses are blocked unless explicitly permitted.
+// fetchURL performs an HTTP GET and returns the response body as a string. It
+// backs TypeFetch; auto never fetches.
+//
+// Requests to private, loopback, and link-local addresses are refused by the
+// HTTP client at dial time unless configuration permits the range. Because the
+// check runs against the resolved address it also covers hostnames pointing at
+// internal infrastructure and redirects into it.
 func (p *ParameterProvider) fetchURL(ctx context.Context, url string) (string, error) {
-	if !httpc.PrivateIPsAllowed(ctx) {
-		if err := httpc.ValidateURLNotPrivate(url); err != nil {
-			return "", fmt.Errorf("resolver parameter URL blocked: %w", err)
-		}
-	}
 	resp, err := p.httpClient.Get(ctx, url)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch URL %q: %w", url, err)
+		return "", fmt.Errorf("failed to fetch URL %q: %w", url, httpc.ExplainBlocked(err))
 	}
 	defer resp.Body.Close()
 

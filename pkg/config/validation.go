@@ -4,7 +4,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +15,67 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
+
+// NormalizeCIDR converts a single address-allowlist entry into CIDR form,
+// returning an error describing why an entry is unusable.
+//
+// A CIDR block is returned in canonical form, not the text supplied:
+// net.ParseCIDR accepts host bits (for example "10.42.7.9/24"), and the
+// masked network -- what the entry actually covers -- is what is stored, so
+// that example comes back as "10.42.7.0/24". A bare address is widened to
+// the single-address range covering it (/32 for IPv4, /128 for IPv6), since
+// naming one host is the obvious way to express "just this host" and
+// rejecting it would be a needless papercut.
+//
+// This is the single definition shared by configuration validation and by the
+// code that builds the runtime policy, so an entry accepted at startup can
+// never be one the policy later rejects.
+func NormalizeCIDR(entry string) (string, error) {
+	trimmed := strings.TrimSpace(entry)
+	if trimmed == "" {
+		return "", errors.New("empty entry")
+	}
+
+	if strings.Contains(trimmed, "/") {
+		ip, network, err := net.ParseCIDR(trimmed)
+		if err != nil {
+			return "", fmt.Errorf("not a valid CIDR block: %w", err)
+		}
+		// IPv4-mapped IPv6 notation is ambiguous in CIDR form, so refuse it
+		// rather than guess. ParseCIDR masks the 16-byte form, so
+		// "::ffff:127.0.0.1/32" does not name that one host -- it is the
+		// network ::/32, silently exempting a vast range including ::1. The
+		// plain-address branch narrows mapped literals to /32 (see below);
+		// narrowing a masked network instead would silently do the opposite
+		// of what its text says. The equivalent IPv4 CIDR says exactly what
+		// the operator means, so require it.
+		if strings.Contains(trimmed, ":") && ip.To4() != nil {
+			return "", fmt.Errorf(
+				"IPv4-mapped IPv6 CIDR notation %q covers %s once masked, not the mapped host it names; write the equivalent IPv4 CIDR instead",
+				trimmed, network.String(),
+			)
+		}
+		// Return the masked network rather than the text supplied. "10.42.7.9/24"
+		// is accepted by ParseCIDR but covers 10.42.7.0/24, and an operator who
+		// wrote it probably meant one host. Storing the effective range makes the
+		// widening visible wherever the entry is echoed back.
+		return network.String(), nil
+	}
+
+	ip := net.ParseIP(trimmed)
+	if ip == nil {
+		return "", errors.New("not a valid IP address or CIDR block")
+	}
+	// Build the CIDR from the canonical address rather than the text supplied.
+	// An IPv4-mapped IPv6 literal such as "::ffff:192.168.1.1" has a non-nil
+	// To4(), but "::ffff:192.168.1.1/32" parses as the IPv6 network ::/32 --
+	// silently exempting a vast range including ::1, rather than the single
+	// host the operator asked for.
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String() + "/32", nil
+	}
+	return ip.String() + "/128", nil
+}
 
 // Validate validates the entire configuration.
 // Returns an error if any configuration value is invalid.
@@ -122,6 +185,29 @@ func (h *HTTPClientConfig) Validate() error {
 	}
 	if h.CircuitBreakerHalfOpenMaxRequests < 0 {
 		return fmt.Errorf("circuitBreakerHalfOpenMaxRequests: must be non-negative, got %d", h.CircuitBreakerHalfOpenMaxRequests)
+	}
+
+	// The `maxItems` struct tag documents this bound for schema consumers, but
+	// the config loader never applies struct tags, so an advertised cap that is
+	// not checked here is not a cap. Same reasoning as allowedHosts below.
+	//
+	// An absent list is nothing to validate; a present but empty one is a
+	// deliberate "no exceptions" and is valid.
+	if entries, set := h.PrivateCIDRs(); set {
+		if len(entries) > settings.MaxAllowedPrivateCIDRs {
+			return fmt.Errorf("allowedPrivateCIDRs: %d entries exceed the maximum of %d",
+				len(entries), settings.MaxAllowedPrivateCIDRs)
+		}
+
+		// Reject a malformed address allowlist at startup. A bad entry is
+		// refused loudly here rather than dropped, because an operator who
+		// mistypes a range would otherwise believe they had granted access they
+		// had not.
+		for i, entry := range entries {
+			if _, err := NormalizeCIDR(entry); err != nil {
+				return fmt.Errorf("allowedPrivateCIDRs[%d]: %q: %w", i, entry, err)
+			}
+		}
 	}
 
 	return nil
