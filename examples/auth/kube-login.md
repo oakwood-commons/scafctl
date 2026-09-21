@@ -227,7 +227,12 @@ scafctl kube login --server https://api.mycluster.example.com:6443 \
 
 An explicit `--handler` and a resolver-supplied `defaultHandler` both take
 precedence over the detected auth type. When an OIDC cluster is auto-routed to
-`entra` with no audience available, login fails fast asking for `--audience`.
+`entra` with no audience available, login fails fast; the error names only the
+remedies that apply to the cluster's source -- a resolver-sourced cluster is
+told to emit `audience` from the `kube.clusters.resolver` transform, define a
+full `kube.clusters.aliases` entry (server + `oidcAudience`), or pass
+`--audience`, while a direct `--server` invocation is pointed at `--audience`
+alone.
 
 After login, the OpenShift integrated image registry is served through scafctl's
 credential helper -- `docker`/`podman` pulls fetch fresh tokens automatically:

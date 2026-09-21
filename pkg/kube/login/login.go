@@ -64,7 +64,9 @@ var (
 	// scope the minted token. An OIDC token without the cluster's audience
 	// cannot authenticate to the API server, so login fails fast rather than
 	// writing a kubeconfig entry that would reject every subsequent request.
-	ErrNoAudience = errors.New("login: OIDC cluster requires an audience; pass --audience or configure the cluster's oidcAudience")
+	// The error returned by Login wraps this sentinel (see noAudienceError)
+	// with remedies tailored to the layers the cluster was resolved from.
+	ErrNoAudience = errors.New("login: OIDC cluster requires an audience")
 )
 
 // Default auth handler names used by DefaultAuthTypeHandlers to route a detected
@@ -273,12 +275,12 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 		ctx = auth.WithProfile(ctx, req.Profile)
 	}
 
-	info, err := resolveCluster(ctx, deps, req)
+	info, source, err := resolveCluster(ctx, deps, req)
 	if err != nil {
 		return nil, err
 	}
 
-	handler, err := resolveHandler(ctx, deps, req, info)
+	handler, err := resolveHandler(ctx, deps, req, info, source)
 	if err != nil {
 		return nil, err
 	}
@@ -386,7 +388,7 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 // resolveHandler returns the authenticator to use. An explicit Deps.Handler wins;
 // otherwise the handler name comes from the request (explicit --handler) or the
 // resolved cluster's DefaultHandler, and is looked up via Deps.HandlerLookup.
-func resolveHandler(ctx context.Context, deps Deps, req Request, info kube.ClusterInfo) (Authenticator, error) {
+func resolveHandler(ctx context.Context, deps Deps, req Request, info kube.ClusterInfo, source clusterSource) (Authenticator, error) {
 	if deps.Handler != nil {
 		return deps.Handler, nil
 	}
@@ -413,7 +415,7 @@ func resolveHandler(ctx context.Context, deps Deps, req Request, info kube.Clust
 	// a kubeconfig entry that cannot authenticate. An explicitly requested
 	// handler is left to the caller's intent and skips this guard.
 	if usedAuthTypeFallback && info.AuthType == kube.AuthTypeOIDC && info.OIDCAudience == "" {
-		return nil, ErrNoAudience
+		return nil, noAudienceError(source)
 	}
 	if deps.HandlerLookup == nil {
 		return nil, ErrNoHandler
@@ -423,6 +425,22 @@ func resolveHandler(ctx context.Context, deps Deps, req Request, info kube.Clust
 		return nil, fmt.Errorf("resolve auth handler %q: %w", name, err)
 	}
 	return handler, nil
+}
+
+// noAudienceError wraps ErrNoAudience with the remedies that can actually
+// supply the missing audience, based on where the cluster details came from:
+// a resolver-sourced cluster (static kube.clusters alias or dynamic inventory)
+// can gain one from the flag, a transform fix, or a full alias override, while
+// a direct URL/--server invocation has only the per-invocation flag.
+func noAudienceError(source clusterSource) error {
+	if source == sourceResolver {
+		return fmt.Errorf(
+			"%w; pass --audience, emit audience from the kube.clusters.resolver transform, "+
+				"or define a full kube.clusters.aliases entry (server + oidcAudience)",
+			ErrNoAudience,
+		)
+	}
+	return fmt.Errorf("%w; pass --audience", ErrNoAudience)
 }
 
 // populateIdentity runs a best-effort whoami so the result reports the subject.

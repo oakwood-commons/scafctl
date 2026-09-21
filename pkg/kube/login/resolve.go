@@ -13,12 +13,28 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/kubeconfig"
 )
 
+// clusterSource records which layer supplied the resolved cluster details, so
+// remediation hints (e.g. the ErrNoAudience remedies) can name the config
+// layers that were actually consulted rather than every layer that exists.
+type clusterSource int
+
+const (
+	// sourceDirect means the details came from explicit request flags or a
+	// concrete URL argument; no cluster resolver tier was consulted.
+	sourceDirect clusterSource = iota
+
+	// sourceResolver means the details came from Deps.Resolver (a static
+	// kube.clusters alias or the dynamic inventory resolver).
+	sourceResolver
+)
+
 // resolveCluster assembles the cluster connection details from (in priority
 // order) explicit request flags, the configured cluster resolver, and
 // best-effort auto-detection of the authentication method. Explicit flags
 // always override resolved values.
-func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterInfo, error) {
+func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterInfo, clusterSource, error) {
 	var info kube.ClusterInfo
+	source := sourceDirect
 
 	// A concrete http(s) URL argument is used directly as the API server (no
 	// resolver required), and is not treated as the logical cluster name.
@@ -36,9 +52,10 @@ func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterIn
 			// inventory) is non-fatal here: fall back to treating the
 			// positional as a plain cluster name.
 		case err != nil:
-			return kube.ClusterInfo{}, fmt.Errorf("resolve cluster %q: %w", clusterArg, err)
+			return kube.ClusterInfo{}, sourceDirect, fmt.Errorf("resolve cluster %q: %w", clusterArg, err)
 		case resolved != nil:
 			info = *resolved
+			source = sourceResolver
 		}
 	}
 	if info.Name == "" {
@@ -63,7 +80,7 @@ func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterIn
 	}
 
 	if info.APIServerURL == "" {
-		return kube.ClusterInfo{}, ErrNoServer
+		return kube.ClusterInfo{}, source, ErrNoServer
 	}
 
 	// Fall back to a name derived from the server host for the direct
@@ -88,9 +105,9 @@ func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterIn
 	}
 
 	if err := info.Validate(); err != nil {
-		return kube.ClusterInfo{}, err
+		return kube.ClusterInfo{}, source, err
 	}
-	return info, nil
+	return info, source, nil
 }
 
 // isConcreteClusterURL reports whether the cluster argument is already an

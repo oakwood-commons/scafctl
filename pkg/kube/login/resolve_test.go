@@ -28,7 +28,7 @@ func TestResolveCluster_ExplicitFlagsOverrideResolver(t *testing.T) {
 	}
 	deps := Deps{Resolver: resolver, Kubeconfig: &stubKube{}}
 
-	info, err := resolveCluster(context.Background(), deps, Request{
+	info, _, err := resolveCluster(context.Background(), deps, Request{
 		Cluster:         "prod",
 		Server:          "https://override:6443",
 		Audience:        "override-aud",
@@ -44,7 +44,7 @@ func TestResolveCluster_ExplicitFlagsOverrideResolver(t *testing.T) {
 func TestResolveCluster_NoResolverUsesFlags(t *testing.T) {
 	t.Parallel()
 
-	info, err := resolveCluster(context.Background(), Deps{Kubeconfig: &stubKube{}}, Request{
+	info, _, err := resolveCluster(context.Background(), Deps{Kubeconfig: &stubKube{}}, Request{
 		ClusterName: "ignored",
 		Cluster:     "prod",
 		Server:      "https://api.example.com:6443",
@@ -62,7 +62,7 @@ func TestResolveCluster_ConcreteURLArgumentPassthrough(t *testing.T) {
 	resolver := &kube.MockResolver{ResolveResult: &kube.ClusterInfo{Name: "should-not-run"}}
 	deps := Deps{Resolver: resolver, Kubeconfig: &stubKube{}}
 
-	info, err := resolveCluster(context.Background(), deps, Request{
+	info, _, err := resolveCluster(context.Background(), deps, Request{
 		Cluster: "https://api.direct.example.com:6443",
 	})
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestResolveCluster_ConcreteURLArgumentPassthrough(t *testing.T) {
 func TestResolveCluster_MissingServer(t *testing.T) {
 	t.Parallel()
 
-	_, err := resolveCluster(context.Background(), Deps{}, Request{Cluster: "prod"})
+	_, _, err := resolveCluster(context.Background(), Deps{}, Request{Cluster: "prod"})
 	assert.ErrorIs(t, err, ErrNoServer)
 }
 
@@ -85,7 +85,7 @@ func TestResolveCluster_AutoDetect(t *testing.T) {
 	kc := &stubKube{detectRes: kubeconfig.DetectResult{Success: true, AuthType: kube.AuthTypeOIDC}}
 	deps := Deps{Kubeconfig: kc}
 
-	info, err := resolveCluster(context.Background(), deps, Request{
+	info, _, err := resolveCluster(context.Background(), deps, Request{
 		ClusterName: "prod",
 		Server:      "https://api.example.com:6443",
 	})
@@ -100,7 +100,7 @@ func TestResolveCluster_AutoDetectFailureNonFatal(t *testing.T) {
 	kc := &stubKube{detectErr: errors.New("probe failed")}
 	deps := Deps{Kubeconfig: kc}
 
-	info, err := resolveCluster(context.Background(), deps, Request{
+	info, _, err := resolveCluster(context.Background(), deps, Request{
 		ClusterName: "prod",
 		Server:      "https://api.example.com:6443",
 	})
@@ -114,7 +114,7 @@ func TestResolveCluster_ResolverNilResult(t *testing.T) {
 	resolver := &kube.MockResolver{ResolveResult: nil}
 	deps := Deps{Resolver: resolver}
 
-	_, err := resolveCluster(context.Background(), deps, Request{Cluster: "prod"})
+	_, _, err := resolveCluster(context.Background(), deps, Request{Cluster: "prod"})
 	// No server resolved and none supplied.
 	assert.ErrorIs(t, err, ErrNoServer)
 }
@@ -124,7 +124,7 @@ func TestResolveCluster_NameDerivedFromServerHost(t *testing.T) {
 
 	// Direct --server flow with no cluster argument and no --cluster-name:
 	// the name must be derived from the host so Validate() passes.
-	info, err := resolveCluster(context.Background(), Deps{}, Request{
+	info, _, err := resolveCluster(context.Background(), Deps{}, Request{
 		Server: "https://api.example.com:6443",
 	})
 	require.NoError(t, err)
@@ -136,7 +136,7 @@ func TestResolveCluster_NameFallsBackToRawServer(t *testing.T) {
 
 	// A bare host (not a parseable URL with a host component) falls back to the
 	// trimmed raw server string so the name is never empty.
-	info, err := resolveCluster(context.Background(), Deps{}, Request{
+	info, _, err := resolveCluster(context.Background(), Deps{}, Request{
 		Server: "api.example.com:6443",
 	})
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestResolveCluster_InsecureSkipTLSClearsResolverCAData(t *testing.T) {
 	}}
 	deps := Deps{Resolver: resolver, Kubeconfig: &stubKube{}}
 
-	info, err := resolveCluster(context.Background(), deps, Request{
+	info, _, err := resolveCluster(context.Background(), deps, Request{
 		Cluster:         "prod",
 		InsecureSkipTLS: true,
 	})
@@ -174,7 +174,7 @@ func TestResolveCluster_ServerOverrideMakesResolverMissNonFatal(t *testing.T) {
 	resolver := &kube.MockResolver{ResolveErr: errors.New("cluster not found")}
 	deps := Deps{Resolver: resolver, Kubeconfig: &stubKube{}}
 
-	info, err := resolveCluster(context.Background(), deps, Request{
+	info, _, err := resolveCluster(context.Background(), deps, Request{
 		Cluster: "scratch",
 		Server:  "https://api.scratch.example.com:6443",
 	})
@@ -192,7 +192,42 @@ func TestResolveCluster_ResolverMissFatalWithoutServer(t *testing.T) {
 	resolver := &kube.MockResolver{ResolveErr: errors.New("cluster not found")}
 	deps := Deps{Resolver: resolver, Kubeconfig: &stubKube{}}
 
-	_, err := resolveCluster(context.Background(), deps, Request{Cluster: "scratch"})
+	_, _, err := resolveCluster(context.Background(), deps, Request{Cluster: "scratch"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve cluster \"scratch\"")
+}
+
+func TestResolveCluster_ReportsSource(t *testing.T) {
+	t.Parallel()
+
+	resolver := &kube.MockResolver{ResolveResult: &kube.ClusterInfo{
+		Name:         "prod",
+		APIServerURL: "https://api.example.com:6443",
+	}}
+	miss := &kube.MockResolver{ResolveErr: errors.New("cluster not found")}
+	deps := Deps{Resolver: resolver, Kubeconfig: &stubKube{}}
+
+	// A resolver-supplied entry is resolver-sourced even when explicit flags
+	// override some of its fields.
+	_, source, err := resolveCluster(context.Background(), deps, Request{
+		Cluster: "prod",
+		Server:  "https://override:6443",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sourceResolver, source)
+
+	// A concrete URL argument and a resolver miss with --server are both
+	// direct-sourced: no resolver tier supplied the details.
+	_, source, err = resolveCluster(context.Background(), deps, Request{
+		Cluster: "https://api.example.com:6443",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sourceDirect, source)
+
+	_, source, err = resolveCluster(context.Background(), Deps{Resolver: miss, Kubeconfig: &stubKube{}}, Request{
+		Cluster: "scratch",
+		Server:  "https://api.scratch.example.com:6443",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, sourceDirect, source)
 }
