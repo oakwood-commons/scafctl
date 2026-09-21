@@ -429,18 +429,35 @@ func resolveHandler(ctx context.Context, deps Deps, req Request, info kube.Clust
 
 // noAudienceError wraps ErrNoAudience with the remedies that can actually
 // supply the missing audience, based on where the cluster details came from:
-// a resolver-sourced cluster (static kube.clusters alias or dynamic inventory)
-// can gain one from the flag, a transform fix, or a full alias override, while
-// a direct URL/--server invocation has only the per-invocation flag.
+// an alias-defined cluster can only gain one via the flag or its own aliases
+// entry (the resolver transform is shadowed by the alias), an
+// inventory-resolved cluster via the flag, the transform, or a full alias
+// override, a named cluster resolved from flags additionally via a newly
+// defined alias entry, and a direct URL/--server invocation has only the
+// per-invocation flag.
 func noAudienceError(source clusterSource) error {
-	if source == sourceResolver {
+	switch source {
+	case sourceResolver:
 		return fmt.Errorf(
 			"%w; pass --audience, emit audience from the kube.clusters.resolver transform, "+
 				"or define a full kube.clusters.aliases entry (server + oidcAudience)",
 			ErrNoAudience,
 		)
+	case sourceResolverAlias:
+		return fmt.Errorf(
+			"%w; pass --audience, or add oidcAudience to the cluster's kube.clusters.aliases entry",
+			ErrNoAudience,
+		)
+	case sourceNamed:
+		return fmt.Errorf(
+			"%w; pass --audience, or define a full kube.clusters.aliases entry for this cluster (server + oidcAudience)",
+			ErrNoAudience,
+		)
+	case sourceDirect:
+		return fmt.Errorf("%w; pass --audience", ErrNoAudience)
+	default:
+		return fmt.Errorf("%w; pass --audience", ErrNoAudience)
 	}
-	return fmt.Errorf("%w; pass --audience", ErrNoAudience)
 }
 
 // populateIdentity runs a best-effort whoami so the result reports the subject.

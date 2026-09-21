@@ -216,18 +216,55 @@ func TestResolveCluster_ReportsSource(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, sourceResolver, source)
 
-	// A concrete URL argument and a resolver miss with --server are both
-	// direct-sourced: no resolver tier supplied the details.
+	// A concrete URL argument is direct-sourced: no name exists, so a
+	// durable kube.clusters.aliases entry is not possible.
 	_, source, err = resolveCluster(context.Background(), deps, Request{
 		Cluster: "https://api.example.com:6443",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, sourceDirect, source)
 
+	// A named cluster that missed the resolver but has --server is
+	// named-sourced: defining a kube.clusters.aliases entry for it would
+	// supply the audience on the next run.
 	_, source, err = resolveCluster(context.Background(), Deps{Resolver: miss, Kubeconfig: &stubKube{}}, Request{
 		Cluster: "scratch",
 		Server:  "https://api.scratch.example.com:6443",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, sourceDirect, source)
+	assert.Equal(t, sourceNamed, source)
+
+	// A resolver reporting alias provenance marks alias-supplied entries as
+	// alias-sourced; the same resolver reporting inventory stays resolver.
+	for _, tt := range []struct {
+		fromAlias bool
+		want      clusterSource
+	}{
+		{true, sourceResolverAlias},
+		{false, sourceResolver},
+	} {
+		prov := &fakeAliasResolver{
+			MockResolver: kube.MockResolver{ResolveResult: &kube.ClusterInfo{
+				Name:         "prod",
+				APIServerURL: "https://api.example.com:6443",
+			}},
+			fromAlias: tt.fromAlias,
+		}
+		_, source, err = resolveCluster(context.Background(),
+			Deps{Resolver: prov, Kubeconfig: &stubKube{}}, Request{Cluster: "prod"})
+		require.NoError(t, err)
+		assert.Equal(t, tt.want, source)
+	}
+}
+
+// fakeAliasResolver implements the optional alias provenance capability on
+// top of MockResolver, for testing resolver-tier provenance reporting.
+type fakeAliasResolver struct {
+	kube.MockResolver
+	fromAlias bool
+}
+
+func (f *fakeAliasResolver) ResolveFromAlias(ctx context.Context, name string) (*kube.ClusterInfo, bool, error) {
+	info, err := f.Resolve(ctx, name)
+	return info, f.fromAlias, err
 }

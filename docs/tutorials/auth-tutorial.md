@@ -2671,10 +2671,14 @@ stamp `defaultHandler` / `authType` / `audience` on every entry and users just
 run `kube login <cluster>`. When an OIDC cluster is auto-routed to `entra` but
 no audience is available, login fails fast rather than writing a kubeconfig
 entry that cannot authenticate; the error names the remedies that apply to the
-cluster's source -- for a resolver-sourced cluster, emit `audience` from the
-`kube.clusters.resolver` transform, define a full `kube.clusters.aliases`
-entry (server + `oidcAudience`), or pass `--audience`, while a direct
-`--server` invocation is pointed at `--audience` alone.
+cluster's source -- an alias-defined cluster is told to add `oidcAudience` to
+its `kube.clusters.aliases` entry (the alias shadows the inventory, so the
+transform cannot fix it); an inventory-resolved cluster to emit `audience`
+from the `kube.clusters.resolver` transform, define a full
+`kube.clusters.aliases` entry (server + `oidcAudience`), or pass
+`--audience`; a named cluster resolved from flags (a resolver miss with
+`--server`) to define a full alias entry or pass `--audience`; and a direct
+`--server` invocation to pass `--audience` alone.
 
 Once logged in, the OpenShift integrated image registry is served through
 scafctl's credential helper, so `docker`/`podman` pulls fetch fresh tokens

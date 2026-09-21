@@ -102,6 +102,19 @@ func (r *Resolver) Resolve(ctx context.Context, name string) (*kube.ClusterInfo,
 	return nil, fmt.Errorf("%w: %q", ErrClusterNotFound, name)
 }
 
+// ResolveFromAlias resolves the named cluster exactly like Resolve and
+// additionally reports whether a static kube.clusters.aliases entry (rather
+// than the dynamic inventory) supplied it. It implements the optional
+// provenance capability consumed by pkg/kube/login: a static alias shadows
+// the inventory wholesale, so remediation hints must not offer the resolver
+// transform as a fix for an alias-defined cluster. Provenance is reported
+// only on success; errors carry no tier.
+func (r *Resolver) ResolveFromAlias(ctx context.Context, name string) (*kube.ClusterInfo, bool, error) {
+	_, fromAlias := r.cfg.Aliases[name]
+	info, err := r.Resolve(ctx, name)
+	return info, fromAlias && err == nil && info != nil, err
+}
+
 // List returns all known clusters (static aliases plus dynamic inventory
 // entries) for shell completion. Static aliases take precedence over inventory
 // entries of the same name. When the inventory cannot be fetched, the static
