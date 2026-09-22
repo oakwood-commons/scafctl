@@ -2845,7 +2845,7 @@ func lintStateEmit(sol *solution.Solution, result *Result, registry providerLook
 			"missing-state-emit-backend", "invalid-state-emit-backend") {
 			continue
 		}
-		lintNilInputs(target.Backend.Inputs, location, result)
+		lintNilInputs(target.Inputs, location, result)
 	}
 }
 

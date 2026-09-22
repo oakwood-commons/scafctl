@@ -359,8 +359,8 @@ func (m *Manager) commit(ctx context.Context, stateData *Data, resolverData, mer
 		}
 		if !enabled {
 			result.Emits = append(result.Emits, BackendWrite{
-				Provider: target.Backend.Provider,
-				Format:   normalizeFormat(target.Backend.Format),
+				Provider: target.Provider,
+				Format:   normalizeFormat(target.Format),
 				Skipped:  true,
 			})
 			continue
