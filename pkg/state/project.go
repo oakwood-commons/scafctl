@@ -49,9 +49,9 @@ type IntentMetadata struct {
 }
 
 // projectState converts a state Data document into the shape a backend's
-// state_save should receive, according to format. It is the single place that
-// defines what each Backend.Format value means; both the primary backend and
-// every Config.Emit target route their save payload through it.
+// state_save should receive, according to backend.Format. It is the single
+// place that defines what each Backend.Format value means; both the primary
+// backend and every Config.Emit target route their save payload through it.
 //
 // The return value is always a map[string]any (via a JSON round-trip through
 // structToMap), because the provider executor's JSON-schema validator can only
@@ -60,22 +60,78 @@ type IntentMetadata struct {
 // An empty format string is treated as FormatFull, matching the zero value of
 // Backend.Format (so an unset Format behaves exactly as state behaved before
 // Format existed).
-func projectState(d *Data, format string) (map[string]any, error) {
-	switch format {
+func projectState(d *Data, backend Backend) (map[string]any, error) {
+	switch backend.Format {
 	case "", FormatFull:
 		return structToMap(d)
 	case FormatIntent:
+		if p := backend.Parameters; p != nil && len(p.Include) > 0 && len(p.Exclude) > 0 {
+			// Defense in depth: lint already rejects this combination for any
+			// solution loaded from YAML, but projectState is also reachable
+			// from a hand-constructed Backend (an embedder, or future internal
+			// caller) that never went through lint. Enforce the invariant here
+			// too, at the one place that actually executes it, rather than
+			// silently letting Include win.
+			return nil, fmt.Errorf("state: backend parameters narrowing cannot set both include and exclude")
+		}
 		intent := Intent{
 			SchemaVersion: d.SchemaVersion,
 			Metadata: IntentMetadata{
 				Solution: d.Metadata.Solution,
 				Version:  d.Metadata.Version,
 			},
-			Parameters:  d.Parameters,
+			Parameters:  narrowParameters(d.Parameters, backend.Parameters),
 			Attestation: d.Attestation,
 		}
 		return structToMap(intent)
 	default:
-		return nil, fmt.Errorf("state: unknown backend format %q (valid: %q, %q)", format, FormatFull, FormatIntent)
+		return nil, fmt.Errorf("state: unknown backend format %q (valid: %q, %q)", backend.Format, FormatFull, FormatIntent)
 	}
+}
+
+// narrowParameters applies an intent-format backend's Parameters projection
+// spec to a saved parameter set. A nil spec is a no-op (every parameter is
+// projected, matching behavior before this field existed). Include is an
+// allowlist (intersection); Exclude is a denylist (difference). Callers
+// (projectState) guarantee Include and Exclude are not both set -- lint
+// rejects that combination for any YAML-authored solution, and projectState
+// itself rejects it as a defense-in-depth check before calling this helper --
+// so this function does not need to arbitrate between them.
+//
+// The result is always a fresh map, even when params is empty or the spec
+// selects nothing, so callers never observe the original map's identity.
+func narrowParameters(params map[string]any, projection *ParameterProjection) map[string]any {
+	if projection == nil {
+		return params
+	}
+
+	result := make(map[string]any, len(params))
+
+	if len(projection.Include) > 0 {
+		for _, name := range projection.Include {
+			if v, ok := params[name]; ok {
+				result[name] = v
+			}
+		}
+		return result
+	}
+
+	if len(projection.Exclude) > 0 {
+		excluded := make(map[string]bool, len(projection.Exclude))
+		for _, name := range projection.Exclude {
+			excluded[name] = true
+		}
+		for k, v := range params {
+			if !excluded[k] {
+				result[k] = v
+			}
+		}
+		return result
+	}
+
+	// Spec present but both lists empty: no-op, matching a nil spec.
+	for k, v := range params {
+		result[k] = v
+	}
+	return result
 }

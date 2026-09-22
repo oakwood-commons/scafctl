@@ -12,6 +12,10 @@
 #     "intent" format: just schemaVersion, metadata.solution/version, and
 #     parameters. No timestamps, no resolver locks, no fingerprints --
 #     deterministic and stable enough to commit and sign.
+#   - The emit target also NARROWS its parameters with `parameters.exclude`:
+#     `mode` is a run-control parameter (not part of this solution's domain),
+#     so it is saved to the full local file but deliberately excluded from
+#     the committed intent.
 #   - Both files are written on every save. Only the intent file is meant to
 #     be committed; the full state file is a local working copy.
 #
@@ -23,7 +27,7 @@
 #
 # Usage:
 #   # First run -- provide inputs via CLI parameters
-#   scafctl run resolver -f solution.yaml -r appName=my-app -r deploymentId=deploy-abc123
+#   scafctl run resolver -f solution.yaml -r appName=my-app -r deploymentId=deploy-abc123 -r mode=publish
 #
 #   # Stderr reports what happened (first run, then both writes):
 #   #   state: no prior state at state-emit-full.json (first run)
@@ -31,13 +35,14 @@
 #   #   state: emitted state-emit-intent.json (intent)
 #
 #   # Inspect both files
-#   cat state-emit-full.json      # full document: has "resolvers" (the lock)
-#   cat state-emit-intent.json    # lean document: no "resolvers" section
+#   cat state-emit-full.json      # full document: has "resolvers" AND "mode"
+#   cat state-emit-intent.json    # lean document: no "resolvers", no "mode"
+#                                  # (narrowed out by parameters.exclude)
 #
 #   # Second run -- parameters replay from the FULL file (the primary, used
 #   # for load); the immutable deploymentId is verified against its lock.
 #   # Stderr now reports a replay instead of a first run:
-#   #   state: reusing 2 parameter(s) and 1 locked value(s) from state-emit-full.json
+#   #   state: reusing 3 parameter(s) and 1 locked value(s) from state-emit-full.json
 #   scafctl run resolver -f solution.yaml
 #
 #   # Replay from the committed INTENT file instead, as a pipeline would:
@@ -70,6 +75,12 @@ state:
   emit:
     - provider: file
       format: intent
+      # Only the domain parameters (appName, deploymentId) reach the
+      # committed intent -- "mode" is a run-control parameter and is
+      # deliberately excluded. See docs/design/state/state.md, "Parameter
+      # Narrowing".
+      parameters:
+        exclude: ["mode"]
       inputs:
         path: "state-emit-intent.json"
 
@@ -89,6 +100,26 @@ spec:
           - provider: static
             inputs:
               value: "demo-app"
+
+    # =========================================================================
+    # Run-control resolver -- saved to the full local state (so it replays for
+    # this example's own convenience), but excluded from the committed intent
+    # via the emit target's parameters.exclude above. A real solution would use
+    # this the way the managed-scaffold pipeline's "mode" parameter works: to
+    # switch behavior locally without that switch ever becoming part of the
+    # signed, published artifact.
+    # =========================================================================
+    mode:
+      description: Run-control switch (never part of the published intent)
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "mode"
+          - provider: static
+            inputs:
+              value: "publish"
 
     # =========================================================================
     # Immutable resolver -- locked in the FULL state, absent from the intent
@@ -117,5 +148,5 @@ spec:
         provider: message
         inputs:
           message:
-            expr: "'app=' + _.appName + ' deployment=' + _.deploymentId"
+            expr: "'app=' + _.appName + ' deployment=' + _.deploymentId + ' mode=' + _.mode"
           type: success

@@ -132,6 +132,7 @@ State is declared via a top-level `state` field on the `Solution` struct, as a p
 |-------|------|----------|-------------|
 | `provider` | `string` | Yes | Name of a registered provider with `CapabilityState` (e.g., `"file"`) |
 | `format` | `string` | No | Save-time projection: `"full"` (default) saves the complete state document; `"intent"` saves the lean, replay-relevant projection. Does not affect load. See [Emit Targets](#emit-targets) |
+| `parameters` | `object` | No | Narrows which parameters an `"intent"`-format projection carries. Only valid when `format` is `"intent"` -- lint rejects it on a `"full"` (or unset) backend. See [Parameter Narrowing](#parameter-narrowing) |
 | `inputs` | `map[string]*ValueRef` | Yes | Provider-specific inputs resolved at **both** load and save time. Must only use `literal`, `__params` expressions, or templates -- resolver references (`rslvr:`) and `_` in CEL are not available at load time. **Exception:** an `Emit` target's `inputs` are save-only (like `saveOverrides`), so they may use `_` and resolver references freely. |
 | `saveOverrides` | `map[string]*ValueRef` | No | Provider-specific inputs resolved **only** at save time. Can use resolver references (`rslvr:`), `_` in CEL, and all other ValueRef forms. Keys that overlap with `inputs` override them at save time. |
 
@@ -318,6 +319,66 @@ The two ways to resolve the warning:
   -- the full-fidelity primary still enforces the immutable lock.
 - Remove `immutable: true` if that resolver's cross-run consistency genuinely
   does not need enforcing.
+
+### Parameter Narrowing
+
+`Backend.Parameters` (used by both the primary backend and each `emit`
+target) narrows which saved parameters an `"intent"`-format backend projects.
+It is only meaningful under `format: intent` -- `scafctl lint` rejects it on a
+`"full"` (or unset) backend (`invalid-state-parameter-narrowing`), because
+narrowing the authoritative state document would silently drop a parameter
+the solution still relies on for replay, with no error to catch it.
+
+| Field | Type | Description |
+|-------|------|--------------|
+| `include` | `[]string` | Allowlist: only these parameter names are projected. Every other saved parameter is dropped. |
+| `exclude` | `[]string` | Denylist: every saved parameter is projected except these names. |
+
+`include` and `exclude` are mutually exclusive -- setting both is a lint error
+(`conflicting-state-parameter-narrowing`).
+
+**Why this exists.** An intent document is meant to be committed and signed,
+so it should carry only the parameters that are actually part of the
+solution's domain -- not run-control parameters like a publish/generate mode
+switch, or destination coordinates for a one-off publish step. Without
+narrowing, *every* saved parameter reaches the intent, including those.
+
+**Choosing `include` vs `exclude`.** `include` is the safer default: an
+unlisted parameter is silently dropped, so a parameter added to the solution
+later can never leak into the committed intent by omission. `exclude` is more
+practical for a solution with a large, evolving parameter surface, where
+hand-maintaining an allowlist would be a constant chore -- there, denying the
+small, stable set of non-domain parameters is the tractable list to keep
+current.
+
+A name in `include` that never appears in the saved parameters this run is
+silently dropped, not an error -- which parameters are actually present
+legitimately varies run to run (a solution may accept optional parameters).
+
+~~~yaml
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs: { path: ".scafctl/state.json" }   # full local working copy
+  emit:
+    - provider: file
+      format: intent
+      parameters:
+        include: [appName, environment, replicas]   # domain params only
+      inputs: { path: "intent.json" }                # committed, signed
+spec:
+  resolvers:
+    appName: { type: string, resolve: { with: [{ provider: parameter, inputs: { key: appName } }] } }
+    environment: { type: string, resolve: { with: [{ provider: parameter, inputs: { key: environment } }] } }
+    replicas: { type: string, resolve: { with: [{ provider: parameter, inputs: { key: replicas } }] } }
+    # A run-control parameter that must never reach the committed intent:
+    mode: { type: string, resolve: { with: [{ provider: parameter, inputs: { key: mode } }] } }
+~~~
+
+The full local backend still saves `mode` (nothing about the primary backend
+changes); only the emitted `intent.json` is narrowed to `appName`,
+`environment`, and `replicas`.
 
 ### Dynamic `enabled` Field
 
@@ -543,9 +604,9 @@ Solution identity (name, version) is already in `metadata` and does not need to 
 
 ### Storage Location
 
-The built-in `file` provider backend resolves relative state paths against the solution file's parent directory (via `provider.SolutionDirectoryFromContext`). This keeps state files co-located with the solution that owns them. Absolute paths are used as-is.
+The built-in `file` provider backend resolves relative state paths against the current working directory (via `provider.GetWorkingDirectory`: the context working directory if set, otherwise the process CWD). This matches the CLI state commands below, so both agree on the same file. Absolute paths are used as-is.
 
-CLI state commands (`scafctl state list`, `get`, `set`, `delete`, `clear`) resolve relative `--path` values against the current working directory.
+CLI state commands (`scafctl state list`, `get`, `set`, `delete`, `clear`) resolve relative `--path` values against the current working directory too.
 
 ---
 
@@ -638,14 +699,14 @@ The built-in `file` provider supports state persistence via `CapabilityState`. S
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `operation` | string (enum: `state_load`, `state_save`, `state_delete`) | Yes | Operation to perform |
-| `path` | string | Yes | File path (relative to solution directory, or absolute) |
+| `path` | string | Yes | File path (relative to the current working directory, or absolute) |
 | `data` | object | For `state_save` | The full `Data` object to persist |
 
 ### Operations
 
 | Operation | Behavior |
 |-----------|----------|
-| `state_load` | Reads JSON from the resolved path (relative to solution directory). Reports `found: false` (fresh state) if the file does not exist (first run). |
+| `state_load` | Reads JSON from the resolved path (relative to the current working directory). Reports `found: false` (fresh state) if the file does not exist (first run). |
 | `state_save` | Writes `Data` as JSON to the resolved path. Creates directories as needed. Uses atomic write (temp + rename). |
 | `state_delete` | Removes the state file at the resolved path. |
 

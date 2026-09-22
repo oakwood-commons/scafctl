@@ -408,7 +408,7 @@ func (m *Manager) saveToBackend(ctx context.Context, backend Backend, stateData 
 	// Project stateData into the shape this backend's Format calls for, then
 	// convert to map[string]any so the provider executor's JSON-schema
 	// validator can inspect the value (it cannot validate Go structs directly).
-	dataMap, err := projectState(stateData, backend.Format)
+	dataMap, err := projectState(stateData, backend)
 	if err != nil {
 		return BackendWrite{}, fmt.Errorf("state: project state data: %w", err)
 	}

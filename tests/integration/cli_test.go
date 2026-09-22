@@ -2513,6 +2513,127 @@ spec:
 	assert.Contains(t, stderr, "emitted intent.json (intent)", "the emit target write must be reported")
 }
 
+// TestIntegration_RunResolver_StateEmit_ParameterNarrowing verifies that an
+// emit target's parameters.include projection actually reaches the file on
+// disk: a control parameter (mode) is saved to the full local state but must
+// not appear in the narrowed, committed intent.
+func TestIntegration_RunResolver_StateEmit_ParameterNarrowing(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-emit-narrowing
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: full-state.json
+  emit:
+    - provider: file
+      format: intent
+      parameters:
+        include: [appName]
+      inputs:
+        path: intent.json
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+    mode:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: mode
+          - provider: static
+            inputs:
+              value: publish
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, _, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath, "-r", "appName=my-app", "-r", "mode=generate")
+	require.Equal(t, 0, exitCode)
+
+	fullRaw, err := os.ReadFile(filepath.Join(tmpDir, "full-state.json")) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	var full map[string]any
+	require.NoError(t, json.Unmarshal(fullRaw, &full))
+	fullParams, ok := full["parameters"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "generate", fullParams["mode"], "the primary (full) backend must carry every parameter, unnarrowed")
+
+	intentRaw, err := os.ReadFile(filepath.Join(tmpDir, "intent.json")) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	var intent map[string]any
+	require.NoError(t, json.Unmarshal(intentRaw, &intent))
+	intentParams, ok := intent["parameters"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"appName": "my-app"}, intentParams, "the narrowed emit target must carry only the included parameter")
+}
+
+// TestIntegration_RunResolver_StatePathResolvesAgainstCWD_NotSolutionDir
+// verifies the 1A fix end-to-end: a relative state path resolves against the
+// process's current working directory, not the directory containing the
+// solution file being run. This matters most for a catalog solution, whose
+// solution directory is a temp extraction the user never sees; using CWD
+// keeps the state file where the state CLI subcommands (scafctl state show,
+// etc., which already resolved relative paths against CWD) will find it too.
+func TestIntegration_RunResolver_StatePathResolvesAgainstCWD_NotSolutionDir(t *testing.T) {
+	t.Parallel()
+
+	// Solution lives in its own directory, separate from where the command
+	// is run -- mirrors a catalog solution extracted somewhere the user
+	// doesn't control.
+	solutionDir := t.TempDir()
+	workDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-cwd-resolution
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+`
+	solutionPath := filepath.Join(solutionDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, _, exitCode := runScafctlInDir(t, workDir, "run", "resolver", "-f", solutionPath, "-r", "appName=my-app")
+	require.Equal(t, 0, exitCode)
+
+	assert.FileExists(t, filepath.Join(workDir, "state.json"), "a relative state path must resolve against the process's working directory")
+	assert.NoFileExists(t, filepath.Join(solutionDir, "state.json"), "a relative state path must NOT resolve against the solution's own directory")
+}
+
 // TestIntegration_RunResolver_StateIndicators_SkippedEmitIsSilent verifies
 // that an Emit target disabled by its Enabled condition produces NO save
 // line -- only the primary's "updated" line is reported.

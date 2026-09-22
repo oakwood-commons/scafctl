@@ -2756,6 +2756,12 @@ func lintStateBackend(sol *solution.Solution, result *Result, registry providerL
 // empty, so the caller can skip further backend-dependent checks (there is
 // nothing more to validate against an unspecified provider).
 func lintBackendProviderAndFormat(backend state.Backend, location string, result *Result, registry providerLookup, missingRule, invalidRule string) bool {
+	// Parameter narrowing is validated regardless of whether the provider
+	// itself is present or valid -- it is an independent problem a user
+	// should see reported together with any provider issue, not only after
+	// fixing the provider and re-running lint.
+	lintBackendParameterNarrowing(backend, location, result)
+
 	if backend.Provider == "" {
 		result.addFinding(SeverityError, "state", location+".provider",
 			"state backend provider is not specified",
@@ -2800,6 +2806,32 @@ func lintBackendProviderAndFormat(backend state.Backend, location string, result
 	}
 
 	return true
+}
+
+// lintBackendParameterNarrowing validates a Backend's Parameters projection
+// spec: it is only meaningful under format: intent (narrowing the
+// authoritative "full" state document would silently break replay -- a
+// resolver-persisted value or a resolver's own fallback the caller didn't
+// pass this run would be missing on the next load with nothing to detect
+// it), and Include/Exclude are mutually exclusive.
+func lintBackendParameterNarrowing(backend state.Backend, location string, result *Result) {
+	if backend.Parameters == nil {
+		return
+	}
+
+	if backend.Format != state.FormatIntent {
+		result.addFinding(SeverityError, "state", location+".parameters",
+			"state.parameters narrowing is only valid with format: intent",
+			fmt.Sprintf("Remove %s.parameters, or set %s.format to %q -- narrowing a %q (or unset) backend would silently drop parameters from the authoritative state document, breaking replay", location, location, state.FormatIntent, state.FormatFull),
+			"invalid-state-parameter-narrowing")
+	}
+
+	if len(backend.Parameters.Include) > 0 && len(backend.Parameters.Exclude) > 0 {
+		result.addFinding(SeverityError, "state", location+".parameters",
+			fmt.Sprintf("%s.parameters.include and %s.parameters.exclude are mutually exclusive", location, location),
+			"Set only one of include or exclude",
+			"conflicting-state-parameter-narrowing")
+	}
 }
 
 // lintStateEmit validates each Config.Emit target: provider registration and

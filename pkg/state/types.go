@@ -144,6 +144,13 @@ type Backend struct {
 	// unaffected by Format -- decoding already tolerates a lean document.
 	Format string `json:"format,omitempty" yaml:"format,omitempty" doc:"Save-time projection: full (default) or intent" enum:"full,intent" example:"intent"`
 
+	// Parameters narrows which parameters an "intent"-format projection carries
+	// (see FormatIntent). Only meaningful when Format is "intent" -- lint rejects
+	// it on a "full" (or unset) backend, since narrowing the authoritative state
+	// document would silently break replay. Nil means no narrowing: every saved
+	// parameter is projected, as before this field existed.
+	Parameters *ParameterProjection `json:"parameters,omitempty" yaml:"parameters,omitempty" doc:"Narrow which parameters an intent-format projection carries (intent format only)"`
+
 	// Inputs are provider-specific inputs. Each value is a ValueRef for dynamic resolution.
 	//
 	// CEL expressions use __params for CLI parameters (e.g. __params.project) and _
@@ -169,6 +176,32 @@ type Backend struct {
 	// are save-only already -- an Emit target's Inputs may reference resolvers
 	// directly.
 	SaveOverrides map[string]*spec.ValueRef `json:"saveOverrides,omitempty" yaml:"saveOverrides,omitempty" doc:"Save-time-only inputs that override Inputs keys"`
+}
+
+// ParameterProjection narrows which parameters an "intent"-format backend
+// projects (see Backend.Parameters and FormatIntent). Include and Exclude are
+// mutually exclusive -- lint rejects setting both.
+//
+// Include is the safer default for a new solution: an unlisted parameter is
+// silently dropped from the committed intent, so a newly-added control
+// parameter can never leak by omission. Exclude is more practical for a
+// solution with a large, evolving parameter surface, where hand-maintaining an
+// allowlist would be a constant maintenance burden -- there, denying the small,
+// stable set of non-domain parameters (e.g. a run-mode switch) is the
+// tractable list to keep current.
+//
+// A name in Include that never appears in the saved parameters is silently
+// ignored (not an error): which parameters are actually present legitimately
+// varies run to run (a solution may accept optional parameters), so an
+// allowlist naming one that happens to be absent this run is not a mistake.
+type ParameterProjection struct {
+	// Include, when set, is an allowlist: only these parameter names are
+	// projected. All other saved parameters are dropped.
+	Include []string `json:"include,omitempty" yaml:"include,omitempty" doc:"Allowlist: only these parameter names are projected" maxItems:"200"`
+
+	// Exclude, when set, is a denylist: every saved parameter is projected
+	// except these names.
+	Exclude []string `json:"exclude,omitempty" yaml:"exclude,omitempty" doc:"Denylist: every saved parameter is projected except these names" maxItems:"200"`
 }
 
 // EmitTarget is one additional, save-only projected state emission. It embeds

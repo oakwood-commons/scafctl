@@ -2803,6 +2803,198 @@ func TestLintState_FormatLossyWithImmutable_EmitDoesNotTrigger(t *testing.T) {
 	assert.Empty(t, filterFindingsByRule(result, "state-format-lossy-with-immutable"))
 }
 
+func TestLintState_ParameterNarrowing_ValidOnIntentPrimary(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"appName": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider:   "file",
+				Format:     state.FormatIntent,
+				Parameters: &state.ParameterProjection{Include: []string{"appName"}},
+				Inputs:     map[string]*spec.ValueRef{"path": {Literal: "intent.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	assert.Empty(t, filterFindingsByRule(result, "invalid-state-parameter-narrowing"))
+	assert.Empty(t, filterFindingsByRule(result, "conflicting-state-parameter-narrowing"))
+}
+
+func TestLintState_ParameterNarrowing_InvalidOnFullPrimary(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"appName": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider:   "file",
+				Parameters: &state.ParameterProjection{Include: []string{"appName"}},
+				Inputs:     map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "invalid-state-parameter-narrowing")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityError, findings[0].Severity)
+}
+
+func TestLintState_ParameterNarrowing_InvalidOnUnsetFormatPrimary(t *testing.T) {
+	// An unset Format defaults to full at runtime -- narrowing must be
+	// rejected exactly as it is for an explicit format: full.
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"appName": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider:   "file",
+				Parameters: &state.ParameterProjection{Exclude: []string{"mode"}},
+				Inputs:     map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	require.Len(t, filterFindingsByRule(result, "invalid-state-parameter-narrowing"), 1)
+}
+
+func TestLintState_ParameterNarrowing_ConflictingIncludeAndExclude(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"appName": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Format:   state.FormatIntent,
+				Parameters: &state.ParameterProjection{
+					Include: []string{"appName"},
+					Exclude: []string{"mode"},
+				},
+				Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "conflicting-state-parameter-narrowing")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityError, findings[0].Severity)
+	// A valid format (intent) means the format-mismatch rule must not also fire.
+	assert.Empty(t, filterFindingsByRule(result, "invalid-state-parameter-narrowing"))
+}
+
+func TestLintState_ParameterNarrowing_AppliesToEmitTargetToo(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"appName": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: ".scafctl/state.json"}},
+			},
+			Emit: []state.EmitTarget{
+				{
+					Backend: state.Backend{
+						Provider:   "file",
+						Parameters: &state.ParameterProjection{Include: []string{"appName"}},
+						Inputs:     map[string]*spec.ValueRef{"path": {Literal: "intent/sandbox.json"}},
+					},
+				},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	// The emit target's Format is unset (defaults to full at runtime), so
+	// narrowing it is invalid exactly like the primary case.
+	findings := filterFindingsByRule(result, "invalid-state-parameter-narrowing")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Location, "state.emit[0]")
+}
+
+func TestLintState_ParameterNarrowing_ReportedEvenWithoutProvider(t *testing.T) {
+	// A backend with no provider at all still gets its own missing-provider
+	// finding, but the narrowing problem must be reported in the SAME lint
+	// pass -- not hidden until the user fixes the provider and re-runs lint.
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"appName": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider:   "",
+				Parameters: &state.ParameterProjection{Include: []string{"appName"}},
+				Inputs:     map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+
+	result := Solution(sol, "test.yaml", reg)
+	assert.Len(t, filterFindingsByRule(result, "missing-state-backend"), 1)
+	assert.Len(t, filterFindingsByRule(result, "invalid-state-parameter-narrowing"), 1,
+		"narrowing on a full/unset-format backend must be reported even when the provider is also missing")
+}
+
 func TestLintResolveForEach(t *testing.T) {
 	prov := newFakeProvider("http", map[string]*jsonschema.Schema{
 		"url": {Type: "string"},

@@ -583,6 +583,25 @@ var KnownRules = map[string]RuleMeta{
 			"# Keep full fidelity primary; publish a lean intent as an emit target:\nstate:\n  enabled: true\n  backend:\n    provider: file\n    inputs:\n      path: \".scafctl/state.json\"\n  emit:\n    - provider: file\n      format: intent\n      inputs:\n        path: \"intent/sandbox.json\"",
 		},
 	},
+	"invalid-state-parameter-narrowing": {
+		Rule:        "invalid-state-parameter-narrowing",
+		Severity:    string(SeverityError),
+		Category:    "state",
+		Description: "A backend's parameters narrowing (include/exclude) is set, but its format is not \"intent\".",
+		Why:         "Parameter narrowing only applies to the lean intent projection. Narrowing a \"full\" (or unset) backend would silently drop parameters from the authoritative state document -- a value dropped from the committed record but still relied on for replay would go missing with no error.",
+		Fix:         "Either remove the backend's parameters narrowing, or set format: intent on that backend.",
+		Examples: []string{
+			"state:\n  enabled: true\n  backend:\n    provider: file\n    format: intent\n    parameters:\n      include: [\"appName\", \"environment\"]\n    inputs:\n      path: \"intent.json\"",
+		},
+	},
+	"conflicting-state-parameter-narrowing": {
+		Rule:        "conflicting-state-parameter-narrowing",
+		Severity:    string(SeverityError),
+		Category:    "state",
+		Description: "A backend's parameters narrowing sets both include and exclude.",
+		Why:         "include (an allowlist) and exclude (a denylist) are two different ways of expressing the same projection; setting both is ambiguous about which one wins.",
+		Fix:         "Set only one of parameters.include or parameters.exclude on the backend.",
+	},
 	"immutable-requires-state": {
 		Rule:        "immutable-requires-state",
 		Severity:    string(SeverityError),

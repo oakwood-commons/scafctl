@@ -143,10 +143,19 @@ func (p *FileProvider) dispatchStateOperation(ctx context.Context, operation str
 		return p.executeStateDryRun(operation)
 	}
 
-	// Use solution directory as base for relative state paths.
-	// Falls back to empty string which ResolveStatePath rejects for relative paths,
-	// ensuring callers must provide an explicit base directory.
-	baseDir, _ := provider.SolutionDirectoryFromContext(ctx)
+	// Resolve relative state paths against the effective working directory
+	// (context working directory if set, else the process CWD) -- the same
+	// base every `scafctl state` CLI subcommand already uses (state show,
+	// state get, state delete, state clear, state fingerprints). Previously
+	// this resolved against the solution's directory instead, which put a
+	// relative state path in a different location than those subcommands
+	// would look for it -- for a catalog solution (extracted to a temp
+	// directory), the solution directory isn't even a location the user has
+	// access to.
+	baseDir, err := provider.GetWorkingDirectory(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: resolve working directory: %w", ProviderName, err)
+	}
 
 	absPath, err := state.ResolveStatePath(statePath, baseDir)
 	if err != nil {

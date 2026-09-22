@@ -125,13 +125,13 @@ team: default
 username: alice
 ```
 
-The parameters `username=alice` and `region=eu-west-1` are now saved to `state-demo.json` in the solution file's parent directory.
+The parameters `username=alice` and `region=eu-west-1` are now saved to `state-demo.json` in the current working directory (where the command above was run).
 
 ### Understanding the Structure
 
 - **state.enabled** -- Activates state persistence. Can be a literal `true`, a CEL expression, or template. Because state is loaded before resolvers run, resolver references (`rslvr:...`) are not supported here.
 - **state.backend.provider** -- The provider that handles persistence. Use `file` for local files.
-- **state.backend.inputs.path** -- Where to store the state file. Relative paths are resolved against the solution file's parent directory. Absolute paths are used as-is. CLI state commands (`scafctl state list`, etc.) resolve relative paths against the current working directory.
+- **state.backend.inputs.path** -- Where to store the state file. Relative paths are resolved against the current working directory. Absolute paths are used as-is. The CLI state commands (`scafctl state list`, etc.) resolve relative paths against the current working directory too, so both agree on the same file.
 
 No per-resolver configuration is needed. All CLI parameters are persisted automatically when state is enabled.
 
@@ -931,6 +931,41 @@ section, which the intent format omits, so `scafctl lint` warns
 Prefer the full-primary-plus-emit pattern above unless you specifically want
 this trade-off.
 
+### Parameter Narrowing
+
+An `"intent"`-format backend (primary or `emit`) projects every saved
+parameter by default. `parameters.include`/`parameters.exclude` narrow that
+down -- useful for dropping a run-control parameter (a publish/generate mode
+switch, one-off destination coordinates) that has no business in a committed,
+signed artifact:
+
+~~~yaml
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs: { path: ".scafctl/state.json" }
+  emit:
+    - provider: file
+      format: intent
+      parameters:
+        include: [app_name, cluster_id]   # domain params only -- "mode" stays out
+      inputs: { path: "intent/sandbox.json" }
+~~~
+
+- `include` is an allowlist: only the listed names are projected. Safer for a
+  new solution -- an unlisted (e.g. newly added) parameter can never leak by
+  omission.
+- `exclude` is a denylist: everything except the listed names is projected.
+  More practical when a solution has a large, evolving parameter surface,
+  where the small set of non-domain parameters is the shorter, more stable
+  list to maintain.
+- `include` and `exclude` are mutually exclusive -- setting both is a lint
+  error.
+- Only valid under `format: intent`. Setting it on a `"full"` (or unset)
+  backend is a lint error too: narrowing the authoritative state document
+  would silently drop a parameter the solution still relies on for replay.
+
 ### Lint Rules
 
 | Rule | Severity | What It Catches |
@@ -939,6 +974,8 @@ this trade-off.
 | `invalid-state-emit-backend` | Error | An `emit` entry's `provider` is unregistered or lacks `CapabilityState` |
 | `invalid-state-format` | Error | `format` is set to something other than `full` or `intent` |
 | `state-format-lossy-with-immutable` | Warning | The primary backend's `format` is `intent` while the solution has an `immutable` resolver |
+| `invalid-state-parameter-narrowing` | Error | A backend's `parameters` narrowing is set, but its `format` is not `intent` |
+| `conflicting-state-parameter-narrowing` | Error | A backend's `parameters` sets both `include` and `exclude` |
 
 Run `scafctl lint` to check your configuration.
 
@@ -975,7 +1012,7 @@ state:
 ```
 
 ```bash
-# Replay from the solution directory (parameters are loaded automatically from state)
+# Replay from the current working directory (parameters are loaded automatically from state)
 scafctl run solution -f app-registration.yaml
 ```
 

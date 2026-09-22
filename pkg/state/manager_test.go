@@ -1771,6 +1771,51 @@ func TestManagerSave_SaveResult(t *testing.T) {
 		assert.Empty(t, disabledEmit.saveCalls, "a skipped target must not actually be saved")
 	})
 
+	t.Run("an emit target's Parameters narrowing is applied to the actual saved payload", func(t *testing.T) {
+		t.Parallel()
+		primary := &mockBackendProvider{}
+		emit := &mockBackendProvider{}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(namedMockBackend("mock-primary", primary)))
+		require.NoError(t, reg.Register(namedMockBackend("mock-emit", emit)))
+
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{Provider: "mock-primary", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("state.json")}},
+			Emit: []EmitTarget{
+				{Backend: Backend{
+					Provider:   "mock-emit",
+					Format:     FormatIntent,
+					Parameters: &ParameterProjection{Include: []string{"appName"}},
+					Inputs:     map[string]*spec.ValueRef{"path": literalValueRef("intent.json")},
+				}},
+			},
+		}
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+
+		sd := NewData()
+		mergedParams := map[string]any{"appName": "hello", "mode": "publish"}
+		result, err := mgr.Save(context.Background(), sd, resolver.NewContext(), nil, mergedParams, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Len(t, result.Emits, 1)
+
+		require.Len(t, emit.saveCalls, 1)
+		saved, ok := emit.saveCalls[0]["data"].(map[string]any)
+		require.True(t, ok)
+		params, ok := saved["parameters"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, map[string]any{"appName": "hello"}, params, "the emit target's saved payload must reflect its own Parameters narrowing, not the full merged set")
+
+		// The primary backend is unaffected -- it has no narrowing spec.
+		require.Len(t, primary.saveCalls, 1)
+		primaryData, ok := primary.saveCalls[0]["data"].(map[string]any)
+		require.True(t, ok)
+		primaryParams, ok := primaryData["parameters"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, mergedParams, primaryParams, "the primary backend must save the full parameter set")
+	})
+
 	t.Run("SaveParams also returns a SaveResult", func(t *testing.T) {
 		t.Parallel()
 		primary := &mockBackendProvider{}
