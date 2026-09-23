@@ -161,7 +161,7 @@ func materializeExtends(cfg *Config) *Config {
 	out.Save = make([]SaveTarget, len(cfg.Save))
 	for i, target := range cfg.Save {
 		if target.Extends == ExtendsLoad && cfg.Load != nil {
-			merged := make(map[string]*spec.ValueRef, len(cfg.Load.Inputs)+len(target.Inputs))
+			merged := make(map[string]*spec.ValueRef, len(cfg.Load.Inputs))
 			for k, v := range cfg.Load.Inputs {
 				merged[k] = v
 			}
