@@ -5,9 +5,12 @@ package config
 
 import (
 	"fmt"
+	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -539,4 +542,273 @@ func TestLoggingConfig_Validate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAPIServerConfig_Validate_MaxHeaderBytes asserts the advertised 4MB
+// ceiling is actually enforced. The `maximum` struct tag documents it for
+// schema consumers but the config loader never applies struct tags, so without
+// this check an operator could configure an unbounded per-connection header
+// buffer despite the documented guarantee.
+func TestAPIServerConfig_Validate_MaxHeaderBytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		value   int
+		wantErr bool
+	}{
+		{"unset uses the default", 0, false},
+		{"below the cap", 1 << 20, false},
+		{"exactly at the cap", settings.MaxAPIMaxHeaderBytes, false},
+		{"one byte over the cap", settings.MaxAPIMaxHeaderBytes + 1, true},
+		{"far over the cap", 1 << 30, true},
+		{"negative", -1, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{APIServer: APIServerConfig{MaxHeaderBytes: tt.value}}
+
+			err := cfg.Validate()
+			if !tt.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "apiServer")
+			assert.Contains(t, err.Error(), "maxHeaderBytes")
+		})
+	}
+}
+
+// TestAPIServerConfig_Validate_AllowedHosts asserts an allowlist that would be
+// configured-but-inert is rejected at startup rather than silently accepting
+// every Host, while both documented opt-outs stay valid. The advertised
+// entry cap is enforced here too: `maxItems` is schema-only, and the allowlist
+// is scanned on every request.
+func TestAPIServerConfig_Validate_AllowedHosts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		hosts   []string
+		wantErr bool
+	}{
+		{"unset", nil, false},
+		{"explicit wildcard opt-out", []string{"*"}, false},
+		{"usable entries", []string{"api.example.com", "*.internal.example.com"}, false},
+		{"only blanks", []string{"", "   "}, true},
+		{"only the malformed wildcard", []string{"*."}, true},
+		{"exactly at the entry cap", hostList(settings.MaxAPIAllowedHosts), false},
+		{"one entry over the cap", hostList(settings.MaxAPIAllowedHosts + 1), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{APIServer: APIServerConfig{AllowedHosts: tt.hosts}}
+
+			err := cfg.Validate()
+			if !tt.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "apiServer")
+			assert.Contains(t, err.Error(), "allowedHosts")
+		})
+	}
+}
+
+// hostList builds n distinct, individually valid allowlist entries so a
+// length-boundary case is not conflated with a normalization failure.
+func hostList(n int) []string {
+	hosts := make([]string, 0, n)
+	for i := range n {
+		hosts = append(hosts, fmt.Sprintf("host%d.example.com", i))
+	}
+	return hosts
+}
+
+// TestAPIServerConfig_TagsMatchRuntimeLimits pins the struct tags that document
+// the apiServer bounds to the constants that actually enforce them. The tags
+// are what schema consumers read; the constants are what Validate checks.
+// Nothing but this test ties the two together, and a schema that advertises a
+// bound the runtime does not apply is exactly the drift these limits exist to
+// close.
+func TestAPIServerConfig_TagsMatchRuntimeLimits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		field string
+		tag   string
+		want  int
+	}{
+		{"MaxHeaderBytes", "maximum", settings.MaxAPIMaxHeaderBytes},
+		{"AllowedHosts", "maxItems", settings.MaxAPIAllowedHosts},
+	}
+
+	typ := reflect.TypeOf(APIServerConfig{})
+	for _, tt := range tests {
+		t.Run(tt.field, func(t *testing.T) {
+			t.Parallel()
+
+			field, ok := typ.FieldByName(tt.field)
+			require.True(t, ok, "APIServerConfig has no field %s", tt.field)
+
+			raw, ok := field.Tag.Lookup(tt.tag)
+			require.True(t, ok, "%s is missing its `%s` tag, so the schema no longer advertises the bound", tt.field, tt.tag)
+
+			got, err := strconv.Atoi(raw)
+			require.NoError(t, err, "%s `%s` tag is not an integer", tt.field, tt.tag)
+			assert.Equal(t, tt.want, got,
+				"%s `%s:%q` disagrees with the constant Validate enforces", tt.field, tt.tag, raw)
+		})
+	}
+}
+
+func TestNormalizeCIDR(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		entry string
+		want  string
+		// wantErrContains is checked when the entry must be rejected.
+		wantErrContains string
+	}{
+		{name: "IPv4 CIDR passes through", entry: "10.0.0.0/8", want: "10.0.0.0/8"},
+		{name: "IPv6 CIDR passes through", entry: "fd00::/8", want: "fd00::/8"},
+		{name: "IPv6 CIDR with a dotted-quad tail is not mapped, passes", entry: "64:ff9b::/96", want: "64:ff9b::/96"},
+		{name: "surrounding space is tolerated", entry: "  10.0.0.0/8  ", want: "10.0.0.0/8"},
+		{name: "bare IPv4 widens to /32", entry: "10.0.0.5", want: "10.0.0.5/32"},
+		{name: "bare IPv6 widens to /128", entry: "fd00::1", want: "fd00::1/128"},
+		{name: "bare IPv4-mapped literal narrows to the IPv4 /32", entry: "::ffff:192.168.1.5", want: "192.168.1.5/32"},
+		{
+			name:            "empty entry is rejected",
+			entry:           "",
+			wantErrContains: "empty",
+		},
+		{
+			name:            "whitespace-only entry is rejected",
+			entry:           "   ",
+			wantErrContains: "empty",
+		},
+		{
+			name:            "hostname is rejected",
+			entry:           "example.com",
+			wantErrContains: "not a valid IP address or CIDR block",
+		},
+		{
+			name:            "out-of-range prefix is rejected",
+			entry:           "10.0.0.0/33",
+			wantErrContains: "not a valid CIDR block",
+		},
+		{
+			name:            "malformed CIDR is rejected",
+			entry:           "10.0.0.0/",
+			wantErrContains: "not a valid CIDR block",
+		},
+		{
+			// Go parses "::ffff:127.0.0.1/32" as the IPv6 network ::/32 -- a
+			// vast range including ::1 -- rather than the single mapped host
+			// the text names. The operator wrote the mapped form meaning one
+			// host as an exception; refusing it (and naming the equivalent
+			// IPv4 form) is the only reading that fails closed.
+			name:            "IPv4-mapped IPv6 CIDR is rejected instead of silently widening",
+			entry:           "::ffff:127.0.0.1/32",
+			wantErrContains: "write the equivalent IPv4 CIDR",
+		},
+		{
+			name:            "IPv4-mapped IPv6 CIDR with host bits is rejected",
+			entry:           "::ffff:10.42.7.9/24",
+			wantErrContains: "write the equivalent IPv4 CIDR",
+		},
+		{
+			name:            "hex-form IPv4-mapped CIDR is rejected too",
+			entry:           "::ffff:a00:0/120",
+			wantErrContains: "write the equivalent IPv4 CIDR",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := NormalizeCIDR(tt.entry)
+
+			if tt.wantErrContains != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrContains)
+				assert.Empty(t, got)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestHTTPClientConfig_Validate_AllowedPrivateCIDRs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid entries are accepted", func(t *testing.T) {
+		t.Parallel()
+		cfg := &HTTPClientConfig{
+			AllowedPrivateCIDRs: PrivateCIDRList("10.0.0.0/8", "192.168.1.5", "fd00::/8"),
+		}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	t.Run("an empty list is accepted", func(t *testing.T) {
+		t.Parallel()
+		cfg := &HTTPClientConfig{AllowedPrivateCIDRs: PrivateCIDRList()}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	// A malformed entry must fail loudly at startup rather than being dropped,
+	// which would silently narrow the allowlist the operator asked for.
+	t.Run("a malformed entry is rejected and located", func(t *testing.T) {
+		t.Parallel()
+		cfg := &HTTPClientConfig{
+			AllowedPrivateCIDRs: PrivateCIDRList("10.0.0.0/8", "nonsense"),
+		}
+		err := cfg.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "allowedPrivateCIDRs[1]",
+			"the error must say which entry is wrong")
+		assert.Contains(t, err.Error(), "nonsense")
+	})
+
+	// The runtime check and the advertised `maxItems` schema cap must not
+	// drift apart: exactly at the limit must pass, and one over must be
+	// rejected with a message naming both the actual and maximum count.
+	t.Run("exactly the maximum entries is accepted", func(t *testing.T) {
+		t.Parallel()
+		entries := make([]string, settings.MaxAllowedPrivateCIDRs)
+		for i := range entries {
+			entries[i] = fmt.Sprintf("10.%d.0.0/16", i%256)
+		}
+		cfg := &HTTPClientConfig{AllowedPrivateCIDRs: PrivateCIDRList(entries...)}
+		assert.NoError(t, cfg.Validate())
+	})
+
+	t.Run("one entry over the maximum is rejected", func(t *testing.T) {
+		t.Parallel()
+		entries := make([]string, settings.MaxAllowedPrivateCIDRs+1)
+		for i := range entries {
+			entries[i] = fmt.Sprintf("10.%d.0.0/16", i%256)
+		}
+		cfg := &HTTPClientConfig{AllowedPrivateCIDRs: PrivateCIDRList(entries...)}
+		err := cfg.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "allowedPrivateCIDRs")
+		assert.Contains(t, err.Error(), fmt.Sprintf("%d", settings.MaxAllowedPrivateCIDRs+1))
+		assert.Contains(t, err.Error(), fmt.Sprintf("%d", settings.MaxAllowedPrivateCIDRs))
+	})
 }

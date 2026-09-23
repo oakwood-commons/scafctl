@@ -54,6 +54,7 @@ func RemoteCatalogsFromContext(ctx context.Context, lgr logr.Logger) []Catalog {
 			CredentialStore: credStore,
 			AuthHandler:     handler,
 			AuthScope:       catCfg.AuthScope,
+			Insecure:        catCfg.Insecure,
 			Logger:          lgr,
 		})
 		if err != nil {

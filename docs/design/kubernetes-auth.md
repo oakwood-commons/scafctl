@@ -225,7 +225,16 @@ with no resolver involved.
     `oidcAudience`, a `--audience` flag, or a static alias -- never a hardcoded
     tenant or client ID. When the OIDC route is auto-selected but no audience is
     resolvable, login fails fast (`ErrNoAudience`) rather than writing a
-    kubeconfig entry that cannot authenticate.
+    kubeconfig entry that cannot authenticate. The error's remedies are tailored
+    to the layer the cluster was resolved from: alias-defined clusters
+    are told to add `oidcAudience` to their `kube.clusters.aliases` entry (the
+    alias shadows the dynamic inventory, so a transform fix cannot reach
+    them); inventory-resolved clusters to emit `audience` from the
+    `kube.clusters.resolver` transform, define a full `kube.clusters.aliases`
+    entry (server + `oidcAudience`), or pass `--audience`; a named cluster
+    resolved from flags (a resolver miss with `--server`) to define a full
+    alias entry or pass `--audience`; and direct URL/`--server` invocations
+    to pass `--audience` only.
 
   The policy is data, not a hardcoded switch: `login.Deps.AuthTypeHandlers`
   (defaulted by `login.DefaultAuthTypeHandlers`) maps an `AuthType` to a handler

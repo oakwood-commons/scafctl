@@ -212,6 +212,26 @@ func WithSolutionDiscovery(folders, fileNames []string) Option {
 // WithAppConfig returns an Option that configures the HTTP client using the application configuration.
 // It creates an HTTP client with settings from the provided config.HTTPClientConfig.
 // The logger is used for HTTP client logging.
+//
+// BREAKING: the destination-address (SSRF) policy this client enforces is now
+// fixed when the Getter is constructed, not re-derived per call. Earlier
+// versions effectively re-checked the policy against context on each FromURL
+// call; as of httpc v0.3.0 dial-time enforcement, the policy lives on the
+// client's transport, and the client is built once here. An embedder that
+// built a bare NewGetter() and relied on passing a differently-configured
+// context to FromURL/Get/GetWithBundle/GetWithLayers on each call will now
+// silently get the policy in effect when the Getter was constructed instead.
+// Callers that need the policy to reflect an app config must pass this option
+// (or use NewGetterFromContext, which already applies it) when constructing
+// the Getter, not per call.
+//
+// The client is built per Getter. Since httpc v0.3.0 each client owns its own
+// connection pool, so a Getter built per request (as the API server does) does
+// not reuse connections and abandons a pool that nothing closes. Sharing one
+// client per configuration was tried and reverted: a pooled connection outlives
+// the endpoint it was opened to, which is fine for a long-lived server but
+// breaks when an ephemeral port is recycled. Fixing this properly needs a
+// lifetime the Getter does not currently have.
 func WithAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) Option {
 	return func(g *Getter) {
 		g.httpClient = httpc.NewClientFromAppConfig(cfg, logger)
@@ -223,12 +243,28 @@ func WithAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) Option {
 // By default, it sets up the Getter with the standard file reading and stat functions,
 // a default HTTP client, and a discard logger. Options can be supplied to customize
 // the behavior of the Getter.
+//
+// The destination-address (SSRF) policy applied to remote fetches (FromURL,
+// and the URL branches of Get/GetWithBundle/GetWithLayers) is fixed at this
+// construction call via WithAppConfig, not re-derived from the ctx passed to
+// those methods later. Pass WithAppConfig here (or use NewGetterFromContext)
+// if the policy should reflect an application config; a plain NewGetter()
+// with no options gets the default (private/loopback/link-local denied,
+// proxy routing disabled) client for the lifetime of the Getter, regardless
+// of ctx.
 func NewGetter(opts ...Option) *Getter {
 	g := &Getter{
-		readFile:          os.ReadFile,
-		statFunc:          os.Stat,
-		httpClient:        httpc.NewClient(nil), // Use default HTTP client
-		logger:            logr.Discard(),       // Use discard logger by default
+		readFile: os.ReadFile,
+		statFunc: os.Stat,
+		// NewClientFromAppConfig(nil, ...) is the secure-default client
+		// constructor: the same deny-private policy and disabled proxy
+		// routing every other policy-protected client in this package gets.
+		// A bare httpc.NewClient(nil) would leave http.DefaultTransport's
+		// environment-based proxy selection in place, so a bare NewGetter()
+		// (with no WithAppConfig option) would not get the same protection
+		// as a Getter the CLI constructs.
+		httpClient:        httpc.NewClientFromAppConfig(nil, logr.Discard()),
+		logger:            logr.Discard(), // Use discard logger by default
 		solutionFolders:   settings.GetRootSolutionFolders(),
 		solutionFileNames: settings.GetSolutionFileNames(),
 	}
@@ -248,6 +284,13 @@ func NewGetter(opts ...Option) *Getter {
 func NewGetterFromContext(ctx context.Context, opts ...Option) *Getter {
 	var ctxOpts []Option
 	if ctx != nil {
+		// Build the HTTP client from application configuration so the
+		// destination-address policy reflects it. Without this the Getter would
+		// use the default deny policy and no allowlist entry could ever take
+		// effect on the solution-fetch path.
+		if appCfg := config.FromContext(ctx); appCfg != nil {
+			ctxOpts = append(ctxOpts, WithAppConfig(&appCfg.HTTPClient, logr.Discard()))
+		}
 		if s, ok := settings.FromContext(ctx); ok {
 			if s.BinaryName != "" && s.BinaryName != settings.CliBinaryName {
 				ctxOpts = append(ctxOpts, WithSolutionDiscovery(
@@ -272,6 +315,11 @@ func NewGetterFromContext(ctx context.Context, opts ...Option) *Getter {
 //   - FromUrl: Loads a Solution from a specified remote URL.
 //   - Get: Loads a Solution from a path (local or URL) with auto-discovery support.
 //   - FindSolution: Searches for a solution file in default locations.
+//
+// BREAKING: the destination-address (SSRF) policy applied to remote fetches
+// is bound to the implementation at construction (see NewGetter's
+// WithAppConfig option), not derived per call from ctx. See FromURL's doc
+// comment for the migration note.
 type Interface interface {
 	FromLocalFileSystem(ctx context.Context, path string) (*solution.Solution, error)
 	FromURL(ctx context.Context, url string) (*solution.Solution, error)
@@ -318,7 +366,8 @@ func (o *Getter) Get(ctx context.Context, path string) (*solution.Solution, erro
 		path = o.FindSolution()
 	}
 
-	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.Get",
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(
+		ctx, "solution.Get",
 		trace.WithAttributes(attribute.String("solution.path", path)),
 	)
 	defer span.End()
@@ -380,7 +429,8 @@ func (o *Getter) GetWithBundle(ctx context.Context, path string) (*solution.Solu
 		path = o.FindSolution()
 	}
 
-	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.GetWithBundle",
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(
+		ctx, "solution.GetWithBundle",
 		trace.WithAttributes(attribute.String("solution.path", path)),
 	)
 	defer span.End()
@@ -445,7 +495,8 @@ func (o *Getter) GetWithLayers(ctx context.Context, path string, mediaTypes ...s
 		path = o.FindSolution()
 	}
 
-	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.GetWithLayers",
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(
+		ctx, "solution.GetWithLayers",
 		trace.WithAttributes(attribute.String("solution.path", path)),
 	)
 	defer span.End()
@@ -860,7 +911,8 @@ func (o *Getter) FromLocalFileSystem(ctx context.Context, path string) (*solutio
 		path = resolved
 	}
 
-	_, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.FromLocalFileSystem",
+	_, span := telemetry.Tracer(telemetry.TracerSolution).Start(
+		ctx, "solution.FromLocalFileSystem",
 		trace.WithAttributes(attribute.String("solution.path", path)),
 	)
 	defer span.End()
@@ -919,20 +971,38 @@ func (o *Getter) FromLocalFileSystem(ctx context.Context, path string) (*solutio
 //
 //	*solution.Solution - The unmarshalled solution object.
 //	error - An error if the operation fails at any step.
+//
+// BREAKING: the destination-address (SSRF) policy enforced here is the
+// Getter's own httpClient, fixed at construction time (see NewGetter /
+// WithAppConfig), not derived from ctx on this call. A caller that expects
+// per-call policy variance (e.g. previously passing a different app config
+// via ctx to each FromURL call) will now silently get the policy in effect
+// when the Getter was built. Construct a Getter per desired policy instead.
 func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, error) {
 	if !filepath.IsURL(url) {
 		o.logger.Error(nil, "Invalid URL provided", "url", url)
 		return nil, fmt.Errorf("the provided path to the solution is not a valid URL: %s", url)
 	}
 
-	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.FromURL",
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(
+		ctx, "solution.FromURL",
 		trace.WithAttributes(attribute.String("solution.url", url)),
 	)
 	defer span.End()
 
+	// Destination-address policy is enforced by the HTTP client at dial time,
+	// against the address actually resolved. That covers IP literals, hostnames
+	// whose records point at a private or metadata address, and every redirect
+	// hop -- none of which a pre-flight URL check can catch, because the client
+	// resolves DNS again when it opens the socket.
+	//
+	// Denials surface from the Get call below as errors wrapping
+	// httpc.ErrBlockedByPolicy.
+
 	o.logger.V(1).Info("Fetching solution from URL", "url", url)
 	resp, err := o.httpClient.Get(ctx, url)
 	if err != nil {
+		err = httpc.ExplainBlocked(err)
 		o.logger.Error(err, "Failed to fetch solution from URL", "url", url)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

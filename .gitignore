@@ -22,8 +22,10 @@ cover_kvx
 # vendor/
 
 # Go workspace file
-go.work
-go.work.sum
+/go.work
+/go.work.sum
+!/e2e/go.work
+!/e2e/go.work.sum
 
 # env file
 .env

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -191,6 +192,17 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		cfg = &config.Config{}
 	}
 
+	// Validate the API section here, not just in the config loader.
+	// config.Manager.Load is the only other caller of Validate, so an embedder
+	// passing a hand-built config through WithServerConfig would otherwise skip
+	// every advertised apiServer bound -- including maxHeaderBytes, which sizes
+	// a per-connection buffer before any request handling. Failing at
+	// construction keeps the documented limits true for every path that can
+	// start a server.
+	if err := cfg.APIServer.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid apiServer configuration: %w", err)
+	}
+
 	baseCtx := sc.ctx
 	if baseCtx == nil {
 		baseCtx = context.Background()
@@ -220,7 +232,26 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 
 		catalogIndex: sc.catalogIndex,
 	}
+
+	// Attach the application config to every request context, matching what the
+	// CLI (cmd/scafctl/root.go) and MCP server (pkg/mcp/context.go) already do.
+	//
+	// Without this, config.FromContext returns nil inside API handlers, so
+	// config-driven behaviour -- including the httpClient.allowPrivateIPs SSRF
+	// setting consulted when fetching a solution by URL -- silently fell back to
+	// defaults and could not be configured by an operator at all.
+	s.router.Use(withAppConfig(cfg))
+
 	return s, nil
+}
+
+// withAppConfig returns middleware that places cfg in each request's context.
+func withAppConfig(cfg *config.Config) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(config.WithConfig(r.Context(), cfg)))
+		})
+	}
 }
 
 // Router returns the root chi router for global middleware setup.
@@ -306,27 +337,7 @@ func (s *Server) Start() error {
 
 	apiCfg := s.cfg.APIServer
 
-	host := apiCfg.Host
-	if host == "" {
-		host = settings.DefaultAPIHost
-	}
-	port := apiCfg.Port
-	if port <= 0 {
-		port = settings.DefaultAPIPort
-	}
-
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-
-	s.httpSrv = &http.Server{
-		Addr:              addr,
-		Handler:           s.router,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       parseTimeoutOrDefault(apiCfg.RequestTimeout, settings.DefaultAPIRequestTimeout),
-		WriteTimeout:      parseTimeoutOrDefault(apiCfg.RequestTimeout, settings.DefaultAPIRequestTimeout),
-		BaseContext: func(_ net.Listener) context.Context {
-			return runmode.WithMode(s.ctx, runmode.API)
-		},
-	}
+	addr := s.buildHTTPServer()
 
 	// TLS configuration
 	if apiCfg.TLS.Enabled {
@@ -402,6 +413,50 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// buildHTTPServer constructs s.httpSrv from configuration and returns the
+// resolved listen address. It performs no I/O and binds no port, so the
+// server's resource limits and exposure warning can be exercised in tests
+// without starting a listener.
+func (s *Server) buildHTTPServer() string {
+	apiCfg := s.cfg.APIServer
+
+	host := apiCfg.Host
+	if host == "" {
+		host = settings.DefaultAPIHost
+	}
+	port := apiCfg.Port
+	if port <= 0 {
+		port = settings.DefaultAPIPort
+	}
+
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+
+	// Exposure warnings are NOT emitted here. They are returned by
+	// StartupWarnings so the caller can put them on stderr, where a human sees
+	// them regardless of logging level -- see that function for why a logger is
+	// the wrong channel for them.
+
+	maxHeaderBytes := apiCfg.MaxHeaderBytes
+	if maxHeaderBytes <= 0 {
+		maxHeaderBytes = settings.DefaultAPIMaxHeaderBytes
+	}
+
+	s.httpSrv = &http.Server{
+		Addr:              addr,
+		Handler:           s.router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       parseTimeoutOrDefault(apiCfg.RequestTimeout, settings.DefaultAPIRequestTimeout),
+		WriteTimeout:      parseTimeoutOrDefault(apiCfg.RequestTimeout, settings.DefaultAPIRequestTimeout),
+		IdleTimeout:       parseTimeoutOrDefault(apiCfg.IdleTimeout, settings.DefaultAPIIdleTimeout),
+		MaxHeaderBytes:    maxHeaderBytes,
+		BaseContext: func(_ net.Listener) context.Context {
+			return runmode.WithMode(s.ctx, runmode.API)
+		},
+	}
+
+	return addr
+}
+
 // parseTimeoutOrDefault parses a duration string, returning a default on failure.
 func parseTimeoutOrDefault(value, defaultValue string) time.Duration {
 	if value == "" {
@@ -412,4 +467,27 @@ func parseTimeoutOrDefault(value, defaultValue string) time.Duration {
 		d, _ = time.ParseDuration(defaultValue)
 	}
 	return d
+}
+
+// isLoopbackHost reports whether host refers only to the local machine.
+//
+// It recognises loopback IP literals and the "localhost" name. An empty host
+// is treated as loopback because the caller substitutes the loopback default
+// before this is called. The wildcard addresses ("0.0.0.0", "::") are NOT
+// loopback: they bind every interface and are the case worth warning about.
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		return true
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	// Tolerate a bracketed IPv6 literal (e.g. "[::1]").
+	trimmed := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if ip := net.ParseIP(trimmed); ip != nil {
+		return ip.IsLoopback()
+	}
+	// An unresolvable hostname is not provably local; treat it as exposed so
+	// the warning errs toward being shown rather than silently skipped.
+	return false
 }

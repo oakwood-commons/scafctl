@@ -128,3 +128,43 @@ spec:
             message: "Request to 169.254.x should fail"
           - expression: __stderr.contains("private") || __stderr.contains("blocked")
             message: "Error should mention private IP blocking"
+
+      ssrf-allowlist-grants-named-range:
+        description: A loopback mock server is reachable when its range is named in allowedPrivateCIDRs
+        extends: [_base]
+        args: ["smallResponse", "-o", "json", "--config", "config.yaml"]
+        # No allowPrivateIPs at all: access comes solely from the allowlist.
+        init:
+          - command: "printf 'httpClient:\\n  allowedPrivateCIDRs:\\n    - 127.0.0.0/8\\n    - ::1/128\\n  maxResponseBodySize: 104857600\\n' > config.yaml"
+        assertions:
+          - expression: __exitCode == 0
+            message: "Naming the loopback range should make the mock server reachable"
+
+      ssrf-allowlist-overrides-allow-private-ips:
+        description: allowedPrivateCIDRs narrows a legacy allowPrivateIPs:true rather than being ignored
+        extends: [_base]
+        args: ["smallResponse", "-o", "json", "--config", "config.yaml"]
+        # Both are set, and the allowlist deliberately excludes loopback. The
+        # request must fail: adding an allowlist has to TIGHTEN the legacy
+        # allow-everything setting, not be silently ignored.
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n  allowedPrivateCIDRs:\\n    - 10.42.0.0/16\\n  maxResponseBodySize: 104857600\\n' > config.yaml"
+        assertions:
+          - expression: __exitCode != 0
+            message: "allowedPrivateCIDRs must override allowPrivateIPs, blocking loopback"
+          - expression: __stderr.contains("blocked") || __stderr.contains("private")
+            message: "Error should report the address was blocked"
+
+      ssrf-metadata-never-allowed:
+        description: Cloud metadata stays blocked even when the allowlist covers its range
+        extends: [_base]
+        args: ["ssrfBlocked", "-o", "json", "--config", "config.yaml"]
+        # The most permissive configuration expressible: allow-everything plus
+        # an allowlist explicitly covering the metadata range.
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n  allowedPrivateCIDRs:\\n    - 169.254.0.0/16\\n  maxResponseBodySize: 104857600\\n' > config.yaml"
+        assertions:
+          - expression: __exitCode != 0
+            message: "Cloud metadata must be unreachable under every configuration"
+          - expression: __stderr.contains("metadata") || __stderr.contains("blocked")
+            message: "Error should report the metadata address was blocked"

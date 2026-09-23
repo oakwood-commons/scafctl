@@ -4,7 +4,6 @@
 package httpc
 
 import (
-	"context"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -33,13 +32,34 @@ func parseDurationOr(s string, fallback time.Duration, logger logr.Logger, field
 // It uses scafctl-specific defaults (XDG cache dir, app-name-based prefix, OTel metrics)
 // as the base, then overlays the string-based config values.
 //
-// The cfg parameter can be nil, in which case scafctl defaults are used.
+// The cfg parameter can be nil, in which case scafctl defaults are used --
+// including the same default deny-private policy and disabled proxy routing
+// an explicit, all-fields-unset configuration gets below.
 func NewClientFromAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) *Client {
+	return NewClient(httpClientConfigFromAppConfig(cfg, logger))
+}
+
+// httpClientConfigFromAppConfig builds the ClientConfig that
+// NewClientFromAppConfig hands to NewClient. Split out from
+// NewClientFromAppConfig so tests can assert on the resolved IPPolicy and
+// Transport directly, rather than reaching through the client's wrapped
+// transport chain (OTel, retry, cache) to find them.
+func httpClientConfigFromAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) *ClientConfig {
 	clientCfg := DefaultConfig()
 	clientCfg.Logger = logger
 
 	if cfg == nil {
-		return NewClient(clientCfg)
+		// nil is the documented secure default, so it must get the same
+		// protections as an explicit, all-fields-unset configuration: the
+		// default deny-private policy (PolicyFromAppConfig(nil)'s result)
+		// and a transport that never routes through an ambient proxy
+		// (TrustedProxy(nil) is false). Returning before these were set left
+		// http.DefaultTransport's environment-based proxy selection in force
+		// for exactly the callers -- such as hostname inventory fetches --
+		// with no trustedProxy opt-in to have relied on it.
+		clientCfg.IPPolicy = &IPPolicy{}
+		clientCfg.Transport = ProxyAwareTransport(false)
+		return clientCfg
 	}
 
 	clientCfg.Timeout = parseDurationOr(cfg.Timeout, clientCfg.Timeout, logger, "timeout")
@@ -90,27 +110,35 @@ func NewClientFromAppConfig(cfg *config.HTTPClientConfig, logger logr.Logger) *C
 	if cfg.EnableCompression != nil {
 		clientCfg.EnableCompression = *cfg.EnableCompression
 	}
-	// NOTE: cfg.AllowPrivateIPs from app config is consumed only by
-	// PrivateIPsAllowed(ctx) at the application layer; it is NOT forwarded to
-	// the upstream transport, which is always set to AllowPrivateIPs=true by
-	// NewClient() to avoid double-gating.
+
+	// Which destination addresses this client may reach. Enforced upstream at
+	// dial time, against the resolved address.
+	//
+	// A malformed entry fails closed: the client keeps the default deny-all
+	// policy rather than starting with weaker protection than the operator
+	// asked for. Config validation rejects malformed entries at startup, so
+	// reaching this branch means validation was bypassed.
+	policy, policyErr := PolicyFromAppConfig(cfg)
+	if policyErr != nil {
+		if logger.GetSink() != nil {
+			logger.Error(policyErr, "invalid address allowlist; denying all private addresses",
+				"field", AllowedPrivateCIDRsKey)
+		}
+		policy = &IPPolicy{}
+	}
+	clientCfg.IPPolicy = policy
+
+	// A proxied request is dialed to the proxy, not the target, so it never
+	// reaches the dial-time check the rest of this policy relies on. Disable
+	// proxy routing by default (TrustedProxy unset/false) rather than accept
+	// that gap silently; see ProxyAwareTransport for the full reasoning.
+	if clientCfg.Transport == nil {
+		clientCfg.Transport = ProxyAwareTransport(TrustedProxy(cfg))
+	}
+
 	if cfg.MaxResponseBodySize > 0 {
 		clientCfg.MaxResponseBodySize = cfg.MaxResponseBodySize
 	}
 
-	return NewClient(clientCfg)
-}
-
-// PrivateIPsAllowed returns true when the application config stored in ctx permits
-// HTTP requests to private/loopback/link-local IP addresses.
-// Returns false (deny) when no config is present -- secure by default.
-func PrivateIPsAllowed(ctx context.Context) bool {
-	cfg := config.FromContext(ctx)
-	if cfg == nil {
-		return false
-	}
-	if cfg.HTTPClient.AllowPrivateIPs != nil {
-		return *cfg.HTTPClient.AllowPrivateIPs
-	}
-	return false
+	return clientCfg
 }

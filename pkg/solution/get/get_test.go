@@ -6,11 +6,13 @@ package get
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -50,6 +52,7 @@ func TestNewGetter(t *testing.T) {
 
 	t.Run("with custom httpClient", func(t *testing.T) {
 		config := httpc.DefaultConfig()
+		config.IPPolicy = allowLoopbackPolicy()
 		config.EnableCache = false
 		customClient := httpc.NewClient(config)
 
@@ -67,6 +70,7 @@ func TestNewGetter(t *testing.T) {
 		}
 
 		config := httpc.DefaultConfig()
+		config.IPPolicy = allowLoopbackPolicy()
 		config.EnableCache = false
 		customClient := httpc.NewClient(config)
 
@@ -106,6 +110,7 @@ func TestWithReadFile(t *testing.T) {
 
 func TestWithHTTPClient(t *testing.T) {
 	config := httpc.DefaultConfig()
+	config.IPPolicy = allowLoopbackPolicy()
 	config.EnableCache = false
 	customClient := httpc.NewClient(config)
 
@@ -143,6 +148,33 @@ func TestNewGetter_WithLogger(t *testing.T) {
 	assert.NotNil(t, getter.httpClient)
 }
 
+// ctxAllowPrivateIPs returns a context whose config permits HTTP fetches to
+// private, loopback, and link-local addresses.
+//
+// Tests that serve fixtures from httptest.NewServer need this: httptest always
+// binds loopback, and FromURL's SSRF guard blocks loopback by default. Opting
+// in here keeps the guard strict in production while letting these tests reach
+// their local fixture server.
+func ctxAllowPrivateIPs() context.Context {
+	allow := true
+	return config.WithConfig(context.Background(), &config.Config{
+		HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow},
+	})
+}
+
+// allowLoopbackPolicy permits loopback, which every httptest server binds to.
+// The default policy denies it, so a test client aimed at a local server must
+// opt in explicitly.
+func allowLoopbackPolicy() *httpc.IPPolicy {
+	policy, err := httpc.PolicyFromAppConfig(&config.HTTPClientConfig{
+		AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return policy
+}
+
 func TestFromUrl(t *testing.T) {
 	validSolutionJSON := `{
 		"apiVersion": "scafctl.io/v1",
@@ -160,8 +192,8 @@ func TestFromUrl(t *testing.T) {
 		}))
 		defer server.Close()
 
-		getter := NewGetter()
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
+		getter := NewGetterFromContext(ctx)
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.NoError(t, err)
@@ -187,10 +219,11 @@ func TestFromUrl(t *testing.T) {
 		// Disable caching so the 404 response is not persisted to the filesystem cache,
 		// which would cause stale responses for later tests that reuse the same port.
 		cfg := httpc.DefaultConfig()
+		cfg.IPPolicy = allowLoopbackPolicy()
 		cfg.EnableCache = false
 		cfg.RetryMax = 0
 		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.Error(t, err)
@@ -207,11 +240,12 @@ func TestFromUrl(t *testing.T) {
 
 		// Use a custom client with retries disabled for faster test
 		config := httpc.DefaultConfig()
+		config.IPPolicy = allowLoopbackPolicy()
 		config.RetryMax = 0
 		customClient := httpc.NewClient(config)
 
 		getter := NewGetter(WithHTTPClient(customClient))
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.Error(t, err)
@@ -227,8 +261,8 @@ func TestFromUrl(t *testing.T) {
 		}))
 		defer server.Close()
 
-		getter := NewGetter()
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
+		getter := NewGetterFromContext(ctx)
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.Error(t, err)
@@ -244,11 +278,12 @@ func TestFromUrl(t *testing.T) {
 		defer server.Close()
 
 		config := httpc.DefaultConfig()
+		config.IPPolicy = allowLoopbackPolicy()
 		config.EnableCache = false
 		customClient := httpc.NewClient(config)
 
 		getter := NewGetter(WithHTTPClient(customClient))
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.NoError(t, err)
@@ -262,8 +297,8 @@ func TestFromUrl(t *testing.T) {
 		}))
 		defer server.Close()
 
-		getter := NewGetter()
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(ctxAllowPrivateIPs())
+		getter := NewGetterFromContext(ctx)
 		cancel() // Cancel immediately
 
 		sol, err := getter.FromURL(ctx, server.URL)
@@ -281,13 +316,14 @@ func TestFromUrl(t *testing.T) {
 		customLogger := logr.Discard()
 		// Disable caching to avoid stale cached responses from port-reuse between tests.
 		cfg := httpc.DefaultConfig()
+		cfg.IPPolicy = allowLoopbackPolicy()
 		cfg.EnableCache = false
 		cfg.RetryMax = 0
 		getter := NewGetter(
 			WithLogger(customLogger),
 			WithHTTPClient(httpc.NewClient(cfg)),
 		)
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.NoError(t, err)
@@ -305,14 +341,202 @@ func TestFromUrl(t *testing.T) {
 		defer server.Close()
 
 		cfg := httpc.DefaultConfig()
+		cfg.IPPolicy = allowLoopbackPolicy()
 		cfg.EnableCache = false
 		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.Error(t, err)
 		assert.Nil(t, sol)
 		assert.Contains(t, err.Error(), "validation")
+	})
+}
+
+// TestFromURL_SSRFGuard is a regression test for the SSRF hole in the solution
+// fetch path: FromURL did not apply the private-IP check that the http provider
+// already applied, so a caller-supplied URL could reach loopback, private, and
+// link-local addresses (including cloud metadata endpoints).
+//
+// The guard must deny by default and only yield when the application config
+// explicitly opts in via HTTPClient.AllowPrivateIPs.
+func TestFromURL_SSRFGuard(t *testing.T) {
+	t.Run("blocks private and link-local addresses by default", func(t *testing.T) {
+		blocked := []struct {
+			name string
+			url  string
+		}{
+			{"loopback v4", "http://127.0.0.1/solution.yaml"},
+			{"loopback name", "http://localhost/solution.yaml"},
+			{"link-local metadata", "http://169.254.169.254/latest/meta-data/"},
+			{"private 10/8", "http://10.0.0.5/solution.yaml"},
+			{"private 192.168/16", "http://192.168.1.10/solution.yaml"},
+			{"private 172.16/12", "http://172.16.0.3/solution.yaml"},
+		}
+
+		for _, tc := range blocked {
+			t.Run(tc.name, func(t *testing.T) {
+				getter := NewGetter()
+
+				// context.Background() carries no config, so the policy denies.
+				sol, err := getter.FromURL(context.Background(), tc.url)
+
+				require.Error(t, err, "expected %s to be blocked", tc.url)
+				assert.Nil(t, sol)
+				assert.ErrorIs(t, err, httpc.ErrBlockedByPolicy)
+			})
+		}
+	})
+
+	// The whole point of checking at dial time is that nothing is sent. A guard
+	// that rejected after the fetch would still have leaked the request to the
+	// internal target.
+	t.Run("blocks before issuing any request", func(t *testing.T) {
+		var hits int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			atomic.AddInt32(&hits, 1)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		getter := NewGetter()
+		sol, err := getter.FromURL(context.Background(), server.URL)
+
+		require.Error(t, err)
+		assert.Nil(t, sol)
+		assert.ErrorIs(t, err, httpc.ErrBlockedByPolicy)
+		assert.Zero(t, atomic.LoadInt32(&hits), "policy must reject before the request is sent")
+	})
+
+	// A hostname that resolves to a private address is blocked. This is what a
+	// pre-flight URL check could not do: the client re-resolves DNS when it
+	// opens the socket, so only a check against the resolved address is sound.
+	// "localhost" is used because its resolution to loopback is guaranteed
+	// without depending on external DNS.
+	t.Run("blocks a hostname that resolves to a private address", func(t *testing.T) {
+		getter := NewGetter()
+
+		sol, err := getter.FromURL(context.Background(), "http://localhost/solution.yaml")
+
+		require.Error(t, err)
+		assert.Nil(t, sol)
+		assert.ErrorIs(t, err, httpc.ErrBlockedByPolicy)
+	})
+
+	t.Run("allows private addresses when explicitly opted in", func(t *testing.T) {
+		validSolutionJSON := `{"apiVersion":"scafctl.io/v1","kind":"Solution",` +
+			`"metadata":{"name":"test-solution","version":"1.0.0"}}`
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(validSolutionJSON))
+		}))
+		defer server.Close()
+
+		// Policy is fixed when the client is built, so the opt-in has to reach
+		// the Getter at construction. NewGetterFromContext does that from the
+		// application config on ctx, which is how the CLI wires it.
+		getter := NewGetterFromContext(ctxAllowPrivateIPs())
+
+		sol, err := getter.FromURL(ctxAllowPrivateIPs(), server.URL)
+
+		require.NoError(t, err, "opt-in config should permit the loopback fetch")
+		require.NotNil(t, sol)
+	})
+
+	t.Run("a narrow allowlist entry is enough", func(t *testing.T) {
+		validSolutionJSON := `{"apiVersion":"scafctl.io/v1","kind":"Solution",` +
+			`"metadata":{"name":"test-solution","version":"1.0.0"}}`
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(validSolutionJSON))
+		}))
+		defer server.Close()
+
+		ctx := config.WithConfig(context.Background(), &config.Config{
+			HTTPClient: config.HTTPClientConfig{
+				AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+			},
+		})
+
+		sol, err := NewGetterFromContext(ctx).FromURL(ctx, server.URL)
+
+		require.NoError(t, err, "naming the range should permit the fetch")
+		require.NotNil(t, sol)
+	})
+
+	t.Run("public addresses are unaffected by the policy", func(t *testing.T) {
+		// Assert against the policy directly rather than calling FromURL: a real
+		// fetch of a public URL would make a live outbound request, which does
+		// not belong in a unit test and would assert nothing when the network is
+		// unavailable.
+		policy, err := httpc.PolicyFromAppConfig(nil)
+		require.NoError(t, err)
+
+		assert.NoError(t, policy.CheckIP(net.ParseIP("203.0.113.7")),
+			"a public IP must not be rejected by the default policy")
+		assert.NoError(t, policy.CheckIP(net.ParseIP("8.8.8.8")),
+			"a public IP must not be rejected by the default policy")
+	})
+
+	// Cloud metadata is never reachable, no matter how permissive the
+	// configuration is. If this ever fails, an operator can hand a solution the
+	// instance credentials.
+	t.Run("metadata stays blocked under the most permissive config", func(t *testing.T) {
+		allow := true
+		policy, err := httpc.PolicyFromAppConfig(&config.HTTPClientConfig{
+			AllowPrivateIPs:     &allow,
+			AllowedPrivateCIDRs: config.PrivateCIDRList("169.254.0.0/16"),
+		})
+		require.NoError(t, err)
+
+		assert.Error(t, policy.CheckIP(net.ParseIP("169.254.169.254")),
+			"cloud metadata must not be reachable under any configuration")
+	})
+
+	t.Run("every public entry point enforces the policy", func(t *testing.T) {
+		// FromURL is currently the single choke point for URL fetches, but the
+		// callers that dispatch to it are the real API surface. Pin each one so
+		// a future fetch path added to a dispatcher cannot bypass the policy
+		// without failing here.
+		var hits int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			atomic.AddInt32(&hits, 1)
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		entryPoints := map[string]func(*Getter) error{
+			"Get": func(g *Getter) error {
+				_, err := g.Get(context.Background(), server.URL)
+				return err
+			},
+			"GetWithBundle": func(g *Getter) error {
+				_, _, err := g.GetWithBundle(context.Background(), server.URL)
+				return err
+			},
+			"GetWithLayers": func(g *Getter) error {
+				_, _, err := g.GetWithLayers(context.Background(), server.URL, mediaTypeSolutionLock)
+				return err
+			},
+			"FromURL": func(g *Getter) error {
+				_, err := g.FromURL(context.Background(), server.URL)
+				return err
+			},
+		}
+
+		for name, call := range entryPoints {
+			t.Run(name, func(t *testing.T) {
+				atomic.StoreInt32(&hits, 0)
+				err := call(NewGetter())
+
+				require.Error(t, err, "%s must reject a loopback URL under default config", name)
+				assert.ErrorIs(t, err, httpc.ErrBlockedByPolicy,
+					"%s must fail via the address policy, not some incidental error", name)
+				assert.Zero(t, atomic.LoadInt32(&hits), "%s must not contact the server", name)
+			})
+		}
 	})
 }
 
@@ -512,10 +736,11 @@ func TestGet(t *testing.T) {
 		// Disable caching so a previously cached response for a reused port doesn't
 		// cause a stale 404 to be returned instead of the actual 200 from this server.
 		cfg := httpc.DefaultConfig()
+		cfg.IPPolicy = allowLoopbackPolicy()
 		cfg.EnableCache = false
 		cfg.RetryMax = 0
 		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.Get(ctx, server.URL)
 		require.NoError(t, err)
@@ -1253,10 +1478,11 @@ spec:
 		defer server.Close()
 
 		cfg := httpc.DefaultConfig()
+		cfg.IPPolicy = allowLoopbackPolicy()
 		cfg.EnableCache = false
 		cfg.RetryMax = 0
 		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
-		sol, layers, err := getter.GetWithLayers(context.Background(), server.URL, mediaTypeSolutionLock)
+		sol, layers, err := getter.GetWithLayers(ctxAllowPrivateIPs(), server.URL, mediaTypeSolutionLock)
 
 		require.NoError(t, err)
 		assert.NotNil(t, sol)
@@ -1923,10 +2149,11 @@ spec:
 		defer server.Close()
 
 		cfg := httpc.DefaultConfig()
+		cfg.IPPolicy = allowLoopbackPolicy()
 		cfg.EnableCache = false
 		cfg.RetryMax = 0
 		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
-		sol, bundleData, err := getter.GetWithBundle(context.Background(), server.URL)
+		sol, bundleData, err := getter.GetWithBundle(ctxAllowPrivateIPs(), server.URL)
 
 		require.NoError(t, err)
 		assert.NotNil(t, sol)

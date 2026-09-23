@@ -32,7 +32,7 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/mark3labs/mcp-go v0.58.0
 	github.com/oakwood-commons/celexp v0.1.0
-	github.com/oakwood-commons/httpc v0.2.0
+	github.com/oakwood-commons/httpc v0.3.0
 	github.com/oakwood-commons/kvx v0.16.1
 	github.com/oakwood-commons/oauth-helpers v0.2.0
 	github.com/oakwood-commons/scafctl-plugin-sdk v0.17.0
@@ -69,7 +69,7 @@ require (
 	golang.org/x/term v0.45.0
 	golang.org/x/tools v0.49.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688
-	google.golang.org/grpc v1.83.1
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/apimachinery v0.37.0

@@ -981,7 +981,7 @@ func providerPoolDeps(sol *solution.Solution, cfg *prepareConfig) []solution.Plu
 		}
 	}
 	if cfg.officialProviders != nil {
-		for _, name := range sol.Spec.ReferencedProviderNames() {
+		for _, name := range sol.ReferencedProviderNames() {
 			if seen[name] {
 				continue
 			}
@@ -1040,7 +1040,7 @@ func missingOfficialProviders(
 	officialReg *official.Registry,
 ) []official.Provider {
 	var missing []official.Provider
-	for _, name := range sol.Spec.ReferencedProviderNames() {
+	for _, name := range sol.ReferencedProviderNames() {
 		if reg.Has(name) {
 			continue
 		}
@@ -1600,9 +1600,13 @@ func HostStaticProviderConfig(binaryName, entrypoint string) plugin.ProviderConf
 	return cfg
 }
 
-// injectHTTPClientSettings propagates httpClient configuration (e.g.
-// allowPrivateIPs) from the app config to ProviderConfig.Settings["httpClient"]
-// so external plugins can apply the same network policies as the host.
+// injectHTTPClientSettings propagates httpClient network policy from the app
+// config to ProviderConfig.Settings["httpClient"] so external plugins can apply
+// the same rules as the host.
+//
+// The field names match the host's own configuration keys, so a plugin reading
+// them gets the same precedence: allowedPrivateCIDRs, when present, narrows the
+// plugin to those ranges regardless of allowPrivateIPs.
 func injectHTTPClientSettings(ctx context.Context, cfg *plugin.ProviderConfig) {
 	if cfg == nil {
 		return
@@ -1613,18 +1617,46 @@ func injectHTTPClientSettings(ctx context.Context, cfg *plugin.ProviderConfig) {
 		return
 	}
 
-	// Only inject if there's something to communicate.
-	if appCfg.HTTPClient.AllowPrivateIPs == nil {
+	// Only inject if there's something to communicate. An operator who sets
+	// only one of these must still have it reach the plugin, so all four have
+	// to be absent before this is a no-op.
+	cidrs, cidrsSet := appCfg.HTTPClient.PrivateCIDRs()
+	if appCfg.HTTPClient.AllowPrivateIPs == nil &&
+		!cidrsSet &&
+		appCfg.HTTPClient.TrustProxyResolution == nil &&
+		appCfg.HTTPClient.TrustedProxy == nil {
 		return
 	}
 
+	// No omitempty on the allowlist: a present-but-empty list means "no
+	// exceptions" and overrides allowPrivateIPs, while an absent one leaves the
+	// flag in force. omitempty erases exactly that distinction, so a plugin
+	// given {allowPrivateIPs: true, allowedPrivateCIDRs: []} would see only the
+	// flag and widen back to every private range. nil marshals as null and an
+	// empty slice as [], which keeps the two apart -- and PrivateCIDRs
+	// guarantees a non-nil slice whenever the field was set.
 	type httpClientSettings struct {
-		AllowPrivateIPs bool `json:"allowPrivateIPs"`
+		AllowPrivateIPs      bool     `json:"allowPrivateIPs"`
+		AllowedPrivateCIDRs  []string `json:"allowedPrivateCIDRs"`
+		TrustProxyResolution bool     `json:"trustProxyResolution"`
+		TrustedProxy         bool     `json:"trustedProxy"`
 	}
 
-	raw, err := json.Marshal(httpClientSettings{
-		AllowPrivateIPs: *appCfg.HTTPClient.AllowPrivateIPs,
-	})
+	settings := httpClientSettings{}
+	if cidrsSet {
+		settings.AllowedPrivateCIDRs = cidrs
+	}
+	if appCfg.HTTPClient.AllowPrivateIPs != nil {
+		settings.AllowPrivateIPs = *appCfg.HTTPClient.AllowPrivateIPs
+	}
+	if appCfg.HTTPClient.TrustProxyResolution != nil {
+		settings.TrustProxyResolution = *appCfg.HTTPClient.TrustProxyResolution
+	}
+	if appCfg.HTTPClient.TrustedProxy != nil {
+		settings.TrustedProxy = *appCfg.HTTPClient.TrustedProxy
+	}
+
+	raw, err := json.Marshal(settings)
 	if err != nil {
 		return
 	}

@@ -262,6 +262,7 @@ tasks:
     silent: true
     cmds:
       - task: mod:tidy:check
+      - task: mod:tidy:check:e2e
 
   mod:tidy:check:
     desc: "Ensure go.mod and go.sum are tidy without modifying the working tree"
@@ -284,6 +285,32 @@ tasks:
         mv go.sum.bak go.sum
         echo "❌ go.mod and go.sum need tidying"
         echo "Run 'task mod' or 'go mod tidy' to fix."
+        exit 1
+
+  mod:tidy:check:e2e:
+    desc: "Ensure e2e go.mod and go.sum are tidy without modifying the working tree"
+    silent: true
+    dir: "{{.ROOT_DIR}}/e2e"
+    env:
+      GOWORK: "{{.ROOT_DIR}}/e2e/go.work"
+    cmds:
+      - |
+        set -e
+        cp go.mod go.mod.bak
+        cp go.sum go.sum.bak
+
+        go mod tidy > /dev/null 2>&1
+
+        if diff -q go.mod go.mod.bak > /dev/null 2>&1 && diff -q go.sum go.sum.bak > /dev/null 2>&1; then
+          echo "✅ e2e go.mod and go.sum are tidy"
+          rm -f go.mod.bak go.sum.bak
+          exit 0
+        fi
+
+        mv go.mod.bak go.mod
+        mv go.sum.bak go.sum
+        echo "❌ e2e go.mod and go.sum need tidying"
+        echo "Run 'cd e2e && go mod tidy' to fix."
         exit 1
 
   mod:verify:
@@ -431,6 +458,30 @@ tasks:
         mkdir -p "{{.GOLANGCI_LINT_CACHE}}"
         golangci-lint run ./... --config .golangci.yml --timeout 10m0s
         echo "✅ No linting issues found"
+      - task: lint:e2e
+
+  lint:e2e:
+    desc: "Run golangci-lint for the e2e module only"
+    silent: true
+    deps: [install-tools]
+    dir: "{{.ROOT_DIR}}/e2e"
+    env:
+      GOWORK: "{{.ROOT_DIR}}/e2e/go.work"
+    sources:
+      - "e2e/**/*.go"
+      - "e2e/go.mod"
+      - "e2e/go.sum"
+      - "e2e/go.work"
+      - ".golangci.yml"
+    cmds:
+      - |
+        set -e
+        export PATH="{{.TOOLS_PATH}}:$PATH"
+
+        echo "Running golangci-lint for e2e module..."
+        mkdir -p "{{.GOLANGCI_LINT_CACHE}}"
+        golangci-lint run ./... --config ../.golangci.yml --timeout 10m0s
+        echo "✅ No linting issues found in e2e module"
 
   lint:changed:
     desc: "Lint ONLY issues introduced by this branch (vs. the merge base). Cuts through pre-existing findings in untouched files so you can verify your own changes are clean before committing."
@@ -460,6 +511,46 @@ tasks:
           --new-from-merge-base "${base_ref}" \
           --whole-files
         echo "✅ No new linting issues in changed code"
+      - task: lint:changed:e2e
+        vars:
+          BASE: '{{.BASE}}'
+
+  lint:changed:e2e:
+    desc: "Lint ONLY issues introduced by this branch (vs. the merge base) in the e2e module. Mirrors lint:changed but scoped to the nested e2e module."
+    silent: true
+    deps: [install-tools]
+    dir: "{{.ROOT_DIR}}/e2e"
+    env:
+      GOWORK: "{{.ROOT_DIR}}/e2e/go.work"
+    vars:
+      # Branch to diff against; override with BASE=<ref>. Defaults to the
+      # tracked default branch, falling back to main.
+      BASE: '{{.BASE | default "main"}}'
+    cmds:
+      - |
+        set -e
+        export PATH="{{.TOOLS_PATH}}:$PATH"
+        mkdir -p "{{.GOLANGCI_LINT_CACHE}}"
+
+        # Resolve the merge base so only lines this branch changed are reported.
+        # Prefer origin/<branch>, then a local ref, then a raw commit hash so the
+        # nested e2e working directory still points at a valid ref.
+        base_ref="{{.BASE}}"
+        if git rev-parse --verify --quiet "origin/${base_ref}" >/dev/null; then
+          base_ref="origin/${base_ref}"
+        elif ! git rev-parse --verify --quiet "${base_ref}" >/dev/null; then
+          echo "❌ Base ref '${base_ref}' not found (tried origin/${base_ref} and ${base_ref})."
+          echo "   Pass BASE=<ref-or-commit> to override."
+          exit 1
+        fi
+
+        echo "Linting e2e changes introduced since ${base_ref}..."
+        golangci-lint run ./... \
+          --config ../.golangci.yml \
+          --timeout 10m0s \
+          --new-from-merge-base "${base_ref}" \
+          --whole-files
+        echo "✅ No new linting issues in changed e2e code"
 
   vet:
     desc: "Run go vet (static checks from the Go toolchain)"
@@ -1074,9 +1165,19 @@ tasks:
       - go test -count=1 -parallel 4 ./tests/integration/ -run "TestIntegration_" -timeout 10m
       - '{{.DIST}}/{{.OUTPUT_FILE}} test functional --tests-path "{{.FIXED_ROOT}}/tests/integration/solutions" --no-color -q --concurrency 8'
 
+  test:e2e:go:
+    desc: "Run Go tests in e2e module only"
+    dir: "{{.ROOT_DIR}}/e2e"
+    env:
+      GOWORK: "{{.ROOT_DIR}}/e2e/go.work"
+      GOFLAGS: '{{.GOFLAGS | default "-count=1"}}'
+      GOTESTFLAGS: '{{.GOTESTFLAGS | default "-shuffle=on"}}'
+    cmds:
+      - go test $GOTESTFLAGS -timeout 20m ./...
+
   test:e2e:
     deps: [info, git-unshallow-clone, lint]
-    desc: "Run end-to-end tests (lint + coverage + solutions + integration)"
+    desc: "Run end-to-end tests (lint + coverage + solutions + integration + e2e module)"
     vars:
       START_TIME:
         sh: date +%s
@@ -1084,6 +1185,7 @@ tasks:
       - task: test-cover
       - task: lint:solutions
       - task: integration
+      - task: test:e2e:go
       - |
         END_TIME=$(date +%s)
         ELAPSED=$((END_TIME - {{.START_TIME}}))

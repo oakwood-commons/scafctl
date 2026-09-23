@@ -20,6 +20,7 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ## Response Format
 
 ### Success (single resource)
+
 ```json
 {
   "fieldA": "value",
@@ -28,6 +29,7 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ```
 
 ### Success (collection with pagination)
+
 ```json
 {
   "items": [...],
@@ -42,6 +44,7 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ```
 
 ### Error (RFC 7807 Problem Details)
+
 ```json
 {
   "title": "Bad Request",
@@ -55,7 +58,7 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ## Naming Conventions
 
 | Layer | Convention | Example |
-|-------|-----------|---------|
+| ------- | ----------- | --------- |
 | Config (YAML/JSON) | camelCase | `apiVersion`, `shutdownTimeout` |
 | API response fields | snake_case | `per_page`, `total_items`, `has_more` |
 | URL paths | lowercase, kebab-case for multi-word | `/v1/solutions`, `/v1/admin/reload-config` |
@@ -68,7 +71,7 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ### Operational (Root Router — No Auth)
 
 | Method | Path | Description | Status Codes |
-|--------|------|-------------|-------------|
+| -------- | ------ | ------------- | ------------- |
 | GET | `/` | API root with HATEOAS links | 200 |
 | GET | `/health` | Full health check with component status | 200 |
 | GET | `/health/live` | Liveness probe | 200 |
@@ -78,7 +81,7 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ### Solutions
 
 | Method | Path | Description | Query Params | Status Codes |
-|--------|------|-------------|-------------|-------------|
+| -------- | ------ | ------------- | ------------- | ------------- |
 | POST | `/v1/solutions/run` | Run a solution (resolve + execute actions) | — | 200, 400, 422 |
 | POST | `/v1/solutions/render` | Resolve inputs without executing actions | — | 200, 400, 422 |
 | POST | `/v1/solutions/lint` | Lint a solution | — | 200, 400 |
@@ -89,7 +92,7 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ### Providers
 
 | Method | Path | Description | Query Params | Status Codes |
-|--------|------|-------------|-------------|-------------|
+| -------- | ------ | ------------- | ------------- | ------------- |
 | GET | `/v1/providers` | List providers | `page`, `per_page`, `filter` | 200, 400 |
 | GET | `/v1/providers/{name}` | Get provider details | — | 200, 404 |
 | GET | `/v1/providers/{name}/schema` | Get provider schema | — | 200, 404 |
@@ -97,14 +100,14 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ### Eval
 
 | Method | Path | Description | Status Codes |
-|--------|------|-------------|-------------|
+| -------- | ------ | ------------- | ------------- |
 | POST | `/v1/eval/cel` | Evaluate CEL expression | 200, 400 |
 | POST | `/v1/eval/template` | Evaluate Go template | 200, 400 |
 
 ### Catalogs
 
 | Method | Path | Description | Query Params | Status Codes |
-|--------|------|-------------|-------------|-------------|
+| -------- | ------ | ------------- | ------------- | ------------- |
 | GET | `/v1/catalogs` | List catalogs | `page`, `per_page`, `filter` | 200, 400 |
 | GET | `/v1/catalogs/{name}` | Get catalog details | — | 200, 404 |
 | GET | `/v1/catalogs/{name}/solutions` | List catalog solutions | `page`, `per_page` | 200, 404 |
@@ -113,7 +116,7 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ### Schemas
 
 | Method | Path | Description | Query Params | Status Codes |
-|--------|------|-------------|-------------|-------------|
+| -------- | ------ | ------------- | ------------- | ------------- |
 | GET | `/v1/schemas` | List schemas | `page`, `per_page` | 200 |
 | GET | `/v1/schemas/{name}` | Get schema | — | 200, 404 |
 | POST | `/v1/schemas/validate` | Validate against schema | — | 200, 400, 422 |
@@ -121,28 +124,28 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ### Config
 
 | Method | Path | Description | Status Codes |
-|--------|------|-------------|-------------|
+| -------- | ------ | ------------- | ------------- |
 | GET | `/v1/config` | Get current config | 200 |
 | GET | `/v1/settings` | Get runtime settings | 200 |
 
 ### Snapshots
 
 | Method | Path | Description | Query Params | Status Codes |
-|--------|------|-------------|-------------|-------------|
+| -------- | ------ | ------------- | ------------- | ------------- |
 | GET | `/v1/snapshots` | List snapshots (planned) | `page`, `per_page` | 200 |
 | GET | `/v1/snapshots/{id}` | Get snapshot details (planned) | — | 200, 404 |
 
 ### Explain & Diff
 
 | Method | Path | Description | Status Codes |
-|--------|------|-------------|-------------|
+| -------- | ------ | ------------- | ------------- |
 | POST | `/v1/explain` | Explain a solution | 200, 400 |
 | POST | `/v1/diff` | Diff solutions | 200, 400 |
 
 ### Admin
 
 | Method | Path | Description | Authorization | Status Codes |
-|--------|------|-------------|--------------|-------------|
+| -------- | ------ | ------------- | -------------- | ------------- |
 | GET | `/v1/admin/info` | Server info | admin role / localhost | 200, 403 |
 | POST | `/v1/admin/reload-config` | Hot-reload config (planned) | admin role / localhost | 200, 403 |
 | POST | `/v1/admin/clear-cache` | Clear caches (planned) | admin role / localhost | 200, 403 |
@@ -150,7 +153,7 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ### Documentation (Auto-Generated by Huma)
 
 | Method | Path | Description | Status Codes |
-|--------|------|-------------|-------------|
+| -------- | ------ | ------------- | ------------- |
 | GET | `/v1/docs` | Interactive API documentation | 200 |
 | GET | `/v1/openapi.json` | OpenAPI specification (JSON) | 200 |
 
@@ -159,7 +162,7 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 ## Common Query Parameters
 
 | Parameter | Type | Description | Default | Constraints |
-|-----------|------|-------------|---------|-------------|
+| ----------- | ------ | ------------- | --------- | ------------- |
 | `page` | int | Page number (1-indexed) | 1 | 1–10000 |
 | `per_page` | int | Items per page | 100 | 1–1000 |
 | `filter` | string | CEL filter expression | — | max 2000 chars |
@@ -169,7 +172,7 @@ Version-prefixed endpoints use `/{apiVersion}/` (default: `/v1/`).
 These status codes can be returned by any endpoint, in addition to endpoint-specific codes:
 
 | Code | Condition |
-|------|-----------|
+| ------ | ----------- |
 | 401 Unauthorized | Missing or invalid auth token (when auth is enabled) |
 | 403 Forbidden | Insufficient role (admin endpoints), or non-loopback with auth disabled |
 | 405 Method Not Allowed | HTTP method not supported for this resource |
@@ -186,20 +189,24 @@ The API uses a two-layer middleware architecture. Health probes and metrics bypa
 ### Global Middleware (All Routes)
 
 | Order | Middleware | Purpose |
-|-------|-----------|---------|
+| ------- | ----------- | --------- |
 | 1 | Panic Recovery | Catches panics, logs stack trace, returns 500 |
 | 2 | Request ID | Generates unique `X-Request-ID` per request |
-| 3 | Strip Slashes | Normalizes trailing slashes in URLs |
-| 4 | Request Logging | Structured log of method, path, status, duration |
+| 3 | Flight ID | Correlation ID spanning the full request lifecycle |
+| 4 | Strip Slashes | Normalizes trailing slashes in URLs |
+| 5 | Request Logging | Structured log of method, path, status, duration |
+| 6 | Token Passthrough | Forwards allow-listed caller tokens to providers (when configured) |
 
 ### API Middleware (Business Endpoints)
 
 | Order | Middleware | Purpose |
-|-------|-----------|---------|
+| ------- | ----------- | --------- |
+| 0 | Host Allowlist | Rejects unexpected `Host` headers (DNS-rebinding protection); no-op when `allowedHosts` is empty |
 | 1 | CORS | Cross-Origin Resource Sharing (configurable) |
 | 2 | Timeout | Request timeout enforcement |
-| 3 | Throttle | Max concurrent connections |
+| 3 | Throttle | Max concurrent in-flight requests |
 | 4 | Authentication | Entra OIDC JWT validation |
+| 4b | Admin Authorization | `/v1/admin/*` only: requires the `admin` role, or a loopback peer when auth is disabled |
 | 5 | Rate Limiting | Per-IP sliding window limiter |
 | 6 | Max Body Size | Request body size validation |
 | 7 | Compression | gzip response compression |
@@ -215,7 +222,7 @@ The API uses a two-layer middleware architecture. Health probes and metrics bypa
 When rate limiting is enabled, every API response includes standard rate limit headers:
 
 | Header | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `X-RateLimit-Limit` | Maximum requests allowed in the window |
 | `X-RateLimit-Remaining` | Requests remaining in the current window |
 | `X-RateLimit-Reset` | Unix timestamp when the rate limit window resets |
@@ -230,7 +237,7 @@ When rate limiting is enabled, every API response includes standard rate limit h
 All API responses include the following security headers:
 
 | Header | Value |
-|--------|-------|
+| -------- | ------- |
 | `X-Content-Type-Options` | `nosniff` |
 | `X-Frame-Options` | `DENY` |
 | `Content-Security-Policy` | `default-src 'none'` |
@@ -246,6 +253,7 @@ The server supports TLS with configurable certificate and key paths. When TLS is
 ### CEL Filter Sandboxing
 
 User-supplied filter expressions are evaluated with:
+
 - **Cost limit**: 10,000 (lower than CLI default of 1,000,000)
 - **Read-only**: No I/O, no mutations, no filesystem access
 - **Max length**: 2,000 characters
@@ -253,14 +261,27 @@ User-supplied filter expressions are evaluated with:
 ### Audit Log Redaction
 
 Request bodies in audit logs have sensitive fields redacted:
+
 - Fields matching `password`, `secret`, `token`, `key`, `credential`, `authorization` → `[REDACTED]`
 
 ### Admin Authorization
 
 | Auth State | Admin Access |
-|-----------|-------------|
+| ----------- | ------------- |
 | Entra OIDC enabled | Requires `admin` role in JWT claims |
-| Auth disabled | Localhost-only (non-loopback → 403) |
+| Auth disabled | Localhost-only (non-loopback -> 403) |
+
+The loopback check reads only the peer address (`RemoteAddr`). Proxy headers
+(`X-Forwarded-For`, `Forwarded`, `X-Real-IP`) are never trusted to *grant*
+access -- a remote caller cannot claim to be localhost by setting them.
+
+**Reverse-proxy caveat:** when the server is fronted by a proxy on the same
+host, every forwarded request arrives with `RemoteAddr = 127.0.0.1`, which would
+otherwise satisfy the loopback check for internet callers. To close that, a
+loopback request carrying any proxy-hop header is **denied** rather than
+allowed, since those headers prove a hop occurred. Operators fronting the server
+with a proxy should additionally block `/v1/admin/` at the proxy and enable
+authentication.
 
 ---
 
@@ -269,14 +290,17 @@ Request bodies in audit logs have sensitive fields redacted:
 The API server is configured via the `apiServer` section in the scafctl config file:
 
 | Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `host` | string | `127.0.0.1` | Bind address |
+| ------- | ------ | --------- | ------------- |
+| `host` | string | `127.0.0.1` | Bind address. Binding a non-loopback address with auth disabled logs a startup warning. |
 | `port` | int | `8080` | Listen port |
 | `apiVersion` | string | `v1` | URL path version prefix |
-| `requestTimeout` | string | `30s` | Per-request timeout |
+| `requestTimeout` | string | `60s` | Per-request timeout (also used for `ReadTimeout`/`WriteTimeout`) |
+| `idleTimeout` | string | `60s` | Keep-alive idle connection timeout. When unset, Go falls back to `ReadTimeout`, so the default matches `requestTimeout` rather than extending it. |
+| `maxHeaderBytes` | int | `1048576` | Max size of request headers in bytes. Capped at 4 MB; a larger value is **rejected at startup** by config validation. |
 | `shutdownTimeout` | string | `30s` | Graceful shutdown window |
-| `maxConcurrent` | int | `100` | Max concurrent connections |
+| `maxConcurrent` | int | `1000` | Max concurrent in-flight requests |
 | `maxRequestSize` | int64 | `10485760` | Max request body size (bytes) |
+| `allowedHosts` | []string | -- | Permitted `Host` header values (DNS-rebinding protection). **Empty means every Host is accepted.** Supports `*.example.com` wildcards (subdomains at any depth, but **not** the bare apex -- list it separately). A bare `*` is the explicit accept-everything opt-out; a non-empty list whose entries are *all* blank or malformed is **rejected at startup** rather than silently disabling the check. Capped at 50 entries, enforced at startup. Applies to `/v1/*` only; `/health` and `/metrics` are exempt so k8s probes keep working. |
 | `compression.level` | int | `6` | Gzip compression level |
 | `cors.enabled` | bool | `false` | Enable CORS |
 | `cors.allowedOrigins` | []string | — | Allowed origins |
@@ -289,7 +313,29 @@ The API server is configured via the `apiServer` section in the scafctl config f
 | `auth.azureOIDC.enabled` | bool | `false` | Enable Entra OIDC auth |
 | `auth.azureOIDC.tenantId` | string | — | Azure AD tenant ID |
 | `auth.azureOIDC.clientId` | string | — | Azure AD client ID |
-| `rateLimit.global.maxRequests` | int | — | Max requests per window |
-| `rateLimit.global.window` | string | — | Rate limit window duration |
+| `rateLimit.global.maxRequests` | int | `100` | Max requests per window. Applied by default -- unset does not mean disabled, and `0` denies every request, so running unlimited means setting a very high value |
+| `rateLimit.global.window` | string | `1m` | Rate limit window duration |
+| `rateLimit.global.trustProxy` | bool | `false` | Key the limiter on `X-Forwarded-For`/`X-Real-IP` instead of `RemoteAddr`. Only enable behind a proxy that sanitizes those headers, or clients can spoof their IP to bypass the limit |
 | `audit.enabled` | bool | `false` | Enable audit logging |
 | `tracing.enabled` | bool | `false` | Enable OpenTelemetry tracing |
+
+### Where these bounds are enforced
+
+The `maximum` / `maxItems` struct tags on `APIServerConfig` describe the bounds
+to schema consumers, but the config loader does not apply struct tags. The
+values above are therefore checked by `APIServerConfig.Validate`, which runs on
+every path that can start a server:
+
+- `config.Manager.Load` -- the file/env/flag configuration path used by
+  `scafctl serve`.
+- `api.NewServer` -- the embedder path. `NewServer(WithServerConfig(cfg))`
+  accepts a hand-built config that never went through the loader, so it
+  validates before constructing anything and returns an error on a violation.
+- `api.SetupMiddleware` -- exported separately, takes its own
+  `*config.APIServerConfig`, and is the only consumer of `allowedHosts`.
+
+Embedder note: `NewServer` and `SetupMiddleware` return an error for an
+`apiServer` config that exceeds a documented bound. A limit that only the
+file-loading path honours is not a limit, so this is deliberate -- but an
+embedder that was previously passing an out-of-bounds value will now fail at
+construction instead of silently running unbounded.

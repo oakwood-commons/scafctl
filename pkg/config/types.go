@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // CurrentConfigVersion is the current config file version.
@@ -74,6 +75,7 @@ type CatalogConfig struct {
 	Type              string            `json:"type" yaml:"type" mapstructure:"type" doc:"Catalog type" example:"filesystem" maxLength:"50"`
 	Path              string            `json:"path,omitempty" yaml:"path,omitempty" mapstructure:"path" doc:"Path for filesystem catalogs" maxLength:"4096" example:"~/.config/scafctl/catalog"`
 	URL               string            `json:"url,omitempty" yaml:"url,omitempty" mapstructure:"url" doc:"URL for remote catalogs" maxLength:"2048" example:"https://catalog.example.com"`
+	Insecure          bool              `json:"insecure,omitempty" yaml:"insecure,omitempty" mapstructure:"insecure" doc:"Allow insecure TLS/HTTP for local development and test registries"`
 	Auth              *AuthConfig       `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration"`
 	AuthProvider      string            `json:"authProvider,omitempty" yaml:"authProvider,omitempty" mapstructure:"authProvider" doc:"Auth handler name for automatic token injection (e.g. github, gcp, entra)" maxLength:"64" example:"github"`
 	AuthScope         string            `json:"authScope,omitempty" yaml:"authScope,omitempty" mapstructure:"authScope" doc:"OAuth scope for auth provider token requests" maxLength:"1024" example:"https://management.azure.com/.default"`
@@ -308,17 +310,121 @@ type HTTPClientConfig struct {
 	EnableCompression *bool `json:"enableCompression,omitempty" yaml:"enableCompression,omitempty" mapstructure:"enableCompression" doc:"Enable automatic gzip compression"`
 
 	// AllowPrivateIPs controls whether HTTP requests to private, loopback, and
-	// link-local IP addresses are permitted. Checked against IP literals only
-	// (hostnames are not pre-resolved). When false (default), requests to RFC 1918
-	// ranges (10.x, 172.16.x, 192.168.x), loopback (127.x, ::1), link-local
-	// (169.254.x), and CGNAT (100.64.x) are blocked. Set to true to allow private
-	// network access (e.g., for on-premises endpoints or local development).
-	AllowPrivateIPs *bool `json:"allowPrivateIPs,omitempty" yaml:"allowPrivateIPs,omitempty" mapstructure:"allowPrivateIPs" doc:"Allow HTTP requests to private/loopback/link-local IP literals (default: false). Set true to allow private network access." example:"false"`
+	// link-local addresses are permitted. When false (default), requests to
+	// RFC 1918 ranges (10.x, 172.16.x, 192.168.x), loopback (127.x, ::1),
+	// link-local (169.254.x), and CGNAT (100.64.x) are blocked.
+	//
+	// The check runs when the connection is opened, against the address the
+	// request actually resolves to, so a hostname pointing into private space
+	// is blocked as well.
+	//
+	// This opens every private range at once. Prefer AllowedPrivateCIDRs, which
+	// grants only the ranges you name.
+	AllowPrivateIPs *bool `json:"allowPrivateIPs,omitempty" yaml:"allowPrivateIPs,omitempty" mapstructure:"allowPrivateIPs" doc:"Allow HTTP requests to every private/loopback/link-local range at once (default: false). Prefer allowedPrivateCIDRs." example:"false"`
+
+	// AllowedPrivateCIDRs carves specific address ranges out of the private-address
+	// blocklist, so an internal endpoint can be reached without opening the whole
+	// private network the way AllowPrivateIPs does. Prefer it over AllowPrivateIPs.
+	//
+	// Entries are CIDR blocks ("10.42.7.0/24") or bare addresses ("10.42.7.9",
+	// treated as a single-address range). Both IPv4 and IPv6 are accepted. Every
+	// entry must parse, or startup fails -- a silently-dropped entry would appear
+	// to grant access it does not.
+	//
+	// When set, this WINS over AllowPrivateIPs and narrows the client to just
+	// these ranges, so adding an allowlist to a legacy AllowPrivateIPs: true
+	// configuration tightens it rather than doing nothing. A present but empty
+	// list means "no exceptions" and also overrides AllowPrivateIPs; omit the
+	// field entirely to leave AllowPrivateIPs in force.
+	//
+	// It is a POINTER so that "absent" and "present but empty" survive a config
+	// round-trip. As a plain slice, omitempty drops an empty list on Save, and
+	// the next load reads it as absent -- silently restoring a blanket
+	// AllowPrivateIPs: true that the empty list was overriding. A nil pointer is
+	// still omitted; a pointer to an empty slice marshals as "[]".
+	//
+	// Cloud metadata addresses (169.254.169.254 and the provider-specific
+	// equivalents) can NOT be re-enabled by this field or by AllowPrivateIPs.
+	AllowedPrivateCIDRs *[]string `json:"allowedPrivateCIDRs,omitempty" yaml:"allowedPrivateCIDRs,omitempty" mapstructure:"allowedPrivateCIDRs" doc:"Address ranges exempted from private-IP blocking, as CIDR blocks or bare IPs (e.g. 10.42.7.0/24). Overrides allowPrivateIPs. Cloud metadata addresses can never be exempted." maxItems:"100"`
+
+	// TrustProxyResolution allows a proxied request whose target hostname cannot
+	// be resolved locally to proceed, leaving egress policy to the proxy.
+	//
+	// When a proxy is in use the destination address is not dialed directly, so
+	// the target is checked by resolving it here instead. That fails closed: in
+	// a proxy-only environment with no direct resolver, every request is refused.
+	// Enable this only where the proxy itself is trusted to enforce egress
+	// policy.
+	//
+	// This is the one setting that can weaken the otherwise unconditional
+	// metadata and private-address blocks, because it hands the address
+	// decision to the proxy: a proxy willing to resolve a hostname to a
+	// metadata or private address will reach it.
+	TrustProxyResolution *bool `json:"trustProxyResolution,omitempty" yaml:"trustProxyResolution,omitempty" mapstructure:"trustProxyResolution" doc:"Allow a proxied request whose target does not resolve locally to proceed, leaving egress policy to the proxy (default: false, which fails closed)." example:"false"`
+
+	// TrustedProxy marks a configured HTTP/HTTPS proxy (HTTP_PROXY, HTTPS_PROXY,
+	// or a caller-supplied Transport) as trusted to enforce its own
+	// destination-address egress policy.
+	//
+	// Independent of TrustProxyResolution above: that field only relaxes what
+	// happens when a proxied hostname fails to resolve locally. This field
+	// addresses a different, always-present gap -- when a request goes
+	// through a proxy, the upstream transport dials the PROXY, not the
+	// target, so the dial-time IP check never runs for that hop; the target
+	// is instead checked once against a LOCAL DNS answer before handing the
+	// request to the proxy. If the proxy's own resolution differs (split-
+	// horizon DNS, a rebind between check and connect), the proxy can still
+	// connect somewhere the local check never saw, even with
+	// TrustProxyResolution left at its default false.
+	//
+	// Defaults to false, which disables proxy routing entirely for
+	// policy-protected clients: no HTTP_PROXY/HTTPS_PROXY environment
+	// variable is honoured, closing the gap by not using a proxy at all.
+	// Set this to true only when the configured proxy is known to enforce an
+	// equivalent (or stricter) destination-address policy itself, restoring
+	// normal environment-based proxy behaviour.
+	TrustedProxy *bool `json:"trustedProxy,omitempty" yaml:"trustedProxy,omitempty" mapstructure:"trustedProxy" doc:"Trust a configured HTTP/HTTPS proxy to enforce its own egress policy (default: false, which disables proxy routing for policy-protected clients since the proxy hop cannot be checked at dial time)." example:"false"`
 
 	// MaxResponseBodySize is the maximum number of bytes the HTTP provider will
 	// read from a single response body. Prevents denial-of-service via unbounded
 	// responses from malicious or misconfigured servers. Defaults to 100 MB.
 	MaxResponseBodySize int64 `json:"maxResponseBodySize,omitempty" yaml:"maxResponseBodySize,omitempty" mapstructure:"maxResponseBodySize" doc:"Maximum HTTP response body size in bytes (default: 104857600)" maximum:"1073741824" example:"104857600"`
+}
+
+// PrivateCIDRList builds a value for HTTPClientConfig.AllowedPrivateCIDRs.
+//
+// The field is a pointer so that an absent list stays distinguishable from a
+// deliberately empty one, which makes a struct literal awkward to write. Called
+// with no arguments it yields a present-but-empty list, meaning "no exceptions"
+// -- to leave the field absent, do not set it at all.
+func PrivateCIDRList(entries ...string) *[]string {
+	if entries == nil {
+		entries = []string{}
+	}
+	return &entries
+}
+
+// PrivateCIDRs reports the configured address allowlist and whether the field
+// was set at all.
+//
+// The second return is the part that matters: an absent list (set == false)
+// leaves AllowPrivateIPs in force, while a present but empty one (set == true,
+// len(entries) == 0) is a deliberate "no exceptions" that overrides it. Callers
+// that collapse the two -- by testing len() alone -- silently widen an empty
+// allowlist back to every private range.
+//
+// When set is true the returned slice is never nil, so a caller can encode it
+// without reintroducing the null-versus-[] ambiguity. Every dereference of the
+// underlying pointer goes through here rather than being repeated at each call
+// site.
+func (h *HTTPClientConfig) PrivateCIDRs() (entries []string, set bool) {
+	if h == nil || h.AllowedPrivateCIDRs == nil {
+		return nil, false
+	}
+	if *h.AllowedPrivateCIDRs == nil {
+		return []string{}, true
+	}
+	return *h.AllowedPrivateCIDRs, true
 }
 
 // HTTPClientCacheType constants define the supported HTTP cache types.
@@ -879,6 +985,9 @@ type APIServerConfig struct {
 	APIVersion       string                  `json:"apiVersion,omitempty" yaml:"apiVersion,omitempty" mapstructure:"apiVersion" doc:"API version prefix (e.g. v1, v2)" example:"v1" maxLength:"10" pattern:"^v[0-9]+$" patternDescription:"must be 'v' followed by one or more digits (e.g. v1, v2)"`
 	ShutdownTimeout  string                  `json:"shutdownTimeout,omitempty" yaml:"shutdownTimeout,omitempty" mapstructure:"shutdownTimeout" doc:"Graceful shutdown timeout" example:"30s" maxLength:"20"`
 	RequestTimeout   string                  `json:"requestTimeout,omitempty" yaml:"requestTimeout,omitempty" mapstructure:"requestTimeout" doc:"Default request timeout" example:"60s" maxLength:"20"`
+	IdleTimeout      string                  `json:"idleTimeout,omitempty" yaml:"idleTimeout,omitempty" mapstructure:"idleTimeout" doc:"Keep-alive idle connection timeout (default: 60s)" example:"60s" maxLength:"20"`
+	MaxHeaderBytes   int                     `json:"maxHeaderBytes,omitempty" yaml:"maxHeaderBytes,omitempty" mapstructure:"maxHeaderBytes" doc:"Maximum size of request headers in bytes (default: 1048576). Capped at 4MB; raising it increases DoS exposure." maximum:"4194304" example:"1048576"`
+	AllowedHosts     []string                `json:"allowedHosts,omitempty" yaml:"allowedHosts,omitempty" mapstructure:"allowedHosts" doc:"Host header values this server will answer to, guarding against DNS rebinding. Empty (default) accepts any Host. Supports '*.example.com' wildcards; '*' accepts all." maxItems:"50"`
 	BodyReadTimeout  string                  `json:"bodyReadTimeout,omitempty" yaml:"bodyReadTimeout,omitempty" mapstructure:"bodyReadTimeout" doc:"Default body read timeout for Huma operations" example:"15s" maxLength:"20"`
 	MaxRequestSize   int64                   `json:"maxRequestSize,omitempty" yaml:"maxRequestSize,omitempty" mapstructure:"maxRequestSize" doc:"Maximum request body size in bytes" maximum:"1073741824" example:"10485760"`
 	TLS              APITLSConfig            `json:"tls,omitempty" yaml:"tls,omitempty" mapstructure:"tls" doc:"TLS configuration"`
@@ -936,8 +1045,34 @@ type APICORSConfig struct {
 
 // APIRateLimitConfig holds rate limiting configuration.
 type APIRateLimitConfig struct {
-	Global    *APIRateLimitEntry            `json:"global,omitempty" yaml:"global,omitempty" mapstructure:"global" doc:"Global rate limit"`
+	Global    *APIRateLimitEntry            `json:"global,omitempty" yaml:"global,omitempty" mapstructure:"global" doc:"Global rate limit. Unset means the built-in default applies, not that rate limiting is off; to run effectively unlimited set a very high maxRequests, since 0 denies every request"`
 	Endpoints map[string]*APIRateLimitEntry `json:"endpoints,omitempty" yaml:"endpoints,omitempty" mapstructure:"endpoints" doc:"Per-endpoint rate limits (reserved for future use — not yet applied by the middleware stack)"`
+}
+
+// EffectiveGlobal returns the global rate limit to enforce, substituting the
+// built-in default when none is configured. It never returns nil.
+//
+// A nil Global means "unset", not "disabled". Manager.Load installs this same
+// default through Viper, so a server started by `scafctl serve` is always rate
+// limited; without this method an embedder passing a zero-valued config to
+// NewServer or SetupMiddleware would silently get no limiter at all, and the
+// "on by default" guarantee would hold only for the CLI.
+//
+// There is deliberately no off switch. A configured MaxRequests of 0 (or any
+// negative value) denies every request rather than disabling the limiter, so
+// running effectively unlimited means setting a very high MaxRequests.
+//
+// The returned entry aliases the configured value rather than copying it, so
+// callers must treat it as read-only; normalizing a field in place would mutate
+// the caller's own configuration.
+func (c APIRateLimitConfig) EffectiveGlobal() *APIRateLimitEntry {
+	if c.Global != nil {
+		return c.Global
+	}
+	return &APIRateLimitEntry{
+		MaxRequests: settings.DefaultAPIRateLimitMaxRequests,
+		Window:      settings.DefaultAPIRateLimitWindow,
+	}
 }
 
 // APIRateLimitEntry defines a rate limit rule.
@@ -999,6 +1134,13 @@ type APITracingConfig struct {
 	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable OpenTelemetry tracing"`
 }
 
+// DynamicClientRegistrationConfig holds configuration for RFC 7591 Dynamic Client Registration.
+type DynamicClientRegistrationConfig struct {
+	RegistrationEndpoint string         `json:"registrationEndpoint,omitempty" yaml:"registrationEndpoint,omitempty" mapstructure:"registrationEndpoint" doc:"RFC 7591 Dynamic Client Registration endpoint" maxLength:"2048"`
+	ClientMetadata       map[string]any `json:"clientMetadata,omitempty" yaml:"clientMetadata,omitempty" mapstructure:"clientMetadata" doc:"Client metadata for dynamic registration"`
+	InitialAccessToken   string         `json:"initialAccessToken,omitempty" yaml:"initialAccessToken,omitempty" mapstructure:"initialAccessToken" doc:"Initial access token for dynamic registration"`
+}
+
 // CustomOAuth2Config defines a user-configurable OAuth2 auth handler.
 // Each entry registers as its own named auth.Handler, usable for any OAuth2 service
 // (OCI registries, APIs, providers, etc.).
@@ -1038,6 +1180,10 @@ type CustomOAuth2Config struct {
 
 	// Token exchange (optional secondary credential derivation)
 	TokenExchange *TokenExchangeConfig `json:"tokenExchange,omitempty" yaml:"tokenExchange,omitempty" mapstructure:"tokenExchange" doc:"Optional secondary API call to derive a service-specific credential from the OAuth2 token"`
+
+	// DynamicClientRegistration holds configuration for RFC 7591 Dynamic Client Registration.
+	// When set, the handler performs dynamic registration before the authorization flow.
+	DynamicClientRegistration *DynamicClientRegistrationConfig `json:"dynamicClientRegistration,omitempty" yaml:"dynamicClientRegistration,omitempty" mapstructure:"dynamicClientRegistration" doc:"RFC 7591 Dynamic Client Registration configuration"`
 }
 
 // TokenExchangeConfig defines a secondary API call that the OAuth2 handler executes after

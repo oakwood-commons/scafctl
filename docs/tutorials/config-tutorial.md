@@ -66,8 +66,11 @@ See the current effective configuration:
 {{< tabs "config-tutorial-cmd-2" >}}
 {{% tab "Bash" %}}
 ```bash
-# Full config (YAML format)
+# Full config (kvx auto-picks the format)
 scafctl config view
+
+# As YAML
+scafctl config view -o yaml
 
 # As JSON
 scafctl config view -o json
@@ -81,8 +84,11 @@ scafctl config view -i
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-# Full config (YAML format)
+# Full config (kvx auto-picks the format)
 scafctl config view
+
+# As YAML
+scafctl config view -o yaml
 
 # As JSON
 scafctl config view -o json
@@ -98,17 +104,32 @@ scafctl config view -i
 
 ### 3. Show Config Sources
 
-See where each value comes from (file, environment, default):
+See where each value comes from (file, dropin, environment, default) and
+filter by source:
 
 {{< tabs "config-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl config show
+# Annotate every key with its source and list env-var overrides
+scafctl config view --show-origin
+
+# Only values coming from the config file
+scafctl config view --source=file
+
+# Only environment variable overrides
+scafctl config view --source=env
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl config show
+# Annotate every key with its source and list env-var overrides
+scafctl config view --show-origin
+
+# Only values coming from the config file
+scafctl config view --source=file
+
+# Only environment variable overrides
+scafctl config view --source=env
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -396,7 +417,10 @@ shown as `(not present)`.
 | `httpClient.retry.maxRetries` | int | `3` | Max HTTP retries |
 | `httpClient.caching.enabled` | bool | `true` | Enable HTTP response caching |
 | `httpClient.maxResponseBodySize` | int | `104857600` | Max HTTP response body size (bytes, default 100 MB) |
-| `httpClient.allowPrivateIPs` | bool | `false` | Allow requests to private/loopback IPs (SSRF protection) |
+| `httpClient.allowPrivateIPs` | bool | `false` | Allow requests to every private/loopback IP range at once. Prefer `allowedPrivateCIDRs` |
+| `httpClient.allowedPrivateCIDRs` | []string | unset | Private ranges (or bare addresses) this client may reach. Checked against the resolved address when the connection is opened. Overrides `allowPrivateIPs` when set. Cloud metadata is never permitted |
+| `httpClient.trustedProxy` | bool | `false` | Trust a configured HTTP/HTTPS proxy (`HTTP_PROXY`/`HTTPS_PROXY`) to enforce its own egress policy. Proxy routing is disabled entirely for policy-protected clients unless this is `true` |
+| `httpClient.trustProxyResolution` | bool | `false` | On the trusted-proxy path, allow a proxied target that does not resolve locally to proceed, leaving egress policy to the proxy. Has no effect unless `httpClient.trustedProxy` is also `true`. Defaults to failing closed |
 | `settings.requireSecureKeyring` | bool | `false` | Fail if OS keyring unavailable instead of insecure fallback |
 | `resolver.timeout` | duration | `5m` | Overall resolver timeout |
 | `resolver.concurrency` | int | `4` | Max parallel resolver execution |

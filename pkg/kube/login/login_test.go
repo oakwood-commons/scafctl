@@ -971,7 +971,7 @@ func TestResolveHandler_AuthTypeFallback(t *testing.T) {
 					return &stubAuth{name: name}, nil
 				},
 			}
-			h, err := resolveHandler(context.Background(), deps, tt.req, tt.info)
+			h, err := resolveHandler(context.Background(), deps, tt.req, tt.info, sourceResolver)
 			if tt.wantErr != nil {
 				assert.ErrorIs(t, err, tt.wantErr)
 				return
@@ -997,7 +997,47 @@ func TestResolveHandler_ExplicitHandlerSkipsAudienceGuard(t *testing.T) {
 	}
 	h, err := resolveHandler(context.Background(), deps,
 		Request{Handler: "entra"},
-		kube.ClusterInfo{AuthType: kube.AuthTypeOIDC})
+		kube.ClusterInfo{AuthType: kube.AuthTypeOIDC},
+		sourceDirect)
 	require.NoError(t, err)
 	assert.Equal(t, "entra", h.Name())
+}
+
+func TestResolveHandler_NoAudienceErrorHints(t *testing.T) {
+	t.Parallel()
+
+	// The ErrNoAudience remedies must name the layers that were actually
+	// consulted (issue #851): an inventory-resolved cluster gets the
+	// transform + alias hints; an alias-defined cluster must NOT be offered
+	// the transform (the alias shadows it); a named cluster resolved from
+	// flags can still gain a durable alias entry; a direct URL/--server
+	// invocation gets only the per-invocation flag.
+	deps := Deps{AuthTypeHandlers: DefaultAuthTypeHandlers()}
+
+	_, err := resolveHandler(context.Background(), deps, Request{},
+		kube.ClusterInfo{AuthType: kube.AuthTypeOIDC}, sourceResolver)
+	require.ErrorIs(t, err, ErrNoAudience)
+	assert.Contains(t, err.Error(), "--audience")
+	assert.Contains(t, err.Error(), "kube.clusters.aliases")
+	assert.Contains(t, err.Error(), "kube.clusters.resolver transform")
+
+	_, err = resolveHandler(context.Background(), deps, Request{},
+		kube.ClusterInfo{AuthType: kube.AuthTypeOIDC}, sourceResolverAlias)
+	require.ErrorIs(t, err, ErrNoAudience)
+	assert.Contains(t, err.Error(), "add oidcAudience to the cluster's kube.clusters.aliases entry")
+	assert.NotContains(t, err.Error(), "transform", "the alias shadows the transform, so that remedy can never fix this cluster")
+
+	_, err = resolveHandler(context.Background(), deps, Request{},
+		kube.ClusterInfo{AuthType: kube.AuthTypeOIDC}, sourceNamed)
+	require.ErrorIs(t, err, ErrNoAudience)
+	assert.Contains(t, err.Error(), "--audience")
+	assert.Contains(t, err.Error(), "kube.clusters.aliases entry")
+	assert.NotContains(t, err.Error(), "transform", "no resolver tier supplied the cluster, so the transform is not applicable")
+
+	_, err = resolveHandler(context.Background(), deps, Request{},
+		kube.ClusterInfo{AuthType: kube.AuthTypeOIDC}, sourceDirect)
+	require.ErrorIs(t, err, ErrNoAudience)
+	assert.Contains(t, err.Error(), "--audience")
+	assert.NotContains(t, err.Error(), "alias", "a direct invocation cannot use the alias or transform layers")
+	assert.NotContains(t, err.Error(), "transform")
 }

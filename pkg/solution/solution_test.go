@@ -5,9 +5,12 @@ package solution
 
 import (
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
@@ -790,6 +793,88 @@ func TestSolution_ValidateStateConfig(t *testing.T) {
 	}
 }
 
+func TestSolution_ReferencedProviderNames(t *testing.T) {
+	t.Parallel()
+
+	specWithProviders := func(providers ...string) Spec {
+		with := make([]resolver.ProviderSource, 0, len(providers))
+		for _, p := range providers {
+			with = append(with, resolver.ProviderSource{Provider: p})
+		}
+		return Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"r1": {Resolve: &resolver.ResolvePhase{With: with}},
+			},
+		}
+	}
+
+	tests := []struct {
+		name string
+		sol  *Solution
+		want []string
+	}{
+		{
+			name: "nil solution",
+			sol:  nil,
+			want: nil,
+		},
+		{
+			name: "no state falls back to spec providers",
+			sol:  &Solution{Spec: specWithProviders("env", "parameter")},
+			want: []string{"env", "parameter"},
+		},
+		{
+			name: "state load provider is added and sorted",
+			sol: &Solution{
+				Spec:  specWithProviders("parameter"),
+				State: &state.Config{Load: &state.LoadConfig{Provider: "github"}},
+			},
+			want: []string{"github", "parameter"},
+		},
+		{
+			name: "state provider deduplicated when also spec-referenced",
+			sol: &Solution{
+				Spec:  specWithProviders("file", "parameter"),
+				State: &state.Config{Load: &state.LoadConfig{Provider: "file"}},
+			},
+			want: []string{"file", "parameter"},
+		},
+		{
+			name: "empty state providers are ignored",
+			sol: &Solution{
+				Spec:  specWithProviders("parameter"),
+				State: &state.Config{Load: &state.LoadConfig{}, Save: []state.SaveTarget{{Extends: state.ExtendsLoad}}},
+			},
+			want: []string{"parameter"},
+		},
+		{
+			name: "save target providers are added, extends adds nothing new",
+			sol: &Solution{
+				Spec: specWithProviders("parameter"),
+				State: &state.Config{
+					Load: &state.LoadConfig{Provider: "github"},
+					Save: []state.SaveTarget{{Extends: state.ExtendsLoad}, {Provider: "file"}, {Provider: "github"}},
+				},
+			},
+			want: []string{"file", "github", "parameter"},
+		},
+		{
+			name: "save-only state with no spec references",
+			sol: &Solution{
+				State: &state.Config{Save: []state.SaveTarget{{Provider: "file"}}},
+			},
+			want: []string{"file"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, tt.sol.ReferencedProviderNames())
+		})
+	}
+}
+
 // TestSolution_LegacyStateKeysRejected verifies the decode-time rejection of
 // state keys removed by the load/save split: every legacy key fails with
 // state.ErrLegacyStateConfig and names the offending key.
@@ -936,4 +1021,100 @@ state:
 		require.Len(t, s.State.Save, 1)
 		assert.Equal(t, state.ExtendsLoad, s.State.Save[0].Extends)
 	})
+}
+
+// TestSolution_ReferencedProviderNames_ReflectionCoverage guards against a new
+// field being added that carries a data-provider handle but is not wired into
+// Solution.ReferencedProviderNames. It walks the Solution type graph via
+// reflection and collects every reachable exported struct field named exactly
+// "Provider" of kind string -- the data-provider handle convention across the
+// spec (auth-handler "AuthProvider" fields are intentionally NOT matched, since
+// they are not registrable data providers). It then asserts the set of owning
+// types is exactly the set ReferencedProviderNames reads.
+//
+// If this test fails after adding a provider field, wire the new field into
+// Solution.ReferencedProviderNames (and Spec.ReferencedProviderNames if it lives
+// under the spec). If the field is deliberately not a registrable data provider,
+// add its owning type to the ignored set below with a rationale.
+func TestSolution_ReferencedProviderNames_ReflectionCoverage(t *testing.T) {
+	t.Parallel()
+
+	const (
+		scafctlPkgPrefix  = "github.com/oakwood-commons/scafctl/"
+		providerFieldName = "Provider"
+	)
+
+	// collected lists the types whose Provider field ReferencedProviderNames
+	// (via Spec.ReferencedProviderNames plus the state load and save providers) actually reads.
+	// Keyed by reflect.Type.String() (e.g. "resolver.ProviderSource").
+	collected := map[string]struct{}{
+		"resolver.ProviderSource":     {},
+		"resolver.ProviderTransform":  {},
+		"resolver.ProviderValidation": {},
+		"spec.Call":                   {},
+		"action.Action":               {},
+		"state.LoadConfig":            {},
+		"state.SaveTarget":            {},
+	}
+
+	// ignored lists reachable Provider-bearing types that intentionally do NOT
+	// contribute registrable data providers. Add entries here (with a reason)
+	// only when a new "Provider" field is genuinely not a data-provider handle.
+	ignored := map[string]struct{}{}
+
+	found := map[string][]string{} // reflect type string -> field paths
+	visited := map[reflect.Type]bool{}
+
+	var walk func(rt reflect.Type, path string)
+	walk = func(rt reflect.Type, path string) {
+		// Unwrap containers to reach the underlying struct type. Map keys cannot
+		// hold provider fields we care about, so following Elem() (the value
+		// type) is sufficient.
+		for rt.Kind() == reflect.Pointer || rt.Kind() == reflect.Slice ||
+			rt.Kind() == reflect.Array || rt.Kind() == reflect.Map {
+			rt = rt.Elem()
+		}
+		if rt.Kind() != reflect.Struct || visited[rt] {
+			return
+		}
+		visited[rt] = true
+		// Provider handles only live on scafctl-owned spec types; never descend
+		// into third-party types (semver, jsonschema, time, ...).
+		if !strings.HasPrefix(rt.PkgPath(), scafctlPkgPrefix) {
+			return
+		}
+		for i := 0; i < rt.NumField(); i++ {
+			f := rt.Field(i)
+			if f.PkgPath != "" {
+				continue // unexported: not part of the serializable graph
+			}
+			fpath := path + "." + f.Name
+			if f.Name == providerFieldName && f.Type.Kind() == reflect.String {
+				found[rt.String()] = append(found[rt.String()], fpath)
+				continue
+			}
+			walk(f.Type, fpath)
+		}
+	}
+	walk(reflect.TypeOf(Solution{}), "Solution")
+
+	// Every expected owner must still be reachable; otherwise the collected set
+	// has silently rotted (e.g. a field was renamed or removed).
+	for owner := range collected {
+		assert.Containsf(t, found, owner,
+			"expected Provider owner %q to be reachable from Solution but reflection did not find it; update the collected set", owner)
+	}
+
+	// Every reachable Provider owner must be either collected or explicitly
+	// ignored -- otherwise ReferencedProviderNames is silently missing a field.
+	for owner, paths := range found {
+		if _, ok := collected[owner]; ok {
+			continue
+		}
+		if _, ok := ignored[owner]; ok {
+			continue
+		}
+		t.Errorf("provider field on type %q (paths: %v) is not handled by Solution.ReferencedProviderNames; "+
+			"wire it into the method or add %q to the ignored set with a rationale", owner, paths, owner)
+	}
 }

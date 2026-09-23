@@ -16,6 +16,7 @@ import (
 
 	apimiddleware "github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 func TestSetupMiddleware_Default(t *testing.T) {
@@ -64,6 +65,26 @@ func TestSetupMiddleware_AuthMissingConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "entra OIDC is enabled but tenantId or clientId is empty")
 }
 
+// TestSetupMiddleware_ValidatesConfig proves SetupMiddleware validates the
+// config it is given, not just the one NewServer happened to see.
+//
+// SetupMiddleware is exported and takes its own *config.APIServerConfig,
+// independent of whatever NewServer validated -- and it is the only consumer
+// of AllowedHosts. Without its own cfg.Validate() call, an embedder invoking
+// SetupMiddleware directly (bypassing NewServer entirely) could exceed every
+// advertised bound this PR introduces.
+func TestSetupMiddleware_ValidatesConfig(t *testing.T) {
+	router := chi.NewRouter()
+	cfg := &config.APIServerConfig{MaxHeaderBytes: -1}
+	lgr := logr.Discard()
+
+	apiRouter, err := SetupMiddleware(t.Context(), router, cfg, lgr)
+	assert.Nil(t, apiRouter, "an invalid config must not produce a usable router")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid apiServer configuration")
+	assert.ErrorContains(t, err, "maxHeaderBytes: must not be negative")
+}
+
 func TestSetupMiddleware_WithRateLimit(t *testing.T) {
 	router := chi.NewRouter()
 	cfg := &config.APIServerConfig{
@@ -79,6 +100,41 @@ func TestSetupMiddleware_WithRateLimit(t *testing.T) {
 	apiRouter, err := SetupMiddleware(t.Context(), router, cfg, lgr)
 	require.NoError(t, err)
 	assert.NotNil(t, apiRouter)
+}
+
+// TestSetupMiddleware_RateLimitsWithZeroValuedConfig proves the "on by default"
+// guarantee reaches embedders, not just `scafctl serve`.
+//
+// The default global limit is installed by Manager.Load through Viper, so any
+// caller that builds a config.APIServerConfig directly -- every embedder using
+// NewServer or SetupMiddleware -- has RateLimit.Global == nil. That previously
+// skipped the limiter entirely, leaving the public server API unbounded while
+// the CLI was bounded.
+func TestSetupMiddleware_RateLimitsWithZeroValuedConfig(t *testing.T) {
+	router := chi.NewRouter()
+
+	apiRouter, err := SetupMiddleware(t.Context(), router, &config.APIServerConfig{}, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, apiRouter)
+
+	path := "/" + settings.DefaultAPIVersion + "/ping"
+	router.Get(path, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	// The limiter keys on client IP and httptest.NewRequest uses a fixed
+	// RemoteAddr, so every request below shares a single bucket.
+	statuses := make([]int, 0, settings.DefaultAPIRateLimitMaxRequests+1)
+	for range settings.DefaultAPIRateLimitMaxRequests + 1 {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
+		statuses = append(statuses, rec.Code)
+	}
+
+	assert.Equal(t, http.StatusOK, statuses[0], "the first request must be allowed")
+	assert.Equal(t, http.StatusOK, statuses[settings.DefaultAPIRateLimitMaxRequests-1],
+		"requests up to the limit must be allowed")
+	assert.Equal(t, http.StatusTooManyRequests, statuses[settings.DefaultAPIRateLimitMaxRequests],
+		"request %d must exceed the default %d-request limit",
+		settings.DefaultAPIRateLimitMaxRequests+1, settings.DefaultAPIRateLimitMaxRequests)
 }
 
 func TestSetupMiddleware_TokenPassThroughWiring(t *testing.T) {

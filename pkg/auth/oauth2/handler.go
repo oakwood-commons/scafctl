@@ -10,12 +10,15 @@ package oauth2
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,7 +41,48 @@ const (
 	defaultPollInterval     = 5
 	maxResponseBody         = 1 << 20
 	defaultTokenType        = "Bearer"
+	dynamicClientSecretKey  = "dynamic_client"
 )
+
+type dynamicClient struct {
+	ClientID              string `json:"client_id"`
+	ClientSecret          string `json:"client_secret"` //nolint:gosec // struct field, not a credential literal
+	ClientSecretExpiresAt int64  `json:"client_secret_expires_at,omitempty"`
+	// Fingerprint binds the cached credentials to the registration config
+	// that produced them (registration endpoint, token URL, and client
+	// metadata). If the config changes -- e.g. the handler is repointed at
+	// a different authorization server -- the fingerprint no longer
+	// matches and the cache is treated as a miss, forcing re-registration
+	// instead of silently reusing credentials that were never issued for
+	// the new target.
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+// expired reports whether the cached dynamic client's secret has expired.
+// A zero ClientSecretExpiresAt means the secret does not expire (RFC 7591).
+func (c *dynamicClient) expired() bool {
+	return c.ClientSecretExpiresAt > 0 && time.Now().Unix() >= c.ClientSecretExpiresAt
+}
+
+// dcrFingerprint computes a stable fingerprint for a Dynamic Client
+// Registration config, binding cached credentials to the registration
+// endpoint, token endpoint, and client metadata that produced them.
+func dcrFingerprint(dcr *config.DynamicClientRegistrationConfig, tokenURL string) string {
+	keys := make([]string, 0, len(dcr.ClientMetadata))
+	for k := range dcr.ClientMetadata {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	sb.WriteString(dcr.RegistrationEndpoint)
+	sb.WriteString("|")
+	sb.WriteString(tokenURL)
+	for _, k := range keys {
+		fmt.Fprintf(&sb, "|%s=%v", k, dcr.ClientMetadata[k])
+	}
+	sum := sha256.Sum256([]byte(sb.String()))
+	return hex.EncodeToString(sum[:])
+}
 
 // Handler implements auth.Handler for generic configurable OAuth2 services.
 type Handler struct {
@@ -142,10 +186,17 @@ func (h *Handler) SupportedFlows() []auth.Flow {
 	if h.cfg.DeviceAuthURL != "" {
 		flows = append(flows, auth.FlowDeviceCode)
 	}
-	if h.cfg.ClientSecret != "" {
+	if h.cfg.ClientSecret != "" || h.dcrEnabled() {
 		flows = append(flows, auth.FlowClientCredentials)
 	}
 	return flows
+}
+
+// dcrEnabled reports whether this handler has RFC 7591 Dynamic Client
+// Registration configured with a registration endpoint. When true, static
+// clientID/clientSecret are supplied by registration rather than config.
+func (h *Handler) dcrEnabled() bool {
+	return h.cfg.DynamicClientRegistration != nil && h.cfg.DynamicClientRegistration.RegistrationEndpoint != ""
 }
 
 // Capabilities returns the handler's capabilities.
@@ -157,9 +208,138 @@ func (h *Handler) Capabilities() []auth.Capability {
 	}
 }
 
+func (h *Handler) storeDynamicClient(ctx context.Context, clientID, clientSecret string, expiresAt int64, fingerprint string) error {
+	client := &dynamicClient{ClientID: clientID, ClientSecret: clientSecret, ClientSecretExpiresAt: expiresAt, Fingerprint: fingerprint}
+	data, err := json.Marshal(client) //nolint:gosec // marshaling to store in the secret store, not logging
+	if err != nil {
+		return fmt.Errorf("marshal dynamic client: %w", err)
+	}
+	return h.secretStore.Set(ctx, h.profileSecretKey(ctx, dynamicClientSecretKey), data)
+}
+
+func (h *Handler) loadDynamicClient(ctx context.Context) (*dynamicClient, error) {
+	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, dynamicClientSecretKey))
+	if err != nil {
+		return nil, err
+	}
+	var client dynamicClient
+	if err := json.Unmarshal(data, &client); err != nil {
+		return nil, fmt.Errorf("unmarshal dynamic client: %w", err)
+	}
+	return &client, nil
+}
+
+// dynamicClientRegistration performs RFC 7591 Dynamic Client Registration if
+// configured. On success it mutates h.cfg in place with the (cached or newly
+// registered) client credentials, so both this call's caller and any later
+// calls on the same *Handler (e.g. GetToken, refresh) observe the same
+// client ID/secret and cache fingerprint. It must be called after
+// ensureSecrets, since it dereferences h.secretStore.
+func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
+	dcr := h.cfg.DynamicClientRegistration
+	if dcr == nil || dcr.RegistrationEndpoint == "" {
+		return nil
+	}
+	fingerprint := dcrFingerprint(dcr, h.cfg.TokenURL)
+
+	// Check if we already have a dynamic client registered and cached for
+	// this exact registration target (endpoint + token URL + metadata).
+	cachedClient, err := h.loadDynamicClient(ctx)
+	if err == nil && cachedClient != nil && !cachedClient.expired() && cachedClient.Fingerprint == fingerprint {
+		h.logger.V(1).Info("using cached dynamic client")
+		h.cfg.ClientID = cachedClient.ClientID
+		h.cfg.ClientSecret = cachedClient.ClientSecret
+		return nil
+	}
+	if err != nil && !errors.Is(err, secrets.ErrNotFound) {
+		return auth.NewError(h.cfg.Name, "load_dynamic_client", err)
+	}
+	if cachedClient != nil {
+		switch {
+		case cachedClient.expired():
+			h.logger.V(1).Info("cached dynamic client secret expired, re-registering")
+		case cachedClient.Fingerprint != fingerprint:
+			h.logger.V(1).Info("dynamic client registration config changed, re-registering")
+		}
+	}
+
+	h.logger.V(1).Info("performing dynamic client registration")
+
+	// Perform dynamic client registration. RFC 7591 requires the request
+	// body to be a JSON object; marshal a nil metadata map as "{}" rather
+	// than JSON null.
+	clientMetadata := dcr.ClientMetadata
+	if clientMetadata == nil {
+		clientMetadata = map[string]any{}
+	}
+	reqBody, err := json.Marshal(clientMetadata)
+	if err != nil {
+		return auth.NewError(h.cfg.Name, "dcr_marshal", fmt.Errorf("marshal client metadata: %w", err))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dcr.RegistrationEndpoint, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return auth.NewError(h.cfg.Name, "dcr_request", fmt.Errorf("create registration request: %w", err))
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	if dcr.InitialAccessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+dcr.InitialAccessToken)
+	}
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return auth.NewError(h.cfg.Name, "dcr_http", fmt.Errorf("registration request failed: %w", err))
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	if err != nil {
+		return auth.NewError(h.cfg.Name, "dcr_read_body", fmt.Errorf("read registration response: %w", err))
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		return auth.NewError(h.cfg.Name, "dcr_http_status", fmt.Errorf("registration failed (HTTP %d): %s", resp.StatusCode, string(respBody)))
+	}
+
+	var regResp struct {
+		ClientID              string `json:"client_id"`
+		ClientSecret          string `json:"client_secret"` //nolint:gosec // JSON field
+		ClientSecretExpiresAt int64  `json:"client_secret_expires_at"`
+	}
+	if err := json.Unmarshal(respBody, &regResp); err != nil {
+		return auth.NewError(h.cfg.Name, "dcr_unmarshal", fmt.Errorf("parse registration response: %w", err))
+	}
+
+	if regResp.ClientID == "" {
+		return auth.NewError(h.cfg.Name, "dcr_missing_field", fmt.Errorf("registration response missing client_id"))
+	}
+
+	// Store the new client credentials.
+	if err := h.storeDynamicClient(ctx, regResp.ClientID, regResp.ClientSecret, regResp.ClientSecretExpiresAt, fingerprint); err != nil {
+		return auth.NewError(h.cfg.Name, "dcr_store", err)
+	}
+
+	// Apply the new client credentials to this handler.
+	h.cfg.ClientID = regResp.ClientID
+	h.cfg.ClientSecret = regResp.ClientSecret
+	return nil
+}
+
 // Login performs authentication using the configured OAuth2 flow.
 func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
 	if err := h.ensureSecrets(); err != nil {
+		return nil, err
+	}
+
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = defaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if err := h.dynamicClientRegistration(ctx); err != nil {
 		return nil, err
 	}
 
@@ -173,17 +353,8 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		scopes = h.cfg.Scopes
 	}
 
-	timeout := opts.Timeout
-	if timeout == 0 {
-		timeout = defaultTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	var (
-		tokenResp *tokenResponse
-		err       error
-	)
+	var tokenResp *tokenResponse
+	var loginErr error
 
 	switch flow { //nolint:exhaustive // only generic OAuth2 flows are supported
 	case auth.FlowInteractive:
@@ -191,17 +362,17 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		if callbackPort == 0 {
 			callbackPort = h.cfg.CallbackPort
 		}
-		tokenResp, err = h.authCodeLogin(ctx, scopes, callbackPort)
+		tokenResp, loginErr = h.authCodeLogin(ctx, scopes, callbackPort)
 	case auth.FlowDeviceCode:
-		tokenResp, err = h.deviceCodeLogin(ctx, opts, scopes)
+		tokenResp, loginErr = h.deviceCodeLogin(ctx, opts, scopes)
 	case auth.FlowClientCredentials:
-		tokenResp, err = h.clientCredentialsLogin(ctx, scopes)
+		tokenResp, loginErr = h.clientCredentialsLogin(ctx, scopes)
 	default:
 		return nil, auth.NewError(h.cfg.Name, "login",
 			fmt.Errorf("%w: %s (supported: %v)", auth.ErrFlowNotSupported, flow, h.SupportedFlows()))
 	}
-	if err != nil {
-		return nil, err
+	if loginErr != nil {
+		return nil, loginErr
 	}
 
 	// Token exchange (optional post-flow pipeline)
@@ -221,9 +392,10 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 	// Verify token identity (optional)
 	var claims *auth.Claims
 	if h.cfg.VerifyURL != "" {
-		claims, err = h.verifyToken(ctx, tokenResp.AccessToken)
-		if err != nil {
-			h.logger.V(1).Info("token verification failed, continuing without identity", "error", err)
+		var verifyErr error
+		claims, verifyErr = h.verifyToken(ctx, tokenResp.AccessToken)
+		if verifyErr != nil {
+			h.logger.V(1).Info("token verification failed, continuing without identity", "error", verifyErr)
 		}
 	}
 	if claims == nil {
@@ -1138,13 +1310,24 @@ func ValidateConfig(cfg config.CustomOAuth2Config) error {
 	if cfg.TokenURL == "" && cfg.ResponseType != "token" {
 		return fmt.Errorf("custom OAuth2 handler %q: tokenURL is required", cfg.Name)
 	}
-	if cfg.ClientID == "" {
+
+	// Dynamic Client Registration (RFC 7591) supplies clientID/clientSecret
+	// at login time, so when it is configured the static credential checks
+	// below are satisfied by registration instead of requiring dummy values.
+	if cfg.DynamicClientRegistration != nil {
+		if cfg.DynamicClientRegistration.RegistrationEndpoint == "" {
+			return fmt.Errorf("custom OAuth2 handler %q: dynamicClientRegistration.registrationEndpoint is required", cfg.Name)
+		}
+	}
+	dcrEnabled := cfg.DynamicClientRegistration != nil && cfg.DynamicClientRegistration.RegistrationEndpoint != ""
+
+	if cfg.ClientID == "" && !dcrEnabled {
 		return fmt.Errorf("custom OAuth2 handler %q: clientID is required", cfg.Name)
 	}
 
 	switch cfg.DefaultFlow {
 	case "", "interactive":
-		if cfg.AuthorizeURL == "" && cfg.DeviceAuthURL == "" && cfg.ClientSecret == "" {
+		if cfg.AuthorizeURL == "" && cfg.DeviceAuthURL == "" && cfg.ClientSecret == "" && !dcrEnabled {
 			return fmt.Errorf("custom OAuth2 handler %q: at least one of authorizeURL, deviceAuthURL, or clientSecret must be set", cfg.Name)
 		}
 	case "device_code":
@@ -1152,7 +1335,7 @@ func ValidateConfig(cfg config.CustomOAuth2Config) error {
 			return fmt.Errorf("custom OAuth2 handler %q: deviceAuthURL is required when defaultFlow is device_code", cfg.Name)
 		}
 	case "client_credentials":
-		if cfg.ClientSecret == "" {
+		if cfg.ClientSecret == "" && !dcrEnabled {
 			return fmt.Errorf("custom OAuth2 handler %q: clientSecret is required when defaultFlow is client_credentials", cfg.Name)
 		}
 	default:

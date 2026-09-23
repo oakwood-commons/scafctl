@@ -31,6 +31,22 @@ func TestBuildRemoteCatalog_ParsesURL(t *testing.T) {
 	assert.Equal(t, "test", remoteCat.Name())
 }
 
+func TestBuildRemoteCatalogFromConfig_PropagatesInsecure(t *testing.T) {
+	t.Parallel()
+
+	catCfg := config.CatalogConfig{
+		Name:     "local-test-registry",
+		Type:     config.CatalogTypeOCI,
+		URL:      "oci://127.0.0.1:5000/scafctl",
+		Insecure: true,
+	}
+
+	remoteCat, err := BuildRemoteCatalogFromConfig(catCfg, nil, nil, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, remoteCat)
+	assert.True(t, remoteCat.insecure)
+}
+
 func TestBuildRemoteCatalogChain_ExcludesLocal(t *testing.T) {
 	t.Parallel()
 

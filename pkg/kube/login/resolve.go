@@ -13,12 +13,48 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/kubeconfig"
 )
 
+// clusterSource records which layer supplied the resolved cluster details, so
+// remediation hints (e.g. the ErrNoAudience remedies) can name the config
+// layers that were actually consulted rather than every layer that exists.
+type clusterSource int
+
+const (
+	// sourceDirect means the details came from a concrete URL argument or
+	// flags alone; no named cluster and no resolver tier were consulted.
+	sourceDirect clusterSource = iota
+
+	// sourceNamed means a named cluster fell back to request flags because
+	// no resolver tier supplied it (a resolution miss or a disabled
+	// resolver). A durable kube.clusters.aliases entry for the name remains
+	// possible, so its remedies include one.
+	sourceNamed
+
+	// sourceResolver means the details came from Deps.Resolver without the
+	// tier being reported (an embedder's resolver or a mock).
+	sourceResolver
+
+	// sourceResolverAlias means a static kube.clusters alias supplied the
+	// details. The alias shadows the dynamic inventory wholesale, so a
+	// resolver-transform fix cannot change such a cluster.
+	sourceResolverAlias
+)
+
+// aliasProvenance is an optional capability of Deps.Resolver implementations
+// (the stock clusterconfig.Resolver has it): it resolves a cluster and
+// reports whether a static alias, rather than the dynamic inventory, supplied
+// it. ErrNoAudience hints use it to avoid recommending the resolver-transform
+// remedy for alias-defined clusters, where it would be silently shadowed.
+type aliasProvenance interface {
+	ResolveFromAlias(ctx context.Context, name string) (*kube.ClusterInfo, bool, error)
+}
+
 // resolveCluster assembles the cluster connection details from (in priority
 // order) explicit request flags, the configured cluster resolver, and
 // best-effort auto-detection of the authentication method. Explicit flags
 // always override resolved values.
-func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterInfo, error) {
+func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterInfo, clusterSource, error) {
 	var info kube.ClusterInfo
+	source := sourceDirect
 
 	// A concrete http(s) URL argument is used directly as the API server (no
 	// resolver required), and is not treated as the logical cluster name.
@@ -28,7 +64,7 @@ func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterIn
 		info.APIServerURL = clusterArg
 		clusterArg = ""
 	case clusterArg != "" && deps.Resolver != nil:
-		resolved, err := deps.Resolver.Resolve(ctx, clusterArg)
+		resolved, fromAlias, err := resolveClusterEntry(ctx, deps, clusterArg)
 		switch {
 		case err != nil && req.Server != "":
 			// An explicit --server supplies the connection details, so a
@@ -36,10 +72,22 @@ func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterIn
 			// inventory) is non-fatal here: fall back to treating the
 			// positional as a plain cluster name.
 		case err != nil:
-			return kube.ClusterInfo{}, fmt.Errorf("resolve cluster %q: %w", clusterArg, err)
+			return kube.ClusterInfo{}, sourceDirect, fmt.Errorf("resolve cluster %q: %w", clusterArg, err)
 		case resolved != nil:
 			info = *resolved
+			source = sourceResolver
+			if fromAlias {
+				source = sourceResolverAlias
+			}
 		}
+	}
+	// A named cluster whose details came from request flags (a resolver
+	// miss, an unavailable resolver, or none configured) can still gain an
+	// audience durably by defining a kube.clusters.aliases entry for it, so
+	// it is named-sourced rather than direct. A concrete URL argument has
+	// already cleared clusterArg and stays direct.
+	if source == sourceDirect && clusterArg != "" {
+		source = sourceNamed
 	}
 	if info.Name == "" {
 		info.Name = firstNonEmpty(clusterArg, req.ClusterName)
@@ -63,7 +111,7 @@ func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterIn
 	}
 
 	if info.APIServerURL == "" {
-		return kube.ClusterInfo{}, ErrNoServer
+		return kube.ClusterInfo{}, source, ErrNoServer
 	}
 
 	// Fall back to a name derived from the server host for the direct
@@ -88,9 +136,20 @@ func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterIn
 	}
 
 	if err := info.Validate(); err != nil {
-		return kube.ClusterInfo{}, err
+		return kube.ClusterInfo{}, source, err
 	}
-	return info, nil
+	return info, source, nil
+}
+
+// resolveClusterEntry resolves via Deps.Resolver, using the optional alias
+// provenance capability when available so alias-sourced clusters can be
+// distinguished from inventory-sourced ones.
+func resolveClusterEntry(ctx context.Context, deps Deps, name string) (*kube.ClusterInfo, bool, error) {
+	if pv, ok := deps.Resolver.(aliasProvenance); ok {
+		return pv.ResolveFromAlias(ctx, name)
+	}
+	info, err := deps.Resolver.Resolve(ctx, name)
+	return info, false, err
 }
 
 // isConcreteClusterURL reports whether the cluster argument is already an

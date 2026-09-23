@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -610,4 +611,44 @@ func stateConfigProblems(cfg *state.Config) []string {
 		}
 	}
 	return problems
+}
+
+// ReferencedProviderNames returns the unique, sorted set of provider names
+// referenced anywhere in the solution that must be registered before
+// execution. It is the whole-solution superset of Spec.ReferencedProviderNames:
+// every provider used by resolver phases, reusable calls, and workflow actions,
+// plus the state providers (state.load.provider and each state.save target's
+// provider) when state is configured.
+//
+// State providers are included because the state manager executes them
+// (state_load / state_save) around a run, so they must be resolvable,
+// fetchable, and declared just like any spec-referenced provider. An
+// extends: load save target reuses the load provider, so it adds nothing.
+// Prefer this over Spec.ReferencedProviderNames() when validating, fetching,
+// or registering the providers a solution needs.
+func (s *Solution) ReferencedProviderNames() []string {
+	if s == nil {
+		return nil
+	}
+	names := s.Spec.ReferencedProviderNames()
+	if s.State == nil {
+		return names
+	}
+	merged := slices.Clone(names)
+	add := func(p string) {
+		if p != "" && !slices.Contains(merged, p) {
+			merged = append(merged, p)
+		}
+	}
+	if s.State.Load != nil {
+		add(s.State.Load.Provider)
+	}
+	for _, target := range s.State.Save {
+		add(target.Provider)
+	}
+	if len(merged) == len(names) {
+		return names
+	}
+	slices.Sort(merged)
+	return merged
 }

@@ -290,6 +290,9 @@ func TestCommandLogin_AutoRouteOIDCNoAudienceErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
 	assert.Contains(t, err.Error(), "audience")
+	// A resolver-sourced OIDC cluster must be told about the inventory
+	// transform layer, not only static remedies (issue #851).
+	assert.Contains(t, err.Error(), "kube.clusters.resolver transform")
 	assert.NoFileExists(t, path, "login must fail before writing a kubeconfig entry")
 }
 

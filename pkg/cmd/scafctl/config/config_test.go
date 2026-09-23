@@ -43,6 +43,7 @@ func TestCommandConfig(t *testing.T) {
 	assert.Contains(t, subCmdNames, "set")
 	assert.Contains(t, subCmdNames, "unset")
 	assert.Contains(t, subCmdNames, "reset")
+	assert.NotContains(t, subCmdNames, "show", "config show was removed; use view --show-origin")
 }
 
 func TestViewOptions_Run(t *testing.T) {
@@ -84,6 +85,398 @@ settings:
 	output := stdout.String()
 	assert.Contains(t, output, "test")
 	assert.Contains(t, output, "filesystem")
+}
+
+func TestCommandView_DefaultOutputIsAuto(t *testing.T) {
+	t.Parallel()
+	// Regression guard: config view must not hardcode a specific -o default;
+	// it should use the kvx idiom (auto) like every other kvx-driven command.
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, &bytes.Buffer{}, &bytes.Buffer{}, false)
+
+	cmd := CommandView(cliParams, ioStreams, "scafctl")
+
+	flag := cmd.Flag("output")
+	require.NotNil(t, flag, "config view must expose an -o/--output flag")
+	assert.Equal(t, "auto", flag.Value.String(),
+		"default -o should be 'auto' so kvx picks the format; use -o yaml explicitly if that shape is wanted")
+}
+
+func TestViewOptions_Run_ShowOrigin(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+settings:
+  defaultCatalog: from-file
+logging:
+  format: json
+`), 0o600))
+
+	t.Setenv("SCAFCTL_LOGGING_LEVEL", "debug")
+	t.Setenv("SCAFCTL_GITHUB_TOKEN", "secret-value")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+		ShowOrigin: true,
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	assert.Contains(t, out, `"sources"`, "output should include sources map")
+	assert.Contains(t, out, `"envOverrides"`, "output should include envOverrides list")
+	assert.Contains(t, out, `"SCAFCTL_LOGGING_LEVEL"`)
+	assert.Contains(t, out, `"SCAFCTL_GITHUB_TOKEN"`)
+	// Token value must be redacted; the raw value must not leak.
+	assert.NotContains(t, out, "secret-value", "sensitive env value must not appear in output")
+	assert.Contains(t, out, appconfig.RedactedValue)
+}
+
+func TestViewOptions_Run_SourceFilter_File(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+settings:
+  defaultCatalog: from-file
+`), 0o600))
+	t.Setenv("SCAFCTL_LOGGING_LEVEL", "debug")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "file",
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	assert.Contains(t, out, "from-file", "file-sourced value should be present")
+	assert.NotContains(t, out, `"level":"debug"`, "env-sourced value must be filtered out")
+}
+
+func TestViewOptions_Run_SourceFilter_Env(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+settings:
+  defaultCatalog: from-file
+`), 0o600))
+	t.Setenv("SCAFCTL_LOGGING_LEVEL", "debug")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "env",
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	assert.NotContains(t, out, "from-file", "file-sourced value must be filtered out")
+	assert.Contains(t, out, `"SCAFCTL_LOGGING_LEVEL"`, "envOverrides always accompanies --source=env")
+	// The logging.level leaf should survive the source filter under settings.
+	assert.Contains(t, out, `"debug"`)
+}
+
+func TestViewOptions_Run_SourceFilter_EnvOnSettings(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv. This test exercises the
+	// FilterMapBySource path against a real settings.* env override
+	// (SCAFCTL_SETTINGS_DEFAULTCATALOG), which the SCAFCTL_LOGGING_LEVEL test
+	// does not cover.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+settings:
+  defaultCatalog: from-file
+`), 0o600))
+	t.Setenv("SCAFCTL_SETTINGS_DEFAULTCATALOG", "from-env")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "env",
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	assert.Contains(t, out, "from-env", "settings.defaultCatalog=from-env must survive --source=env")
+	assert.NotContains(t, out, "from-file", "file-sourced value must be filtered out")
+}
+
+func TestViewOptions_Run_SourceFilter_Default(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "default",
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	// The default settings.defaultCatalog is "official" (built-in). With no
+	// user config or env override present, --source=default must include it.
+	assert.Contains(t, out, `"official"`, "built-in default settings must be present under --source=default")
+}
+
+func TestViewOptions_Run_SourceFilter_DropIn(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(tmpDir, appconfig.ConfigDirName), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, appconfig.ConfigDirName, "10-x.yaml"),
+		[]byte("logging:\n  format: json\n"),
+		0o600,
+	))
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "dropin",
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	// The dropin fragment only touches logging.format, so under --source=dropin
+	// the payload must include that key and exclude the built-in default
+	// settings.defaultCatalog=official.
+	assert.Contains(t, out, `"json"`, "dropin-sourced logging.format=json must appear")
+	assert.NotContains(t, out, `"official"`,
+		"only dropin-sourced values may appear under --source=dropin")
+}
+
+func TestViewOptions_Run_ShowOrigin_ExposesAllSections(t *testing.T) {
+	t.Parallel()
+	// `view` emits the full Config struct (matching the pre-fold `show`
+	// behavior), so every top-level section's keys must appear in `sources`.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+		ShowOrigin: true,
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	// Spot-check keys from sections beyond settings/catalogs.
+	assert.Contains(t, out, `"logging.level"`, "logging.* must appear in sources")
+	assert.Contains(t, out, `"httpclient.timeout"`, "httpclient.* must appear in sources")
+	assert.Contains(t, out, `"resolver.timeout"`, "resolver.* must appear in sources")
+}
+
+func TestViewOptions_Run_RedactsSensitiveConfigLeaves(t *testing.T) {
+	t.Parallel()
+	// Regression: `view` emits the full Config, so on-disk secrets must be
+	// stripped before reaching stdout. The user-visible `auth.handlers`
+	// structure and non-sensitive fields must survive intact.
+	//
+	// The sanitizer uses two strategies:
+	//   - Drop sensitive fields entirely from the sanitized types (e.g.
+	//     entra.clientSecret has no counterpart in SanitizedEntraAuth).
+	//   - Replace opaque map values with RedactedValue (e.g. resolver Headers,
+	//     apiServer.tls.key path, apiServer.auth.handlers plugin blobs).
+	// Both patterns are exercised here.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+auth:
+  entra:
+    clientId: visible-id
+    clientSecret: super-secret-entra-1
+  handlers:
+    github:
+      hostname:
+        aliases:
+          alias-a: https://api.github.com/
+        resolver:
+          source:
+            url: https://inventory.example.com
+            headers:
+              Authorization: super-secret-bearer-2
+apiServer:
+  tls:
+    enabled: true
+    cert: /etc/ssl/cert.pem
+    key: /etc/ssl/key.pem
+  auth:
+    handlers:
+      openshift:
+        clientSecret: super-secret-plugin-3
+`), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	// Fail-closed: no on-disk secret from any of the three locations may leak.
+	assert.NotContains(t, out, "super-secret-entra-1",
+		"entra.clientSecret must not appear verbatim")
+	assert.NotContains(t, out, "super-secret-bearer-2",
+		"resolver header value must not appear verbatim")
+	assert.NotContains(t, out, "super-secret-plugin-3",
+		"apiServer.auth.handlers plugin body must not appear verbatim")
+	// Positive assertions: placeholder appears where the sanitizer replaces
+	// opaque maps and known-secret fields.
+	assert.Contains(t, out, appconfig.RedactedValue,
+		"redaction placeholder must appear where opaque maps/keys are stripped")
+	// Non-sensitive fields survive.
+	assert.Contains(t, out, "visible-id",
+		"non-sensitive auth fields must survive sanitization")
+	assert.Contains(t, out, "alias-a",
+		"auth.handlers structure must survive sanitization")
+	assert.Contains(t, out, "/etc/ssl/cert.pem",
+		"TLS cert path is public and must survive sanitization")
+}
+
+func TestViewOptions_Run_SourceFilter_Invalid(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "bogus",
+	}
+	opts.Output = "yaml"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	err := opts.Run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid --source")
+}
+
+func TestViewOptions_Run_EmbedderBinaryName(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	t.Setenv("MYCLI_LOGGING_LEVEL", "info")
+	t.Setenv("SCAFCTL_LOGGING_LEVEL", "debug")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+
+	opts := &ViewOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+		BinaryName: "mycli",
+		ShowOrigin: true,
+	}
+	opts.Output = "json"
+
+	// Wire the embedder's env prefix into the manager options via context, so
+	// the domain layer uses MYCLI_ instead of SCAFCTL_.
+	ctx := appconfig.WithManagerOptions(
+		context.Background(),
+		[]appconfig.ManagerOption{appconfig.WithEnvPrefix("MYCLI")},
+	)
+	ctx = writer.WithWriter(ctx, writer.New(ioStreams, cliParams))
+
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	assert.Contains(t, out, `"MYCLI_LOGGING_LEVEL"`, "embedder prefix should be detected")
+	assert.NotContains(t, out, `"SCAFCTL_LOGGING_LEVEL"`, "default prefix should be ignored under embedder")
 }
 
 func TestGetOptions_Run(t *testing.T) {
@@ -398,4 +791,82 @@ func TestCommandConfig_UnknownSubcommandErrors(t *testing.T) {
 	cmd2.SilenceErrors = true
 	cmd2.SilenceUsage = true
 	assert.NoError(t, cmd2.Execute())
+}
+
+// TestSetOptions_Run_InvalidCIDRIsRejectedNotPersisted proves the user-visible
+// half of Manager.Save's validation: `config set` with a value the loader would
+// refuse must exit with an error that names the offending key, and must leave
+// the configuration file untouched -- not "succeed" and brick the next Load.
+func TestSetOptions_Run_InvalidCIDRIsRejectedNotPersisted(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &SetOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+		Key:        "httpClient.allowedPrivateCIDRs",
+		Value:      "nonsense",
+	}
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	err := opts.Run(ctx)
+	require.Error(t, err, "an invalid CIDR must be rejected, not reported as success")
+	assert.Contains(t, err.Error(), "allowedPrivateCIDRs",
+		"the failure must name the key the operator set")
+
+	// The refused value must not be on disk, and the file must still load.
+	reloaded, loadErr := appconfig.NewManager(configPath).Load()
+	require.NoError(t, loadErr, "a refused set must leave the config loadable")
+	_, set := reloaded.HTTPClient.PrivateCIDRs()
+	assert.False(t, set, "the refused value must not have persisted")
+}
+
+// TestInitOptions_Run_FullTemplateDocumentsSecuritySettings pins the other
+// documentation surface for the destination-address policy: `config init
+// --full` reads templates/full.yaml, and that template must document the same
+// controls examples/config/full-config.yaml does, or the security posture
+// this PR ships is invisible to everyone who starts from the generated file.
+func TestInitOptions_Run_FullTemplateDocumentsSecuritySettings(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "config.yaml")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &InitOptions{
+		IOStreams: ioStreams,
+		CliParams: cliParams,
+		Output:    outputPath,
+		Full:      true,
+		Force:     true,
+	}
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	require.NoError(t, opts.Run(ctx))
+
+	generated, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	for _, key := range []string{"allowedPrivateCIDRs", "trustedProxy", "trustProxyResolution"} {
+		assert.Contains(t, string(generated), key,
+			"config init --full must document the %s control", key)
+	}
+
+	// The generated file must actually work: it has to load back cleanly.
+	_, loadErr := appconfig.NewManager(outputPath).Load()
+	require.NoError(t, loadErr, "the generated full configuration must pass validation")
 }

@@ -10,20 +10,8 @@ import (
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/config"
-	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
-
-// privateIPsAllowed delegates to httpc.PrivateIPsAllowed.
-// Defaults to false (deny) when no config is present — secure by default.
-func privateIPsAllowed(ctx context.Context) bool {
-	return httpc.PrivateIPsAllowed(ctx)
-}
-
-// validateURLNotPrivate delegates to httpc.ValidateURLNotPrivate.
-func validateURLNotPrivate(rawURL string) error {
-	return httpc.ValidateURLNotPrivate(rawURL)
-}
 
 // maxResponseBodySize returns the configured maximum response body size from
 // the application config, falling back to settings.DefaultMaxResponseBodySize.

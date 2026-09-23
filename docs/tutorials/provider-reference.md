@@ -15,7 +15,7 @@ This document provides a reference for all providers available in scafctl.
 Providers are execution primitives used by resolvers and actions. Each provider has **capabilities** that determine where it can be used:
 
 | Capability | Used In | Description |
-|------------|---------|-------------|
+| ------------ | --------- | ------------- |
 | `from` | Resolver `resolve.with` | Fetch or generate data |
 | `transform` | Resolver `transform.with` | Transform data |
 | `validation` | Resolver `validate.with` | Validate data |
@@ -49,7 +49,7 @@ demand (for example, `scafctl run provider exec command='ls'`). See
 ## Capabilities Matrix
 
 | Provider | Type | from | transform | validation | action |
-|----------|:----:|:----:|:---------:|:----------:|:------:|
+| ---------- | :----: | :----: | :---------: | :----------: | :------: |
 | [cel](#cel) | built-in | ❌ | ✅ | ❌ | ✅ |
 | [debug](#debug) | built-in | ✅ | ✅ | ✅ | ✅ |
 | [directory](#directory) | official | ✅ | ❌ | ❌ | ✅ |
@@ -125,7 +125,7 @@ Debugging provider for inspecting resolver data during workflow execution.
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `expression` | string | ❌ | CEL expression to filter/transform data before output |
 | `label` | string | ❌ | Label or message for debug output context |
 | `format` | string | ❌ | Output format: `yaml`, `json`, `pretty` (default: `yaml`) |
@@ -165,7 +165,7 @@ Directory operations: listing contents with filtering, creating, removing, and c
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `operation` | string | ✅ | Operation: `list`, `mkdir`, `rmdir`, `copy` |
 | `path` | string | ✅ | Target directory path (absolute or relative) |
 | `recursive` | bool | ❌ | Enable recursive directory traversal (default: `false`) |
@@ -183,7 +183,7 @@ Directory operations: listing contents with filtering, creating, removing, and c
 ### Output (list)
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `entries` | array | List of directory entries |
 | `entries[].path` | string | Relative path from the listed directory |
 | `entries[].absolutePath` | string | Absolute filesystem path |
@@ -208,7 +208,7 @@ Directory operations: listing contents with filtering, creating, removing, and c
 ### Output (mkdir, rmdir, copy)
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `success` | bool | Whether the operation succeeded |
 | `operation` | string | Operation that was performed |
 | `path` | string | Absolute path of the target directory |
@@ -291,7 +291,7 @@ Read environment variables.
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `operation` | string | ✅ | Operation: `get`, `list` |
 | `name` | string | ❌ | Variable name (required for `get`) |
 | `default` | string | ❌ | Default value if variable not set |
@@ -300,7 +300,7 @@ Read environment variables.
 ### Output
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `value` | string | Variable value (for `get`) |
 | `variables` | map | Key-value pairs (for `list`) |
 | `found` | bool | Whether the variable exists |
@@ -346,7 +346,7 @@ Execute shell commands using an embedded cross-platform POSIX shell interpreter.
 ### Inputs
 
 | Field | Type | Required | Default | Description |
-|-------|------|:--------:|:-------:|-------------|
+| ------- | ------ | :--------: | :-------: | ------------- |
 | `command` | string | ✅ | — | Command to execute. Supports POSIX shell syntax including pipes, redirections, variable expansion, and command substitution by default |
 | `args` | array | ❌ | — | Additional arguments appended to the command. Arguments are automatically shell-quoted for safety |
 | `stdin` | string | ❌ | — | Standard input to provide to the command |
@@ -358,7 +358,7 @@ Execute shell commands using an embedded cross-platform POSIX shell interpreter.
 ### Output
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `stdout` | string | Standard output |
 | `stderr` | string | Standard error |
 | `exitCode` | int | Exit code |
@@ -369,7 +369,7 @@ Execute shell commands using an embedded cross-platform POSIX shell interpreter.
 ### Shell Modes
 
 | Value | Description | Platform |
-|-------|-------------|----------|
+| ------- | ------------- | ---------- |
 | `auto` | Embedded POSIX shell (default). Pure Go — no external shell binary required. Supports pipes, redirections, variable expansion, command substitution, and Go-native coreutils on Windows. | All |
 | `sh` | Alias for `auto` | All |
 | `bash` | External bash binary from `$PATH`. Use for bash-specific features (globstar, arrays, etc.) | Linux, macOS |
@@ -453,7 +453,7 @@ a tree of files.
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `operation` | string | ✅ | Operation: `read`, `write`, `exists`, `delete`, `write-tree` |
 | `path` | string | ❌ | File path — required for `read`, `write`, `exists`, `delete` |
 | `content` | string | ❌ | Content to write (required for `write`) |
@@ -467,7 +467,7 @@ a tree of files.
 ### Output
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `content` | string | File content (for `read`) |
 | `object` | any | Parsed content (for `read`, only when `parse` is set) |
 | `exists` | bool | Whether file exists |
@@ -537,7 +537,7 @@ Git version control operations.
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `operation` | string | ✅ | Operation: `clone`, `pull`, `status`, `add`, `commit`, `push`, `checkout`, `branch`, `log`, `tag` |
 | `url` | string | ❌ | Repository URL (for `clone`) |
 | `path` | string | ❌ | Local repository path |
@@ -601,7 +601,7 @@ Interact with GitHub via GraphQL (reads, issues, PRs, review threads, signed com
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `operation` | string | Yes | API operation (see operations table below) |
 | `owner` | string | Conditional | Repository owner (user or organization). Required for all operations except `create_repo` (defaults to authenticated user). |
 | `repo` | string | Yes | Repository name. Required for all operations. |
@@ -705,7 +705,7 @@ Interact with GitHub via GraphQL (reads, issues, PRs, review threads, signed com
 **Read operations** (capabilities: `from`, `transform`):
 
 | Operation | Description |
-|-----------|-------------|
+| ----------- | ------------- |
 | `get_repo` | Get repository metadata |
 | `get_file` | Get file content (returned as plain text, not base64) |
 | `list_releases` | List releases |
@@ -739,7 +739,7 @@ Interact with GitHub via GraphQL (reads, issues, PRs, review threads, signed com
 **Write operations** (capability: `action` — returns `success` boolean):
 
 | Operation | API | Description |
-|-----------|-----|-------------|
+| ----------- | ----- | ------------- |
 | `create_issue` | GraphQL | Create a new issue |
 | `update_issue` | GraphQL | Update an existing issue |
 | `create_issue_comment` | GraphQL | Add a comment to an issue |
@@ -812,7 +812,7 @@ needing the `http` provider.
 **Write operations (action):**
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `success` | bool | Always `true` on success (failures return a Go error) |
 | `operation` | string | The operation that was performed |
 | `result` | any | API response data |
@@ -1175,7 +1175,7 @@ Transform data using Go text/template syntax. Supports single-template rendering
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `operation` | string | ❌ | Operation: `render` (default) or `render-tree` |
 | `template` | string | ❌ | Go template content (required for `render`) |
 | `name` | string | ❌ | Template name for error messages (defaults to `"render-tree"` for render-tree) |
@@ -1414,7 +1414,7 @@ Process HCL (HashiCorp Configuration Language) content. Supports four operations
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `operation` | string | ❌ | `parse` (default), `format`, `validate`, or `generate` |
 | `content` | string | ❌ | Raw HCL content to process |
 | `path` | string | ❌ | Path to a single HCL file |
@@ -1428,7 +1428,7 @@ Process HCL (HashiCorp Configuration Language) content. Supports four operations
 ### Output — `parse` (default)
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `variables` | array | Variable blocks (name, type, default, description, sensitive, validation) |
 | `resources` | array | Resource blocks (type, name, attributes, sub-blocks) |
 | `data` | array | Data source blocks (type, name, attributes, sub-blocks) |
@@ -1455,7 +1455,7 @@ Multi-file format returns `{ files: [{filename, formatted, changed}, ...], chang
 ### Output — `validate`
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `valid` | bool | `true` if no syntax errors were found |
 | `error_count` | int | Number of error-level diagnostics |
 | `diagnostics` | array | Diagnostic entries with severity, summary, detail, range |
@@ -1589,7 +1589,7 @@ HTTP client for API calls with built-in pagination support for fetching data acr
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `url` | string | ✅ | URL to request |
 | `method` | string | ❌ | HTTP method (default: `GET`) |
 | `headers` | object | ❌ | HTTP headers |
@@ -1628,7 +1628,7 @@ The `pagination` input enables automatic multi-page fetching. Five strategies ar
 #### Pagination Fields
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `strategy` | string | ✅ | One of: `offset`, `pageNumber`, `cursor`, `linkHeader`, `custom` |
 | `maxPages` | int | ✅ | Safety limit for max pages to fetch (default: 100, max: 10000) |
 | `collectPath` | string | ❌ | CEL expression to extract items from each response (e.g., `body.items`) |
@@ -1637,7 +1637,7 @@ The `pagination` input enables automatic multi-page fetching. Five strategies ar
 **CEL variables available** in `collectPath`, `stopWhen`, and strategy-specific expressions:
 
 | Variable | Type | Description |
-|----------|------|-------------|
+| ---------- | ------ | ------------- |
 | `statusCode` | int | HTTP response status code |
 | `body` | any | Parsed JSON response body |
 | `rawBody` | string | Raw response body string |
@@ -1649,7 +1649,7 @@ The `pagination` input enables automatic multi-page fetching. Five strategies ar
 Increments an offset query parameter each page.
 
 | Field | Type | Default | Description |
-|-------|------|---------|-------------|
+| ------- | ------ | --------- | ------------- |
 | `limit` | int | *(required)* | Page size |
 | `offsetParam` | string | `offset` | Query parameter name for offset |
 | `limitParam` | string | `limit` | Query parameter name for limit |
@@ -1659,7 +1659,7 @@ Increments an offset query parameter each page.
 Increments a page number query parameter each page.
 
 | Field | Type | Default | Description |
-|-------|------|---------|-------------|
+| ------- | ------ | --------- | ------------- |
 | `pageSize` | int | *(required)* | Page size |
 | `pageParam` | string | `page` | Query parameter name for page number |
 | `pageSizeParam` | string | `pageSize` | Query parameter name for page size |
@@ -1670,7 +1670,7 @@ Increments a page number query parameter each page.
 Extracts a cursor token or next URL from the response to fetch subsequent pages.
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `nextTokenPath` | string | CEL expression to extract cursor from response (e.g., `body.nextCursor`) |
 | `nextTokenParam` | string | Query parameter to set with the cursor value (required with `nextTokenPath` unless `bodyTemplate` is set) |
 | `nextURLPath` | string | CEL expression to extract the full next page URL (e.g., `body['@odata.nextLink']`). Alternative to `nextTokenPath`. |
@@ -1701,7 +1701,7 @@ For APIs that paginate via the request body (GraphQL, Elasticsearch), use `bodyT
 **CEL variables available** in `bodyTemplate`:
 
 | Variable | Type | Description |
-|----------|------|-------------|
+| ---------- | ------ | ------------- |
 | `__page` | int | Current page number (starts at `startPage`, default 1) |
 | `__pageSize` | int | Page size from `pageSize` (pageNumber/cursor/linkHeader/custom) or `limit` (offset) |
 | `__offset` | int | Current offset (increments by `__pageSize` each page) |
@@ -1752,7 +1752,7 @@ inputs:
 The `poll` input enables re-executing the request until a response condition is met. This is different from `retry` (which handles transient failures) — polling re-executes on successful responses until the content matches expectations.
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `until` | string | ✅ | CEL expression evaluated against the response. Polling stops when this returns `true`. Available variables: `body` (parsed if JSON), `statusCode`, `headers` |
 | `failWhen` | string | ❌ | CEL expression that triggers immediate failure (e.g., terminal error states) |
 | `interval` | string | ❌ | Duration between polls (default: `5s`). Format: `1s`, `30s`, `2m` |
@@ -1778,7 +1778,7 @@ resolve:
 ### Output
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `statusCode` | int | HTTP status code (last page when paginating) |
 | `body` | any | Response body as string, or parsed JSON object when `autoParseJson: true`. When paginating with `collectPath`, contains JSON array of all collected items |
 | `headers` | object | Response headers (last page when paginating) |
@@ -1942,9 +1942,9 @@ inputs:
 
 The HTTP provider enforces several security measures:
 
-- **SSRF protection**: Requests to private, loopback, and link-local IP addresses (e.g., `169.254.169.254`) are blocked by default. Set `httpClient.allowPrivateIPs: true` in config to allow private network access for on-premises endpoints.
+- **SSRF protection**: Requests to private, loopback, and link-local addresses are blocked by default. The check runs at dial time against the resolved IP, so a hostname that resolves into private space is blocked too. To reach an on-premises endpoint, name its range in `httpClient.allowedPrivateCIDRs` (`httpClient.allowPrivateIPs: true` unblocks every private range at once and is the blunter option). Cloud metadata addresses such as `169.254.169.254` can never be exempted via direct policy settings. Proxy routing (`HTTP_PROXY`/`HTTPS_PROXY`) is disabled by default for exactly this reason -- a proxied request is dialed to the proxy, not the target, so it can only be checked once against a local DNS answer before hand-off, which a proxy with different resolution (or `httpClient.trustProxyResolution: true`, for a target that fails to resolve locally at all) could defeat. Set `httpClient.trustedProxy: true` only once the configured proxy is known to enforce an equivalent egress policy itself; only then does the metadata guarantee depend on that proxy rather than on this client.
 - **Response body size limit**: Each response is limited to `httpClient.maxResponseBodySize` (default: 100 MB). This prevents denial-of-service via unbounded responses from malicious or misconfigured servers. Applies to both direct requests and each page in paginated requests.
-- **Redirect validation**: Each redirect target is checked against the SSRF private IP blocklist. A maximum of 10 redirects is enforced.
+- **Redirect validation**: Every redirect hop is checked at dial time, so a redirect from a public URL into private space is refused. A maximum of 10 redirects is enforced.
 - **Pagination host validation**: Pagination next URLs must stay on the same hostname as the original request to prevent open redirect attacks.
 - **Token security**: Authentication tokens are injected via the `Authorization` header and are never logged. Token refresh on 401 responses is handled transparently.
 
@@ -1970,7 +1970,7 @@ inspect its claims on demand.
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `operation` | string | ✅ | Operation: `status`, `claims`, `groups`, `list` |
 | `handler` | string | ❌ | Auth handler name (e.g., `entra`, `github`) |
 | `scope` | string | ❌ | OAuth scope for on-demand token minting. When set, `claims` and `status` mint a fresh access token for the scope and return its details instead of stored session metadata. Not supported for `groups` or `list`. |
@@ -1978,7 +1978,7 @@ inspect its claims on demand.
 ### Operations
 
 | Operation | Description |
-|-----------|-------------|
+| ----------- | ------------- |
 | `status` | Returns authentication status, expiry, and identity type from stored session metadata (or scoped token when `scope` is set) |
 | `claims` | Returns identity claims (name, email, tenant, etc.) from stored session metadata (or scoped token JWT when `scope` is set) |
 | `groups` | Returns Entra group memberships for the authenticated user |
@@ -1987,7 +1987,7 @@ inspect its claims on demand.
 ### Output
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `operation` | string | The operation that was executed |
 | `handler` | string | The auth handler that was used |
 | `authenticated` | bool | Whether authenticated |
@@ -2110,7 +2110,7 @@ identity (`whoami`).
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `operation` | string | ✅ | Operation: `kubeconfig_write`, `kubeconfig_remove`, `current_server`, `detect_auth_type`, `reachable`, `whoami` |
 | `kubeconfig_path` | string | ❌ | Path to kubeconfig (empty resolves `KUBECONFIG` or `~/.kube/config`) |
 | `cluster_name` | string | ❌ | Kubeconfig cluster name |
@@ -2132,7 +2132,7 @@ identity (`whoami`).
 ### Operations
 
 | Operation | Description |
-|-----------|-------------|
+| ----------- | ------------- |
 | `kubeconfig_write` | Writes (or updates) a cluster/context/user entry in the kubeconfig, wiring the user entry to an `exec`-based credential plugin |
 | `kubeconfig_remove` | Removes a cluster/context/user entry from the kubeconfig |
 | `current_server` | Returns the API server URL for the current (or a named) context |
@@ -2143,7 +2143,7 @@ identity (`whoami`).
 ### Output
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `success` | bool | Whether the operation succeeded |
 | `kubeconfig_path` | string | Path to the kubeconfig that was read or written |
 | `context_name` | string | The context name involved in the operation |
@@ -2209,7 +2209,7 @@ None. The metadata provider accepts no inputs.
 ### Output
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `version` | object | Build version information |
 | `version.buildVersion` | string | Semantic version of the scafctl build |
 | `version.commit` | string | Git commit hash of the build |
@@ -2275,7 +2275,7 @@ Outputs styled terminal messages with built-in types, custom formatting via lipg
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `message` | string | ✅ | Message text to output. Use `tmpl:` or `expr:` ValueRef for dynamic interpolation. Limited to 8192 characters unless `type: raw`. |
 | `type` | string | ❌ | Message type: `success`, `warning`, `error`, `info` (default), `debug`, `plain`, `raw` |
 | `label` | string | ❌ | Contextual prefix rendered as dimmed `[label]` between icon and message (e.g., `step 2/5`). Not supported with `type: raw`. |
@@ -2390,7 +2390,7 @@ Access CLI parameters passed via `-r` flags.
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `key` | string | ❌ | Single-key (scalar) mode. Parameter name (exact match). Provide either `key` or `keys`; `key` takes precedence over `keys` when both are set. Mutually exclusive with `all` and with `as: map`. |
 | `keys` | array of string | ❌ | Ordered list of parameter names. Default meaning: aliases for a single logical parameter (first provided via CLI wins), evaluated after `key`. With `as: map` it is instead a distinct set of parameter names read into a map. |
 | `as` | string | ❌ | Read-mode discriminator for `keys`. Only `map` is supported: it reinterprets `keys` as a distinct set of parameter names read into a map (instead of first-match-wins aliases). |
@@ -2420,7 +2420,7 @@ visible via `scafctl run provider parameter ...` but not in the resolver value.
 #### `type` values
 
 | Value | Behavior |
-|-------|----------|
+| ------- | ---------- |
 | `auto` | Default. For CLI values, infers booleans, numbers, JSON, and `file://` sources, falling back to the literal string. `http://`/`https://` values are **not** fetched (they stay literal strings -- use `fetch`), and comma-separated values are **not** split into a list (opt in with `csv`). An authored `default` keeps its YAML type under `auto` (a quoted `"false"` stays a string, a bare `false` stays a bool) and is never inferred; use an explicit `type` to coerce a default. When the enclosing resolver declares a scalar output type (`string`/`int`/`float`/`bool`), that declared type is authoritative -- the CLI value is coerced directly to it instead of being inferred and re-coerced (so `-r version=2.0` on a `type: string` resolver stays `"2.0"`). |
 | `string` | Coerces the value to a string, stripping surrounding quotes. Use to keep a numeric-looking value (leading zeros, or a value used with CEL `matches()`) as a string. A resolver that already declares `type: string` gets this automatically under `auto`. |
 | `raw` | Returns the value untouched -- no coercion or quote-stripping. A numeric YAML default stays numeric; a CLI string stays verbatim. The escape hatch to disable inference. |
@@ -2546,7 +2546,7 @@ Retrieve encrypted secrets from the scafctl secrets store.
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `operation` | string | ✅ | Operation: `get` or `list` |
 | `name` | string | ❌ | Secret name (for `get`) |
 | `pattern` | string | ❌ | Regex pattern to match names |
@@ -2634,7 +2634,7 @@ Execute a sub-solution and return its results as a structured envelope. Supports
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `source` | string | Yes | Sub-solution location: file path, catalog reference (e.g. `deploy-to-k8s@2.0.0`), or URL |
 | `inputs` | object | ❌ | Parameters passed to the sub-solution's `parameter` provider |
 | `resolvers` | array | ❌ | Resolver names to execute from the child solution; when empty all resolvers run |
@@ -2647,7 +2647,7 @@ Execute a sub-solution and return its results as a structured envelope. Supports
 **From capability (resolver-only):**
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `resolvers` | object | Resolver values from the sub-solution (keyed by resolver name) |
 | `status` | string | Overall status: `success` or `failed` |
 | `errors` | array | Resolver errors encountered during execution |
@@ -2655,7 +2655,7 @@ Execute a sub-solution and return its results as a structured envelope. Supports
 **Action capability (resolvers + workflow):**
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `resolvers` | object | Resolver values from the sub-solution |
 | `workflow` | object | Aggregate workflow status (`finalStatus`, `failedActions`, `skippedActions`) |
 | `status` | string | Overall status: `success` or `failed` |
@@ -2737,7 +2737,7 @@ without forming a self-cycle.
 Specify **exactly one** of `key`, `keys`, or `all` to choose the read mode.
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `operation` | string | ❌ | State operation. Only `get` is supported (the default). |
 | `key` | string | ❌ | Single-key mode. Name of the persisted resolver whose prior-run value to read. Returns the value directly. |
 | `keys` | array | ❌ | Map mode. Explicit set of persisted keys to read as a map. Absent keys are **omitted** from the map. |
@@ -2862,7 +2862,7 @@ Validate data using regex patterns and CEL expressions.
 ### Inputs
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `value` | string | ❌ | Value to validate (uses `__self` in transform context) |
 | `match` | string | ❌ | Regex pattern that must match |
 | `notMatch` | string | ❌ | Regex pattern that must NOT match |
@@ -2872,7 +2872,7 @@ Validate data using regex patterns and CEL expressions.
 ### Output
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `valid` | bool | Whether validation passed |
 | `errors` | array | Validation error messages |
 | `details` | string | Failure details |
@@ -2914,7 +2914,7 @@ The `forEach` clause iterates over an array, executing a provider once per eleme
 ### Supported Phases
 
 | Phase | Supported | `forEach.in` | Notes |
-|-------|:---------:|:------------:|-------|
+| ------- | :---------: | :------------: | ------- |
 | `transform.with` | Yes | Optional (defaults to `__self`) | Most common -- transform an existing value |
 | `resolve.with` | Yes | **Required** | No `__self` in resolve phase |
 | `validate.with` | No | -- | Not supported |
@@ -2922,7 +2922,7 @@ The `forEach` clause iterates over an array, executing a provider once per eleme
 ### forEach Clause Fields
 
 | Field | Type | Required | Description |
-|-------|------|:--------:|-------------|
+| ------- | ------ | :--------: | ------------- |
 | `item` | string | No | Variable name alias for current array element. `__item` is always available. |
 | `index` | string | No | Variable name alias for current 0-based index. `__index` is always available. |
 | `in` | ValueRef | Resolve: Yes, Transform: No | Array to iterate over. Defaults to `__self` (transform only). |

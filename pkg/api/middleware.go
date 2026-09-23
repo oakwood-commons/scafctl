@@ -33,6 +33,16 @@ import (
 // huma.Register runs through the full middleware chain assembled here.
 // Returns the root router for API-router compatibility with callers.
 func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServerConfig, lgr logr.Logger) (chi.Router, error) {
+	// Validate here as well as in NewServer. This function is exported and
+	// takes its own *APIServerConfig, so a caller can reach it with a config
+	// object NewServer never saw -- and it is the only consumer of
+	// AllowedHosts. Routing both entry points through the same Validate keeps
+	// the advertised bounds true no matter which one an embedder uses, and
+	// keeps this from drifting into a second, partial validation.
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid apiServer configuration: %w", err)
+	}
+
 	// Validate auth configuration: refuse to start unauthenticated when auth is expected.
 	if cfg.Auth.AzureOIDC.Enabled {
 		if cfg.Auth.AzureOIDC.TenantID == "" || cfg.Auth.AzureOIDC.ClientID == "" {
@@ -47,14 +57,24 @@ func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServer
 	// All versioned business endpoints share this prefix.
 	versionedPrefix := "/" + version + "/"
 
-	// makeVersionedOnly wraps mw so it only activates for requests whose path
-	// starts with versionedPrefix. The inner handler is built once at setup
-	// time (not per-request) so there is no allocation overhead.
-	makeVersionedOnly := func(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	// makePrefixOnly wraps mw so it only activates for requests whose path
+	// starts with prefix, or equals it with the trailing slash removed. The
+	// bare-path case matters because chi's StripSlashes rewrites the routing
+	// path but leaves r.URL.Path intact, so a route registered at "/v1/admin"
+	// would route successfully while a strict HasPrefix("/v1/admin/") check
+	// missed it. The inner handler is built once at setup time (not
+	// per-request) so there is no allocation overhead.
+	//
+	// NOTE: this gate reads r.URL.Path (decoded) while chi routes on
+	// RouteContext.RoutePath/RawPath. Adding path-rewriting middleware such as
+	// chimiddleware.CleanPath above this point could desync the two; revisit
+	// this matcher if that changes.
+	makePrefixOnly := func(prefix string, mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+		bare := strings.TrimSuffix(prefix, "/")
 		return func(next http.Handler) http.Handler {
 			wrapped := mw(next)
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasPrefix(r.URL.Path, versionedPrefix) {
+				if r.URL.Path == bare || strings.HasPrefix(r.URL.Path, prefix) {
 					wrapped.ServeHTTP(w, r)
 					return
 				}
@@ -63,20 +83,33 @@ func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServer
 		}
 	}
 
+	// makeVersionedOnly restricts mw to versioned business endpoints, so health
+	// probes and /metrics are never blocked or instrumented by it.
+	makeVersionedOnly := func(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+		return makePrefixOnly(versionedPrefix, mw)
+	}
+
 	// ── Global middleware (all routes including health probes) ──
 	router.Use(chimiddleware.Recoverer)
 	router.Use(chimiddleware.RequestID)
 	router.Use(middleware.FlightID)
 	router.Use(chimiddleware.StripSlashes)
 	router.Use(middleware.RequestLogging(lgr))
-	if cfg.TokenPassThrough != nil {
-		if err := cfg.TokenPassThrough.Validate(); err != nil {
-			return nil, fmt.Errorf("invalid token pass-through configuration: %w", err)
-		}
-	}
 	router.Use(middleware.TokenPassthrough(cfg.TokenPassThroughAllowedHeaders()))
 
 	// ── API middleware (versioned paths only) ──
+
+	// 0. Host allowlist.
+	//
+	// Runs first so a request for a host this server does not serve is rejected
+	// before any other middleware does work. Guards against DNS rebinding,
+	// where an attacker-controlled name is pointed at this server so a victim's
+	// browser will talk to it while keeping the attacker's page origin.
+	//
+	// Scoped to versioned paths, matching the rest of this chain, so health and
+	// readiness probes (which commonly send a pod IP as the Host) keep working
+	// when an allowlist is configured. Empty config accepts every host.
+	router.Use(makeVersionedOnly(middleware.HostAllowlist(cfg.AllowedHosts, lgr)))
 
 	// 1. CORS
 	if cfg.CORS.Enabled {
@@ -112,11 +145,23 @@ func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServer
 		router.Use(makeVersionedOnly(authMW))
 	}
 
+	// 4b. Admin authorization.
+	//
+	// Registered after authentication so validated claims are in the request
+	// context. Enforces the policy documented in docs/design/api-surface.md:
+	// an "admin" role claim when auth is enabled, loopback-only when it is not.
+	// Without this the admin routes are reachable by any caller that reaches
+	// the port, despite the documentation promising otherwise.
+	adminPrefix := versionedPrefix + "admin/"
+	router.Use(makePrefixOnly(adminPrefix, middleware.AdminAuthorization(cfg.Auth.AzureOIDC.Enabled, lgr)))
+
 	// 5. Rate limiting
-	if cfg.RateLimit.Global != nil {
-		window := parseTimeoutOrDefault(cfg.RateLimit.Global.Window, settings.DefaultAPIRateLimitWindow)
-		router.Use(makeVersionedOnly(middleware.RateLimit(ctx, cfg.RateLimit.Global.MaxRequests, window, cfg.RateLimit.Global.TrustProxy)))
-	}
+	// EffectiveGlobal substitutes the built-in default when none is configured,
+	// so an embedder passing a zero-valued config gets the same limiter as
+	// `scafctl serve` rather than no limiter at all.
+	globalLimit := cfg.RateLimit.EffectiveGlobal()
+	window := parseTimeoutOrDefault(globalLimit.Window, settings.DefaultAPIRateLimitWindow)
+	router.Use(makeVersionedOnly(middleware.RateLimit(ctx, globalLimit.MaxRequests, window, globalLimit.TrustProxy)))
 
 	// 6. Request size limits
 	maxReqSize := cfg.MaxRequestSize

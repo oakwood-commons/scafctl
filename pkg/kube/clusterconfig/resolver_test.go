@@ -172,6 +172,33 @@ func TestResolver_Resolve_AliasWinsOverInventory(t *testing.T) {
 	assert.Equal(t, "openshift", info.DefaultHandler)
 }
 
+func TestResolver_ResolveFromAlias(t *testing.T) {
+	t.Parallel()
+
+	deps := inventoryDeps([]hostname.Entry{
+		{Name: "prod", URL: "https://inventory.example.com:6443"},
+	})
+	r := New(config.ClusterResolutionConfig{
+		Aliases:  map[string]config.ClusterAlias{"lab": {Server: "https://api.lab:6443"}},
+		Resolver: resolverConfig(),
+	}, WithDeps(deps))
+
+	// A static alias supplies the entry: provenance reports the alias tier.
+	_, fromAlias, err := r.ResolveFromAlias(context.Background(), "lab")
+	require.NoError(t, err)
+	assert.True(t, fromAlias)
+
+	// An inventory-sourced entry reports the non-alias tier.
+	_, fromAlias, err = r.ResolveFromAlias(context.Background(), "prod")
+	require.NoError(t, err)
+	assert.False(t, fromAlias)
+
+	// Errors carry no tier.
+	_, fromAlias, err = r.ResolveFromAlias(context.Background(), "missing")
+	require.Error(t, err)
+	assert.False(t, fromAlias, "provenance must not be claimed on error")
+}
+
 func TestResolver_Resolve_NotFound(t *testing.T) {
 	t.Parallel()
 

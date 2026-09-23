@@ -182,12 +182,44 @@ httpClient:
 
   # --- Security ---
 
-  # Allow HTTP requests to private, loopback, and link-local IP addresses.
-  # Blocked by default to prevent SSRF attacks against cloud metadata endpoints
+  # Requests to private, loopback, link-local and CGNAT addresses are blocked
+  # by default, to prevent SSRF against cloud metadata endpoints
   # (e.g. 169.254.169.254) and internal services.
-  # Set to true only when accessing on-premises endpoints or local dev servers.
+  #
+  # The check runs when the connection is opened, against the address the
+  # request actually resolves to -- so a hostname pointing into private space
+  # is blocked too, and so is a redirect into it.
+
+  # Name the specific ranges an on-premises deployment needs. A bare address
+  # means just that host. This is the preferred control.
+  #
+  # When set, it OVERRIDES allowPrivateIPs below and narrows access to exactly
+  # these ranges. A present but empty list means "no exceptions".
+  # allowedPrivateCIDRs:
+  #   - 10.42.0.0/16
+  #   - 192.168.1.50
+
+  # Unblocks every private range at once. Prefer allowedPrivateCIDRs above.
   # Default: false
   # allowPrivateIPs: false
+
+  # Cloud metadata addresses can NEVER be reached, under any combination of
+  # the two settings above.
+
+  # HTTP_PROXY/HTTPS_PROXY proxy routing is DISABLED by default for
+  # policy-protected clients: a proxied request is dialed to the proxy, not
+  # the target, so the dial-time address check above cannot cover that hop.
+  # Set this to true only once the configured proxy is known to enforce an
+  # equivalent destination-address policy itself.
+  # Default: false
+  # trustedProxy: false
+
+  # Additional relaxation for the trusted-proxy path only: allow a proxied
+  # request whose target hostname does not resolve locally to proceed,
+  # leaving egress policy to the proxy. Has no effect unless trustedProxy
+  # above is true. Defaults to false, which fails closed. Enable only in a
+  # proxy-only environment with no direct resolver.
+  # trustProxyResolution: false
 
   # Maximum size in bytes the HTTP provider will read from a single response
   # body. Prevents denial-of-service via unbounded responses from malicious
