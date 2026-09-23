@@ -4,10 +4,13 @@
 package solution
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -714,4 +717,223 @@ func TestSolution_ApplyDefaults_PluginKindDefaultsToProvider(t *testing.T) {
 	assert.Equal(t, PluginKindProvider, s.Bundle.Plugins[0].Kind, "empty kind should default to provider")
 	assert.Equal(t, PluginKindAuthHandler, s.Bundle.Plugins[1].Kind, "explicit auth-handler kind should be preserved")
 	assert.Equal(t, PluginKindProvider, s.Bundle.Plugins[2].Kind, "explicit provider kind should be preserved")
+}
+
+// TestSolution_ValidateStateConfig exercises stateConfigProblems through the
+// public Validate() gate: every structural state problem must abort validation,
+// and a load/save pair must pass cleanly.
+func TestSolution_ValidateStateConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		state   *state.Config
+		wantErr string // empty means Validate must succeed
+	}{
+		{
+			name:    "valid load and extends save target",
+			state:   &state.Config{Load: &state.LoadConfig{Provider: "file"}, Save: []state.SaveTarget{{Extends: state.ExtendsLoad}}},
+			wantErr: "",
+		},
+		{
+			name:    "valid save-only config",
+			state:   &state.Config{Save: []state.SaveTarget{{Provider: "file"}}},
+			wantErr: "",
+		},
+		{
+			name:    "valid load-only config",
+			state:   &state.Config{Load: &state.LoadConfig{Provider: "file"}},
+			wantErr: "",
+		},
+		{
+			name:    "load block without provider",
+			state:   &state.Config{Load: &state.LoadConfig{}},
+			wantErr: "state.load.provider is required when state.load is configured",
+		},
+		{
+			name:    "save target without provider or extends",
+			state:   &state.Config{Save: []state.SaveTarget{{Inputs: map[string]*spec.ValueRef{"path": {Literal: "state.json"}}}}},
+			wantErr: "state.save[0].provider is required unless extends is set",
+		},
+		{
+			name:    "unsupported extends value",
+			state:   &state.Config{Load: &state.LoadConfig{Provider: "file"}, Save: []state.SaveTarget{{Extends: "elsewhere"}}},
+			wantErr: `state.save[0].extends must be "load"`,
+		},
+		{
+			name:    "extends combined with provider",
+			state:   &state.Config{Load: &state.LoadConfig{Provider: "file"}, Save: []state.SaveTarget{{Extends: state.ExtendsLoad, Provider: "file"}}},
+			wantErr: "state.save[0]: extends and provider are mutually exclusive",
+		},
+		{
+			name:    "extends without a load block",
+			state:   &state.Config{Save: []state.SaveTarget{{Extends: state.ExtendsLoad}}},
+			wantErr: `state.save[0].extends: load requires a state.load block`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Solution{
+				APIVersion: DefaultAPIVersion,
+				Kind:       SolutionKind,
+				Metadata:   Metadata{Name: "state-config"},
+				State:      tt.state,
+			}
+
+			err := s.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestSolution_LegacyStateKeysRejected verifies the decode-time rejection of
+// state keys removed by the load/save split: every legacy key fails with
+// state.ErrLegacyStateConfig and names the offending key.
+func TestSolution_LegacyStateKeysRejected(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		wantKey string
+	}{
+		{
+			name: "state.backend",
+			data: `
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: legacy
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+`,
+			wantKey: "state.backend",
+		},
+		{
+			name: "state.emit",
+			data: `
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: legacy
+state:
+  load:
+    provider: file
+  emit:
+    - provider: file
+      format: intent
+`,
+			wantKey: "state.emit",
+		},
+		{
+			name: "state.load.saveOverrides",
+			data: `
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: legacy
+state:
+  load:
+    provider: file
+    saveOverrides:
+      branch: main
+`,
+			wantKey: "state.load.saveOverrides",
+		},
+		{
+			name: "state.load.format",
+			data: `
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: legacy
+state:
+  load:
+    provider: file
+    format: intent
+`,
+			wantKey: "state.load.format",
+		},
+		{
+			name: "state.load.parameters",
+			data: `
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: legacy
+state:
+  load:
+    provider: file
+    parameters:
+      exclude: [mode]
+`,
+			wantKey: "state.load.parameters",
+		},
+		{
+			name: "state.save saveOverrides",
+			data: `
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: legacy
+state:
+  load:
+    provider: file
+  save:
+    - extends: load
+      saveOverrides:
+        branch: main
+`,
+			wantKey: "state.save[].saveOverrides",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"/yaml", func(t *testing.T) {
+			s := &Solution{}
+			err := s.FromYAML([]byte(tt.data))
+			require.Error(t, err, "legacy state key %q must be rejected at decode time", tt.wantKey)
+			assert.True(t, errors.Is(err, state.ErrLegacyStateConfig),
+				"error must wrap state.ErrLegacyStateConfig, got: %v", err)
+			assert.Contains(t, err.Error(), tt.wantKey, "error must name the offending key")
+		})
+	}
+
+	t.Run("state.backend/json", func(t *testing.T) {
+		s := &Solution{}
+		err := s.FromJSON([]byte(`{"apiVersion":"scafctl.io/v1","kind":"Solution","metadata":{"name":"legacy"},"state":{"backend":{"provider":"file"}}}`))
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, state.ErrLegacyStateConfig),
+			"error must wrap state.ErrLegacyStateConfig, got: %v", err)
+		assert.Contains(t, err.Error(), "state.backend")
+	})
+
+	t.Run("new load/save split still loads", func(t *testing.T) {
+		s := &Solution{}
+		err := s.FromYAML([]byte(`
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: modern
+state:
+  load:
+    provider: file
+    inputs:
+      path: state.json
+  save:
+    - extends: load
+`))
+		require.NoError(t, err)
+		require.NotNil(t, s.State)
+		require.NotNil(t, s.State.Load)
+		assert.Equal(t, "file", s.State.Load.Provider)
+		require.Len(t, s.State.Save, 1)
+		assert.Equal(t, state.ExtendsLoad, s.State.Save[0].Extends)
+	})
 }

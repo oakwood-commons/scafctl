@@ -568,9 +568,7 @@ func (s *Solution) Validate() error {
 		}
 	}
 
-	if s.State != nil && s.State.Backend.Provider == "" {
-		problems = append(problems, "state.backend.provider is required when state is configured")
-	}
+	problems = append(problems, stateConfigProblems(s.State)...)
 
 	if len(problems) > 0 {
 		return fmt.Errorf("solution validation failed: %s", strings.Join(problems, "; "))
@@ -582,4 +580,34 @@ func (s *Solution) Validate() error {
 	}
 
 	return nil
+}
+
+// stateConfigProblems reports the structural state configuration problems
+// that make a run impossible (a load block with no provider, or a save target
+// with nothing to write to). Advisory problems -- for example a checkpoint on
+// an intent-format target -- are left to lint.
+func stateConfigProblems(cfg *state.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+
+	var problems []string
+	if cfg.Load != nil && cfg.Load.Provider == "" {
+		problems = append(problems, "state.load.provider is required when state.load is configured")
+	}
+	for i, target := range cfg.Save {
+		switch {
+		case target.Extends == "" && target.Provider == "":
+			problems = append(problems, fmt.Sprintf("state.save[%d].provider is required unless extends is set", i))
+		case target.Extends == "":
+			// A regular target naming its own provider.
+		case target.Extends != state.ExtendsLoad:
+			problems = append(problems, fmt.Sprintf("state.save[%d].extends must be %q", i, state.ExtendsLoad))
+		case target.Provider != "":
+			problems = append(problems, fmt.Sprintf("state.save[%d]: extends and provider are mutually exclusive", i))
+		case cfg.Load == nil:
+			problems = append(problems, fmt.Sprintf("state.save[%d].extends: %s requires a state.load block", i, state.ExtendsLoad))
+		}
+	}
+	return problems
 }

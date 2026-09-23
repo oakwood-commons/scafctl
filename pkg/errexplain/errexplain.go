@@ -157,8 +157,8 @@ func knownPatterns() []pattern {
 					RootCause: fmt.Sprintf("The resolver(s) [%s] read state (or depend on one that does), so they cannot run before state is loaded -- a circular dependency", m[2]),
 					Suggestions: []string{
 						fmt.Sprintf("Reference only state-independent resolvers from %s (ones that do not use the state provider)", m[1]),
-						"Move the state read into a downstream resolver instead of the state.enabled / state.backend.inputs field",
-						"If you need the value at save time, use state.backend.save overrides, which are evaluated after resolvers run",
+						"Move the state read into a downstream resolver instead of the state.enabled / state.load.inputs field",
+						"If you need the value at save time, reference it from a state.save target, which is evaluated after resolvers run",
 						"Use lint_solution to see the state-ref-state-dependent finding and the offending references",
 					},
 				}
@@ -368,7 +368,7 @@ func knownPatterns() []pattern {
 					Suggestions: []string{
 						fmt.Sprintf("Supply the missing parameters with -r flags: %s", formatParamHints(params)),
 						"State is loaded before resolvers run, so __params (CLI -r flags) are the only data source",
-						"Check the state.backend.inputs section of your solution YAML for __params references",
+						"Check the state.enabled and state.load.inputs sections of your solution YAML for __params references",
 						"If this is a replay run, the state file path must be deterministic from CLI params alone",
 					},
 				}

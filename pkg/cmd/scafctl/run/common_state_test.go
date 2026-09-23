@@ -9,8 +9,13 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -39,104 +44,286 @@ func testQuietWriterCtx(t *testing.T) (context.Context, *bytes.Buffer) {
 }
 
 func TestValidateStateFlags(t *testing.T) {
-	t.Run("ok when neither set", func(t *testing.T) {
-		o := &sharedResolverOptions{}
-		require.NoError(t, o.validateStateFlags())
-	})
+	tests := []struct {
+		name    string
+		opts    sharedResolverOptions
+		wantErr []string
+	}{
+		{name: "no flags"},
+		{name: "state-file only", opts: sharedResolverOptions{StateFile: "in.json"}},
+		{name: "state-file with state-output", opts: sharedResolverOptions{StateFile: "in.json", StateOutput: "out.json"}},
+		{name: "state-file with no-state-output", opts: sharedResolverOptions{StateFile: "in.json", NoStateOutput: true}},
+		{name: "allow-missing-locks with state-file", opts: sharedResolverOptions{StateFile: "in.json", AllowMissingLocks: true}},
+		{name: "no-state only", opts: sharedResolverOptions{NoState: true}},
+		{
+			name:    "no-state with state-file",
+			opts:    sharedResolverOptions{NoState: true, StateFile: "in.json"},
+			wantErr: []string{"--no-state disables state entirely and cannot be combined with --state-file"},
+		},
+		{
+			name: "no-state lists every conflicting flag",
+			opts: sharedResolverOptions{NoState: true, StateOutput: "out.json", NoStateOutput: true, AllowMissingLocks: true},
+			wantErr: []string{
+				"cannot be combined with --state-output, --no-state-output, --allow-missing-locks",
+			},
+		},
+		{
+			name:    "state-output with no-state-output",
+			opts:    sharedResolverOptions{StateOutput: "out.json", NoStateOutput: true},
+			wantErr: []string{"--state-output and --no-state-output are mutually exclusive"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.opts.validateStateFlags()
+			if len(tt.wantErr) == 0 {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			for _, want := range tt.wantErr {
+				assert.Contains(t, err.Error(), want)
+			}
+		})
+	}
+}
 
-	t.Run("ok when only state-file set", func(t *testing.T) {
-		o := &sharedResolverOptions{StateFile: "intent.json"}
-		require.NoError(t, o.validateStateFlags())
-	})
-
-	t.Run("ok when only no-state set", func(t *testing.T) {
-		o := &sharedResolverOptions{NoState: true}
-		require.NoError(t, o.validateStateFlags())
-	})
-
-	t.Run("error when both set", func(t *testing.T) {
-		o := &sharedResolverOptions{NoState: true, StateFile: "intent.json"}
-		err := o.validateStateFlags()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "mutually exclusive")
-	})
+// declaredState is a solution state block with a github load, an extends:
+// load target, and an intent target.
+func declaredState() *state.Config {
+	return &state.Config{
+		Load: &state.LoadConfig{
+			Provider: "github",
+			Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state/app.json"}},
+		},
+		Save: []state.SaveTarget{
+			{Extends: state.ExtendsLoad},
+			{Provider: state.FileProviderName, Format: state.FormatIntent, Inputs: map[string]*spec.ValueRef{state.FileInputPath: {Literal: "intent.json"}}},
+		},
+	}
 }
 
 func TestResolveStateConfig(t *testing.T) {
-	t.Run("no state-file returns the declared config unchanged", func(t *testing.T) {
+	demo := func(cfg *state.Config) *solution.Solution {
+		return &solution.Solution{Metadata: solution.Metadata{Name: "demo"}, State: cfg}
+	}
+
+	t.Run("no flags returns the declared config unchanged", func(t *testing.T) {
 		ctx, buf := testWriterCtx(t)
-		declared := &state.Config{Backend: state.Backend{Provider: "github"}}
-		sol := &solution.Solution{Metadata: solution.Metadata{Name: "demo"}, State: declared}
+		declared := declaredState()
 		o := &sharedResolverOptions{}
 
-		cfg, err := o.resolveStateConfig(ctx, sol)
+		cfg, err := o.resolveStateConfig(ctx, demo(declared))
 		require.NoError(t, err)
-		assert.Same(t, declared, cfg, "the declared config must be returned as-is")
-		assert.Empty(t, buf.String(), "no override notice when the flag is unset")
+		assert.Same(t, declared, cfg)
+		assert.Empty(t, buf.String(), "no notice when no flag is set")
 	})
 
-	t.Run("no state-file and no state block returns nil", func(t *testing.T) {
+	t.Run("no flags and no state block returns nil", func(t *testing.T) {
 		ctx, _ := testWriterCtx(t)
-		sol := &solution.Solution{Metadata: solution.Metadata{Name: "demo"}}
 		o := &sharedResolverOptions{}
 
-		cfg, err := o.resolveStateConfig(ctx, sol)
+		cfg, err := o.resolveStateConfig(ctx, demo(nil))
 		require.NoError(t, err)
 		assert.Nil(t, cfg)
 	})
 
-	t.Run("state-file with no state block enables full-format file state without a notice", func(t *testing.T) {
+	t.Run("state-file without a state block is a read-only replay", func(t *testing.T) {
 		ctx, buf := testWriterCtx(t)
-		sol := &solution.Solution{Metadata: solution.Metadata{Name: "demo"}}
 		o := &sharedResolverOptions{StateFile: "intent.json"}
 
-		cfg, err := o.resolveStateConfig(ctx, sol)
+		cfg, err := o.resolveStateConfig(ctx, demo(nil))
 		require.NoError(t, err)
 		require.NotNil(t, cfg)
-		assert.Equal(t, state.FileBackendProvider, cfg.Backend.Provider)
-		assert.Empty(t, cfg.Backend.Format, "with no declared state block, format defaults to full (empty string)")
-		assert.Equal(t, "intent.json", cfg.Backend.Inputs[state.BackendInputPath].Literal)
-		assert.Empty(t, buf.String(), "no override notice when the solution declares no state block")
+		require.NotNil(t, cfg.Load)
+		assert.Equal(t, state.FileProviderName, cfg.Load.Provider)
+		assert.Equal(t, "intent.json", cfg.Load.Inputs[state.FileInputPath].Literal)
+		assert.Empty(t, cfg.Save, "reading a file never adds a write")
+		assert.Empty(t, buf.String(), "nothing declared was replaced")
 	})
 
-	t.Run("state-file overrides a declared block, inherits its format, and reports the override", func(t *testing.T) {
+	t.Run("state-file replaces only the declared load and says so", func(t *testing.T) {
 		ctx, buf := testWriterCtx(t)
-		declared := &state.Config{Backend: state.Backend{Provider: "github", Format: state.FormatIntent}}
-		sol := &solution.Solution{Metadata: solution.Metadata{Name: "demo"}, State: declared}
 		o := &sharedResolverOptions{StateFile: "intent.json"}
 
-		cfg, err := o.resolveStateConfig(ctx, sol)
+		cfg, err := o.resolveStateConfig(ctx, demo(declaredState()))
 		require.NoError(t, err)
-		require.NotNil(t, cfg)
-		assert.Equal(t, state.FileBackendProvider, cfg.Backend.Provider)
-		assert.Equal(t, state.FormatIntent, cfg.Backend.Format, "the inherited format must carry over from the solution's declared backend")
-		assert.Empty(t, cfg.Emit, "an explicit state file is a complete substitution, never an additional output")
-		out := buf.String()
-		assert.Contains(t, out, "overriding")
-		assert.Contains(t, out, "github", "the override notice must name the replaced provider")
-		assert.Contains(t, out, "intent.json")
-		assert.NotContains(t, out, "dropped", "a declared block with no Emit targets has nothing to report as dropped")
+		assert.Equal(t, "intent.json", cfg.Load.Inputs[state.FileInputPath].Literal)
+		require.Len(t, cfg.Save, 2, "the declared save targets still run")
+		assert.Equal(t, "github", cfg.Save[0].Provider, "the extends target keeps the declared load's provider")
+		assert.Equal(t, "state/app.json", cfg.Save[0].Inputs["path"].Literal, "and its location")
+		assert.Contains(t, buf.String(), `--state-file: reading state from intent.json instead of the solution's "github" load`)
+		assert.NotContains(t, buf.String(), "overriding the solution's state.enabled", "an absent enabled is not overridden")
 	})
 
-	t.Run("state-file overriding a block with Emit targets reports how many were dropped", func(t *testing.T) {
+	t.Run("state-file over a conditional enabled forces state on and says so", func(t *testing.T) {
 		ctx, buf := testWriterCtx(t)
-		declared := &state.Config{
-			Backend: state.Backend{Provider: "file"},
-			Emit: []state.EmitTarget{
-				{Backend: state.Backend{Provider: "file", Format: state.FormatIntent}},
-				{Backend: state.Backend{Provider: "http", Format: state.FormatIntent}},
-			},
-		}
-		sol := &solution.Solution{Metadata: solution.Metadata{Name: "demo"}, State: declared}
-		o := &sharedResolverOptions{StateFile: "override.json"}
+		o := &sharedResolverOptions{StateFile: "intent.json"}
+		declared := declaredState()
+		expr := celexp.Expression("__params.persist == 'true'")
+		declared.Enabled = &spec.ValueRef{Expr: &expr}
 
-		cfg, err := o.resolveStateConfig(ctx, sol)
+		cfg, err := o.resolveStateConfig(ctx, demo(declared))
 		require.NoError(t, err)
-		require.NotNil(t, cfg)
-		assert.Empty(t, cfg.Emit)
-		out := buf.String()
-		assert.Contains(t, out, "2 emit target(s) dropped", "the notice must name how many Emit targets were dropped")
+		assert.Equal(t, true, cfg.Enabled.Literal)
+		assert.Contains(t, buf.String(), "--state-file: overriding the solution's state.enabled; state is enabled for this run")
 	})
+
+	t.Run("state-output alone names itself in the enabled notice", func(t *testing.T) {
+		ctx, buf := testWriterCtx(t)
+		o := &sharedResolverOptions{StateOutput: "out.json"}
+		declared := declaredState()
+		declared.Enabled = &spec.ValueRef{Literal: false}
+
+		_, err := o.resolveStateConfig(ctx, demo(declared))
+		require.NoError(t, err)
+		assert.Contains(t, buf.String(), "--state-output: overriding the solution's state.enabled")
+	})
+
+	t.Run("state-file on a save-only block reports no replaced load", func(t *testing.T) {
+		ctx, buf := testWriterCtx(t)
+		o := &sharedResolverOptions{StateFile: "intent.json"}
+		saveOnly := &state.Config{Save: []state.SaveTarget{{Provider: state.FileProviderName}}}
+
+		_, err := o.resolveStateConfig(ctx, demo(saveOnly))
+		require.NoError(t, err)
+		assert.Empty(t, buf.String())
+	})
+
+	t.Run("state-output replaces every declared save target and says so", func(t *testing.T) {
+		ctx, buf := testWriterCtx(t)
+		o := &sharedResolverOptions{StateOutput: "out.json"}
+
+		cfg, err := o.resolveStateConfig(ctx, demo(declaredState()))
+		require.NoError(t, err)
+		require.Len(t, cfg.Save, 1)
+		assert.Equal(t, "out.json", cfg.Save[0].Inputs[state.FileInputPath].Literal)
+		assert.Equal(t, state.FormatFull, cfg.Save[0].Format)
+		assert.Contains(t, buf.String(), "--state-output: writing full state to out.json instead of the solution's 2 save target(s)")
+	})
+
+	t.Run("no-state-output skips every declared save target and says so", func(t *testing.T) {
+		ctx, buf := testWriterCtx(t)
+		o := &sharedResolverOptions{NoStateOutput: true}
+
+		cfg, err := o.resolveStateConfig(ctx, demo(declaredState()))
+		require.NoError(t, err)
+		assert.Empty(t, cfg.Save)
+		require.NotNil(t, cfg.Load, "loading still happens")
+		assert.Contains(t, buf.String(), "--no-state-output: skipping the solution's 2 save target(s)")
+	})
+
+	t.Run("no-state-output on a load-only block is silent", func(t *testing.T) {
+		ctx, buf := testWriterCtx(t)
+		o := &sharedResolverOptions{NoStateOutput: true}
+		loadOnly := &state.Config{Load: &state.LoadConfig{Provider: state.FileProviderName}}
+
+		_, err := o.resolveStateConfig(ctx, demo(loadOnly))
+		require.NoError(t, err)
+		assert.Empty(t, buf.String())
+	})
+
+	t.Run("conflicting output overrides are an error", func(t *testing.T) {
+		ctx, _ := testWriterCtx(t)
+		o := &sharedResolverOptions{StateOutput: "out.json", NoStateOutput: true}
+
+		_, err := o.resolveStateConfig(ctx, demo(declaredState()))
+		require.Error(t, err)
+	})
+
+	t.Run("no panic without a writer", func(t *testing.T) {
+		o := &sharedResolverOptions{StateFile: "intent.json"}
+		cfg, err := o.resolveStateConfig(context.Background(), demo(declaredState()))
+		require.NoError(t, err)
+		assert.NotNil(t, cfg)
+	})
+}
+
+func TestStateManagerOptions(t *testing.T) {
+	assert.Len(t, (&sharedResolverOptions{}).stateManagerOptions("/invoking"), 1,
+		"relative state locations always resolve against the invoking directory")
+	assert.Len(t, (&sharedResolverOptions{StateFile: "intent.json"}).stateManagerOptions("/invoking"), 2,
+		"an explicitly named --state-file must also exist")
+}
+
+func TestCheckMissingLocks(t *testing.T) {
+	resolvers := []*resolver.Resolver{{Name: "project_id", Immutable: true}}
+	lockless := func() *state.LoadResult {
+		d := state.NewData()
+		d.Parameters["env"] = "prod"
+		return &state.LoadResult{Data: d, Loaded: true, LoadedParams: 1, Location: "intent.json", Provider: state.FileProviderName}
+	}
+
+	t.Run("refuses a lock-less replay", func(t *testing.T) {
+		ctx, _ := testWriterCtx(t)
+		err := (&sharedResolverOptions{}).checkMissingLocks(ctx, lockless(), resolvers, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "has parameters but no immutable locks")
+		assert.Contains(t, err.Error(), "re-run with --allow-missing-locks")
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	})
+
+	t.Run("allow-missing-locks waives the guard with a warning", func(t *testing.T) {
+		ctx, buf := testWriterCtx(t)
+		err := (&sharedResolverOptions{AllowMissingLocks: true}).checkMissingLocks(ctx, lockless(), resolvers, false)
+		require.NoError(t, err)
+		assert.Contains(t, buf.String(), "--allow-missing-locks:")
+		assert.Contains(t, buf.String(), "project_id")
+	})
+
+	t.Run("a dry run only warns", func(t *testing.T) {
+		ctx, buf := testWriterCtx(t)
+		err := (&sharedResolverOptions{}).checkMissingLocks(ctx, lockless(), resolvers, true)
+		require.NoError(t, err)
+		assert.Contains(t, buf.String(), "a real run requires --allow-missing-locks")
+	})
+
+	t.Run("a genuine full state file passes silently", func(t *testing.T) {
+		ctx, buf := testWriterCtx(t)
+		lr := lockless()
+		lr.Data.Resolvers["project_id"] = &state.PersistedEntry{Value: "p-1", Immutable: true}
+		require.NoError(t, (&sharedResolverOptions{}).checkMissingLocks(ctx, lr, resolvers, false))
+		assert.Empty(t, buf.String())
+	})
+}
+
+func TestVerifyImmutablesOption(t *testing.T) {
+	sd := state.NewData()
+	sd.Resolvers["cluster_id"] = &state.PersistedEntry{Value: "old", Type: "string", Immutable: true}
+	rctx := resolver.NewContext()
+	rctx.SetResult("cluster_id", &resolver.ExecutionResult{Value: "new", Status: resolver.ExecutionStatusSuccess})
+	resolvers := []*resolver.Resolver{{Name: "cluster_id", Type: "string", Immutable: true}}
+	mgr := state.NewManager(&state.Config{Load: &state.LoadConfig{Provider: state.FileProviderName}}, provider.NewRegistry(), settings.RuntimeProvenance{})
+	o := &sharedResolverOptions{}
+
+	t.Run("a changed immutable value fails the run", func(t *testing.T) {
+		ctx, _ := testWriterCtx(t)
+		err := o.verifyImmutables(ctx, mgr, sd, rctx, resolvers)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, state.ErrImmutableEntry)
+		assert.Equal(t, exitcode.GeneralError, exitcode.GetCode(err))
+	})
+
+	t.Run("no manager or no state is a no-op", func(t *testing.T) {
+		ctx, _ := testWriterCtx(t)
+		assert.NoError(t, o.verifyImmutables(ctx, nil, sd, rctx, resolvers))
+		assert.NoError(t, o.verifyImmutables(ctx, mgr, nil, rctx, resolvers))
+	})
+
+	t.Run("an unchanged immutable value passes", func(t *testing.T) {
+		ctx, _ := testWriterCtx(t)
+		same := resolver.NewContext()
+		same.SetResult("cluster_id", &resolver.ExecutionResult{Value: "old", Status: resolver.ExecutionStatusSuccess})
+		assert.NoError(t, o.verifyImmutables(ctx, mgr, sd, same, resolvers))
+	})
+}
+
+func TestHandleStateLoadError_NotFound(t *testing.T) {
+	ctx, _ := testWriterCtx(t)
+	err := (&sharedResolverOptions{}).handleStateLoadError(ctx, &state.NotFoundError{Location: "missing.json", Provider: state.FileProviderName})
+	require.Error(t, err)
+	assert.Equal(t, `--state-file: state file "missing.json" does not exist`, err.Error())
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
 }
 
 func TestWarnSolutionMismatch(t *testing.T) {
@@ -203,15 +390,8 @@ func TestWarnSolutionMismatch(t *testing.T) {
 }
 
 func TestLocationOrProvider(t *testing.T) {
-	t.Run("prefers Location when set", func(t *testing.T) {
-		got := locationOrProvider("state.json", "file")
-		assert.Equal(t, "state.json", got)
-	})
-
-	t.Run("falls back to a provider-named backend when Location is empty", func(t *testing.T) {
-		got := locationOrProvider("", "github")
-		assert.Equal(t, "github backend", got)
-	})
+	assert.Equal(t, "state.json", locationOrProvider("state.json", "file"), "prefers Location when set")
+	assert.Equal(t, "github provider", locationOrProvider("", "github"), "falls back to the provider name")
 }
 
 func TestReportStateLoaded(t *testing.T) {
@@ -227,119 +407,91 @@ func TestReportStateLoaded(t *testing.T) {
 		assert.Empty(t, buf.String())
 	})
 
+	t.Run("no-op when nothing was loaded (save-only)", func(t *testing.T) {
+		ctx, buf := testWriterCtx(t)
+		reportStateLoaded(ctx, &state.LoadResult{FirstRun: true})
+		assert.Empty(t, buf.String(), "a save-only configuration reads nothing, so there is nothing to report")
+	})
+
 	t.Run("first run reports no prior state", func(t *testing.T) {
 		ctx, buf := testWriterCtx(t)
-		reportStateLoaded(ctx, &state.LoadResult{FirstRun: true, Location: "state.json"})
-		out := buf.String()
-		assert.Contains(t, out, "no prior state")
-		assert.Contains(t, out, "state.json")
-		assert.Contains(t, out, "first run")
+		reportStateLoaded(ctx, &state.LoadResult{Loaded: true, FirstRun: true, Location: "state.json"})
+		assert.Contains(t, buf.String(), "state: no prior state at state.json (first run)")
 	})
 
 	t.Run("replay reports parameter and locked-value counts", func(t *testing.T) {
 		ctx, buf := testWriterCtx(t)
 		reportStateLoaded(ctx, &state.LoadResult{
-			FirstRun:        false,
+			Loaded:          true,
 			LoadedParams:    3,
 			LoadedResolvers: 1,
 			Location:        "state.json",
 		})
-		out := buf.String()
-		assert.Contains(t, out, "reusing")
-		assert.Contains(t, out, "3 parameter")
-		assert.Contains(t, out, "1 locked value")
-		assert.Contains(t, out, "state.json")
+		assert.Contains(t, buf.String(), "state: reusing 3 parameter(s) and 1 locked value(s) from state.json")
 	})
 
-	t.Run("falls back to a provider-named backend when Location is empty", func(t *testing.T) {
+	t.Run("falls back to the provider name when Location is empty", func(t *testing.T) {
 		ctx, buf := testWriterCtx(t)
-		reportStateLoaded(ctx, &state.LoadResult{FirstRun: true, Provider: "github"})
-		assert.Contains(t, buf.String(), "github backend")
+		reportStateLoaded(ctx, &state.LoadResult{Loaded: true, FirstRun: true, Provider: "github"})
+		assert.Contains(t, buf.String(), "github provider")
 	})
 
 	t.Run("suppressed by --quiet", func(t *testing.T) {
 		ctx, buf := testQuietWriterCtx(t)
-		reportStateLoaded(ctx, &state.LoadResult{FirstRun: true, Location: "state.json"})
+		reportStateLoaded(ctx, &state.LoadResult{Loaded: true, FirstRun: true, Location: "state.json"})
 		assert.Empty(t, buf.String())
 	})
 
 	t.Run("no panic without a writer", func(t *testing.T) {
 		assert.NotPanics(t, func() {
-			reportStateLoaded(context.Background(), &state.LoadResult{FirstRun: true})
+			reportStateLoaded(context.Background(), &state.LoadResult{Loaded: true, FirstRun: true})
 		})
 	})
 }
 
 func TestReportStateSaved(t *testing.T) {
+	full := state.TargetWrite{Provider: state.FileProviderName, Location: "state.json", Format: state.FormatFull}
+	intent := state.TargetWrite{Provider: state.FileProviderName, Location: "intent.json", Format: state.FormatIntent}
+
 	t.Run("no-op when result is nil", func(t *testing.T) {
 		ctx, buf := testWriterCtx(t)
 		reportStateSaved(ctx, nil)
 		assert.Empty(t, buf.String())
 	})
 
-	t.Run("reports the primary write", func(t *testing.T) {
+	t.Run("reports each written target with its format", func(t *testing.T) {
 		ctx, buf := testWriterCtx(t)
-		reportStateSaved(ctx, &state.SaveResult{
-			Primary: state.BackendWrite{Provider: "file", Location: "state.json", Format: state.FormatFull},
-		})
+		reportStateSaved(ctx, &state.SaveResult{Targets: []state.TargetWrite{full, intent}})
 		out := buf.String()
-		assert.Contains(t, out, "updated")
-		assert.Contains(t, out, "state.json")
-		assert.Contains(t, out, "full")
+		assert.Contains(t, out, "state: saved state.json (full)")
+		assert.Contains(t, out, "state: saved intent.json (intent)")
 	})
 
-	t.Run("reports an enabled emit target", func(t *testing.T) {
+	t.Run("a skipped target is silent", func(t *testing.T) {
 		ctx, buf := testWriterCtx(t)
-		reportStateSaved(ctx, &state.SaveResult{
-			Primary: state.BackendWrite{Provider: "file", Location: "state.json", Format: state.FormatFull},
-			Emits: []state.BackendWrite{
-				{Provider: "file", Location: "intent.json", Format: state.FormatIntent},
-			},
-		})
+		skipped := intent
+		skipped.Skipped = true
+		reportStateSaved(ctx, &state.SaveResult{Targets: []state.TargetWrite{full, skipped}})
 		out := buf.String()
-		assert.Contains(t, out, "emitted")
-		assert.Contains(t, out, "intent.json")
-		assert.Contains(t, out, "intent")
+		assert.Contains(t, out, "state.json", "the written target is still reported")
+		assert.NotContains(t, out, "intent.json", "a skipped target must not be reported")
 	})
 
-	t.Run("a skipped emit target is silent", func(t *testing.T) {
+	t.Run("falls back to the provider name when Location is empty", func(t *testing.T) {
 		ctx, buf := testWriterCtx(t)
-		reportStateSaved(ctx, &state.SaveResult{
-			Primary: state.BackendWrite{Provider: "file", Location: "state.json", Format: state.FormatFull},
-			Emits: []state.BackendWrite{
-				{Provider: "file", Location: "intent.json", Format: state.FormatIntent, Skipped: true},
-			},
-		})
-		out := buf.String()
-		assert.Contains(t, out, "updated", "the primary write is still reported")
-		assert.NotContains(t, out, "intent.json", "a skipped emit target must not be reported")
-		assert.NotContains(t, out, "emitted")
-	})
-
-	t.Run("falls back to a provider-named backend when Location is empty", func(t *testing.T) {
-		ctx, buf := testWriterCtx(t)
-		reportStateSaved(ctx, &state.SaveResult{
-			Primary: state.BackendWrite{Provider: "github", Format: state.FormatFull},
-		})
-		assert.Contains(t, buf.String(), "github backend")
+		reportStateSaved(ctx, &state.SaveResult{Targets: []state.TargetWrite{{Provider: "github", Format: state.FormatFull}}})
+		assert.Contains(t, buf.String(), "state: saved github provider (full)")
 	})
 
 	t.Run("suppressed by --quiet", func(t *testing.T) {
 		ctx, buf := testQuietWriterCtx(t)
-		reportStateSaved(ctx, &state.SaveResult{
-			Primary: state.BackendWrite{Provider: "file", Location: "state.json", Format: state.FormatFull},
-			Emits: []state.BackendWrite{
-				{Provider: "file", Location: "intent.json", Format: state.FormatIntent},
-			},
-		})
+		reportStateSaved(ctx, &state.SaveResult{Targets: []state.TargetWrite{full, intent}})
 		assert.Empty(t, buf.String())
 	})
 
 	t.Run("no panic without a writer", func(t *testing.T) {
 		assert.NotPanics(t, func() {
-			reportStateSaved(context.Background(), &state.SaveResult{
-				Primary: state.BackendWrite{Provider: "file", Location: "state.json", Format: state.FormatFull},
-			})
+			reportStateSaved(context.Background(), &state.SaveResult{Targets: []state.TargetWrite{full}})
 		})
 	})
 }

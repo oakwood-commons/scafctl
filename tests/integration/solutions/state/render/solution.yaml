@@ -12,7 +12,7 @@ metadata:
 
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: state.json

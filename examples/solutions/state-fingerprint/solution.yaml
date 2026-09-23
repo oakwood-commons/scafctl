@@ -11,7 +11,7 @@
 #   5. Re-executes when templates are modified or output is tampered with
 #
 # State features demonstrated:
-#   - state.enabled / state.backend configuration
+#   - state.enabled / state.load + state.save configuration
 #   - Automatic parameter replay (CLI -r values saved and restored)
 #   - Immutable resolver values locked after first execution
 #   - computed resolvers using state-replayed values
@@ -67,13 +67,17 @@ metadata:
 # STATE CONFIGURATION
 # =============================================================================
 # State persists resolver values and fingerprint hashes between executions.
-# The file backend stores a JSON file relative to the solution file's directory.
+# Fingerprints live only in the full state document, so the solution loads the
+# file (to compare hashes) and saves it back in full via extends: load. The
+# file provider resolves the path against the current working directory.
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: "state-fingerprint-demo.json"
+  save:
+    - extends: load
 bundle:
   plugins:
     - name: directory

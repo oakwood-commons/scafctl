@@ -8,6 +8,11 @@ weight: 18
 Related: [state.md](state.md) (original state design),
 [immutable-resolvers-plan.md](immutable-resolvers-plan.md)
 
+> **Note:** the state block this design builds on was later split into
+> `state.load` (read only) and `state.save` (the only write mechanism).
+> Configuration snippets below use the current syntax; see
+> [state.md](state.md) for the current model.
+
 ---
 
 ## 1. Motivation
@@ -144,7 +149,7 @@ User: scafctl run solution -f app.yaml -r project=foo -r region=us-east-1
 2. **Merge parameters** -- CLI params are the only source: `{project: foo, region: us-east-1}`.
 3. **Execute resolvers** -- All resolvers execute with the merged params available via the `parameter` provider.
 4. **Check immutables** -- For each resolver with `immutable: true`, save its resolved value to `immutables`.
-5. **Save state** -- Write `parameters` (the merged set) and `immutables` to the backend.
+5. **Save state** -- Write `parameters` (the merged set) and `immutables` to the save targets.
 
 ### 4.2 Subsequent Run (No Parameters)
 
@@ -307,8 +312,8 @@ flag alone.
 | `state-circular-dependency` | **Removed** -- no `saveToState` to create cycles |
 | `immutable-without-save` | **Removed** -- `saveToState` no longer exists |
 | `immutable-no-state-read` | **Removed** -- `state` provider no longer exists |
-| `state-ref-state-dependent` | **New** -- state.enabled/backend inputs may reference state-INDEPENDENT resolvers (resolved in a pre-load pass), but referencing a state-dependent resolver is a cycle |
-| `state-ref-unknown` | **New** -- state.enabled/backend inputs reference an undefined resolver |
+| `state-ref-state-dependent` | **New** -- state.enabled/load inputs may reference state-INDEPENDENT resolvers (resolved in a pre-load pass), but referencing a state-dependent resolver is a cycle |
+| `state-ref-unknown` | **New** -- state.enabled/load inputs reference an undefined resolver |
 | `immutable-requires-state` | **New** -- resolver with `immutable: true` requires a `state` block on the solution |
 
 ### 7.4 New Lint Rule: `immutable-requires-state`
@@ -320,7 +325,7 @@ block configured and enabled, emit an error:
 Error [immutable-requires-state] resolvers.cluster_id:
   resolver 'cluster_id' has immutable: true but no state block is configured.
   Immutable values require state persistence to enforce the lock across runs.
-  Add a state block with a backend provider to the solution.
+  Add a state block with a load block and a full-format save target to the solution.
 ~~~
 
 Severity: **Error** (not just warning) because without state, the immutable
@@ -410,32 +415,36 @@ $ scafctl state clear --path app-state.json
 
 ## 9. Solution Configuration Changes
 
-The top-level `state` block is **unchanged** in structure:
+The top-level `state` block keeps its structure (shown in the current load/save syntax):
 
 ~~~yaml
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: "app-state.json"
+  save:
+    - extends: load
 ~~~
 
 The semantics change: state now stores parameters and immutables instead of
 arbitrary resolver values.
 
-The `state.backend.inputs` can still use `__params` in CEL/template
+`state.load.inputs` can still use `__params` in CEL/template
 expressions. The "bootstrap parameter" pattern still applies -- at least one
 parameter identifying the state file must always be passed via CLI:
 
 ~~~yaml
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path:
         tmpl: "deploy/{{ .__params.project }}.json"
+  save:
+    - extends: load
 ~~~
 
 Here, `project` must always be passed via `-r project=foo` because the state

@@ -54,7 +54,7 @@ type TwoPhaseResult struct {
 }
 
 // LoadTwoPhase executes the state pre-load, supporting state config fields
-// (enabled and backend inputs) that reference state-independent resolvers.
+// (enabled and load inputs) that reference state-independent resolvers.
 //
 // It:
 //  1. Validates that no load-time field references a state-dependent resolver

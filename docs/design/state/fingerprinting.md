@@ -384,10 +384,12 @@ metadata:
 
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: ".scafctl/state.json"
+  save:
+    - extends: load   # fingerprints live only in the full state document
 
 spec:
   resolvers:

@@ -1,21 +1,23 @@
 # Dynamic State Configuration Example
 
 Demonstrates referencing resolver outputs from the `state.enabled` and
-`state.backend.inputs` fields. The state file path and the enable flag are
-computed from resolved values instead of hard-coded literals.
+`state.load.inputs` fields. The state file path and the enable flag are
+computed from resolved values instead of hard-coded literals; the
+`extends: load` save target writes back to the same computed path.
 
 ## How it works
 
 Before state is loaded, scafctl runs a minimal "Phase A" -- just the resolvers
 the load-time state fields transitively require (`persist_state`, `state_path`,
-and `app_name`). It evaluates `state.enabled` and `state.backend.inputs.path`
+and `app_name`). It evaluates `state.enabled` and `state.load.inputs.path`
 from those values, loads state, then reuses the Phase-A results in the main run
 (they are not executed twice).
 
 Only *state-independent* resolvers may be referenced here. A resolver that reads
 state (via the `state` provider) or depends on one that does would be circular
 and is rejected at load time with a clear error (lint rules
-`state-ref-state-dependent` and `state-ref-unknown`).
+`state-ref-state-dependent` and `state-ref-unknown`). Save targets resolve after
+every resolver has run, so they have no such restriction.
 
 ## Usage
 

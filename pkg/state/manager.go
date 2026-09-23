@@ -29,20 +29,54 @@ type ProviderGetter interface {
 // merging, and post-execution saving. It is called by the CLI command layer
 // before and after resolver execution.
 type Manager struct {
-	registry ProviderGetter
-	config   *Config
-	runtime  settings.RuntimeProvenance // execution provenance for metadata
+	registry        ProviderGetter
+	config          *Config
+	runtime         settings.RuntimeProvenance // execution provenance for metadata
+	requireExisting bool
+	workingDir      string // base for providers' relative locations; empty = context/process default
+}
+
+// ManagerOption configures optional Manager behavior.
+type ManagerOption func(*Manager)
+
+// WithRequireExisting makes Load fail with a *NotFoundError when the load
+// provider reports that no state exists, instead of treating it as a first
+// run. Use it when the caller named an exact state location to read (for
+// example the CLI's --state-file flag): a missing document there is almost
+// certainly a typo, not a first run.
+func WithRequireExisting() ManagerOption {
+	return func(m *Manager) {
+		m.requireExisting = true
+	}
+}
+
+// WithWorkingDirectory sets the directory state providers resolve relative
+// locations against (for the file provider, a relative state path). Use it
+// when the process directory may differ from the caller's working directory --
+// for example while a bundled solution runs with its extraction directory as
+// the process directory. It applies only to state provider calls, never to
+// resolver execution. An empty dir keeps the context or process default.
+func WithWorkingDirectory(dir string) ManagerOption {
+	return func(m *Manager) {
+		m.workingDir = dir
+	}
 }
 
 // NewManager creates a state manager for the given state configuration. The
 // provenance records both the engine (scafctl library) and invoking
-// CLI/frontend identities; see settings.RuntimeProvenance.
-func NewManager(config *Config, registry ProviderGetter, runtime settings.RuntimeProvenance) *Manager {
-	return &Manager{
-		config:   config,
+// CLI/frontend identities; see settings.RuntimeProvenance. extends: load save
+// targets are resolved against config's load block here (see ApplyOverrides for
+// replacing the load block without redirecting those targets).
+func NewManager(config *Config, registry ProviderGetter, runtime settings.RuntimeProvenance, opts ...ManagerOption) *Manager {
+	m := &Manager{
+		config:   materializeExtends(config),
 		registry: registry,
 		runtime:  runtime,
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // runtimeMetadata adapts the shared provenance primitive into the state
@@ -76,13 +110,18 @@ type LoadResult struct {
 	// Skipped is true when state is disabled or the enabled ValueRef is falsy.
 	Skipped bool
 
-	// FirstRun is true when no prior state was found for this backend: a fresh
-	// Data document (zero CreatedAt) with no persisted parameters or resolver
-	// entries. All three conditions are required -- CreatedAt alone is not
-	// enough because the lean "intent" format deliberately omits it, so a
-	// document produced by that format looks first-run by timestamp alone even
-	// when it carries replayed parameters. False (and the rest of the
-	// enrichment fields below) are meaningless when Skipped is true.
+	// Loaded is true when a load block was configured and read. It is false
+	// when the configuration has save targets only, in which case every run
+	// starts from empty state and there is nothing to report as loaded.
+	Loaded bool
+
+	// FirstRun is true when no prior state was found: a fresh Data document
+	// (zero CreatedAt) with no persisted parameters or resolver entries. All
+	// three conditions are required -- CreatedAt alone is not enough because the
+	// lean "intent" format deliberately omits it, so a document produced by that
+	// format looks first-run by timestamp alone even when it carries replayed
+	// parameters. False (and the rest of the enrichment fields below) are
+	// meaningless when Skipped is true.
 	FirstRun bool
 
 	// LoadedParams is the number of parameters present in the previously saved
@@ -93,14 +132,14 @@ type LoadResult struct {
 	// immutable locks) present in the previously saved state.
 	LoadedResolvers int
 
-	// Provider is the backend provider name state was loaded from (e.g.,
-	// "file", "http"). Used as a fallback label when Location is empty.
+	// Provider is the load provider name state was read from (e.g., "file",
+	// "http"). Used as a fallback label when Location is empty.
 	Provider string
 
-	// Location is a human-readable destination the state was loaded from --
-	// the resolved "path" or "url" backend input when the backend uses one,
-	// otherwise empty. Callers should fall back to displaying the provider
-	// name (Provider) when Location is empty.
+	// Location is a human-readable location state was read from -- the resolved
+	// "path" or "url" load input when the provider uses one, otherwise empty.
+	// Callers should fall back to displaying the provider name (Provider) when
+	// Location is empty.
 	Location string
 }
 
@@ -108,13 +147,14 @@ type LoadResult struct {
 //  1. Evaluates the enabled ValueRef using CLI params (available as __params
 //     in CEL expressions). No resolver data is available at load time.
 //  2. If disabled, returns LoadResult{Skipped: true}.
-//  3. Resolves backend inputs with params as __params.
-//  4. Calls the backend provider with operation=state_load.
+//  3. Without a load block, starts from empty state.
+//  4. Otherwise resolves the load inputs with params as __params and calls the
+//     load provider with operation=state_load.
 //  5. Merges saved parameters with CLI params (CLI wins on conflict).
 //  6. Captures command info.
 //  7. Injects state into context via WithState.
 //
-// Load resolves enabled and backend inputs with no resolver data (_ is empty).
+// Load resolves enabled and load inputs with no resolver data (_ is empty).
 // To let those fields reference state-independent resolvers, use LoadTwoPhase,
 // which runs the referenced resolvers first and passes their values here.
 func (m *Manager) Load(ctx context.Context, params map[string]any, command CommandInfo) (*LoadResult, error) {
@@ -124,7 +164,7 @@ func (m *Manager) Load(ctx context.Context, params map[string]any, command Comma
 // load is the shared implementation behind Load and LoadTwoPhase. resolverData
 // holds any resolver outputs available at load time (empty for the single-phase
 // Load; the Phase-A results for LoadTwoPhase) and is exposed as _ in enabled and
-// backend-input expressions.
+// load-input expressions.
 func (m *Manager) load(ctx context.Context, resolverData, params map[string]any, command CommandInfo) (*LoadResult, error) {
 	if m.config == nil {
 		return &LoadResult{Ctx: ctx, Skipped: true}, nil
@@ -145,36 +185,51 @@ func (m *Manager) load(ctx context.Context, resolverData, params map[string]any,
 		return &LoadResult{Ctx: ctx, Skipped: true}, nil
 	}
 
-	// Resolve backend inputs -- resolverData is exposed as _, CLI params as __params.
-	backendInputs, err := m.resolveBackendInputs(ctx, m.config.Backend, resolverData, params)
+	// No load block: every run starts from empty state.
+	if m.config.Load == nil {
+		stateData := NewData()
+		stateData.Command = command
+		return &LoadResult{
+			Ctx:          WithState(ctx, stateData),
+			Data:         stateData,
+			MergedParams: MergeParameters(stateData.Parameters, params),
+			FirstRun:     true,
+		}, nil
+	}
+
+	// Resolve load inputs -- resolverData is exposed as _, CLI params as __params.
+	loadInputs, err := m.resolveInputs(ctx, m.config.Load.Inputs, resolverData, params)
 	if err != nil {
 		if missing := MissingParams(ctx, m.config, params); len(missing) > 0 {
 			return nil, &MissingParamsError{
 				Missing:  missing,
-				Original: fmt.Errorf("state: resolve backend inputs: %w", err),
+				Original: fmt.Errorf("state: resolve load inputs: %w", err),
 			}
 		}
-		return nil, fmt.Errorf("state: resolve backend inputs: %w", err)
+		return nil, fmt.Errorf("state: resolve load inputs: %w", err)
 	}
 
-	// Look up backend provider
-	backendProvider, err := m.getBackendProvider(m.config.Backend.Provider)
+	loadProvider, err := m.getStateProvider(m.config.Load.Provider)
 	if err != nil {
 		return nil, err
 	}
 
-	// Execute load
-	backendInputs["operation"] = "state_load"
-	execCtx := provider.WithExecutionMode(ctx, provider.CapabilityState)
-	result, err := provider.Execute(execCtx, backendProvider, backendInputs)
+	// Capture the location before loadInputs gains the operation key.
+	location := resolveLocation(loadInputs)
+
+	loadInputs["operation"] = "state_load"
+	execCtx := m.providerContext(ctx)
+	result, err := provider.Execute(execCtx, loadProvider, loadInputs)
 	if err != nil {
-		return nil, fmt.Errorf("state: backend load: %w", err)
+		return nil, fmt.Errorf("state: load: %w", err)
 	}
 
-	// Extract state data from result
-	stateData, err := extractStateData(result)
+	stateData, found, err := extractStateData(result)
 	if err != nil {
 		return nil, fmt.Errorf("state: extract loaded data: %w", err)
+	}
+	if !found && m.requireExisting {
+		return nil, &NotFoundError{Location: location, Provider: m.config.Load.Provider}
 	}
 
 	// Capture load-time facts before command/context mutation below: a fresh
@@ -188,145 +243,123 @@ func (m *Manager) load(ctx context.Context, resolverData, params map[string]any,
 	loadedResolvers := len(stateData.Resolvers)
 	firstRun := stateData.Metadata.CreatedAt.IsZero() && loadedParams == 0 && loadedResolvers == 0
 
-	// Merge saved parameters with CLI params (CLI wins)
+	// Merge saved parameters with CLI params (CLI wins). MergeParameters returns
+	// a fresh map, so stateData.Parameters stays as loaded -- which is what a
+	// checkpoint write persists.
 	mergedParams := MergeParameters(stateData.Parameters, params)
 
 	// Capture command info
 	stateData.Command = command
 
-	// Inject into context
-	enrichedCtx := WithState(ctx, stateData)
-
 	return &LoadResult{
-		Ctx:             enrichedCtx,
+		Ctx:             WithState(ctx, stateData),
 		Data:            stateData,
 		MergedParams:    mergedParams,
+		Loaded:          true,
 		FirstRun:        firstRun,
 		LoadedParams:    loadedParams,
 		LoadedResolvers: loadedResolvers,
-		Provider:        m.config.Backend.Provider,
-		Location:        resolveLocation(backendInputs),
+		Provider:        m.config.Load.Provider,
+		Location:        location,
 	}, nil
 }
 
-// BackendWrite reports the outcome of a single state_save call against one
-// backend -- which provider received it, where, in what format, and whether it
-// was skipped. Command-layer callers use this to render a save confirmation.
-type BackendWrite struct {
-	// Provider is the backend provider name (e.g., "file", "http").
+// TargetWrite reports the outcome of a single save target write -- which
+// provider received it, where, in what format, and whether it was skipped.
+// Command-layer callers use this to render a save confirmation.
+type TargetWrite struct {
+	// Provider is the save target's provider name (e.g., "file", "http").
 	Provider string
 
-	// Location is a human-readable destination for this write -- the resolved
-	// "path" or "url" backend input when the backend uses one, otherwise
-	// empty. Callers should fall back to displaying the provider name when
-	// Location is empty.
+	// Location is a human-readable location for this write -- the resolved
+	// "path" or "url" input when the provider uses one, otherwise empty.
+	// Callers should fall back to displaying the provider name when Location
+	// is empty.
 	Location string
 
-	// Format is the backend's declared Format, normalized ("" reports as
-	// FormatFull, matching the zero-value contract in Backend.Format and
-	// projectState).
+	// Format is the target's declared Format, normalized ("" reports as
+	// FormatFull, matching the zero-value contract of SaveTarget.Format).
 	Format string
 
-	// Skipped is true for an Emit target whose Enabled condition evaluated to
-	// false; the write was never attempted. Always false for Primary.
+	// Skipped is true for a target whose Enabled condition evaluated to false;
+	// the write was never attempted.
 	Skipped bool
 }
 
-// SaveResult reports what commit actually wrote, for callers that want to
-// surface a save confirmation to the user.
+// SaveResult reports what Save wrote, for callers that want to surface a save
+// confirmation to the user.
 type SaveResult struct {
-	// Primary is the primary backend's write outcome.
-	Primary BackendWrite
-
-	// Emits reports each configured Emit target, in declaration order,
+	// Targets reports each configured save target, in declaration order,
 	// including targets skipped by their Enabled condition.
-	Emits []BackendWrite
+	Targets []TargetWrite
 }
 
-// Save executes the post-execution state lifecycle:
-//  1. Saves the merged parameter set.
-//  2. Checks immutable resolvers (saves new, verifies existing).
-//  3. Updates metadata timestamps.
-//  4. Calls the backend provider with operation=state_save.
+// Checkpoint writes the save targets marked checkpoint: true. The entrypoints
+// that run workflow actions call it after resolvers run and before any action,
+// so immutable values locked this run survive a later action failure.
 //
-// params are the merged parameters for this execution. resolverData contains
-// resolver outputs, available as _ in CEL expressions for backend inputs.
-func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, mergedParams, resolverData map[string]any, solMeta SolutionMeta) (*SaveResult, error) {
-	if m.config == nil || stateData == nil {
-		return nil, nil
-	}
-
-	// Save the merged parameter set
-	stateData.Parameters = mergedParams
-
-	// Record persisted and immutable resolver values
-	if err := PersistResolvers(stateData, resolverCtx, resolvers, nil); err != nil {
-		return nil, err
-	}
-
-	return m.commit(ctx, stateData, resolverData, mergedParams, solMeta, true)
-}
-
-// SaveImmutables checks and persists immutable resolver locks without touching
-// the saved parameter set. It is used by entrypoints that run side-effecting
-// actions: immutable locks are committed after deferred validation passes and
-// before actions run, so a value that is now fixed is persisted even if a
-// downstream action later fails.
-//
-// skip contains resolver names whose deferred validation failed; their
-// immutable values are not locked.
-//
-// This is an interim commit ahead of actions, not the run's user-facing save
-// confirmation -- so its SaveResult is discarded (not returned), and, more
-// importantly, it never writes Emit targets. An Emit target may be a
-// side-effecting backend (e.g. a REST endpoint), so it must be written at
-// most once per run, from the run's single final commit (SaveParams) --
-// never from this interim commit, which runs before an action might still
-// fail and would otherwise publish an emit for a run that never completes.
-func (m *Manager) SaveImmutables(ctx context.Context, stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, mergedParams, resolverData map[string]any, solMeta SolutionMeta, skip map[string]bool) error {
-	if m.config == nil || stateData == nil {
+// It locks immutable resolver values (except those in skip, whose deferred
+// validation failed) and records persisted ones, but deliberately leaves the
+// saved parameter set as loaded: new -r values are saved only by Save, once the
+// whole run has succeeded. A checkpoint is an interim write, not the run's
+// save confirmation, so it reports nothing. It is a no-op when no save target
+// sets checkpoint: true.
+func (m *Manager) Checkpoint(ctx context.Context, stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, mergedParams, resolverData map[string]any, solMeta SolutionMeta, skip map[string]bool) error {
+	if m.config == nil || stateData == nil || !m.hasCheckpointTargets() {
 		return nil
 	}
 
-	// Check and save immutable resolver values. Parameters are intentionally not
-	// updated here -- they are persisted after actions complete via SaveParams.
 	if err := PersistResolvers(stateData, resolverCtx, resolvers, skip); err != nil {
 		return err
 	}
 
-	_, err := m.commit(ctx, stateData, resolverData, mergedParams, solMeta, false)
+	_, err := m.write(ctx, stateData, resolverData, mergedParams, solMeta, true)
 	return err
 }
 
-// SaveParams persists the merged parameter set. It is called after actions
-// complete so that ordinary (mutable) parameters are only saved on a fully
-// successful run.
-func (m *Manager) SaveParams(ctx context.Context, stateData *Data, mergedParams, resolverData map[string]any, solMeta SolutionMeta) (*SaveResult, error) {
-	if m.config == nil || stateData == nil {
+// Save executes the post-execution state lifecycle, writing every enabled save
+// target once the run has succeeded:
+//  1. Records the merged parameter set.
+//  2. Locks new immutable resolver values and verifies existing locks (except
+//     resolvers in skip, whose deferred validation failed), and records
+//     persisted resolver values.
+//  3. Updates metadata timestamps.
+//  4. Writes each target, projected per its own Format, via state_save.
+//
+// resolverData contains resolver outputs, available as _ in save-target
+// expressions. It returns nil when no save target is configured. When a target
+// fails, the result still reports the targets written before it.
+func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, mergedParams, resolverData map[string]any, solMeta SolutionMeta, skip map[string]bool) (*SaveResult, error) {
+	if m.config == nil || stateData == nil || len(m.config.Save) == 0 {
 		return nil, nil
 	}
 
 	stateData.Parameters = mergedParams
 
-	return m.commit(ctx, stateData, resolverData, mergedParams, solMeta, true)
+	if err := PersistResolvers(stateData, resolverCtx, resolvers, skip); err != nil {
+		return nil, err
+	}
+
+	return m.write(ctx, stateData, resolverData, mergedParams, solMeta, false)
 }
 
-// commit updates state metadata and saves the current state document to the
-// primary backend. When writeEmits is true, it also saves to each configured
-// Emit target (each independently projected per its own Format and gated by
-// its own Enabled condition).
-//
-// writeEmits is false for the interim pre-action commit (SaveImmutables) and
-// true for the run's single user-facing save (Save for run resolver;
-// SaveParams for run solution/run action) -- see SaveImmutables for why an
-// Emit target must be written at most once per run, at the final commit.
-//
-// A failure saving to the primary backend aborts before any Emit target is
-// attempted. A failure saving to an Emit target aborts the remaining Emit
-// targets but does not undo the primary save, which has already succeeded by
-// that point.
-func (m *Manager) commit(ctx context.Context, stateData *Data, resolverData, mergedParams map[string]any, solMeta SolutionMeta, writeEmits bool) (*SaveResult, error) {
-	// Update metadata
+// hasCheckpointTargets reports whether any save target sets checkpoint: true.
+func (m *Manager) hasCheckpointTargets() bool {
+	for _, target := range m.config.Save {
+		if target.Checkpoint {
+			return true
+		}
+	}
+	return false
+}
+
+// write updates state metadata and writes the document to the save targets:
+// only the checkpoint: true targets when checkpoint is set, otherwise every
+// target. Targets are written in declaration order, each projected per its own
+// Format and gated by its own Enabled condition. A failure aborts the remaining
+// targets but does not undo the targets already written; the returned result
+// then reports those earlier targets alongside the error.
+func (m *Manager) write(ctx context.Context, stateData *Data, resolverData, mergedParams map[string]any, solMeta SolutionMeta, checkpoint bool) (*SaveResult, error) {
 	now := time.Now().UTC()
 	// Stamp the current schema version so a state file loaded under an older
 	// (still-supported) schema is re-persisted under the format this build
@@ -341,113 +374,100 @@ func (m *Manager) commit(ctx context.Context, stateData *Data, resolverData, mer
 	stateData.Metadata.Version = solMeta.Version
 	stateData.Metadata.Runtime = runtimeMetadata(m.runtime)
 
-	primaryWrite, err := m.saveToBackend(ctx, m.config.Backend, stateData, resolverData, mergedParams)
-	if err != nil {
-		return nil, err
-	}
-
-	result := &SaveResult{Primary: primaryWrite}
-
-	if !writeEmits {
-		return result, nil
-	}
-
-	for i, target := range m.config.Emit {
-		enabled, err := m.evaluateEmitEnabled(ctx, target, resolverData, mergedParams)
+	result := &SaveResult{}
+	for i, target := range m.config.Save {
+		if checkpoint && !target.Checkpoint {
+			continue
+		}
+		enabled, err := m.evaluateTargetEnabled(ctx, target, resolverData, mergedParams)
 		if err != nil {
-			return nil, fmt.Errorf("state: evaluate emit[%d] enabled: %w", i, err)
+			return result, fmt.Errorf("state: evaluate save[%d] enabled: %w", i, err)
 		}
 		if !enabled {
-			result.Emits = append(result.Emits, BackendWrite{
+			result.Targets = append(result.Targets, TargetWrite{
 				Provider: target.Provider,
 				Format:   normalizeFormat(target.Format),
 				Skipped:  true,
 			})
 			continue
 		}
-		emitWrite, err := m.saveToBackend(ctx, target.Backend, stateData, resolverData, mergedParams)
+		written, err := m.writeTarget(ctx, target, stateData, resolverData, mergedParams)
 		if err != nil {
-			return nil, fmt.Errorf("state: emit[%d]: %w", i, err)
+			return result, fmt.Errorf("state: save[%d]: %w", i, err)
 		}
-		result.Emits = append(result.Emits, emitWrite)
+		result.Targets = append(result.Targets, written)
 	}
 
 	return result, nil
 }
 
-// saveToBackend projects stateData per backend.Format and writes it through
-// backend's provider via state_save. It is shared by the primary backend save
-// and every Emit target save in commit, so format handling and input/override
-// resolution behave identically regardless of which backend is being written.
-func (m *Manager) saveToBackend(ctx context.Context, backend Backend, stateData *Data, resolverData, mergedParams map[string]any) (BackendWrite, error) {
-	// Resolve backend inputs for save -- resolver outputs are available as _
-	// and CLI params as __params in backend input expressions.
-	backendInputs, err := m.resolveBackendInputs(ctx, backend, resolverData, mergedParams)
-	if err != nil {
-		return BackendWrite{}, fmt.Errorf("state: resolve backend inputs for save: %w", err)
-	}
-
-	// Resolve save-only overrides (can use rslvr: and _ since resolvers have run)
-	if len(backend.SaveOverrides) > 0 {
-		overrides, err := m.resolveSaveOverrides(ctx, backend, resolverData, mergedParams)
-		if err != nil {
-			return BackendWrite{}, fmt.Errorf("state: resolve save overrides: %w", err)
+// writeTarget projects stateData per target.Format and writes it through the
+// target's provider via state_save.
+func (m *Manager) writeTarget(ctx context.Context, target SaveTarget, stateData *Data, resolverData, mergedParams map[string]any) (TargetWrite, error) {
+	if target.Extends != "" {
+		// materializeExtends resolves every extends: load target when a load
+		// block exists, so an extends target reaching here has nothing to
+		// inherit from (or an unsupported value).
+		if target.Extends == ExtendsLoad {
+			return TargetWrite{}, fmt.Errorf("extends: %s requires a state.load block", ExtendsLoad)
 		}
-		// Merge: saveOverrides keys override inputs keys
-		for k, v := range overrides {
-			backendInputs[k] = v
-		}
+		return TargetWrite{}, fmt.Errorf("unsupported extends value %q (only %q is supported)", target.Extends, ExtendsLoad)
 	}
 
-	// Look up backend provider
-	backendProvider, err := m.getBackendProvider(backend.Provider)
+	// Resolve inputs -- resolver outputs are available as _ and CLI params as
+	// __params, since every resolver has run by save time.
+	inputs, err := m.resolveInputs(ctx, target.Inputs, resolverData, mergedParams)
 	if err != nil {
-		return BackendWrite{}, err
+		return TargetWrite{}, fmt.Errorf("resolve inputs: %w", err)
 	}
 
-	// Project stateData into the shape this backend's Format calls for, then
-	// convert to map[string]any so the provider executor's JSON-schema
-	// validator can inspect the value (it cannot validate Go structs directly).
-	dataMap, err := projectState(stateData, backend)
+	saveProvider, err := m.getStateProvider(target.Provider)
 	if err != nil {
-		return BackendWrite{}, fmt.Errorf("state: project state data: %w", err)
+		return TargetWrite{}, err
 	}
 
-	// Capture the write's reporting facts before backendInputs is mutated with
-	// the operation/data keys below.
-	write := BackendWrite{
-		Provider: backend.Provider,
-		Location: resolveLocation(backendInputs),
-		Format:   normalizeFormat(backend.Format),
+	// Project stateData into the shape this target's Format calls for, as a
+	// map[string]any so the provider executor's JSON-schema validator can
+	// inspect the value (it cannot validate Go structs directly).
+	dataMap, err := projectState(stateData, target)
+	if err != nil {
+		return TargetWrite{}, fmt.Errorf("project state data: %w", err)
 	}
 
-	backendInputs["operation"] = "state_save"
-	backendInputs["data"] = dataMap
-	execCtx := provider.WithExecutionMode(ctx, provider.CapabilityState)
-	if _, err := provider.Execute(execCtx, backendProvider, backendInputs); err != nil {
-		return BackendWrite{}, fmt.Errorf("state: backend save: %w", err)
+	// Capture the write's reporting facts before inputs gains the
+	// operation/data keys below.
+	written := TargetWrite{
+		Provider: target.Provider,
+		Location: resolveLocation(inputs),
+		Format:   normalizeFormat(target.Format),
 	}
 
-	return write, nil
+	inputs["operation"] = "state_save"
+	inputs["data"] = dataMap
+	execCtx := m.providerContext(ctx)
+	if _, err := provider.Execute(execCtx, saveProvider, inputs); err != nil {
+		return TargetWrite{}, fmt.Errorf("write: %w", err)
+	}
+
+	return written, nil
 }
 
-// resolveLocation extracts a human-readable location from resolved backend
-// inputs, for status reporting. It checks the common "path" (file backend)
-// and "url" (http backend) input keys; other backend providers report an
-// empty location, and callers fall back to displaying the provider name.
-func resolveLocation(backendInputs map[string]any) string {
-	if path, ok := backendInputs["path"].(string); ok && path != "" {
+// resolveLocation extracts a human-readable location from resolved provider
+// inputs, for status reporting. It checks the common "path" (file provider)
+// and "url" (http provider) input keys; other providers report an empty
+// location, and callers fall back to displaying the provider name.
+func resolveLocation(inputs map[string]any) string {
+	if path, ok := inputs["path"].(string); ok && path != "" {
 		return path
 	}
-	if url, ok := backendInputs["url"].(string); ok && url != "" {
+	if url, ok := inputs["url"].(string); ok && url != "" {
 		return url
 	}
 	return ""
 }
 
 // normalizeFormat returns format if non-empty, otherwise FormatFull -- mirroring
-// the zero-value contract in Backend.Format and projectState (an unset Format
-// behaves exactly as state behaved before Format existed).
+// the zero-value contract of SaveTarget.Format and projectState.
 func normalizeFormat(format string) string {
 	if format == "" {
 		return FormatFull
@@ -455,11 +475,11 @@ func normalizeFormat(format string) string {
 	return format
 }
 
-// evaluateEmitEnabled resolves an Emit target's Enabled condition, defaulting
-// to true (always emit) when unset. It is evaluated at save time, so unlike
-// the primary Config.Enabled it may reference any resolver -- all resolvers
-// have run by save time, so there is no pre-load acyclic constraint to honor.
-func (m *Manager) evaluateEmitEnabled(ctx context.Context, target EmitTarget, resolverData, params map[string]any) (bool, error) {
+// evaluateTargetEnabled resolves a save target's Enabled condition, defaulting
+// to true (always save) when unset. It is evaluated at save time, so unlike
+// Config.Enabled it may reference any resolver -- all resolvers have run by
+// save time, so there is no pre-load acyclic constraint to honor.
+func (m *Manager) evaluateTargetEnabled(ctx context.Context, target SaveTarget, resolverData, params map[string]any) (bool, error) {
 	if target.Enabled == nil {
 		return true, nil
 	}
@@ -505,39 +525,19 @@ func (m *Manager) evaluateEnabled(ctx context.Context, resolverData, params map[
 	return isTruthy(val), nil
 }
 
-// resolveBackendInputs resolves all of backend's input ValueRefs.
-// resolverData becomes _ in CEL; params becomes __params. Used for both the
-// primary Config.Backend (at load and save) and each Config.Emit target's
-// Backend (at save only).
-func (m *Manager) resolveBackendInputs(ctx context.Context, backend Backend, resolverData, params map[string]any) (map[string]any, error) {
-	resolved := make(map[string]any, len(backend.Inputs))
+// resolveInputs resolves a provider input map's ValueRefs. resolverData becomes
+// _ in CEL; params becomes __params. Used for the load block (at load time) and
+// every save target (at save time).
+func (m *Manager) resolveInputs(ctx context.Context, inputs map[string]*spec.ValueRef, resolverData, params map[string]any) (map[string]any, error) {
+	resolved := make(map[string]any, len(inputs))
 
-	for key, vr := range backend.Inputs {
+	for key, vr := range inputs {
 		if vr == nil {
 			continue
 		}
 		val, err := resolveWithParams(ctx, vr, resolverData, params)
 		if err != nil {
 			return nil, fmt.Errorf("resolve input %q: %w", key, err)
-		}
-		resolved[key] = val
-	}
-
-	return resolved, nil
-}
-
-// resolveSaveOverrides resolves all of backend's SaveOverrides ValueRefs.
-// These are only called at save time when resolver data (_) is available.
-func (m *Manager) resolveSaveOverrides(ctx context.Context, backend Backend, resolverData, params map[string]any) (map[string]any, error) {
-	resolved := make(map[string]any, len(backend.SaveOverrides))
-
-	for key, vr := range backend.SaveOverrides {
-		if vr == nil {
-			continue
-		}
-		val, err := resolveWithParams(ctx, vr, resolverData, params)
-		if err != nil {
-			return nil, fmt.Errorf("resolve save override %q: %w", key, err)
 		}
 		resolved[key] = val
 	}
@@ -589,16 +589,26 @@ func resolveWithParams(ctx context.Context, vr *spec.ValueRef, resolverData, par
 	return nil, fmt.Errorf("empty value reference")
 }
 
-// getBackendProvider looks up a backend provider by name from the registry.
-// Used for both the primary Config.Backend and each Config.Emit target.
-func (m *Manager) getBackendProvider(name string) (provider.Provider, error) {
+// providerContext returns the context a state provider operation runs in:
+// the state execution mode, plus the configured working directory, if any.
+func (m *Manager) providerContext(ctx context.Context) context.Context {
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityState)
+	if m.workingDir != "" {
+		ctx = provider.WithWorkingDirectory(ctx, m.workingDir)
+	}
+	return ctx
+}
+
+// getStateProvider looks up a state provider by name from the registry.
+// Used for the load block and every save target.
+func (m *Manager) getStateProvider(name string) (provider.Provider, error) {
 	if name == "" {
-		return nil, fmt.Errorf("state: backend provider name is empty")
+		return nil, fmt.Errorf("state: provider name is empty")
 	}
 
 	prov, exists := m.registry.Get(name)
 	if !exists {
-		return nil, fmt.Errorf("state: backend provider %q not found in registry: %w", name, ErrInvalidBackend)
+		return nil, fmt.Errorf("state: provider %q not found in registry: %w", name, ErrInvalidProvider)
 	}
 
 	// Verify it has CapabilityState
@@ -611,7 +621,7 @@ func (m *Manager) getBackendProvider(name string) (provider.Provider, error) {
 		}
 	}
 	if !hasState {
-		return nil, fmt.Errorf("state: provider %q does not have CapabilityState: %w", name, ErrInvalidBackend)
+		return nil, fmt.Errorf("state: provider %q does not have CapabilityState: %w", name, ErrInvalidProvider)
 	}
 
 	return prov, nil
@@ -620,27 +630,30 @@ func (m *Manager) getBackendProvider(name string) (provider.Provider, error) {
 // extractStateData extracts *Data from a provider execution result.
 // It handles both direct *Data pointers (returned by in-process providers)
 // and map[string]any representations (returned after JSON round-trips).
-func extractStateData(result *provider.ExecutionResult) (*Data, error) {
+//
+// found is false when the provider reports that no state object exists (a
+// first run); the returned Data is then fresh empty state.
+func extractStateData(result *provider.ExecutionResult) (*Data, bool, error) {
 	if result == nil {
-		return nil, fmt.Errorf("nil execution result")
+		return nil, false, fmt.Errorf("nil execution result")
 	}
 
 	dataMap, ok := result.Output.Data.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("expected map output, got %T", result.Output.Data)
+		return nil, false, fmt.Errorf("expected map output, got %T", result.Output.Data)
 	}
 
-	// A backend reports an absent object (a first run) via found:false. Treat it
+	// A provider reports an absent object (a first run) via found:false. Treat it
 	// as fresh empty state without decoding or version-checking the payload, so
 	// the misleading "delete the state file" guidance is never emitted before a
-	// file exists. Absent found defaults to true (the prior backend contract).
+	// file exists. Absent found defaults to true (the prior provider contract).
 	if found, ok := dataMap[OutputKeyFound]; ok && !isTruthy(found) {
-		return NewData(), nil
+		return NewData(), false, nil
 	}
 
 	sd, ok := dataMap[OutputKeyData]
 	if !ok {
-		return nil, fmt.Errorf("missing 'data' field in backend output")
+		return nil, false, fmt.Errorf("missing 'data' field in state provider output")
 	}
 
 	// Direct pointer — returned by in-process providers.
@@ -648,13 +661,13 @@ func extractStateData(result *provider.ExecutionResult) (*Data, error) {
 		// A zero-value document is the in-process equivalent of a contentless
 		// payload: treat it as fresh empty state rather than a version-0 file.
 		if isEmptyData(stateData) {
-			return NewData(), nil
+			return NewData(), true, nil
 		}
 		if err := validateSchemaVersion(stateData.SchemaVersion, true); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		normalizeData(stateData)
-		return stateData, nil
+		return stateData, true, nil
 	}
 
 	// Map representation — may occur after JSON serialization round-trips
@@ -662,16 +675,16 @@ func extractStateData(result *provider.ExecutionResult) (*Data, error) {
 	if m, ok := sd.(map[string]any); ok {
 		b, err := json.Marshal(m)
 		if err != nil {
-			return nil, fmt.Errorf("marshal state map: %w", err)
+			return nil, false, fmt.Errorf("marshal state map: %w", err)
 		}
 		stateData, err := DecodeData(b)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return stateData, nil
+		return stateData, true, nil
 	}
 
-	return nil, fmt.Errorf("expected *Data or map[string]any, got %T", sd)
+	return nil, false, fmt.Errorf("expected *Data or map[string]any, got %T", sd)
 }
 
 // isTruthy coerces a value to bool.
@@ -710,16 +723,16 @@ func structToMap(v any) (map[string]any, error) {
 	return m, nil
 }
 
-// RequiredParams extracts the __params keys referenced by the state
+// RequiredParams extracts the __params keys referenced by the load-time state
 // configuration. These are the CLI parameters (-r flags) that must be supplied
-// for the state backend to resolve its inputs at load time.
+// for state to resolve its load inputs at load time.
 //
-// It inspects Enabled and Backend.Inputs ValueRefs for:
+// It inspects Enabled and Load.Inputs ValueRefs for:
 //   - CEL expressions: uses Expression.GetVariablesWithPrefix("__params.")
 //   - Go templates: uses GetGoTemplateReferences() and filters for .__params.*
 //
 // Literal and resolver-ref ValueRefs are skipped (they don't use __params).
-// SaveOverrides are also skipped (they are only evaluated at save time).
+// Save targets are also skipped (they are only evaluated at save time).
 //
 // Returns a deduplicated, sorted list of parameter names (e.g., ["app_name", "project"]).
 // Errors during parsing are silently ignored (best-effort extraction).
@@ -733,12 +746,12 @@ func RequiredParams(ctx context.Context, config *Config) []string {
 	// Extract from Enabled
 	extractParamRefs(ctx, config.Enabled, seen)
 
-	// Extract from Backend.Inputs
-	for _, vr := range config.Backend.Inputs {
-		extractParamRefs(ctx, vr, seen)
+	// Extract from Load.Inputs
+	if config.Load != nil {
+		for _, vr := range config.Load.Inputs {
+			extractParamRefs(ctx, vr, seen)
+		}
 	}
-
-	// SaveOverrides are skipped: they are evaluated at save time only
 
 	if len(seen) == 0 {
 		return nil

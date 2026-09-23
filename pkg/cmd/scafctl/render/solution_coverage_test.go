@@ -17,6 +17,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -475,7 +477,7 @@ func TestSolutionOptions_loadStateIntoContext_DisabledState(t *testing.T) {
 	sol := &solution.Solution{
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: false},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs: map[string]*spec.ValueRef{
 					"path": {Literal: "test.json"},
@@ -502,7 +504,7 @@ func TestSolutionOptions_loadStateIntoContext_NoStateFlag(t *testing.T) {
 	sol := &solution.Solution{
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs: map[string]*spec.ValueRef{
 					"path": {Literal: "test.json"},
@@ -522,6 +524,42 @@ func TestSolutionOptions_loadStateIntoContext_NoStateFlag(t *testing.T) {
 	assert.False(t, ok)
 	assert.Nil(t, data)
 	assert.Nil(t, params, "params should be unchanged when state load is skipped")
+}
+
+// TestSolutionOptions_loadStateIntoContext_LocklessReplayWarns verifies that
+// render only warns about a lock-less replay document (parameters, no
+// createdAt, an immutable resolver without a lock): render never saves, so it
+// cannot replace a lock, but a real run would refuse without the waiver flag.
+func TestSolutionOptions_loadStateIntoContext_LocklessReplayWarns(t *testing.T) {
+	t.Parallel()
+
+	statePath := filepath.Join(t.TempDir(), "intent.json")
+	require.NoError(t, os.WriteFile(statePath,
+		[]byte(`{"schemaVersion":3,"metadata":{"solution":"render-guard","version":"1.0.0"},"parameters":{"id":"from-intent"}}`), 0o600))
+
+	sol := &solution.Solution{
+		State: &state.Config{
+			Load: &state.LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: statePath}}},
+		},
+		Spec: solution.Spec{Resolvers: map[string]*resolver.Resolver{
+			"id": {Type: "string", Immutable: true},
+		}},
+	}
+	sol.Metadata.Name = "render-guard"
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	ctx := writer.WithWriter(context.Background(), writer.New(ioStreams, settings.NewCliParams()))
+	l := logr.Discard()
+	ctx = logger.WithLogger(ctx, &l)
+
+	_, params, _, err := (&SolutionOptions{}).loadStateIntoContext(ctx, sol, reg, nil)
+	require.NoError(t, err, "render only warns")
+	assert.Equal(t, "from-intent", params["id"], "parameters still replay")
+	assert.Contains(t, buf.String(), "has parameters but no immutable locks")
+	assert.Contains(t, buf.String(), "a real run requires --allow-missing-locks")
 }
 
 func TestFormatParams(t *testing.T) {

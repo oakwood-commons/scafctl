@@ -6,10 +6,49 @@ package state
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 )
+
+// CheckMissingLocks guards against silently replacing immutable locks. It
+// returns a *MissingLocksError when a loaded state document carries parameters
+// but no creation timestamp -- the shape of an intent document, or of a
+// hand-built replay document, rather than a full state file -- and one or more
+// of the solution's immutable resolvers has no lock in it. Running on would
+// re-derive those values and overwrite any previously saved locks.
+//
+// A document written by a full-format save always carries a creation
+// timestamp, so a genuine full state file never trips this check -- including
+// when a newer solution version adds its first immutable resolver. Call it
+// right after load, before the main resolver pass. The caller decides the
+// policy: fail unless explicitly allowed (run), or warn (render).
+func CheckMissingLocks(lr *LoadResult, resolvers []*resolver.Resolver) error {
+	if lr == nil || lr.Skipped || !lr.Loaded || lr.Data == nil {
+		return nil
+	}
+	if !lr.Data.Metadata.CreatedAt.IsZero() || lr.LoadedParams == 0 {
+		return nil
+	}
+
+	var missing []string
+	for _, r := range resolvers {
+		if r == nil || !r.Immutable {
+			continue
+		}
+		if entry, ok := lr.Data.Resolvers[r.Name]; ok && entry != nil && entry.Immutable {
+			continue
+		}
+		missing = append(missing, r.Name)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	sort.Strings(missing)
+	return &MissingLocksError{Location: lr.Location, Provider: lr.Provider, Resolvers: missing}
+}
 
 // PersistResolvers records resolver values into state after execution. For each
 // resolver marked persist: true or immutable: true (immutable implies persist):

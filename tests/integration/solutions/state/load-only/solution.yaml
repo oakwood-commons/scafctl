@@ -1,0 +1,79 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-load-only
+  version: 1.0.0
+  description: |
+    Functional tests for a load-only state configuration (a state.load
+    block with no state.save targets): every run is a read-only replay.
+    Saved parameters are replayed through the parameter provider and the
+    load indicator reports what was reused, but nothing is ever written --
+    the state file on disk stays byte-for-byte unchanged.
+
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: state.json
+
+spec:
+  resolvers:
+    app_name:
+      description: Application name from parameter or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "app_name"
+          - provider: static
+            inputs:
+              value: "fallback-name"
+
+  testing:
+    cases:
+      # =====================================================================
+      # First run with no state file: a fresh first-run load line, defaults
+      # resolve, and nothing is written.
+      # =====================================================================
+      load-only-first-run:
+        description: A load-only run with no prior state reports the first-run line and writes nothing
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, load-only, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.app_name == "fallback-name"
+            message: "With no prior state the resolver falls through to static"
+          - expression: '__stderr.contains("state: no prior state at state.json (first run)")'
+            message: "The load indicator must name the location"
+          - expression: '!__stderr.contains("state: saved")'
+            message: "A load-only config has no save line"
+          - expression: '!("state.json" in __files)'
+            message: "A load-only run must not create a state file"
+
+      # =====================================================================
+      # Replay: seeded parameters are served by the parameter provider, the
+      # reuse indicator reports them, and the file is never rewritten.
+      # =====================================================================
+      load-only-replays-without-writing:
+        description: A load-only run replays saved parameters and leaves the file untouched
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, load-only]
+        init:
+          - command: >-
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-load-only","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"app_name":"from-state"},"resolvers":{},"fingerprints":{}}'
+              > $SCAFCTL_SANDBOX_DIR/state.json
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.app_name == "from-state"
+            message: "The parameter provider must serve the saved parameter"
+          - expression: '__stderr.contains("state: reusing 1 parameter(s)")'
+            message: "The load indicator must report the replay"
+          - expression: '!__stderr.contains("state: saved")'
+            message: "A load-only config has no save line"
+          - expression: '!("state.json" in __files)'
+            message: "The seeded state file must be byte-for-byte unchanged"

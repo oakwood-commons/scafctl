@@ -1,0 +1,78 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-save-only
+  version: 1.0.0
+  description: |
+    Functional tests for a save-only state configuration (a state.save
+    target with no state.load block). Every run starts from empty state:
+    nothing is read back, so a stale state file left on disk is ignored --
+    no load indicator line is printed, and only the save line reports.
+
+state:
+  enabled: true
+  save:
+    - provider: file
+      inputs:
+        path: state.json
+
+spec:
+  resolvers:
+    app_name:
+      description: Application name from parameter or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "app_name"
+          - provider: static
+            inputs:
+              value: "fallback-name"
+
+  testing:
+    cases:
+      # =====================================================================
+      # First run against no prior state: nothing is loaded (no load
+      # indicator), the run resolves from defaults, and the save target
+      # writes the document with its save indicator.
+      # =====================================================================
+      save-only-fresh-first-run:
+        description: A save-only run starts from empty state and reports only the save line
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, save-only, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.app_name == "fallback-name"
+            message: "No prior parameters may be replayed (there is no load)"
+          - expression: '!__stderr.contains("no prior state")'
+            message: "A save-only config must not print a load line"
+          - expression: '!__stderr.contains("reusing")'
+            message: "A save-only config must not print a load line"
+          - expression: '__stderr.contains("state: saved state.json (full)")'
+            message: "The save must be reported with location and format"
+          - expression: __files["state.json"].exists
+            message: "The save target must write the document"
+
+      # =====================================================================
+      # A stale state file on disk is ignored: save-only never reads it, so
+      # its parameters do NOT replay (fresh state each run), and the file is
+      # simply overwritten by this run's save.
+      # =====================================================================
+      save-only-ignores-stale-state:
+        description: A stale state file is neither loaded nor replayed by a save-only run
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, save-only]
+        init:
+          - command: >-
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-save-only","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z"},"parameters":{"app_name":"stale-value"},"resolvers":{},"fingerprints":{}}'
+              > $SCAFCTL_SANDBOX_DIR/state.json
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.app_name == "fallback-name"
+            message: "The stale parameter must not replay: save-only starts from empty state"
+          - expression: __files["state.json"].content.contains("stale-value") == false
+            message: "The rewritten document must carry only this run's values"

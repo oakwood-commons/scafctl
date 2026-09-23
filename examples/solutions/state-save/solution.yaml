@@ -1,0 +1,156 @@
+# =============================================================================
+# State Save Targets Example
+# =============================================================================
+# Demonstrates `state.save` with more than one target: the same state document
+# is written to a full-fidelity local file AND published as a lean, signable
+# "intent" projection.
+#
+# How it works:
+#   - `state.load` reads the full local file before resolvers run. Load only
+#     ever reads; `state.save` is the only way state is written.
+#   - The first save target, `extends: load`, writes the complete document
+#     (schemaVersion, metadata, command, parameters, resolvers, fingerprints)
+#     back to the load location -- including the locked value of the immutable
+#     `deploymentId` resolver. `checkpoint: true` also writes it BEFORE the
+#     workflow actions run, so a lock minted this run survives a later action
+#     failure.
+#   - The second save target writes the SAME state, projected into the
+#     "intent" format: just schemaVersion, metadata.solution/version, and
+#     parameters. No timestamps, no resolver locks, no fingerprints --
+#     deterministic and stable enough to commit and sign.
+#   - The intent target also NARROWS its parameters with
+#     `parameters.exclude`: `mode` is a run-control parameter (not part of this
+#     solution's domain), so it is saved to the full local file but
+#     deliberately excluded from the committed intent.
+#   - Both targets are written after every successful run. Only the intent file
+#     is meant to be committed; the full state file is a local working copy.
+#
+# This is the pattern for a workflow where a human iterates locally (state
+# accumulates in the full file, immutable locks persist across runs) and then
+# publishes the lean intent file for a pipeline to later replay via
+# `--state-file` (see docs/tutorials/state-tutorial.md).
+#
+# Usage:
+#   # First run -- provide inputs via CLI parameters
+#   scafctl run solution -f solution.yaml -r appName=my-app -r deploymentId=deploy-abc123 -r mode=publish
+#
+#   # Stderr reports what happened (first run, then one line per target):
+#   #   state: no prior state at state-save-full.json (first run)
+#   #   state: saved state-save-full.json (full)
+#   #   state: saved state-save-intent.json (intent)
+#
+#   # Inspect both files
+#   cat state-save-full.json      # full document: has "resolvers" AND "mode"
+#   cat state-save-intent.json    # lean document: no "resolvers", no "mode"
+#                                 # (narrowed out by parameters.exclude)
+#
+#   # Second run -- parameters replay from the full file; the immutable
+#   # deploymentId is verified against its lock:
+#   #   state: reusing 3 parameter(s) and 1 locked value(s) from state-save-full.json
+#   scafctl run solution -f solution.yaml
+#
+#   # Replay the committed INTENT file instead, as a pipeline would, writing
+#   # the result to a separate file. --state-file only reads; --state-output
+#   # replaces both save targets with one full-format file. An intent document
+#   # carries no immutable locks, so the run refuses to re-derive deploymentId
+#   # until --allow-missing-locks confirms that is intended:
+#   scafctl run solution -f solution.yaml --state-file state-save-intent.json \
+#     --state-output replayed-state.json --allow-missing-locks
+# =============================================================================
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-save-example
+  displayName: State Save Targets
+  version: 1.0.0
+  category: solutions
+  tags:
+    - state
+    - save
+    - intent
+  description: Demonstrates saving full state and a lean "intent" projection to separate targets
+
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: "state-save-full.json"
+  save:
+    # Full document back to the load location; also written before actions.
+    - extends: load
+      checkpoint: true
+    # Lean, signable projection for committing.
+    - provider: file
+      format: intent
+      # Only the domain parameters (appName, deploymentId) reach the
+      # committed intent -- "mode" is a run-control parameter and is
+      # deliberately excluded. See docs/design/state/state.md, "Parameter
+      # Narrowing".
+      parameters:
+        exclude: ["mode"]
+      inputs:
+        path: "state-save-intent.json"
+
+spec:
+  resolvers:
+    # =========================================================================
+    # Mutable resolver -- replayed from parameters, overridable each run
+    # =========================================================================
+    appName:
+      description: Application name
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "appName"
+          - provider: static
+            inputs:
+              value: "demo-app"
+
+    # =========================================================================
+    # Run-control resolver -- saved to the full local state (so it replays for
+    # this example's own convenience), but excluded from the committed intent
+    # via the intent target's parameters.exclude above: it switches behavior
+    # locally without ever becoming part of the signed, published artifact.
+    # =========================================================================
+    mode:
+      description: Run-control switch (never part of the published intent)
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "mode"
+          - provider: static
+            inputs:
+              value: "publish"
+
+    # =========================================================================
+    # Immutable resolver -- locked in the FULL state, absent from the intent
+    # =========================================================================
+    # The lock lives in the full document's "resolvers" section. The intent
+    # projection omits that section entirely, so this value's cross-run
+    # consistency is enforced only through the full-format target -- exactly
+    # why this example keeps one alongside the intent target (lint:
+    # state-requires-full-save).
+    deploymentId:
+      description: Unique deployment identifier (locked after first generation)
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "deploymentId"
+
+  workflow:
+    actions:
+      show-deployment:
+        description: Display the current deployment info
+        provider: message
+        inputs:
+          message:
+            expr: "'app=' + _.appName + ' deployment=' + _.deploymentId + ' mode=' + _.mode"
+          type: success

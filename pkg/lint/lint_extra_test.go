@@ -921,8 +921,8 @@ func TestLintResolvers_DependsOnCountedAsUsage(t *testing.T) {
 }
 
 func TestLintResolvers_StateReferenceCountedAsUsage(t *testing.T) {
-	// Resolvers referenced only from the state block (saveOverrides rslvr and a
-	// backend input expression) must NOT be flagged as unused.
+	// Resolvers referenced only from the state block (a save-target inputs
+	// rslvr and a load input expression) must NOT be flagged as unused.
 	branch := "featureBranch"
 	pathExpr := celexp.Expression("_.statePath")
 
@@ -941,18 +941,23 @@ func TestLintResolvers_StateReferenceCountedAsUsage(t *testing.T) {
 	}
 	sol.State = &state.Config{
 		Enabled: &spec.ValueRef{Literal: true},
-		Backend: state.Backend{
-			Provider:      "github",
-			Inputs:        map[string]*spec.ValueRef{"path": {Expr: &pathExpr}},
-			SaveOverrides: map[string]*spec.ValueRef{"branch": {Resolver: &branch}},
+		Load: &state.LoadConfig{
+			Provider: "github",
+			Inputs:   map[string]*spec.ValueRef{"path": {Expr: &pathExpr}},
+		},
+		Save: []state.SaveTarget{
+			{
+				Extends: state.ExtendsLoad,
+				Inputs:  map[string]*spec.ValueRef{"branch": {Resolver: &branch}},
+			},
 		},
 	}
 
 	referencedResolvers := collectReferencedResolvers(sol)
 	assert.True(t, referencedResolvers["featureBranch"],
-		"saveOverrides rslvr reference should mark featureBranch as referenced")
+		"save-target inputs rslvr reference should mark featureBranch as referenced")
 	assert.True(t, referencedResolvers["statePath"],
-		"backend input expr reference should mark statePath as referenced")
+		"load input expr reference should mark statePath as referenced")
 }
 
 func TestLintResolvers_HyphenatedName(t *testing.T) {

@@ -18,9 +18,28 @@ func TestCycleError_Error(t *testing.T) {
 }
 
 func TestUnknownStateRefError_Error(t *testing.T) {
-	err := &UnknownStateRefError{Location: "state.backend.inputs.path", Refs: []string{"typo"}}
+	err := &UnknownStateRefError{Location: "state.load.inputs.path", Refs: []string{"typo"}}
 	msg := err.Error()
-	assert.Contains(t, msg, "state.backend.inputs.path")
+	assert.Contains(t, msg, "state.load.inputs.path")
 	assert.Contains(t, msg, "typo")
 	assert.Contains(t, msg, "no such resolver")
+}
+
+func TestNotFoundError_Error(t *testing.T) {
+	withLocation := &NotFoundError{Location: "intent.json", Provider: "file"}
+	assert.Equal(t, `state file "intent.json" does not exist`, withLocation.Error())
+
+	withoutLocation := &NotFoundError{Provider: "github"}
+	assert.Equal(t, "no state exists at the github load provider", withoutLocation.Error())
+}
+
+func TestMissingLocksError_Error(t *testing.T) {
+	withLocation := &MissingLocksError{Location: "intent.json", Provider: "file", Resolvers: []string{"cluster_id", "project_id"}}
+	msg := withLocation.Error()
+	assert.Contains(t, msg, `state "intent.json" has parameters but no immutable locks`)
+	assert.Contains(t, msg, "[cluster_id, project_id]")
+	assert.Contains(t, msg, "would be re-derived instead of replayed from a saved lock")
+
+	withoutLocation := &MissingLocksError{Provider: "github", Resolvers: []string{"cluster_id"}}
+	assert.Contains(t, withoutLocation.Error(), "state from the github load provider has parameters")
 }

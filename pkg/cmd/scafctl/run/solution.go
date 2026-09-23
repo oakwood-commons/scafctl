@@ -424,7 +424,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Prepare solution: load, set up registry, handle bundles
 	sol, reg, solutionDir, cleanup, providerCtx, err := o.prepareSolutionForExecution(ctx)
 	if err != nil {
-		return o.exitWithCode(ctx, err, exitcode.FileNotFound)
+		return o.exitWithCode(ctx, err, prepareErrorCode(err))
 	}
 	defer cleanup()
 	if providerCtx != nil {
@@ -537,7 +537,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// State lifecycle: load persisted state before resolver execution so that
 	// the state provider can serve previously saved values. State is loaded
 	// even in dry-run mode (resolvers need context) but never saved.
-	// params are passed so that state backend inputs can reference CLI
+	// params are passed so that state load inputs can reference CLI
 	// parameters via __params in CEL expressions (e.g. __params.appName).
 	var stateMgr *state.Manager
 	var stateData *state.Data
@@ -549,11 +549,14 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	if o.NoState {
 		warnStateSkipped(ctx, sol)
 	} else if stateCfg != nil {
-		stateMgr = state.NewManager(stateCfg, reg, state.RuntimeProvenanceFromContext(ctx))
+		stateMgr = state.NewManager(stateCfg, reg, state.RuntimeProvenanceFromContext(ctx), o.stateManagerOptions(originalCwd)...)
 		cmdInfo := buildCommandInfo("run solution", params)
 		loadResult, loadErr := stateMgr.LoadTwoPhase(ctx, params, cmdInfo, o.buildStateTwoPhaseInput(sol, params, reg))
 		if loadErr != nil {
 			return o.handleStateLoadError(ctx, loadErr)
+		}
+		if err := o.checkMissingLocks(ctx, loadResult.LoadResult, sol.Spec.ResolversToSlice(), o.DryRun); err != nil {
+			return err
 		}
 		stateSeed = loadResult.Seed
 		if !loadResult.Skipped {
@@ -606,17 +609,20 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	resolverElapsed := time.Since(start)
 
-	// State lifecycle (D1): commit immutable locks now -- after resolvers and
-	// deferred validation have succeeded, but before running side-effecting
-	// actions. An immutable lock represents a value that is now fixed; it must be
-	// persisted independent of whether a downstream action later fails, so the
-	// next run does not regenerate a different value. Resolvers whose deferred
-	// validation failed are not locked. Merged parameters are saved after actions.
+	// State lifecycle: verify immutable values against their locks after
+	// resolvers and deferred validation, but before any side-effecting action
+	// runs. Then write the checkpoint save targets (checkpoint: true), if any, so
+	// immutable values locked now survive a later action failure -- without a
+	// checkpoint target, state is written only after the workflow succeeds.
+	// Resolvers whose deferred validation failed are never locked.
+	var stateSkip map[string]bool
 	if stateMgr != nil && stateData != nil {
-		solMeta := buildStateSolutionMeta(sol)
-		skip := deferredValidationFailures(resolverCtx)
-		if saveErr := stateMgr.SaveImmutables(ctx, stateData, resolverCtx, resolvers, params, resolverData, solMeta, skip); saveErr != nil {
-			return o.exitWithCode(ctx, fmt.Errorf("state save immutables: %w", saveErr), exitcode.GeneralError)
+		if err := o.verifyImmutables(ctx, stateMgr, stateData, resolverCtx, resolvers); err != nil {
+			return err
+		}
+		stateSkip = deferredValidationFailures(resolverCtx)
+		if cpErr := stateMgr.Checkpoint(ctx, stateData, resolverCtx, resolvers, params, resolverData, buildStateSolutionMeta(sol), stateSkip); cpErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("state checkpoint: %w", cpErr), exitcode.GeneralError)
 		}
 	}
 
@@ -690,15 +696,15 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
 
-	// State lifecycle: save merged parameters after successful action execution.
-	// Immutable locks were already committed before actions (D1).
+	// State lifecycle: write every save target after successful action
+	// execution -- the merged parameters plus immutable and persisted values.
 	if stateMgr != nil && stateData != nil {
-		solMeta := buildStateSolutionMeta(sol)
-		saveResult, saveErr := stateMgr.SaveParams(ctx, stateData, params, resolverData, solMeta)
+		saveResult, saveErr := stateMgr.Save(ctx, stateData, resolverCtx, resolvers, params, resolverData, buildStateSolutionMeta(sol), stateSkip)
+		// Report what was written even when a later target failed.
+		reportStateSaved(ctx, saveResult)
 		if saveErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("state save: %w", saveErr), exitcode.GeneralError)
 		}
-		reportStateSaved(ctx, saveResult)
 	}
 
 	// Build and write output — only include __execution in output when --show-execution is set

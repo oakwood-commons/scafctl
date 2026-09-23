@@ -53,9 +53,9 @@ func TestExplain_StateRefStateDependent(t *testing.T) {
 }
 
 func TestExplain_StateRefUnknown(t *testing.T) {
-	exp := Explain(`state.backend.inputs.path references unknown resolver(s) [typo]: no such resolver is defined in the solution`)
+	exp := Explain(`state.load.inputs.path references unknown resolver(s) [typo]: no such resolver is defined in the solution`)
 	assert.Equal(t, "state", exp.Category)
-	assert.Contains(t, exp.Summary, "state.backend.inputs.path")
+	assert.Contains(t, exp.Summary, "state.load.inputs.path")
 	assert.Contains(t, exp.RootCause, "typo")
 	assert.NotEmpty(t, exp.Suggestions)
 }
@@ -163,7 +163,7 @@ func TestExplain_DirectoryNotFound_CatalogContext(t *testing.T) {
 }
 
 func TestExplain_StateMissingParams(t *testing.T) {
-	exp := Explain(`state configuration requires parameters [project, env] that were not supplied: state: resolve backend inputs: failed to execute template`)
+	exp := Explain(`state configuration requires parameters [project, env] that were not supplied: state: resolve load inputs: failed to execute template`)
 	assert.Equal(t, "state_configuration", exp.Category)
 	assert.Contains(t, exp.Summary, "project, env")
 	assert.Contains(t, exp.Suggestions[0], "-r project=<value>")

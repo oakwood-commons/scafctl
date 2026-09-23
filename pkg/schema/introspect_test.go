@@ -392,10 +392,10 @@ func TestFieldsAtPath_NamedEmbedNotFlattened(t *testing.T) {
 // incorrectly suppressed the SECOND occurrence's promoted fields entirely when
 // that occurrence was an inline embed: the embed produced no field, not even an
 // un-expanded placeholder, silently dropping real serializable keys from the
-// schema (discovered via state.EmitTarget embedding state.Backend, which is
-// also used as a plain named field on state.Config; also affected
+// schema. The field was state.EmitTarget embedding state.Backend at the time
+// (both since removed by the state load/save split). Also affected:
 // spec.CallRef, embedded identically in ResolvePhase/TransformPhase/
-// ValidatePhase, so only the first phase's call/args ever appeared).
+// ValidatePhase, so only the first phase's call/args ever appeared.
 type ReusedInlineEmbedSibling struct {
 	InlineEmbedInner `yaml:",inline"`
 	Enabled          bool `json:"enabled,omitempty" doc:"enabled flag"`

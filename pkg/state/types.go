@@ -36,9 +36,9 @@ const (
 // partition logic reference it to avoid drift.
 const ReadProviderName = "state"
 
-// Backend format identifiers. Format controls what a backend's state_save
-// receives: the complete state document, or a lean, human-readable "intent"
-// projection of it. See Backend.Format and projectState.
+// Save target format identifiers. Format controls what a save target's
+// state_save receives: the complete state document, or a lean, human-readable
+// "intent" projection of it. See SaveTarget.Format and projectState.
 const (
 	// FormatFull is the default: the complete state document (schemaVersion,
 	// metadata, command, parameters, resolvers, fingerprints, attestation).
@@ -50,137 +50,157 @@ const (
 	// volatile metadata fields (createdAt/lastUpdatedAt/runtime), producing a
 	// deterministic, reviewable document suitable for committing and signing.
 	//
-	// Using FormatIntent as the PRIMARY backend's format is lossy: immutable
-	// resolver locks live in the omitted "resolvers" section, so they will not
-	// persist across runs against that backend alone. Pair it with a full-
-	// fidelity primary backend and an "emit" entry (see Config.Emit) to keep
-	// both a complete local state and a published intent; see
-	// lintStateFormatLossy for the guardrail.
+	// An intent document carries no immutable resolver locks or action
+	// fingerprints, so a solution that relies on either needs at least one
+	// FormatFull save target as well (lint rule state-requires-full-save), and
+	// replaying an intent document through a solution with immutable resolvers
+	// is refused unless explicitly allowed (see CheckMissingLocks).
 	FormatIntent = "intent"
 )
 
+// ExtendsLoad is the only supported SaveTarget.Extends value: the target
+// inherits the declared load block's provider and inputs, with the target's
+// own inputs merged on top (the target wins on a key conflict).
+const ExtendsLoad = "load"
+
 const (
 	// OutputKeyData is the state_load output field that carries the decoded or
-	// serialized state document a backend read from its storage.
+	// serialized state document a state provider read from its storage.
 	OutputKeyData = "data"
 
-	// OutputKeyFound is the state_load output field a backend sets to false to
-	// report that no state object exists yet (a first run). When absent it
-	// defaults to true, which preserves the prior backend contract. The core
+	// OutputKeyFound is the state_load output field a state provider sets to
+	// false to report that no state object exists yet (a first run). When absent
+	// it defaults to true, which preserves the prior provider contract. The core
 	// loader treats found:false as fresh empty state without decoding the
 	// payload or applying the schema-version guard, so the "delete the state
 	// file and recreate it" guidance is never emitted before a file exists.
 	OutputKeyFound = "found"
 )
 
-// Config is the solution-level state configuration.
-// It is a top-level peer to Spec, Catalog, Bundle, and Compose on the Solution struct.
+// Config is the solution-level state configuration. It is a top-level peer to
+// Spec, Catalog, Bundle, and Compose on the Solution struct.
 //
-// CLI parameters passed via -r flags are available as __params in CEL expressions
-// and Go templates used in Enabled and Backend.Inputs. This allows dynamic backend
-// configuration from user input.
+// Reading and writing are configured separately: Load only ever READS state,
+// and the Save targets are the ONLY way state is written. Each is optional:
 //
-// Enabled and Backend.Inputs may also reference resolvers (via rslvr:, expr:, or
-// tmpl:), as long as those resolvers are state-INDEPENDENT -- i.e. they do not
-// read state (via the state provider) and do not transitively depend on one that
-// does. The engine runs the referenced resolvers first (a minimal pre-load pass),
-// then loads state with their values exposed as _. Referencing a state-dependent
-// resolver is a circular dependency and is rejected (see CycleError).
+//	load  save
+//	yes   yes   persist across runs (the common case -- see ExtendsLoad)
+//	yes   no    read-only replay
+//	no    yes   start from empty state each run, publish the result
+//	no    no    nothing to do (lint rule empty-state-config)
 //
-// Example:
+// CLI parameters passed via -r flags are available as __params in CEL
+// expressions and Go templates. Enabled and Load.Inputs are evaluated at load
+// time, before the main resolver pass, so they may reference only
+// state-INDEPENDENT resolvers -- ones that do not read state (via the state
+// provider) and do not transitively depend on one that does. The engine runs
+// those resolvers first (a minimal pre-load pass), then loads state with their
+// values exposed as _. Referencing a state-dependent resolver is a circular
+// dependency and is rejected (see CycleError). Save targets are resolved at save
+// time, after every resolver has run, so they may reference any resolver.
 //
-//	state:
-//	  enabled:
-//	    expr: "_.stateEnabled"   # stateEnabled is a state-independent resolver
-//	  backend:
-//	    provider: file
-//	    inputs:
-//	      path:
-//	        expr: "'gcp/' + __params.project + '/state.json'"
-//
-// A solution can additionally publish one or more projected copies of the same
-// state document via Emit -- for example, keeping a full-fidelity primary state
-// file locally while also emitting a lean "intent" file intended to be committed
-// and signed:
+// Example -- persist full state locally and also publish a lean, signable intent:
 //
 //	state:
 //	  enabled: true
-//	  backend:                                # full-fidelity primary
+//	  load:
 //	    provider: file
-//	    inputs: { path: ".scafctl/state.json" }
-//	  emit:
+//	    inputs: { path: ".state/sandbox.json" }
+//	  save:
+//	    - extends: load              # same provider + inputs as load; format: full
 //	    - provider: file
 //	      format: intent
+//	      parameters: { exclude: [mode] }
 //	      inputs: { path: "intent/sandbox.json" }
 type Config struct {
-	// Enabled controls whether state persistence is active. Supports a literal bool,
-	// CEL expression, Go template, or resolver reference.
-	// References to state-independent resolvers are resolved via a pre-load pass;
-	// references to state-dependent resolvers are rejected (circular dependency).
-	// Use __params to reference CLI parameters (e.g. expr: "__params.enable_state == true").
-	Enabled *spec.ValueRef `json:"enabled" yaml:"enabled" doc:"Dynamic activation of state persistence"`
+	// Enabled controls whether state is active at all. Supports a literal bool,
+	// CEL expression, Go template, or resolver reference. Absent means enabled.
+	// Use __params to reference CLI parameters (e.g.
+	// expr: "__params.enable_state == true").
+	Enabled *spec.ValueRef `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"Dynamic activation of state (default: enabled)"`
 
-	// Backend configures which provider handles state persistence. This is the
-	// PRIMARY backend: the only one used for load, and always saved to.
-	Backend Backend `json:"backend" yaml:"backend" doc:"Backend provider configuration"`
+	// Load configures where state is READ from before resolvers run. Optional:
+	// without it every run starts from empty state. Load never writes -- see Save.
+	Load *LoadConfig `json:"load,omitempty" yaml:"load,omitempty" doc:"Where state is read from before resolvers run (read only)"`
 
-	// Emit configures additional save-only projections of the same state
-	// document, each written through its own backend. Emit targets are never
-	// used for load -- only Backend is. Each target may set its own Format
-	// (e.g. "intent") independent of the primary backend's format, and its own
-	// Enabled condition to skip that emission on some runs. See FormatIntent.
-	Emit []EmitTarget `json:"emit,omitempty" yaml:"emit,omitempty" doc:"Additional save-only projected state emissions" maxItems:"20"`
+	// Save lists where state is WRITTEN after a successful run. It is the only
+	// state write mechanism: nothing is saved unless a target here says so. Each
+	// target is written independently, in declaration order, in its own Format
+	// and gated by its own Enabled condition. Optional: without it every run is a
+	// read-only replay.
+	Save []SaveTarget `json:"save,omitempty" yaml:"save,omitempty" doc:"Where state is written after a successful run (the only write mechanism)" maxItems:"20"`
 }
 
-// Backend configures a state persistence backend -- used both for the primary
-// Config.Backend (load + save) and for each Config.Emit target (save only).
-type Backend struct {
+// LoadConfig configures the provider state is read from. It is used only for
+// state_load; writing is configured by Config.Save.
+type LoadConfig struct {
 	// Provider is the name of a registered provider with CapabilityState (e.g., "file").
 	Provider string `json:"provider" yaml:"provider" doc:"Provider name with CapabilityState" maxLength:"253" example:"file"`
 
-	// Format controls what shape of the state document this backend receives at
-	// save time. "full" (the default) saves the complete state document; "intent"
-	// saves the lean, replay-relevant projection (see FormatIntent). Load is
-	// unaffected by Format -- decoding already tolerates a lean document.
-	Format string `json:"format,omitempty" yaml:"format,omitempty" doc:"Save-time projection: full (default) or intent" enum:"full,intent" example:"intent"`
+	// Inputs are provider-specific inputs, resolved at load time. Each value is a
+	// ValueRef for dynamic resolution.
+	//
+	// CEL expressions use __params for CLI parameters (e.g. __params.project) and
+	// _ for resolver outputs. A referenced resolver must be state-independent; the
+	// engine runs such resolvers in a pre-load pass before loading state.
+	//
+	// Go templates spread resolver data at top level (e.g. {{ .name }}) and expose
+	// CLI parameters under __params (e.g. {{ .__params.project }}).
+	Inputs map[string]*spec.ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider-specific inputs, resolved at load time"`
+}
+
+// SaveTarget is one place state is written after a successful run.
+//
+// A target either names its own Provider, or sets Extends: load to inherit the
+// load block's provider and inputs -- the common "save to the same place I
+// loaded from" case. With Extends, the target's own Inputs are merged on top of
+// the load inputs (the target wins on a key conflict), which is how a target
+// reads from one location and writes to another: for example a GitHub target
+// loading from main but committing to a feature branch.
+//
+// Extends copies the load block DECLARED in the solution. An override of where a
+// run reads from (such as the CLI's --state-file flag) never redirects where an
+// Extends target writes.
+type SaveTarget struct {
+	// Extends, when set to "load", inherits the declared load block's provider
+	// and inputs. Mutually exclusive with Provider.
+	Extends string `json:"extends,omitempty" yaml:"extends,omitempty" doc:"Inherit provider and inputs from the load block (only load is supported)" enum:"load" example:"load"`
+
+	// Provider is the name of a registered provider with CapabilityState (e.g.,
+	// "file"). Required unless Extends is set.
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty" doc:"Provider name with CapabilityState (unless extends is set)" maxLength:"253" example:"file"`
+
+	// Format controls what shape of the state document this target receives:
+	// "full" (the default) saves the complete state document; "intent" saves the
+	// lean, replay-relevant projection (see FormatIntent).
+	Format string `json:"format,omitempty" yaml:"format,omitempty" doc:"Document shape: full (default) or intent" enum:"full,intent" example:"intent"`
 
 	// Parameters narrows which parameters an "intent"-format projection carries
 	// (see FormatIntent). Only meaningful when Format is "intent" -- lint rejects
-	// it on a "full" (or unset) backend, since narrowing the authoritative state
-	// document would silently break replay. Nil means no narrowing: every saved
-	// parameter is projected, as before this field existed.
+	// it on a "full" (or unset) target, since narrowing the authoritative state
+	// document would silently break replay. Nil means no narrowing.
 	Parameters *ParameterProjection `json:"parameters,omitempty" yaml:"parameters,omitempty" doc:"Narrow which parameters an intent-format projection carries (intent format only)"`
 
-	// Inputs are provider-specific inputs. Each value is a ValueRef for dynamic resolution.
-	//
-	// CEL expressions use __params for CLI parameters (e.g. __params.project) and _
-	// for resolver outputs. A referenced resolver must be state-independent (it must
-	// not read state or depend on one that does); the engine runs such resolvers in a
-	// pre-load pass before loading state. Referencing a state-dependent resolver is a
-	// circular dependency and is rejected.
-	//
-	// Go templates spread resolver data at top level (e.g. {{ .name }}) and expose CLI
-	// parameters under __params (e.g. {{ .__params.project }}).
-	//
-	// For an Emit target, Inputs are resolved at save time only (resolver data _
-	// is always available), so this constraint applies only to the primary backend.
-	Inputs map[string]*spec.ValueRef `json:"inputs" yaml:"inputs" doc:"Provider-specific inputs (ValueRef for dynamic resolution)"`
+	// Inputs are provider-specific inputs, resolved at save time -- every
+	// resolver has run by then, so they may reference any resolver (via rslvr:,
+	// or _ in CEL). With Extends, they are merged on top of the load inputs.
+	Inputs map[string]*spec.ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider-specific inputs, resolved at save time"`
 
-	// SaveOverrides are provider-specific inputs resolved only at save time when
-	// resolver data (_) is available. Keys that overlap with Inputs override them
-	// at save time. This enables patterns like loading state from a fixed branch
-	// (via Inputs) and saving to a resolver-derived branch (via SaveOverrides).
-	//
-	// At load time, SaveOverrides are completely ignored -- no errors are raised
-	// for resolver-dependent expressions. Not applicable to Emit targets, which
-	// are save-only already -- an Emit target's Inputs may reference resolvers
-	// directly.
-	SaveOverrides map[string]*spec.ValueRef `json:"saveOverrides,omitempty" yaml:"saveOverrides,omitempty" doc:"Save-time-only inputs that override Inputs keys"`
+	// Enabled gates this target. Resolved at save time, so it may reference any
+	// resolver. Coerced to bool; absent defaults to true (always save).
+	Enabled *spec.ValueRef `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"Per-target condition, resolved at save time (default: always save)"`
+
+	// Checkpoint also writes this target before workflow actions run (run
+	// solution and run action only), locking immutable resolver values so they
+	// survive a later action failure. Only valid with format: full. A checkpoint
+	// write does not update the saved parameter set: new -r values are saved
+	// only when the whole run succeeds.
+	Checkpoint bool `json:"checkpoint,omitempty" yaml:"checkpoint,omitempty" doc:"Also write before actions run, locking immutable values (full format only)"`
 }
 
-// ParameterProjection narrows which parameters an "intent"-format backend
-// projects (see Backend.Parameters and FormatIntent). Include and Exclude are
-// mutually exclusive -- lint rejects setting both.
+// ParameterProjection narrows which parameters an "intent"-format save target
+// projects (see SaveTarget.Parameters and FormatIntent). Include and Exclude are
+// mutually exclusive -- lint rejects setting both, and projectState refuses it.
 //
 // Include is the safer default for a new solution: an unlisted parameter is
 // silently dropped from the committed intent, so a newly-added control
@@ -202,22 +222,6 @@ type ParameterProjection struct {
 	// Exclude, when set, is a denylist: every saved parameter is projected
 	// except these names.
 	Exclude []string `json:"exclude,omitempty" yaml:"exclude,omitempty" doc:"Denylist: every saved parameter is projected except these names" maxItems:"200"`
-}
-
-// EmitTarget is one additional, save-only projected state emission. It embeds
-// Backend (provider, format, inputs, saveOverrides) and adds a per-target
-// enable condition.
-type EmitTarget struct {
-	Backend `json:",inline" yaml:",inline"`
-
-	// Enabled gates this emission independent of the primary Config.Enabled.
-	// Resolved at save time, so it may reference ANY resolver (unlike the
-	// primary Config.Enabled, which is load-time and restricted to
-	// state-independent resolvers): all resolvers have run by save time. CEL
-	// expressions have __params (CLI parameters) and _ (resolver outputs)
-	// available; Go templates spread resolver data at top level and expose
-	// __params. Coerced to bool; absent defaults to true (always emit).
-	Enabled *spec.ValueRef `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"Per-emit condition, resolved at save time (default: always emit)"`
 }
 
 // Data is the complete persisted state structure.

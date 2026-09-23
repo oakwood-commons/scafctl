@@ -1,0 +1,159 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-flags
+  version: 1.0.0
+  description: |
+    Functional tests for the state CLI flags: --state-file, --state-output,
+    and --no-state-output interacting with a solution that declares both a
+    load block and an "extends: load" save target.
+
+    The solution loads from and saves to state.json. The flag cases verify:
+    --state-file replaces the load block (load-only: the file it names is
+    never written, while the declared save target still runs), --state-output
+    replaces every save target with one full-format file save, and
+    --no-state-output skips the save target while the load still replays.
+
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: state.json
+  save:
+    - extends: load
+
+spec:
+  resolvers:
+    app_name:
+      description: Application name from parameter or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "app_name"
+          - provider: static
+            inputs:
+              value: "fallback-name"
+
+  testing:
+    cases:
+      # =====================================================================
+      # --state-file requires an existing file: exit 3 with an error naming
+      # the flag and the missing path.
+      # =====================================================================
+      state-file-missing-exits-3:
+        description: --state-file with a missing file exits 3 with a clear error
+        command: [run, resolver]
+        args: ["-o", "json", "--state-file", "missing.json"]
+        tags: [state, flags, error-handling]
+        assertions:
+          - expression: __exitCode == 3
+            message: "A missing --state-file must exit 3 (invalid input)"
+          - expression: __stderr.contains("--state-file")
+            message: "The error must name the flag"
+          - expression: __stderr.contains("does not exist")
+            message: "The error must say the file does not exist"
+
+      # =====================================================================
+      # --state-file A never writes A; the declared extends: load target
+      # still writes the solution's own location. A file seeded by init and
+      # untouched by the command is absent from __files, which only carries
+      # files the command created or modified -- so absence is the
+      # byte-for-byte-unmodified proof.
+      # =====================================================================
+      state-file-never-writes:
+        description: --state-file reads A but never writes it; the declared save target still runs
+        command: [run, resolver]
+        args: ["-o", "json", "--state-file", "replay.json"]
+        tags: [state, flags, smoke]
+        init:
+          - command: >-
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-flags","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"app_name":"from-replay"},"resolvers":{},"fingerprints":{}}'
+              > $SCAFCTL_SANDBOX_DIR/replay.json
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.app_name == "from-replay"
+            message: "Parameters must replay from the --state-file document"
+          - expression: '__stderr.contains("--state-file: reading state from replay.json instead of")'
+            message: "Replacing the declared load must be reported on stderr"
+          - expression: "!('replay.json' in __files)"
+            message: "The --state-file document must be byte-for-byte unchanged (absent from the file diff)"
+          - expression: __files["state.json"].exists
+            message: "The declared extends: load save target must still write state.json"
+
+      # =====================================================================
+      # --state-file A --state-output B: replays A's parameters and writes the
+      # full document to B; all declared save targets are replaced.
+      # =====================================================================
+      state-file-and-state-output:
+        description: --state-file A replays and --state-output B receives the full document
+        command: [run, resolver]
+        args: ["-o", "json", "--state-file", "replay.json", "--state-output", "out.json"]
+        tags: [state, flags]
+        init:
+          - command: >-
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-flags","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"app_name":"from-replay"},"resolvers":{},"fingerprints":{}}'
+              > $SCAFCTL_SANDBOX_DIR/replay.json
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.app_name == "from-replay"
+            message: "Parameters must replay from the --state-file document"
+          - expression: __files["out.json"].exists
+            message: "--state-output must write the full document"
+          - expression: __files["out.json"].content.contains("lastUpdatedAt")
+            message: "The --state-output document must be full format (fresh metadata timestamps)"
+          - expression: "!('state.json' in __files)"
+            message: "The declared save target must not run while replaced by --state-output"
+          - expression: '__stderr.contains("--state-output: writing full state to out.json instead of the solution''s 1 save target(s)")'
+            message: "Replacing the declared save targets must be reported on stderr"
+          - expression: "!('replay.json' in __files)"
+            message: "The --state-file document must be byte-for-byte unchanged"
+
+      # =====================================================================
+      # --state-output alone: enables state save-only (with the declared load
+      # still reading), replaces the save targets, writes a full document.
+      # =====================================================================
+      state-output-only:
+        description: --state-output alone writes a full document and replaces the declared saves
+        command: [run, resolver]
+        args: ["-o", "json", "--state-output", "out.json", "-r", "app_name=cli-name"]
+        tags: [state, flags]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __files["out.json"].exists
+            message: "--state-output must write the full document"
+          - expression: __files["out.json"].content.contains("cli-name")
+            message: "The written document must carry this run's parameters"
+          - expression: "!('state.json' in __files)"
+            message: "The declared save target must not run while replaced by --state-output"
+          - expression: __stderr.contains("saved out.json (full)")
+            message: "The save indicator must name the output file and full format"
+          - expression: __stderr.contains("no prior state")
+            message: "The declared load must still run (first run against a missing file)"
+
+      # =====================================================================
+      # --no-state-output: the load still replays; every save target is
+      # skipped; the on-disk state file is left untouched.
+      # =====================================================================
+      no-state-output-skips-saves:
+        description: --no-state-output replays loaded parameters without writing anything
+        command: [run, resolver]
+        args: ["-o", "json", "--no-state-output"]
+        tags: [state, flags]
+        init:
+          - command: >-
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-flags","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"app_name":"from-state"},"resolvers":{},"fingerprints":{}}'
+              > $SCAFCTL_SANDBOX_DIR/state.json
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.app_name == "from-state"
+            message: "The load must still replay the saved parameter"
+          - expression: '__stderr.contains("--no-state-output: skipping the solution''s 1 save target(s)")'
+            message: "Skipping the declared save targets must be reported on stderr"
+          - expression: "!__stderr.contains(\"state: saved\")"
+            message: "No save indicator may print when every target is skipped"
+          - expression: "!('state.json' in __files)"
+            message: "The on-disk state file must be byte-for-byte untouched"

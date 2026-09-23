@@ -19,7 +19,7 @@ func TestProjectState_FullFormat(t *testing.T) {
 	sd.Resolvers["cluster_id"] = &PersistedEntry{Value: "abc", Type: "string", Immutable: true}
 	sd.Fingerprints["__fingerprint:build:sources"] = &FingerprintEntry{Value: "sha256:xyz"}
 
-	m, err := projectState(sd, Backend{Format: FormatFull})
+	m, err := projectState(sd, SaveTarget{Format: FormatFull})
 	require.NoError(t, err)
 
 	assert.Equal(t, "deploy-app", m["metadata"].(map[string]any)["solution"])
@@ -34,7 +34,7 @@ func TestProjectState_EmptyFormatMeansFull(t *testing.T) {
 	sd := NewMockData("deploy-app", "1.4.2", nil)
 	sd.Resolvers["x"] = &PersistedEntry{Value: "y", Type: "string"}
 
-	m, err := projectState(sd, Backend{})
+	m, err := projectState(sd, SaveTarget{})
 	require.NoError(t, err)
 	assert.Contains(t, m, "resolvers", "an empty format string must behave as FormatFull")
 }
@@ -47,7 +47,7 @@ func TestProjectState_IntentFormat_OmitsVolatileAndDerivedFields(t *testing.T) {
 	sd.Fingerprints["__fingerprint:build:sources"] = &FingerprintEntry{Value: "sha256:xyz"}
 	sd.Command.Subcommand = "run solution"
 
-	m, err := projectState(sd, Backend{Format: FormatIntent})
+	m, err := projectState(sd, SaveTarget{Format: FormatIntent})
 	require.NoError(t, err)
 
 	assert.NotContains(t, m, "resolvers", "intent must omit resolver locks")
@@ -75,7 +75,7 @@ func TestProjectState_IntentFormat_AttestationCarriedWhenPresent(t *testing.T) {
 	sd := NewMockData("deploy-app", "1.4.2", nil)
 	sd.Attestation = json.RawMessage(`{"principal":"svc-deployer"}`)
 
-	m, err := projectState(sd, Backend{Format: FormatIntent})
+	m, err := projectState(sd, SaveTarget{Format: FormatIntent})
 	require.NoError(t, err)
 
 	att, ok := m["attestation"].(map[string]any)
@@ -88,7 +88,7 @@ func TestProjectState_IntentFormat_AttestationOmittedWhenAbsent(t *testing.T) {
 
 	sd := NewMockData("deploy-app", "1.4.2", nil)
 
-	m, err := projectState(sd, Backend{Format: FormatIntent})
+	m, err := projectState(sd, SaveTarget{Format: FormatIntent})
 	require.NoError(t, err)
 	assert.NotContains(t, m, "attestation", "attestation must be omitted from the projection when absent")
 }
@@ -97,9 +97,9 @@ func TestProjectState_UnknownFormat(t *testing.T) {
 	t.Parallel()
 
 	sd := NewMockData("deploy-app", "1.4.2", nil)
-	_, err := projectState(sd, Backend{Format: "unknown"})
+	_, err := projectState(sd, SaveTarget{Format: "unknown"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown backend format")
+	assert.Contains(t, err.Error(), "unknown save target format")
 	assert.Contains(t, err.Error(), "unknown")
 }
 
@@ -112,7 +112,7 @@ func TestProjectState_IntentFormat_Idempotent(t *testing.T) {
 	t.Parallel()
 
 	sd1 := NewMockData("deploy-app", "1.4.2", map[string]any{"env": "prod", "region": "us-east-1"})
-	m1, err := projectState(sd1, Backend{Format: FormatIntent})
+	m1, err := projectState(sd1, SaveTarget{Format: FormatIntent})
 	require.NoError(t, err)
 	b1, err := json.Marshal(m1)
 	require.NoError(t, err)
@@ -123,7 +123,7 @@ func TestProjectState_IntentFormat_Idempotent(t *testing.T) {
 	sd2 := NewMockData("deploy-app", "1.4.2", map[string]any{"env": "prod", "region": "us-east-1"})
 	sd2.Metadata.CreatedAt = sd2.Metadata.CreatedAt.Add(time.Hour)
 	sd2.Resolvers["unrelated"] = &PersistedEntry{Value: "differs", Type: "string"}
-	m2, err := projectState(sd2, Backend{Format: FormatIntent})
+	m2, err := projectState(sd2, SaveTarget{Format: FormatIntent})
 	require.NoError(t, err)
 	b2, err := json.Marshal(m2)
 	require.NoError(t, err)
@@ -135,7 +135,7 @@ func TestProjectState_Narrowing_NilSpecProjectsEverything(t *testing.T) {
 	t.Parallel()
 
 	sd := NewMockData("deploy-app", "1.4.2", map[string]any{"appName": "hello", "mode": "publish"})
-	m, err := projectState(sd, Backend{Format: FormatIntent})
+	m, err := projectState(sd, SaveTarget{Format: FormatIntent})
 	require.NoError(t, err)
 
 	params, ok := m["parameters"].(map[string]any)
@@ -150,7 +150,7 @@ func TestProjectState_Narrowing_Include(t *testing.T) {
 	sd := NewMockData("deploy-app", "1.4.2", map[string]any{
 		"appName": "hello", "environment": "sandbox", "mode": "publish", "githubOwner": "acme",
 	})
-	m, err := projectState(sd, Backend{
+	m, err := projectState(sd, SaveTarget{
 		Format:     FormatIntent,
 		Parameters: &ParameterProjection{Include: []string{"appName", "environment"}},
 	})
@@ -167,7 +167,7 @@ func TestProjectState_Narrowing_Exclude(t *testing.T) {
 	sd := NewMockData("deploy-app", "1.4.2", map[string]any{
 		"appName": "hello", "environment": "sandbox", "mode": "publish", "githubOwner": "acme",
 	})
-	m, err := projectState(sd, Backend{
+	m, err := projectState(sd, SaveTarget{
 		Format:     FormatIntent,
 		Parameters: &ParameterProjection{Exclude: []string{"mode", "githubOwner"}},
 	})
@@ -182,7 +182,7 @@ func TestProjectState_Narrowing_IncludeNameAbsentFromParams_SilentlyOmitted(t *t
 	t.Parallel()
 
 	sd := NewMockData("deploy-app", "1.4.2", map[string]any{"appName": "hello"})
-	m, err := projectState(sd, Backend{
+	m, err := projectState(sd, SaveTarget{
 		Format:     FormatIntent,
 		Parameters: &ParameterProjection{Include: []string{"appName", "neverPassedThisRun"}},
 	})
@@ -197,7 +197,7 @@ func TestProjectState_Narrowing_EmptySpecIsNoOp(t *testing.T) {
 	t.Parallel()
 
 	sd := NewMockData("deploy-app", "1.4.2", map[string]any{"appName": "hello", "mode": "publish"})
-	m, err := projectState(sd, Backend{Format: FormatIntent, Parameters: &ParameterProjection{}})
+	m, err := projectState(sd, SaveTarget{Format: FormatIntent, Parameters: &ParameterProjection{}})
 	require.NoError(t, err)
 
 	params, ok := m["parameters"].(map[string]any)
@@ -208,14 +208,14 @@ func TestProjectState_Narrowing_EmptySpecIsNoOp(t *testing.T) {
 func TestProjectState_Narrowing_FullFormatIgnoresParameters(t *testing.T) {
 	t.Parallel()
 
-	// Backend.Parameters only has an effect under FormatIntent; a Full-format
-	// backend must not be affected by it even if somehow set (lint rejects
+	// SaveTarget.Parameters only has an effect under FormatIntent; a full-format
+	// target must not be affected by it even if somehow set (lint rejects
 	// this combination at the solution level -- this test verifies the
 	// runtime behavior independent of that lint gate).
 	sd := NewMockData("deploy-app", "1.4.2", map[string]any{"appName": "hello", "mode": "publish"})
 	sd.Resolvers["x"] = &PersistedEntry{Value: "y", Type: "string"}
 
-	m, err := projectState(sd, Backend{
+	m, err := projectState(sd, SaveTarget{
 		Format:     FormatFull,
 		Parameters: &ParameterProjection{Include: []string{"appName"}},
 	})
@@ -229,14 +229,14 @@ func TestProjectState_Narrowing_FullFormatIgnoresParameters(t *testing.T) {
 
 // TestProjectState_Narrowing_BothIncludeAndExcludeIsRejected verifies
 // projectState enforces the include/exclude mutual-exclusivity invariant
-// itself (not only lint): a hand-constructed Backend that never went through
+// itself (not only lint): a hand-constructed SaveTarget that never went through
 // lint -- an embedder, or any future internal caller -- must not silently get
 // Include-wins-over-Exclude behavior.
 func TestProjectState_Narrowing_BothIncludeAndExcludeIsRejected(t *testing.T) {
 	t.Parallel()
 
 	sd := NewMockData("deploy-app", "1.4.2", map[string]any{"appName": "hello", "mode": "publish"})
-	_, err := projectState(sd, Backend{
+	_, err := projectState(sd, SaveTarget{
 		Format: FormatIntent,
 		Parameters: &ParameterProjection{
 			Include: []string{"appName"},

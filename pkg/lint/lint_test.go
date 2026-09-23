@@ -1308,6 +1308,19 @@ func TestLintSchema_RawContentPreferred(t *testing.T) {
 	assert.True(t, found, "expected a schema-violation finding from raw content, got %+v", result.Findings)
 }
 
+// TestLintSchema_StateEnabledIsOptional verifies the schema matches the
+// runtime contract that an absent state.enabled means enabled: a state block
+// without it is not a schema violation.
+func TestLintSchema_StateEnabledIsOptional(t *testing.T) {
+	raw := []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: test\n  version: 1.0.0\nstate:\n  load:\n    provider: file\n    inputs:\n      path: state.json\n  save:\n    - extends: load\nspec:\n  resolvers:\n    r1:\n      resolve:\n        with:\n          - provider: static\n            inputs:\n              value: hello\n")
+	result := &Result{Findings: make([]*Finding, 0)}
+	lintSchema(raw, "/nonexistent/solution.yaml", result)
+
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "schema-violation", f.RuleName, "unexpected schema violation: %+v", f)
+	}
+}
+
 // TestLintSchema_RawContentFromNonFileSolution verifies the end-to-end path:
 // a solution loaded from bytes (no file on disk) with an unknown top-level
 // field still produces a schema-violation finding through lint.Solution.
@@ -1868,7 +1881,7 @@ func newStateProvider(name string, capability provider.Capability) *fakeProvider
 	}
 }
 
-func TestLintState_MissingBackendProvider(t *testing.T) {
+func TestLintState_MissingLoadProvider(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
 		Kind:       "Solution",
@@ -1876,18 +1889,18 @@ func TestLintState_MissingBackendProvider(t *testing.T) {
 		Spec:       solution.Spec{Resolvers: map[string]*resolver.Resolver{"a": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}}}},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{Provider: ""},
+			Load:    &state.LoadConfig{Provider: ""},
 		},
 	}
 	reg := provider.NewRegistry()
 	_ = reg.Register(newFakeProvider("static", nil))
 
 	result := Solution(sol, "test.yaml", reg)
-	findings := filterFindingsByRule(result, "missing-state-backend")
+	findings := filterFindingsByRule(result, "missing-state-load-provider")
 	assert.Len(t, findings, 1)
 }
 
-func TestLintState_InvalidBackendProvider(t *testing.T) {
+func TestLintState_InvalidLoadProvider(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
 		Kind:       "Solution",
@@ -1895,14 +1908,14 @@ func TestLintState_InvalidBackendProvider(t *testing.T) {
 		Spec:       solution.Spec{Resolvers: map[string]*resolver.Resolver{"a": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}}}},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{Provider: "nonexistent"},
+			Load:    &state.LoadConfig{Provider: "nonexistent"},
 		},
 	}
 	reg := provider.NewRegistry()
 	_ = reg.Register(newFakeProvider("static", nil))
 
 	result := Solution(sol, "test.yaml", reg)
-	findings := filterFindingsByRule(result, "invalid-state-backend")
+	findings := filterFindingsByRule(result, "invalid-state-load-provider")
 	assert.Len(t, findings, 1)
 }
 
@@ -1919,7 +1932,7 @@ func TestLintState_BundlePluginSuppressesFinding(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "github",
 				Inputs:   map[string]*spec.ValueRef{"repo": {Literal: "my-org/my-repo"}},
 			},
@@ -1929,8 +1942,8 @@ func TestLintState_BundlePluginSuppressesFinding(t *testing.T) {
 	_ = reg.Register(newFakeProvider("static", nil))
 
 	result := Solution(sol, "test.yaml", reg)
-	findings := filterFindingsByRule(result, "invalid-state-backend")
-	assert.Empty(t, findings, "bundle.plugins-declared provider should not trigger invalid-state-backend")
+	findings := filterFindingsByRule(result, "invalid-state-load-provider")
+	assert.Empty(t, findings, "bundle.plugins-declared provider should not trigger invalid-state-load-provider")
 }
 
 func TestLintBundlePlugins_BuiltinWarning(t *testing.T) {
@@ -2025,14 +2038,14 @@ func TestLintState_ProviderWithoutCapabilityState(t *testing.T) {
 		Spec:       solution.Spec{Resolvers: map[string]*resolver.Resolver{"a": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}}}},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{Provider: "static"},
+			Load:    &state.LoadConfig{Provider: "static"},
 		},
 	}
 	reg := provider.NewRegistry()
 	_ = reg.Register(newFakeProvider("static", nil))
 
 	result := Solution(sol, "test.yaml", reg)
-	findings := filterFindingsByRule(result, "invalid-state-backend")
+	findings := filterFindingsByRule(result, "invalid-state-load-provider")
 	assert.Len(t, findings, 1)
 }
 
@@ -2051,10 +2064,11 @@ func TestLintState_ValidConfig(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "test.json"}},
 			},
+			Save: []state.SaveTarget{{Extends: state.ExtendsLoad}},
 		},
 	}
 	reg := provider.NewRegistry()
@@ -2087,7 +2101,7 @@ func TestLintState_EnabledRefToStateIndependentResolverAllowed(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Resolver: &rslvrName},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "test.json"}},
 			},
@@ -2122,7 +2136,7 @@ func TestLintState_EnabledRefToStateDependentResolverRejected(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Resolver: &rslvrName},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "test.json"}},
 			},
@@ -2155,7 +2169,7 @@ func TestLintState_EnabledRefToUnknownResolverRejected(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Resolver: &rslvrName},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "test.json"}},
 			},
@@ -2172,7 +2186,7 @@ func TestLintState_EnabledRefToUnknownResolverRejected(t *testing.T) {
 	assert.Contains(t, findings[0].Message, "does_not_exist")
 }
 
-func TestLintState_BackendInputRefToStateIndependentResolverAllowed(t *testing.T) {
+func TestLintState_LoadInputRefToStateIndependentResolverAllowed(t *testing.T) {
 	rslvrName := "app_name"
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
@@ -2188,7 +2202,7 @@ func TestLintState_BackendInputRefToStateIndependentResolverAllowed(t *testing.T
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs: map[string]*spec.ValueRef{
 					"path": {Resolver: &rslvrName},
@@ -2201,12 +2215,12 @@ func TestLintState_BackendInputRefToStateIndependentResolverAllowed(t *testing.T
 	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
 
 	result := Solution(sol, "test.yaml", reg)
-	// app_name is state-independent, so a backend input may reference it.
+	// app_name is state-independent, so a load input may reference it.
 	assert.Empty(t, filterFindingsByRule(result, "state-ref-state-dependent"))
 	assert.Empty(t, filterFindingsByRule(result, "state-ref-unknown"))
 }
 
-func TestLintState_BackendInputRefToStateDependentResolverRejected(t *testing.T) {
+func TestLintState_LoadInputRefToStateDependentResolverRejected(t *testing.T) {
 	rslvrName := "saved_path"
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
@@ -2222,7 +2236,7 @@ func TestLintState_BackendInputRefToStateDependentResolverRejected(t *testing.T)
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs: map[string]*spec.ValueRef{
 					"path": {Resolver: &rslvrName},
@@ -2241,7 +2255,7 @@ func TestLintState_BackendInputRefToStateDependentResolverRejected(t *testing.T)
 	assert.Contains(t, findings[0].Message, "saved_path")
 }
 
-func TestLintState_SaveOverrideStateRef(t *testing.T) {
+func TestLintState_SaveTargetStateRef(t *testing.T) {
 	expr := celexp.Expression("__state.branch")
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
@@ -2257,11 +2271,16 @@ func TestLintState_SaveOverrideStateRef(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "github",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
-				SaveOverrides: map[string]*spec.ValueRef{
-					"branch": {Expr: &expr},
+			},
+			Save: []state.SaveTarget{
+				{
+					Extends: state.ExtendsLoad,
+					Inputs: map[string]*spec.ValueRef{
+						"branch": {Expr: &expr},
+					},
 				},
 			},
 		},
@@ -2271,12 +2290,12 @@ func TestLintState_SaveOverrideStateRef(t *testing.T) {
 	_ = reg.Register(newStateProvider("github", provider.CapabilityState))
 
 	result := Solution(sol, "test.yaml", reg)
-	findings := filterFindingsByRule(result, "state-save-override-state-ref")
+	findings := filterFindingsByRule(result, "state-save-state-ref")
 	assert.Len(t, findings, 1)
 	assert.Contains(t, findings[0].Message, "branch")
 }
 
-func TestLintState_SaveOverrideRslvrAllowed(t *testing.T) {
+func TestLintState_SaveTargetRslvrAllowed(t *testing.T) {
 	rslvrName := "featureBranch"
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
@@ -2292,11 +2311,16 @@ func TestLintState_SaveOverrideRslvrAllowed(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "github",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
-				SaveOverrides: map[string]*spec.ValueRef{
-					"branch": {Resolver: &rslvrName},
+			},
+			Save: []state.SaveTarget{
+				{
+					Extends: state.ExtendsLoad,
+					Inputs: map[string]*spec.ValueRef{
+						"branch": {Resolver: &rslvrName},
+					},
 				},
 			},
 		},
@@ -2306,14 +2330,14 @@ func TestLintState_SaveOverrideRslvrAllowed(t *testing.T) {
 	_ = reg.Register(newStateProvider("github", provider.CapabilityState))
 
 	result := Solution(sol, "test.yaml", reg)
-	// rslvr: is allowed in saveOverrides (unlike inputs)
+	// rslvr: is allowed in save-target inputs (unlike load inputs)
 	findings := filterFindingsByRule(result, "state-ref-state-dependent")
 	assert.Empty(t, findings)
-	findings = filterFindingsByRule(result, "state-save-override-state-ref")
+	findings = filterFindingsByRule(result, "state-save-state-ref")
 	assert.Empty(t, findings)
 }
 
-func TestLintState_SaveOverrideNoFalsePositive(t *testing.T) {
+func TestLintState_SaveTargetNoFalsePositive(t *testing.T) {
 	// Expressions using 'state/' as a string prefix must NOT trigger the state-ref rule
 	expr := celexp.Expression("'state/' + _.branch")
 	sol := &solution.Solution{
@@ -2330,11 +2354,16 @@ func TestLintState_SaveOverrideNoFalsePositive(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "github",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
-				SaveOverrides: map[string]*spec.ValueRef{
-					"path": {Expr: &expr},
+			},
+			Save: []state.SaveTarget{
+				{
+					Extends: state.ExtendsLoad,
+					Inputs: map[string]*spec.ValueRef{
+						"path": {Expr: &expr},
+					},
 				},
 			},
 		},
@@ -2344,7 +2373,7 @@ func TestLintState_SaveOverrideNoFalsePositive(t *testing.T) {
 	_ = reg.Register(newStateProvider("github", provider.CapabilityState))
 
 	result := Solution(sol, "test.yaml", reg)
-	findings := filterFindingsByRule(result, "state-save-override-state-ref")
+	findings := filterFindingsByRule(result, "state-save-state-ref")
 	assert.Empty(t, findings, "expression using 'state/' string should not trigger false positive")
 }
 
@@ -2363,10 +2392,11 @@ func TestLintState_GitHubNoSaveBranch(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "github",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
 			},
+			Save: []state.SaveTarget{{Extends: state.ExtendsLoad}},
 		},
 	}
 	reg := provider.NewRegistry()
@@ -2375,11 +2405,12 @@ func TestLintState_GitHubNoSaveBranch(t *testing.T) {
 
 	result := Solution(sol, "test.yaml", reg)
 	findings := filterFindingsByRule(result, "state-github-no-save-branch")
-	assert.Len(t, findings, 1)
-	assert.Contains(t, findings[0].Message, "no save branch")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Location, "state.save[0]")
+	assert.Contains(t, findings[0].Message, "no branch configured")
 }
 
-func TestLintState_GitHubWithSaveBranchInOverrides(t *testing.T) {
+func TestLintState_GitHubWithBranchInSaveTargetInputs(t *testing.T) {
 	rslvrName := "featureBranch"
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
@@ -2395,11 +2426,16 @@ func TestLintState_GitHubWithSaveBranchInOverrides(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "github",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
-				SaveOverrides: map[string]*spec.ValueRef{
-					"branch": {Resolver: &rslvrName},
+			},
+			Save: []state.SaveTarget{
+				{
+					Extends: state.ExtendsLoad,
+					Inputs: map[string]*spec.ValueRef{
+						"branch": {Resolver: &rslvrName},
+					},
 				},
 			},
 		},
@@ -2410,10 +2446,10 @@ func TestLintState_GitHubWithSaveBranchInOverrides(t *testing.T) {
 
 	result := Solution(sol, "test.yaml", reg)
 	findings := filterFindingsByRule(result, "state-github-no-save-branch")
-	assert.Empty(t, findings) // branch is configured via saveOverrides
+	assert.Empty(t, findings) // branch is configured on the save target
 }
 
-func TestLintState_GitHubWithBranchInInputs(t *testing.T) {
+func TestLintState_GitHubWithBranchInLoadInputs(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
 		Kind:       "Solution",
@@ -2428,13 +2464,14 @@ func TestLintState_GitHubWithBranchInInputs(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "github",
 				Inputs: map[string]*spec.ValueRef{
 					"path":   {Literal: "state.json"},
 					"branch": {Literal: "main"},
 				},
 			},
+			Save: []state.SaveTarget{{Extends: state.ExtendsLoad}},
 		},
 	}
 	reg := provider.NewRegistry()
@@ -2443,7 +2480,7 @@ func TestLintState_GitHubWithBranchInInputs(t *testing.T) {
 
 	result := Solution(sol, "test.yaml", reg)
 	findings := filterFindingsByRule(result, "state-github-no-save-branch")
-	assert.Empty(t, findings) // branch is configured via inputs
+	assert.Empty(t, findings) // an extends target inherits the branch from load inputs
 }
 
 func TestLintState_NonGitHubNoSaveBranchHint(t *testing.T) {
@@ -2461,10 +2498,11 @@ func TestLintState_NonGitHubNoSaveBranchHint(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
 			},
+			Save: []state.SaveTarget{{Extends: state.ExtendsLoad}},
 		},
 	}
 	reg := provider.NewRegistry()
@@ -2476,7 +2514,7 @@ func TestLintState_NonGitHubNoSaveBranchHint(t *testing.T) {
 	assert.Empty(t, findings) // hint only fires for github provider
 }
 
-func TestLintState_InvalidFormat_Primary(t *testing.T) {
+func TestLintState_InvalidFormat_SaveTarget(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
 		Kind:       "Solution",
@@ -2488,10 +2526,12 @@ func TestLintState_InvalidFormat_Primary(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
-				Format:   "bogus",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+			Save: []state.SaveTarget{
+				{Extends: state.ExtendsLoad, Format: "bogus"},
 			},
 		},
 	}
@@ -2503,9 +2543,10 @@ func TestLintState_InvalidFormat_Primary(t *testing.T) {
 	findings := filterFindingsByRule(result, "invalid-state-format")
 	require.Len(t, findings, 1)
 	assert.Equal(t, SeverityError, findings[0].Severity)
+	assert.Contains(t, findings[0].Location, "state.save[0]")
 }
 
-func TestLintState_ValidFormats_Primary(t *testing.T) {
+func TestLintState_ValidFormats_SaveTarget(t *testing.T) {
 	for _, format := range []string{"", state.FormatFull, state.FormatIntent} {
 		t.Run(format, func(t *testing.T) {
 			sol := &solution.Solution{
@@ -2519,10 +2560,12 @@ func TestLintState_ValidFormats_Primary(t *testing.T) {
 				},
 				State: &state.Config{
 					Enabled: &spec.ValueRef{Literal: true},
-					Backend: state.Backend{
+					Load: &state.LoadConfig{
 						Provider: "file",
-						Format:   format,
 						Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+					},
+					Save: []state.SaveTarget{
+						{Extends: state.ExtendsLoad, Format: format},
 					},
 				},
 			}
@@ -2536,7 +2579,7 @@ func TestLintState_ValidFormats_Primary(t *testing.T) {
 	}
 }
 
-func TestLintState_Emit_MissingBackendProvider(t *testing.T) {
+func TestLintState_Save_MissingProvider(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
 		Kind:       "Solution",
@@ -2548,12 +2591,13 @@ func TestLintState_Emit_MissingBackendProvider(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
 			},
-			Emit: []state.EmitTarget{
-				{Backend: state.Backend{Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}}}},
+			Save: []state.SaveTarget{
+				{Extends: state.ExtendsLoad},
+				{Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}}}, // missing provider
 			},
 		},
 	}
@@ -2562,12 +2606,12 @@ func TestLintState_Emit_MissingBackendProvider(t *testing.T) {
 	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
 
 	result := Solution(sol, "test.yaml", reg)
-	findings := filterFindingsByRule(result, "missing-state-emit-backend")
+	findings := filterFindingsByRule(result, "missing-state-save-provider")
 	require.Len(t, findings, 1)
-	assert.Contains(t, findings[0].Location, "state.emit[0]")
+	assert.Contains(t, findings[0].Location, "state.save[1]")
 }
 
-func TestLintState_Emit_InvalidBackendProvider(t *testing.T) {
+func TestLintState_Save_InvalidProvider(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
 		Kind:       "Solution",
@@ -2579,12 +2623,12 @@ func TestLintState_Emit_InvalidBackendProvider(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
 			},
-			Emit: []state.EmitTarget{
-				{Backend: state.Backend{Provider: "static", Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}}}},
+			Save: []state.SaveTarget{
+				{Provider: "static", Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}}},
 			},
 		},
 	}
@@ -2593,11 +2637,11 @@ func TestLintState_Emit_InvalidBackendProvider(t *testing.T) {
 	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
 
 	result := Solution(sol, "test.yaml", reg)
-	findings := filterFindingsByRule(result, "invalid-state-emit-backend")
+	findings := filterFindingsByRule(result, "invalid-state-save-provider")
 	require.Len(t, findings, 1)
 }
 
-func TestLintState_Emit_ValidConfig(t *testing.T) {
+func TestLintState_Save_ValidConfig(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
 		Kind:       "Solution",
@@ -2609,17 +2653,16 @@ func TestLintState_Emit_ValidConfig(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: ".scafctl/state.json"}},
 			},
-			Emit: []state.EmitTarget{
+			Save: []state.SaveTarget{
+				{Extends: state.ExtendsLoad},
 				{
-					Backend: state.Backend{
-						Provider: "file",
-						Format:   state.FormatIntent,
-						Inputs:   map[string]*spec.ValueRef{"path": {Literal: "intent/sandbox.json"}},
-					},
+					Provider: "file",
+					Format:   state.FormatIntent,
+					Inputs:   map[string]*spec.ValueRef{"path": {Literal: "intent/sandbox.json"}},
 				},
 			},
 		},
@@ -2638,7 +2681,7 @@ func TestLintState_Emit_ValidConfig(t *testing.T) {
 	assert.Empty(t, stateFindings)
 }
 
-func TestLintState_Emit_InvalidTargetDoesNotBlockOthers(t *testing.T) {
+func TestLintState_Save_InvalidTargetDoesNotBlockOthers(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
 		Kind:       "Solution",
@@ -2650,13 +2693,14 @@ func TestLintState_Emit_InvalidTargetDoesNotBlockOthers(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
 			},
-			Emit: []state.EmitTarget{
-				{Backend: state.Backend{Inputs: map[string]*spec.ValueRef{"path": {Literal: "a.json"}}}}, // missing provider
-				{Backend: state.Backend{Provider: "file", Format: "bogus", Inputs: map[string]*spec.ValueRef{"path": {Literal: "b.json"}}}},
+			Save: []state.SaveTarget{
+				{Extends: state.ExtendsLoad},
+				{Inputs: map[string]*spec.ValueRef{"path": {Literal: "a.json"}}}, // missing provider
+				{Provider: "file", Format: "bogus", Inputs: map[string]*spec.ValueRef{"path": {Literal: "b.json"}}},
 			},
 		},
 	}
@@ -2665,145 +2709,11 @@ func TestLintState_Emit_InvalidTargetDoesNotBlockOthers(t *testing.T) {
 	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
 
 	result := Solution(sol, "test.yaml", reg)
-	assert.Len(t, filterFindingsByRule(result, "missing-state-emit-backend"), 1, "emit[0] must still be reported")
-	assert.Len(t, filterFindingsByRule(result, "invalid-state-format"), 1, "emit[1]'s independent problem must still be reported")
+	assert.Len(t, filterFindingsByRule(result, "missing-state-save-provider"), 1, "save[1] must still be reported")
+	assert.Len(t, filterFindingsByRule(result, "invalid-state-format"), 1, "save[2]'s independent problem must still be reported")
 }
 
-func TestLintState_FormatLossyWithImmutable(t *testing.T) {
-	sol := &solution.Solution{
-		APIVersion: "scafctl.io/v1",
-		Kind:       "Solution",
-		Metadata:   solution.Metadata{Name: "test"},
-		Spec: solution.Spec{
-			Resolvers: map[string]*resolver.Resolver{
-				"cluster_id": {
-					Type:      "string",
-					Immutable: true,
-					Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
-				},
-			},
-		},
-		State: &state.Config{
-			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
-				Provider: "file",
-				Format:   state.FormatIntent,
-				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "intent.json"}},
-			},
-		},
-	}
-	reg := provider.NewRegistry()
-	_ = reg.Register(newFakeProvider("static", nil))
-	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
-
-	result := Solution(sol, "test.yaml", reg)
-	findings := filterFindingsByRule(result, "state-format-lossy-with-immutable")
-	require.Len(t, findings, 1)
-	assert.Equal(t, SeverityWarning, findings[0].Severity)
-}
-
-func TestLintState_FormatLossyWithImmutable_NoWarningWithoutImmutable(t *testing.T) {
-	sol := &solution.Solution{
-		APIVersion: "scafctl.io/v1",
-		Kind:       "Solution",
-		Metadata:   solution.Metadata{Name: "test"},
-		Spec: solution.Spec{
-			Resolvers: map[string]*resolver.Resolver{
-				"env": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
-			},
-		},
-		State: &state.Config{
-			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
-				Provider: "file",
-				Format:   state.FormatIntent,
-				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "intent.json"}},
-			},
-		},
-	}
-	reg := provider.NewRegistry()
-	_ = reg.Register(newFakeProvider("static", nil))
-	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
-
-	result := Solution(sol, "test.yaml", reg)
-	assert.Empty(t, filterFindingsByRule(result, "state-format-lossy-with-immutable"))
-}
-
-func TestLintState_FormatLossyWithImmutable_NoWarningWhenFormatFull(t *testing.T) {
-	sol := &solution.Solution{
-		APIVersion: "scafctl.io/v1",
-		Kind:       "Solution",
-		Metadata:   solution.Metadata{Name: "test"},
-		Spec: solution.Spec{
-			Resolvers: map[string]*resolver.Resolver{
-				"cluster_id": {
-					Type:      "string",
-					Immutable: true,
-					Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
-				},
-			},
-		},
-		State: &state.Config{
-			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
-				Provider: "file",
-				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
-			},
-		},
-	}
-	reg := provider.NewRegistry()
-	_ = reg.Register(newFakeProvider("static", nil))
-	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
-
-	result := Solution(sol, "test.yaml", reg)
-	assert.Empty(t, filterFindingsByRule(result, "state-format-lossy-with-immutable"))
-}
-
-// TestLintState_FormatLossyWithImmutable_EmitDoesNotTrigger verifies that a
-// lossy format on an EMIT target (as opposed to the primary backend) does not
-// trigger the warning: only the primary backend's format matters, because the
-// primary is what a solution's own replay depends on, and an emit target
-// alongside a full-fidelity primary is the recommended, non-lossy pattern.
-func TestLintState_FormatLossyWithImmutable_EmitDoesNotTrigger(t *testing.T) {
-	sol := &solution.Solution{
-		APIVersion: "scafctl.io/v1",
-		Kind:       "Solution",
-		Metadata:   solution.Metadata{Name: "test"},
-		Spec: solution.Spec{
-			Resolvers: map[string]*resolver.Resolver{
-				"cluster_id": {
-					Type:      "string",
-					Immutable: true,
-					Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
-				},
-			},
-		},
-		State: &state.Config{
-			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
-				Provider: "file",
-				Inputs:   map[string]*spec.ValueRef{"path": {Literal: ".scafctl/state.json"}},
-			},
-			Emit: []state.EmitTarget{
-				{
-					Backend: state.Backend{
-						Provider: "file",
-						Format:   state.FormatIntent,
-						Inputs:   map[string]*spec.ValueRef{"path": {Literal: "intent/sandbox.json"}},
-					},
-				},
-			},
-		},
-	}
-	reg := provider.NewRegistry()
-	_ = reg.Register(newFakeProvider("static", nil))
-	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
-
-	result := Solution(sol, "test.yaml", reg)
-	assert.Empty(t, filterFindingsByRule(result, "state-format-lossy-with-immutable"))
-}
-
-func TestLintState_ParameterNarrowing_ValidOnIntentPrimary(t *testing.T) {
+func TestLintState_ParameterNarrowing_ValidOnIntentTarget(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
 		Kind:       "Solution",
@@ -2815,11 +2725,17 @@ func TestLintState_ParameterNarrowing_ValidOnIntentPrimary(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
-				Provider:   "file",
-				Format:     state.FormatIntent,
-				Parameters: &state.ParameterProjection{Include: []string{"appName"}},
-				Inputs:     map[string]*spec.ValueRef{"path": {Literal: "intent.json"}},
+			Load: &state.LoadConfig{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+			Save: []state.SaveTarget{
+				{
+					Extends:    state.ExtendsLoad,
+					Format:     state.FormatIntent,
+					Parameters: &state.ParameterProjection{Include: []string{"appName"}},
+					Inputs:     map[string]*spec.ValueRef{"path": {Literal: "intent.json"}},
+				},
 			},
 		},
 	}
@@ -2832,7 +2748,7 @@ func TestLintState_ParameterNarrowing_ValidOnIntentPrimary(t *testing.T) {
 	assert.Empty(t, filterFindingsByRule(result, "conflicting-state-parameter-narrowing"))
 }
 
-func TestLintState_ParameterNarrowing_InvalidOnFullPrimary(t *testing.T) {
+func TestLintState_ParameterNarrowing_InvalidOnFullTarget(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
 		Kind:       "Solution",
@@ -2844,10 +2760,16 @@ func TestLintState_ParameterNarrowing_InvalidOnFullPrimary(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
-				Provider:   "file",
-				Parameters: &state.ParameterProjection{Include: []string{"appName"}},
-				Inputs:     map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			Load: &state.LoadConfig{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+			Save: []state.SaveTarget{
+				{
+					Extends:    state.ExtendsLoad,
+					Format:     state.FormatFull,
+					Parameters: &state.ParameterProjection{Include: []string{"appName"}},
+				},
 			},
 		},
 	}
@@ -2861,7 +2783,7 @@ func TestLintState_ParameterNarrowing_InvalidOnFullPrimary(t *testing.T) {
 	assert.Equal(t, SeverityError, findings[0].Severity)
 }
 
-func TestLintState_ParameterNarrowing_InvalidOnUnsetFormatPrimary(t *testing.T) {
+func TestLintState_ParameterNarrowing_InvalidOnUnsetFormatTarget(t *testing.T) {
 	// An unset Format defaults to full at runtime -- narrowing must be
 	// rejected exactly as it is for an explicit format: full.
 	sol := &solution.Solution{
@@ -2875,10 +2797,15 @@ func TestLintState_ParameterNarrowing_InvalidOnUnsetFormatPrimary(t *testing.T) 
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
-				Provider:   "file",
-				Parameters: &state.ParameterProjection{Exclude: []string{"mode"}},
-				Inputs:     map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			Load: &state.LoadConfig{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+			Save: []state.SaveTarget{
+				{
+					Extends:    state.ExtendsLoad,
+					Parameters: &state.ParameterProjection{Exclude: []string{"mode"}},
+				},
 			},
 		},
 	}
@@ -2902,14 +2829,19 @@ func TestLintState_ParameterNarrowing_ConflictingIncludeAndExclude(t *testing.T)
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
-				Format:   state.FormatIntent,
-				Parameters: &state.ParameterProjection{
-					Include: []string{"appName"},
-					Exclude: []string{"mode"},
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+			Save: []state.SaveTarget{
+				{
+					Extends: state.ExtendsLoad,
+					Format:  state.FormatIntent,
+					Parameters: &state.ParameterProjection{
+						Include: []string{"appName"},
+						Exclude: []string{"mode"},
+					},
 				},
-				Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}},
 			},
 		},
 	}
@@ -2925,7 +2857,7 @@ func TestLintState_ParameterNarrowing_ConflictingIncludeAndExclude(t *testing.T)
 	assert.Empty(t, filterFindingsByRule(result, "invalid-state-parameter-narrowing"))
 }
 
-func TestLintState_ParameterNarrowing_AppliesToEmitTargetToo(t *testing.T) {
+func TestLintState_ParameterNarrowing_AppliesToExtendsTarget(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
 		Kind:       "Solution",
@@ -2937,17 +2869,15 @@ func TestLintState_ParameterNarrowing_AppliesToEmitTargetToo(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: ".scafctl/state.json"}},
 			},
-			Emit: []state.EmitTarget{
+			Save: []state.SaveTarget{
 				{
-					Backend: state.Backend{
-						Provider:   "file",
-						Parameters: &state.ParameterProjection{Include: []string{"appName"}},
-						Inputs:     map[string]*spec.ValueRef{"path": {Literal: "intent/sandbox.json"}},
-					},
+					Provider:   "file",
+					Parameters: &state.ParameterProjection{Include: []string{"appName"}},
+					Inputs:     map[string]*spec.ValueRef{"path": {Literal: "intent/sandbox.json"}},
 				},
 			},
 		},
@@ -2957,15 +2887,15 @@ func TestLintState_ParameterNarrowing_AppliesToEmitTargetToo(t *testing.T) {
 	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
 
 	result := Solution(sol, "test.yaml", reg)
-	// The emit target's Format is unset (defaults to full at runtime), so
-	// narrowing it is invalid exactly like the primary case.
+	// The target's Format is unset (defaults to full at runtime), so
+	// narrowing it is invalid exactly like the full-format case.
 	findings := filterFindingsByRule(result, "invalid-state-parameter-narrowing")
 	require.Len(t, findings, 1)
-	assert.Contains(t, findings[0].Location, "state.emit[0]")
+	assert.Contains(t, findings[0].Location, "state.save[0]")
 }
 
 func TestLintState_ParameterNarrowing_ReportedEvenWithoutProvider(t *testing.T) {
-	// A backend with no provider at all still gets its own missing-provider
+	// A save target with no provider at all still gets its own missing-provider
 	// finding, but the narrowing problem must be reported in the SAME lint
 	// pass -- not hidden until the user fixes the provider and re-runs lint.
 	sol := &solution.Solution{
@@ -2979,10 +2909,12 @@ func TestLintState_ParameterNarrowing_ReportedEvenWithoutProvider(t *testing.T) 
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
-				Provider:   "",
-				Parameters: &state.ParameterProjection{Include: []string{"appName"}},
-				Inputs:     map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			Save: []state.SaveTarget{
+				{
+					Provider:   "",
+					Parameters: &state.ParameterProjection{Include: []string{"appName"}},
+					Inputs:     map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+				},
 			},
 		},
 	}
@@ -2990,9 +2922,300 @@ func TestLintState_ParameterNarrowing_ReportedEvenWithoutProvider(t *testing.T) 
 	_ = reg.Register(newFakeProvider("static", nil))
 
 	result := Solution(sol, "test.yaml", reg)
-	assert.Len(t, filterFindingsByRule(result, "missing-state-backend"), 1)
+	assert.Len(t, filterFindingsByRule(result, "missing-state-save-provider"), 1)
 	assert.Len(t, filterFindingsByRule(result, "invalid-state-parameter-narrowing"), 1,
-		"narrowing on a full/unset-format backend must be reported even when the provider is also missing")
+		"narrowing on a full/unset-format target must be reported even when the provider is also missing")
+}
+
+// newStateRuleSolution builds a minimal solution with the given state config
+// for the new-rule tests. The registry must still be populated by the caller.
+func newStateRuleSolution(st *state.Config) *solution.Solution {
+	return &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"env": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: st,
+	}
+}
+
+func newStateRegistry(t *testing.T) *provider.Registry {
+	t.Helper()
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+	require.NoError(t, reg.Register(newStateProvider("file", provider.CapabilityState)))
+	require.NoError(t, reg.Register(newStateProvider("github", provider.CapabilityState)))
+	return reg
+}
+
+func TestLintState_EmptyConfig(t *testing.T) {
+	t.Run("neither load nor save", func(t *testing.T) {
+		sol := newStateRuleSolution(&state.Config{Enabled: &spec.ValueRef{Literal: true}})
+		result := Solution(sol, "test.yaml", newStateRegistry(t))
+
+		findings := filterFindingsByRule(result, "empty-state-config")
+		require.Len(t, findings, 1)
+		assert.Equal(t, SeverityWarning, findings[0].Severity)
+		assert.Contains(t, findings[0].Message, "neither load nor save")
+	})
+
+	t.Run("with load and save targets", func(t *testing.T) {
+		sol := newStateRuleSolution(&state.Config{
+			Load: &state.LoadConfig{Provider: "file"},
+			Save: []state.SaveTarget{{Extends: state.ExtendsLoad}},
+		})
+		result := Solution(sol, "test.yaml", newStateRegistry(t))
+		assert.Empty(t, filterFindingsByRule(result, "empty-state-config"))
+	})
+
+	t.Run("an empty block cannot honor an immutable resolver", func(t *testing.T) {
+		sol := newStateRuleSolution(&state.Config{Enabled: &spec.ValueRef{Literal: true}})
+		sol.Spec.Resolvers["id"] = &resolver.Resolver{Type: "string", Immutable: true, Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}}
+		result := Solution(sol, "test.yaml", newStateRegistry(t))
+
+		findings := filterFindingsByRule(result, "immutable-requires-state")
+		require.Len(t, findings, 1, "an empty state block persists nothing, like no block at all")
+		assert.Equal(t, SeverityError, findings[0].Severity)
+		assert.Equal(t, "resolvers.id", findings[0].Location)
+	})
+}
+
+func TestLintState_SaveExtends(t *testing.T) {
+	tests := []struct {
+		name      string
+		state     *state.Config
+		wantCount int
+		wantLoc   string
+	}{
+		{
+			name: "unsupported extends value",
+			state: &state.Config{
+				Load: &state.LoadConfig{Provider: "file"},
+				Save: []state.SaveTarget{{Extends: "elsewhere"}},
+			},
+			wantCount: 1,
+			wantLoc:   "state.save[0].extends",
+		},
+		{
+			name: "extends combined with provider",
+			state: &state.Config{
+				Load: &state.LoadConfig{Provider: "file"},
+				Save: []state.SaveTarget{{Extends: state.ExtendsLoad, Provider: "file"}},
+			},
+			wantCount: 1,
+			wantLoc:   "state.save[0].extends",
+		},
+		{
+			name: "extends without a load block",
+			state: &state.Config{
+				Save: []state.SaveTarget{{Extends: state.ExtendsLoad}},
+			},
+			wantCount: 1,
+			wantLoc:   "state.save[0].extends",
+		},
+		{
+			name: "valid extends load",
+			state: &state.Config{
+				Load: &state.LoadConfig{Provider: "file"},
+				Save: []state.SaveTarget{{Extends: state.ExtendsLoad}},
+			},
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Solution(newStateRuleSolution(tt.state), "test.yaml", newStateRegistry(t))
+			findings := filterFindingsByRule(result, "invalid-state-save-extends")
+			assert.Len(t, findings, tt.wantCount)
+			if tt.wantCount > 0 {
+				assert.Equal(t, SeverityError, findings[0].Severity)
+				assert.Contains(t, findings[0].Location, tt.wantLoc)
+			}
+		})
+	}
+}
+
+func TestLintState_SaveCheckpoint(t *testing.T) {
+	t.Run("checkpoint on intent target", func(t *testing.T) {
+		sol := newStateRuleSolution(&state.Config{
+			Load: &state.LoadConfig{Provider: "file"},
+			Save: []state.SaveTarget{{Extends: state.ExtendsLoad, Format: state.FormatIntent, Checkpoint: true}},
+		})
+		result := Solution(sol, "test.yaml", newStateRegistry(t))
+
+		findings := filterFindingsByRule(result, "invalid-state-save-checkpoint")
+		require.Len(t, findings, 1)
+		assert.Equal(t, SeverityError, findings[0].Severity)
+		assert.Contains(t, findings[0].Location, "state.save[0].checkpoint")
+	})
+
+	t.Run("checkpoint on full target", func(t *testing.T) {
+		sol := newStateRuleSolution(&state.Config{
+			Load: &state.LoadConfig{Provider: "file"},
+			Save: []state.SaveTarget{{Extends: state.ExtendsLoad, Checkpoint: true}},
+		})
+		result := Solution(sol, "test.yaml", newStateRegistry(t))
+		assert.Empty(t, filterFindingsByRule(result, "invalid-state-save-checkpoint"))
+	})
+}
+
+func TestLintState_RequiresLoad(t *testing.T) {
+	// A save-only config with an immutable resolver never reads state back.
+	firing := newStateRuleSolution(&state.Config{
+		Save: []state.SaveTarget{{Provider: "file", Format: state.FormatFull, Inputs: map[string]*spec.ValueRef{"path": {Literal: "state.json"}}}},
+	})
+	firing.Spec.Resolvers["cluster_id"] = &resolver.Resolver{
+		Type:      "string",
+		Immutable: true,
+		Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+	}
+
+	result := Solution(firing, "test.yaml", newStateRegistry(t))
+	findings := filterFindingsByRule(result, "state-requires-load")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
+	assert.Contains(t, findings[0].Message, "immutable resolvers")
+	// A full-format save target exists, so the sibling rule must not also fire.
+	assert.Empty(t, filterFindingsByRule(result, "state-requires-full-save"))
+
+	// Adding a load block resolves the warning.
+	nonFiring := newStateRuleSolution(&state.Config{
+		Load: &state.LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "state.json"}}},
+		Save: []state.SaveTarget{{Extends: state.ExtendsLoad}},
+	})
+	nonFiring.Spec.Resolvers["cluster_id"] = &resolver.Resolver{
+		Type:      "string",
+		Immutable: true,
+		Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+	}
+
+	result = Solution(nonFiring, "test.yaml", newStateRegistry(t))
+	assert.Empty(t, filterFindingsByRule(result, "state-requires-load"))
+}
+
+func TestLintState_RequiresFullSave(t *testing.T) {
+	// An intent-only config with an immutable resolver never persists the lock.
+	firing := newStateRuleSolution(&state.Config{
+		Load: &state.LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "state.json"}}},
+		Save: []state.SaveTarget{{Provider: "file", Format: state.FormatIntent, Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}}}},
+	})
+	firing.Spec.Resolvers["cluster_id"] = &resolver.Resolver{
+		Type:      "string",
+		Immutable: true,
+		Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+	}
+
+	result := Solution(firing, "test.yaml", newStateRegistry(t))
+	findings := filterFindingsByRule(result, "state-requires-full-save")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
+	// A load block exists, so the sibling rule must not also fire.
+	assert.Empty(t, filterFindingsByRule(result, "state-requires-load"))
+
+	// Adding a full-format target (extends: load defaults to full) resolves it.
+	nonFiring := newStateRuleSolution(&state.Config{
+		Load: &state.LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "state.json"}}},
+		Save: []state.SaveTarget{
+			{Extends: state.ExtendsLoad},
+			{Provider: "file", Format: state.FormatIntent, Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}}},
+		},
+	})
+	nonFiring.Spec.Resolvers["cluster_id"] = &resolver.Resolver{
+		Type:      "string",
+		Immutable: true,
+		Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+	}
+
+	result = Solution(nonFiring, "test.yaml", newStateRegistry(t))
+	assert.Empty(t, filterFindingsByRule(result, "state-requires-full-save"))
+}
+
+func TestLintState_ImmutableWithoutCheckpoint(t *testing.T) {
+	newImmutableSolution := func(st *state.Config) *solution.Solution {
+		sol := newStateRuleSolution(st)
+		sol.Spec.Resolvers["cluster_id"] = &resolver.Resolver{
+			Type:      "string",
+			Immutable: true,
+			Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+		}
+		sol.Spec.Workflow = &action.Workflow{
+			Actions: map[string]*action.Action{
+				"run": {Name: "run", Provider: "static"},
+			},
+		}
+		return sol
+	}
+
+	t.Run("immutable with actions and no checkpoint", func(t *testing.T) {
+		sol := newImmutableSolution(&state.Config{
+			Load: &state.LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "state.json"}}},
+			Save: []state.SaveTarget{{Extends: state.ExtendsLoad}},
+		})
+		result := Solution(sol, "test.yaml", newStateRegistry(t))
+
+		findings := filterFindingsByRule(result, "immutable-without-checkpoint")
+		require.Len(t, findings, 1)
+		assert.Equal(t, SeverityInfo, findings[0].Severity)
+		assert.Contains(t, findings[0].Message, "saved only after every workflow action succeeds")
+	})
+
+	t.Run("checkpoint set", func(t *testing.T) {
+		sol := newImmutableSolution(&state.Config{
+			Load: &state.LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "state.json"}}},
+			Save: []state.SaveTarget{{Extends: state.ExtendsLoad, Checkpoint: true}},
+		})
+		result := Solution(sol, "test.yaml", newStateRegistry(t))
+		assert.Empty(t, filterFindingsByRule(result, "immutable-without-checkpoint"))
+	})
+
+	t.Run("no workflow actions", func(t *testing.T) {
+		sol := newImmutableSolution(&state.Config{
+			Load: &state.LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "state.json"}}},
+			Save: []state.SaveTarget{{Extends: state.ExtendsLoad}},
+		})
+		sol.Spec.Workflow = nil // no actions: nothing can fail mid-run
+		result := Solution(sol, "test.yaml", newStateRegistry(t))
+		assert.Empty(t, filterFindingsByRule(result, "immutable-without-checkpoint"))
+	})
+
+	t.Run("an invalid checkpoint on an intent target does not count", func(t *testing.T) {
+		sol := newImmutableSolution(&state.Config{
+			Load: &state.LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "state.json"}}},
+			Save: []state.SaveTarget{
+				{Extends: state.ExtendsLoad},
+				{Provider: "file", Format: state.FormatIntent, Checkpoint: true, Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}}},
+			},
+		})
+		result := Solution(sol, "test.yaml", newStateRegistry(t))
+		assert.Len(t, filterFindingsByRule(result, "invalid-state-save-checkpoint"), 1)
+		assert.Len(t, filterFindingsByRule(result, "immutable-without-checkpoint"), 1,
+			"an intent checkpoint locks nothing, so the full target still lacks one")
+	})
+}
+
+// TestLintState_UnknownFormatReportedOnce verifies that a save target with an
+// unrecognized format is reported once, not again by every format-dependent
+// check (checkpoint, parameter narrowing) that would otherwise quote it.
+func TestLintState_UnknownFormatReportedOnce(t *testing.T) {
+	sol := newStateRuleSolution(&state.Config{
+		Load: &state.LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "state.json"}}},
+		Save: []state.SaveTarget{{
+			Extends:    state.ExtendsLoad,
+			Format:     "bogus",
+			Checkpoint: true,
+			Parameters: &state.ParameterProjection{Include: []string{"env"}},
+		}},
+	})
+	result := Solution(sol, "test.yaml", newStateRegistry(t))
+
+	assert.Len(t, filterFindingsByRule(result, "invalid-state-format"), 1)
+	assert.Empty(t, filterFindingsByRule(result, "invalid-state-save-checkpoint"))
+	assert.Empty(t, filterFindingsByRule(result, "invalid-state-parameter-narrowing"))
 }
 
 func TestLintResolveForEach(t *testing.T) {
@@ -3281,10 +3504,11 @@ func TestLintImmutableResolvers_WithStateBlock(t *testing.T) {
 		},
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
 			},
+			Save: []state.SaveTarget{{Extends: state.ExtendsLoad}},
 		},
 	}
 	reg := provider.NewRegistry()

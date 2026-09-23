@@ -24,7 +24,8 @@ func CommandState(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 			View and manage persisted state files.
 
 			State files store resolver values across solution executions. They are
-			created automatically when a solution has a state block with a file backend.
+			written automatically when a solution's state block has a save target
+			that uses the file provider.
 
 			The --path flag specifies the state file relative to the current working
 			directory. Use an absolute path to reference files in other locations.

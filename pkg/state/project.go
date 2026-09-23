@@ -48,31 +48,30 @@ type IntentMetadata struct {
 	Version string `json:"version" doc:"Solution semver"`
 }
 
-// projectState converts a state Data document into the shape a backend's
-// state_save should receive, according to backend.Format. It is the single
-// place that defines what each Backend.Format value means; both the primary
-// backend and every Config.Emit target route their save payload through it.
+// projectState converts a state Data document into the shape a save target's
+// state_save should receive, according to target.Format. It is the single
+// place that defines what each SaveTarget.Format value means; every save target
+// routes its payload through it.
 //
 // The return value is always a map[string]any (via a JSON round-trip through
 // structToMap), because the provider executor's JSON-schema validator can only
 // inspect map/JSON values, never a Go struct pointer directly.
 //
 // An empty format string is treated as FormatFull, matching the zero value of
-// Backend.Format (so an unset Format behaves exactly as state behaved before
-// Format existed).
-func projectState(d *Data, backend Backend) (map[string]any, error) {
-	switch backend.Format {
+// SaveTarget.Format.
+func projectState(d *Data, target SaveTarget) (map[string]any, error) {
+	switch target.Format {
 	case "", FormatFull:
 		return structToMap(d)
 	case FormatIntent:
-		if p := backend.Parameters; p != nil && len(p.Include) > 0 && len(p.Exclude) > 0 {
+		if p := target.Parameters; p != nil && len(p.Include) > 0 && len(p.Exclude) > 0 {
 			// Defense in depth: lint already rejects this combination for any
 			// solution loaded from YAML, but projectState is also reachable
-			// from a hand-constructed Backend (an embedder, or future internal
-			// caller) that never went through lint. Enforce the invariant here
-			// too, at the one place that actually executes it, rather than
-			// silently letting Include win.
-			return nil, fmt.Errorf("state: backend parameters narrowing cannot set both include and exclude")
+			// from a hand-constructed SaveTarget (an embedder, or future
+			// internal caller) that never went through lint. Enforce the
+			// invariant here too, at the one place that actually executes it,
+			// rather than silently letting Include win.
+			return nil, fmt.Errorf("state: save target parameters narrowing cannot set both include and exclude")
 		}
 		intent := Intent{
 			SchemaVersion: d.SchemaVersion,
@@ -80,16 +79,16 @@ func projectState(d *Data, backend Backend) (map[string]any, error) {
 				Solution: d.Metadata.Solution,
 				Version:  d.Metadata.Version,
 			},
-			Parameters:  narrowParameters(d.Parameters, backend.Parameters),
+			Parameters:  narrowParameters(d.Parameters, target.Parameters),
 			Attestation: d.Attestation,
 		}
 		return structToMap(intent)
 	default:
-		return nil, fmt.Errorf("state: unknown backend format %q (valid: %q, %q)", backend.Format, FormatFull, FormatIntent)
+		return nil, fmt.Errorf("state: unknown save target format %q (valid: %q, %q)", target.Format, FormatFull, FormatIntent)
 	}
 }
 
-// narrowParameters applies an intent-format backend's Parameters projection
+// narrowParameters applies an intent-format save target's Parameters projection
 // spec to a saved parameter set. A nil spec is a no-op (every parameter is
 // projected, matching behavior before this field existed). Include is an
 // allowlist (intersection); Exclude is a denylist (difference). Callers

@@ -12,10 +12,12 @@ metadata:
 
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: run-solution-state.json
+  save:
+    - extends: load
 
 bundle:
   plugins:

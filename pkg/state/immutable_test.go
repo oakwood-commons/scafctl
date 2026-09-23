@@ -4,6 +4,7 @@
 package state
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -368,4 +369,88 @@ func TestPersistResolvers(t *testing.T) {
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrImmutableEntry)
 	})
+}
+
+func TestCheckMissingLocks(t *testing.T) {
+	t.Parallel()
+
+	resolvers := []*resolver.Resolver{
+		{Name: "project_id", Immutable: true},
+		{Name: "cluster_id", Immutable: true},
+		{Name: "region"},
+		nil,
+	}
+	// lockless is the shape of an intent document: parameters, no createdAt.
+	lockless := func() *Data {
+		d := NewData()
+		d.Parameters["env"] = "prod"
+		return d
+	}
+	loaded := func(d *Data) *LoadResult {
+		return &LoadResult{Data: d, Loaded: true, LoadedParams: len(d.Parameters), Location: "intent.json", Provider: "file"}
+	}
+	withCreatedAt := lockless()
+	withCreatedAt.Metadata.CreatedAt = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	persistOnly := lockless()
+	persistOnly.Resolvers["project_id"] = &PersistedEntry{Value: "p-1"}
+	persistOnly.Resolvers["cluster_id"] = &PersistedEntry{Value: "c-1", Immutable: true}
+	allLocked := lockless()
+	allLocked.Resolvers["project_id"] = &PersistedEntry{Value: "p-1", Immutable: true}
+	allLocked.Resolvers["cluster_id"] = &PersistedEntry{Value: "c-1", Immutable: true}
+
+	tests := []struct {
+		name    string
+		lr      *LoadResult
+		wantErr []string // immutable resolvers reported missing; nil means no error
+	}{
+		{name: "nil load result", lr: nil},
+		{name: "skipped load", lr: &LoadResult{Skipped: true}},
+		{name: "nothing loaded (save-only config)", lr: &LoadResult{Data: lockless(), LoadedParams: 1}},
+		{name: "loaded without data", lr: &LoadResult{Loaded: true, LoadedParams: 1}},
+		{name: "a full state file never trips, even for a newly added immutable resolver", lr: loaded(withCreatedAt)},
+		{name: "a first run (no parameters) never trips", lr: loaded(NewData())},
+		{
+			name:    "a lock-less document with parameters reports every unlocked immutable resolver, sorted",
+			lr:      loaded(lockless()),
+			wantErr: []string{"cluster_id", "project_id"},
+		},
+		{name: "a persist-only entry is not a lock", lr: loaded(persistOnly), wantErr: []string{"project_id"}},
+		{name: "every immutable resolver locked", lr: loaded(allLocked)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := CheckMissingLocks(tt.lr, resolvers)
+			if tt.wantErr == nil {
+				assert.NoError(t, err)
+				return
+			}
+			var missing *MissingLocksError
+			if assert.ErrorAs(t, err, &missing) {
+				assert.Equal(t, tt.wantErr, missing.Resolvers)
+				assert.Equal(t, "intent.json", missing.Location)
+				assert.Equal(t, "file", missing.Provider)
+			}
+		})
+	}
+
+	t.Run("a solution without immutable resolvers never trips", func(t *testing.T) {
+		t.Parallel()
+		assert.NoError(t, CheckMissingLocks(loaded(lockless()), []*resolver.Resolver{{Name: "region"}}))
+	})
+}
+
+func BenchmarkCheckMissingLocks(b *testing.B) {
+	resolvers := make([]*resolver.Resolver, 0, 50)
+	for i := range 50 {
+		resolvers = append(resolvers, &resolver.Resolver{Name: fmt.Sprintf("r%d", i), Immutable: i%2 == 0})
+	}
+	d := NewData()
+	d.Parameters["env"] = "prod"
+	lr := &LoadResult{Data: d, Loaded: true, LoadedParams: 1, Location: "intent.json"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_ = CheckMissingLocks(lr, resolvers)
+	}
 }
