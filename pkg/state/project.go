@@ -97,8 +97,8 @@ func projectState(d *Data, target SaveTarget) (map[string]any, error) {
 // itself rejects it as a defense-in-depth check before calling this helper --
 // so this function does not need to arbitrate between them.
 //
-// The result is always a fresh map, even when params is empty or the spec
-// selects nothing, so callers never observe the original map's identity.
+// A nil spec returns params itself, unchanged. A non-nil spec always returns
+// a fresh map, even when params is empty or the spec selects nothing.
 func narrowParameters(params map[string]any, projection *ParameterProjection) map[string]any {
 	if projection == nil {
 		return params
