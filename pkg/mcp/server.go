@@ -36,6 +36,21 @@ import (
 // changes (e.g. auth profile switches) without hitting disk every request.
 const configReloaderTTL = 2 * time.Second
 
+// listCacheTTLMs is the SEP-2549 freshness hint (in milliseconds)
+// advertised on tools/list, resources/list, resources/templates/list, and
+// prompts/list results. List contents are effectively static: tools,
+// prompts, and resource templates are registered during NewServer and are
+// never removed at runtime (the only visibility change is additive -- lazy
+// auth-handler registration can reveal auth tools mid-session, bounded by
+// this TTL). Modern-era clients (protocol version 2026-07-28 or later) may
+// reuse a cached list for this long instead of re-fetching the full tool
+// catalog on every turn. resources/read keeps the SDK's fail-closed default
+// (revalidate every time) because resource contents change on disk.
+//
+// Embedders adding or removing tools at runtime via MCPServer().AddTool()
+// should call NotifyToolsChanged so clients invalidate their cache.
+const listCacheTTLMs int64 = 5 * 60 * 1000 // 5 minutes
+
 // Server wraps the mcp-go MCPServer and holds shared dependencies
 // that tool handlers need.
 type Server struct {
@@ -555,6 +570,14 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		server.WithResourceCompletionProvider(&resourceCompletionProvider{registry: s.registry, logger: s.logger, ctx: s.ctx}),
 		// Dynamic tool filtering
 		server.WithToolFilter(contextualToolFilter(s)),
+		// SEP-2549 cache hints: the tool/prompt/resource catalog is static
+		// for the lifetime of the process, so modern-era clients may reuse
+		// list results (see listCacheTTLMs). Private scope keeps shared
+		// intermediaries from caching across authorization contexts.
+		server.WithMethodCacheHints(mcp.MethodToolsList, listCacheTTLMs, mcp.CacheScopePrivate),
+		server.WithMethodCacheHints(mcp.MethodPromptsList, listCacheTTLMs, mcp.CacheScopePrivate),
+		server.WithMethodCacheHints(mcp.MethodResourcesList, listCacheTTLMs, mcp.CacheScopePrivate),
+		server.WithMethodCacheHints(mcp.MethodResourcesTemplatesList, listCacheTTLMs, mcp.CacheScopePrivate),
 	}
 
 	// Optional: pagination
@@ -885,6 +908,12 @@ func (s *Server) SendLog(ctx context.Context, level mcp.LoggingLevel, loggerName
 
 // RequestRoots asks the MCP client for its workspace root directories.
 // This enables workspace-aware file discovery in tools.
+//
+// Modern-era caveat: protocol version 2026-07-28 replaced server-initiated
+// requests (SEP-2322), so for modern-era clients this fails with
+// server.ErrServerInitiatedRequestUnsupported unless the bidirectional
+// legacy behavior is enabled via server.WithLegacyServerInitiatedRequests.
+// Callers must treat that error as "no roots known" and fall back.
 func (s *Server) RequestRoots(ctx context.Context) ([]mcp.Root, error) {
 	result, err := s.mcpServer.RequestRoots(ctx, mcp.ListRootsRequest{})
 	if err != nil {
@@ -898,12 +927,24 @@ func (s *Server) RequestRoots(ctx context.Context) ([]mcp.Root, error) {
 
 // RequestSampling asks the MCP client's LLM to generate content.
 // This enables server-side use of the client's AI capabilities.
+//
+// Deprecated upstream (SEP-2577): sampling was removed in protocol version
+// 2026-07-28, so this only works for legacy-era clients; requests arriving
+// from modern-era clients fail with
+// server.ErrServerInitiatedRequestUnsupported. Retained while legacy
+// clients remain supported.
 func (s *Server) RequestSampling(ctx context.Context, req mcp.CreateMessageRequest) (*mcp.CreateMessageResult, error) {
-	return s.mcpServer.RequestSampling(ctx, req)
+	return s.mcpServer.RequestSampling(ctx, req) //nolint:staticcheck // SEP-2577 deprecation; kept for legacy-era clients
 }
 
 // RequestElicitation asks the MCP client to prompt the user for input.
 // This enables interactive parameter collection during tool execution.
+//
+// Modern-era caveat: like RequestRoots, server-initiated elicitation was
+// replaced in protocol version 2026-07-28 (SEP-2322); modern-era clients
+// return server.ErrServerInitiatedRequestUnsupported unless the
+// bidirectional legacy behavior is enabled. Callers must handle the error
+// by falling back to defaults or surfacing a validation message.
 func (s *Server) RequestElicitation(ctx context.Context, req mcp.ElicitationRequest) (*mcp.ElicitationResult, error) {
 	return s.mcpServer.RequestElicitation(ctx, req)
 }

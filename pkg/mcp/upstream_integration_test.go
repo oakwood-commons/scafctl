@@ -12,6 +12,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/mark3labs/mcp-go/server/servertest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -34,7 +35,7 @@ func newTestUpstreamMCPServer(t *testing.T, tools map[string]string) *httptest.S
 			},
 		)
 	}
-	return mcpserver.NewTestStreamableHTTPServer(srv)
+	return servertest.NewTestStreamableHTTPServer(srv)
 }
 
 func TestWithUpstreamServer(t *testing.T) {
