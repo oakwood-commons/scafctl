@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -504,5 +506,40 @@ func TestNewServer_DeclaresEntrypointToPool(t *testing.T) {
 		srv, err := NewServer()
 		require.NoError(t, err)
 		assert.Equal(t, prepare.EntrypointMCP, srv.entrypoint)
+	})
+}
+
+// ── Server-initiated request wrapper tests ───────────────────────────────────
+
+func TestRequestSampling(t *testing.T) {
+	req := mcp.CreateMessageRequest{}
+
+	t.Run("modern-era client is rejected with the documented sentinel", func(t *testing.T) {
+		srv, err := NewServer(WithServerLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		ctx := server.WithRequestProtocolInfo(t.Context(), &server.RequestProtocolInfo{
+			Modern:          true,
+			ProtocolVersion: mcp.ProtocolVersion20260728,
+		})
+
+		result, err := srv.RequestSampling(ctx, req)
+		require.Error(t, err)
+		assert.Nil(t, result)
+		// The wrapper deliberately does not wrap, so callers can match the
+		// upstream sentinel directly (per the modern-era caveat in its doc).
+		assert.ErrorIs(t, err, server.ErrServerInitiatedRequestUnsupported)
+	})
+
+	t.Run("legacy-era request without a session returns the upstream error verbatim", func(t *testing.T) {
+		srv, err := NewServer(WithServerLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		result, err := srv.RequestSampling(t.Context(), req)
+		require.Error(t, err)
+		assert.Nil(t, result)
+		// No added wrapping context: the upstream message reaches the
+		// caller unchanged.
+		assert.EqualError(t, err, "no active session")
 	})
 }
