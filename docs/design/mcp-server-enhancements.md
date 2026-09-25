@@ -108,6 +108,7 @@ scafctl eval cel --expression 'has(config.timeout)' --file config.json
 **File:** `pkg/cmd/scafctl/eval/cel.go`
 
 **Inputs:**
+
 | Flag | Type | Required | Description |
 |------|------|----------|-------------|
 | `--expression`, `-e` | string | Yes | CEL expression to evaluate |
@@ -117,6 +118,7 @@ scafctl eval cel --expression 'has(config.timeout)' --file config.json
 | `-o` | string | No | Output format: `json`, `yaml`, `table` (default: `table`) |
 
 **Implementation:**
+
 - Parse flags → build `map[string]any` data context
 - Call `celexp.EvaluateExpression()` from `pkg/celexp/context.go`
 - Format and write output via `kvx.OutputOptions`
@@ -134,6 +136,7 @@ scafctl eval template --template '{{ .config.host }}' --file resolvers.json
 **File:** `pkg/cmd/scafctl/eval/template.go`
 
 **Inputs:**
+
 | Flag | Type | Required | Description |
 |------|------|----------|-------------|
 | `--template`, `-t` | string | No* | Go template string (inline) |
@@ -147,6 +150,7 @@ scafctl eval template --template '{{ .config.host }}' --file resolvers.json
 *One of `--template` or `--template-file` is required.
 
 **Implementation:**
+
 - Parse flags → build data context
 - Call `gotmpl.NewService(nil).Execute()` from `pkg/gotmpl`
 - Optionally call `gotmpl.Service.GetReferences()` for `--show-refs`
@@ -164,6 +168,7 @@ scafctl eval validate --expression '{{ .name }}' --type go-template
 **File:** `pkg/cmd/scafctl/eval/validate.go`
 
 **Inputs:**
+
 | Flag | Type | Required | Description |
 |------|------|----------|-------------|
 | `--expression`, `-e` | string | Yes | Expression to validate |
@@ -171,6 +176,7 @@ scafctl eval validate --expression '{{ .name }}' --type go-template
 | `-o` | string | No | Output format |
 
 **Implementation:**
+
 - CEL: use `celexp.ValidateSyntax(ctx, expr)` to syntax-check (routes through the
   shared parse environment so optional access/chaining like `_.?name` parses the
   same way the runtime evaluates it)
@@ -193,6 +199,7 @@ scafctl new solution --name simple-transform --description "Text transformer" > 
 **File:** `pkg/cmd/scafctl/new/solution.go`
 
 **Inputs:**
+
 | Flag | Type | Required | Description |
 |------|------|----------|-------------|
 | `--name`, `-n` | string | Yes | Solution name (lowercase, hyphens, 3-60 chars) |
@@ -245,12 +252,14 @@ scafctl lint explain unknown-provider-input  # detailed fix guidance
 ```
 
 **Files:**
+
 - `pkg/cmd/scafctl/lint/rules_cmd.go` — `scafctl lint rules`
 - `pkg/cmd/scafctl/lint/explain_cmd.go` — `scafctl lint explain`
 
 **Shared code:** `pkg/cmd/scafctl/lint/rules.go` already exports `ListRules()` and `GetRule()` — no extraction needed. CLI commands are thin wrappers.
 
 **`scafctl lint rules` outputs:**
+
 | Column | Description |
 |--------|-------------|
 | Rule | Rule name (e.g., `missing-description`) |
@@ -259,6 +268,7 @@ scafctl lint explain unknown-provider-input  # detailed fix guidance
 | Description | One-line summary |
 
 **`scafctl lint explain` outputs:**
+
 | Field | Description |
 |-------|-------------|
 | Rule | Rule name |
@@ -285,6 +295,7 @@ scafctl get examples providers/http-resolver.yaml > my.yaml   # save to file
 ```
 
 **Files:**
+
 - `pkg/cmd/scafctl/get/examples/examples.go`
 
 **Prerequisite — Extract shared library with `go:embed`:**
@@ -342,6 +353,7 @@ func Categories() ([]string, error) { ... }
 ```
 
 Key changes from the current MCP implementation:
+
 - **No `FindExamplesDir()`** — the directory concept is replaced by `embed.FS`
 - **No `runtime.Caller()` hacks** — examples are always available in the binary
 - `Scan()` and `Read()` operate on `EmbeddedExamples` instead of `os.ReadDir`/`os.ReadFile`
@@ -415,9 +427,9 @@ type WhatIfAction struct {
 func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Report, error) { ... }
 ```
 
-3. Update `scafctl run solution --dry-run` to call `dryrun.Generate()` and render via `kvx.OutputOptions`
-4. Update the MCP tools (`preview_resolvers`, `preview_action`, `dry_run_solution`) to call the same shared library
-5. Support `-o table|json|yaml` on the CLI output
+1. Update `scafctl run solution --dry-run` to call `dryrun.Generate()` and render via `kvx.OutputOptions`
+2. Update the MCP tools (`preview_resolvers`, `preview_action`, `dry_run_solution`) to call the same shared library
+3. Support `-o table|json|yaml` on the CLI output
 
 **Shared code:** `pkg/dryrun/` — new package extracted from MCP inline logic.
 
@@ -436,6 +448,7 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 **File:** `pkg/mcp/tools_refs.go`
 
 **Tool Definition:**
+
 ```go
 mcp.NewTool("extract_resolver_refs",
     mcp.WithDescription("Extract resolver references (_.resolverName patterns) from Go templates or CEL expressions. Returns a list of referenced resolver names, which should be used to populate the 'dependsOn' field. Accepts inline text or a file path."),
@@ -457,6 +470,7 @@ mcp.NewTool("extract_resolver_refs",
 ```
 
 **Response Schema:**
+
 ```json
 {
   "source": "inline" | "file",
@@ -476,6 +490,7 @@ mcp.NewTool("extract_resolver_refs",
 **CLI counterpart:** Already exists as `scafctl eval refs`. No new CLI command needed.
 
 **Update `serverInstructions`:** Add guidance:
+
 ```
 When creating or editing Go templates (tmpl:) or CEL expressions (expr:) that reference resolvers,
 call extract_resolver_refs to determine which resolver names are referenced, then use those
@@ -493,6 +508,7 @@ names in the dependsOn field.
 **File:** `pkg/mcp/tools_test.go`
 
 **Tool Definition:**
+
 ```go
 mcp.NewTool("generate_test_scaffold",
     mcp.WithDescription("Analyze a solution and generate a starter functional test scaffold. Examines resolvers (types, parameters, transforms) and workflow actions (providers, dependencies) to produce test cases with appropriate assertions. The generated YAML can be added to the solution's spec.testing section."),
@@ -509,6 +525,7 @@ mcp.NewTool("generate_test_scaffold",
 ```
 
 **Response Schema:**
+
 ```json
 {
   "yaml": "spec:\n  testing:\n    cases:\n      ...",
@@ -542,6 +559,7 @@ mcp.NewTool("generate_test_scaffold",
 **File:** `pkg/mcp/tools_test.go` (same file as `generate_test_scaffold`)
 
 **Tool Definition:**
+
 ```go
 mcp.NewTool("list_tests",
     mcp.WithDescription("Discover and list functional tests defined in solutions without executing them. Returns test names, tags, commands, expected behavior, and skip status. Use this to understand what tests exist before calling run_solution_tests."),
@@ -566,6 +584,7 @@ mcp.NewTool("list_tests",
 ```
 
 **Response Schema:**
+
 ```json
 {
   "solutions": [
@@ -604,6 +623,7 @@ mcp.NewTool("list_tests",
 **File:** `pkg/mcp/tools_snapshot.go`
 
 **Tool Definition:**
+
 ```go
 mcp.NewTool("show_snapshot",
     mcp.WithDescription("Load and display a resolver execution snapshot. Shows solution metadata, execution timing, status (success/failure), parameter values, and per-resolver results (value, status, duration, provider). Use this to inspect past execution results for debugging."),
@@ -623,6 +643,7 @@ mcp.NewTool("show_snapshot",
 ```
 
 **Response Schema:**
+
 ```json
 {
   "solution": "my-solution",
@@ -665,6 +686,7 @@ mcp.NewTool("show_snapshot",
 **File:** `pkg/mcp/tools_snapshot.go` (same file as `show_snapshot`)
 
 **Tool Definition:**
+
 ```go
 mcp.NewTool("diff_snapshots",
     mcp.WithDescription("Compare two resolver execution snapshots and show differences. Identifies resolvers with changed values, status changes (success→failure), additions, and removals. Useful for detecting regressions between runs or understanding the impact of solution changes."),
@@ -688,6 +710,7 @@ mcp.NewTool("diff_snapshots",
 ```
 
 **Response Schema:**
+
 ```json
 {
   "before": { "solution": "my-solution", "timestamp": "...", "status": "success" },
@@ -726,6 +749,7 @@ mcp.NewTool("diff_snapshots",
 **File:** `pkg/mcp/tools_catalog.go` (add to existing file)
 
 **Tool Definition:**
+
 ```go
 mcp.NewTool("catalog_inspect",
     mcp.WithDescription("Show detailed metadata about a specific catalog artifact. Returns name, version, kind, digest, size, creation timestamp, catalog source, and annotations. Use catalog_list first to find artifact references."),
@@ -756,6 +780,7 @@ mcp.NewTool("catalog_inspect",
 **File:** `pkg/mcp/tools_auth.go` (add to existing file)
 
 **Tool Definition:**
+
 ```go
 mcp.NewTool("list_auth_handlers",
     mcp.WithDescription("List all registered authentication handlers with their supported flows (device-code, client-credentials, etc.) and capabilities. Use this to understand what authentication mechanisms are available when configuring solutions that need specific auth providers. Use auth_status to check the current credential status for a specific handler."),
@@ -782,6 +807,7 @@ mcp.NewTool("list_auth_handlers",
 **File:** `pkg/mcp/tools_config.go` (add to existing file)
 
 **Tool Definition:**
+
 ```go
 mcp.NewTool("get_config_paths",
     mcp.WithDescription("Return all file system paths used by scafctl, resolved for the current platform. Shows where config, data, cache, catalogs, plugins, secrets, and logs are stored. Useful for locating snapshots, cached artifacts, or diagnosing path-related issues."),
@@ -794,6 +820,7 @@ mcp.NewTool("get_config_paths",
 ```
 
 **Response Schema:**
+
 ```json
 {
   "paths": [
@@ -821,6 +848,7 @@ mcp.NewTool("get_config_paths",
 **File:** `pkg/mcp/tools_template.go` (add to existing file)
 
 **Tool Definition:**
+
 ```go
 mcp.NewTool("validate_expressions",
     mcp.WithDescription("Validate multiple CEL expressions and/or Go templates in a single call. Returns per-expression validation results. More efficient than calling validate_expression repeatedly when checking all expressions in a solution."),
@@ -837,6 +865,7 @@ mcp.NewTool("validate_expressions",
 ```
 
 **Input:**
+
 ```json
 {
   "expressions": [
@@ -848,6 +877,7 @@ mcp.NewTool("validate_expressions",
 ```
 
 **Response Schema:**
+
 ```json
 {
   "results": [
@@ -872,6 +902,7 @@ mcp.NewTool("validate_expressions",
 All existing prompts are pre-execution (create, debug, update, prepare). This prompt guides the agent through post-execution analysis when something went wrong.
 
 **Arguments:**
+
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `snapshot_path` | Yes | Path to the snapshot from the failed/unexpected run |
@@ -879,6 +910,7 @@ All existing prompts are pre-execution (create, debug, update, prepare). This pr
 | `problem` | No | Description of what went wrong |
 
 **Prompt content guide:**
+
 1. Call `show_snapshot` with the provided path to inspect results
 2. Identify failed resolvers (status != success)
 3. If `previous_snapshot` provided, call `diff_snapshots` to find what changed
@@ -896,6 +928,7 @@ All existing prompts are pre-execution (create, debug, update, prepare). This pr
 Different from `update_solution` (targeted changes). This prompt handles larger structural refactoring: adding composition, migrating from inline to file-based templates, splitting a monolith solution, upgrading patterns, etc.
 
 **Arguments:**
+
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `path` | Yes | Path to the solution to migrate |
@@ -903,6 +936,7 @@ Different from `update_solution` (targeted changes). This prompt handles larger 
 | `target_dir` | No | Target directory for split/extracted files |
 
 **Prompt content guide (varies by migration type):**
+
 1. Call `inspect_solution` to understand current structure
 2. Call `lint_solution` to establish baseline (zero errors before migration)
 3. Plan the migration based on type:
@@ -922,12 +956,14 @@ Different from `update_solution` (targeted changes). This prompt handles larger 
 **Priority: Medium** — Performance and quality analysis.
 
 **Arguments:**
+
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `path` | Yes | Path to the solution to optimize |
 | `focus` | No | Focus area: `performance`, `readability`, `testing`, `all` (default: `all`) |
 
 **Prompt content guide:**
+
 1. Call `inspect_solution` to understand the solution structure
 2. Call `render_solution` with `graph_type=resolver` to analyze the dependency graph
 3. Call `render_solution` with `graph_type=action-deps` to analyze action dependencies
@@ -978,6 +1014,7 @@ This complements the `list_tests` tool by providing a resource-oriented access p
 | `pkg/examples/` | `pkg/mcp/tools_examples.go` | `scanExamples()`, category/description handling, embedded via `go:embed` |
 
 Each extraction should:
+
 1. Create the new package with exported types and functions
 2. Add comprehensive unit tests in the new package
 3. Update the MCP handler to call the shared code
@@ -1005,6 +1042,7 @@ type ToolError struct {
 ```
 
 Create a helper:
+
 ```go
 func newStructuredError(code, message string, opts ...ErrorOption) *mcp.CallToolResult {
     // Build ToolError, marshal to JSON, return as mcp.NewToolResultError()
@@ -1012,6 +1050,7 @@ func newStructuredError(code, message string, opts ...ErrorOption) *mcp.CallTool
 ```
 
 Apply to high-frequency error paths in:
+
 - `lint_solution` — include rule name, severity, fix suggestion
 - `preview_resolvers` — include resolver name, provider, error type
 - `dry_run_solution` — include phase, resolver/action name, error details
@@ -1032,6 +1071,7 @@ Add latency categories to tool descriptions to help AI agents choose efficient t
 | `🌐 variable` | `preview_resolvers`, `preview_action`, `dry_run_solution`, `run_solution_tests`, `evaluate_cel`, `render_solution` | May involve network calls depending on providers |
 
 Update `serverInstructions` with a section:
+
 ```
 Tool Latency Guide:
   - Instant (in-memory): list_lint_rules, explain_lint_rule, explain_kind, get_solution_schema, 
@@ -1063,6 +1103,7 @@ mcp.NewTool("get_version",
 ```
 
 **Response:**
+
 ```json
 {
   "version": "0.15.0",
@@ -1078,43 +1119,50 @@ mcp.NewTool("get_version",
 Recommended execution order balancing impact, dependencies, and effort:
 
 ### Sprint 1: Shared Library Extraction (Prerequisite)
+
 1. **Phase 5A:** Extract `pkg/scaffold/`, `pkg/soldiff/`, `pkg/examples/` from MCP inline code
 2. Update MCP handlers to use extracted packages
 3. Verify all existing MCP tests pass
 
 ### Sprint 2: Highest-Impact MCP Tools
+
 4. **Phase 2A:** `extract_resolver_refs` tool
-5. **Phase 2B:** `generate_test_scaffold` tool
-6. **Phase 2C:** `list_tests` tool
-7. Update `serverInstructions` with new tool guidance
+2. **Phase 2B:** `generate_test_scaffold` tool
+3. **Phase 2C:** `list_tests` tool
+4. Update `serverInstructions` with new tool guidance
 
 ### Sprint 3: CLI Parity — Core Commands
+
 8. **Phase 1A:** `scafctl eval cel`, `scafctl eval template`, `scafctl eval validate`
-9. **Phase 1B:** `scafctl new solution`
-10. **Phase 1C:** `scafctl lint rules`, `scafctl lint explain`
+2. **Phase 1B:** `scafctl new solution`
+3. **Phase 1C:** `scafctl lint rules`, `scafctl lint explain`
 
 ### Sprint 4: Snapshot & Analysis Tools
+
 11. **Phase 2D:** `show_snapshot` tool
-12. **Phase 2E:** `diff_snapshots` tool
-13. **Phase 3A:** `analyze_execution` prompt
+2. **Phase 2E:** `diff_snapshots` tool
+3. **Phase 3A:** `analyze_execution` prompt
 
 ### Sprint 5: CLI Parity — Additional Commands
+
 14. **Phase 1E:** `scafctl get examples`
-15. **Phase 1F:** Enhanced `--dry-run` output (full rich report replaces lightweight summary)
+2. **Phase 1F:** Enhanced `--dry-run` output (full rich report replaces lightweight summary)
 
 ### Sprint 6: Supplementary MCP Enhancements
+
 16. **Phase 2F:** `catalog_inspect` tool
-17. **Phase 2G:** `list_auth_handlers` tool
-18. **Phase 2H:** `get_config_paths` tool
-19. **Phase 2I:** `validate_expressions` batch tool
+2. **Phase 2G:** `list_auth_handlers` tool
+3. **Phase 2H:** `get_config_paths` tool
+4. **Phase 2I:** `validate_expressions` batch tool
 
 ### Sprint 7: Prompts, Resources & Polish
+
 20. **Phase 3B:** `migrate_solution` prompt
-21. **Phase 3C:** `optimize_solution` prompt
-22. **Phase 4A:** `solution://{name}/tests` resource
-23. **Phase 5B:** Structured error context
-24. **Phase 5C:** Tool latency hints in server instructions
-25. **Phase 5D:** `get_version` tool
+2. **Phase 3C:** `optimize_solution` prompt
+3. **Phase 4A:** `solution://{name}/tests` resource
+4. **Phase 5B:** Structured error context
+5. **Phase 5C:** Tool latency hints in server instructions
+6. **Phase 5D:** `get_version` tool
 
 ---
 
@@ -1162,13 +1210,14 @@ Every new tool, prompt, and CLI command must have unit tests following existing 
 
 ## Part 6: MCP Protocol Feature Adoption
 
-This section covers enhancements that leverage additional MCP protocol capabilities from the mcp-go SDK v0.44.0. These features improve the user experience, provide richer metadata, and enable more interactive workflows.
+This section covers enhancements that leverage additional MCP protocol capabilities from the mcp-go SDK v1.1.1. These features improve the user experience, provide richer metadata, and enable more interactive workflows.
 
 ### 6A: Progress Notifications for Long-Running Tools
 
 **File**: `pkg/mcp/progress.go`
 
 Tools that take significant time now send real-time progress notifications to the MCP client using `notifications/progress`. Implemented via a `progressReporter` helper that:
+
 - Extracts the progress token from `request.Params.Meta.ProgressToken`
 - Falls back to logger output if no token is provided
 - Reports progress with step count, total, and human-readable messages
@@ -1186,12 +1235,14 @@ All 36 tools, 12 prompts, and 6 resources now have SVG icons using data URIs. Ic
 **File**: `pkg/mcp/output_schemas.go`
 
 11 tools now declare their output JSON Schema via `mcp.WithRawOutputSchema()`, enabling MCP clients to validate and render structured output:
+
 - `list_solutions`, `inspect_solution`, `lint_solution`, `render_solution`, `preview_resolvers`
 - `get_version`, `evaluate_cel`, `auth_status`, `get_config`, `get_config_paths`, `dry_run_solution`
 
 ### 6D: ResourceLink in Tool Results
 
 Tools that return structured data about solutions or providers now include `ResourceLink` items pointing to related MCP resources:
+
 - `inspect_solution` → links to `solution://{path}`, `solution://{path}/schema`, `solution://{path}/graph`
 - `list_providers` → link to `provider://reference`
 - `preview_resolvers` → links to `solution://{path}`, `solution://{path}/graph`
@@ -1199,12 +1250,14 @@ Tools that return structured data about solutions or providers now include `Reso
 ### 6E: Content Annotations (Audience/Priority)
 
 The `get_run_command` tool now annotates its output content with audience hints:
+
 - Command text → `assistant` audience (high priority) for LLM consumption
 - Explanation text → `user` audience for human display
 
 ### 6F: Resource Annotations
 
 All resource templates and resources have audience and priority annotations:
+
 - Solution YAML content → both `user` and `assistant`, priority 0.7
 - Provider reference → `assistant` only, priority 0.8
 - Schema/graph/tests → `assistant`, priority 0.5-0.6
@@ -1212,6 +1265,7 @@ All resource templates and resources have audience and priority annotations:
 ### 6G: Deferred Tool Loading
 
 Rarely-used tools are marked with `mcp.WithDeferLoading(true)` to reduce initial load time:
+
 - `show_snapshot`, `diff_snapshots`, `diff_solution`, `extract_resolver_refs`, `explain_lint_rule`
 
 ### 6H: Elicitation for Interactive Workflows
@@ -1238,4 +1292,3 @@ The `list_solutions` tool uses MCP roots discovery to find solution files in wor
 **File**: `pkg/mcp/progress.go`
 
 A `sendLog()` helper enables real-time log streaming to connected MCP clients via `notifications/message`, supporting log levels (info, warning, error) and named loggers.
-

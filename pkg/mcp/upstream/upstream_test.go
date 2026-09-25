@@ -10,6 +10,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/mark3labs/mcp-go/server/servertest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -41,7 +42,7 @@ func TestProxy_ListTools(t *testing.T) {
 		"tool_a": "response_a",
 		"tool_b": "response_b",
 	})
-	ts := server.NewTestStreamableHTTPServer(mcpServer)
+	ts := servertest.NewTestStreamableHTTPServer(mcpServer)
 	defer ts.Close()
 
 	cfg := config.MCPServerConfig{
@@ -66,7 +67,7 @@ func TestProxy_ListTools_Cached(t *testing.T) {
 	mcpServer := newMockUpstreamServer(t, map[string]string{
 		"tool_a": "response_a",
 	})
-	ts := server.NewTestStreamableHTTPServer(mcpServer)
+	ts := servertest.NewTestStreamableHTTPServer(mcpServer)
 	defer ts.Close()
 
 	cfg := config.MCPServerConfig{URL: ts.URL}
@@ -86,7 +87,7 @@ func TestProxy_CallTool(t *testing.T) {
 	mcpServer := newMockUpstreamServer(t, map[string]string{
 		"greet": "hello world",
 	})
-	ts := server.NewTestStreamableHTTPServer(mcpServer)
+	ts := servertest.NewTestStreamableHTTPServer(mcpServer)
 	defer ts.Close()
 
 	cfg := config.MCPServerConfig{URL: ts.URL}
@@ -109,7 +110,7 @@ func TestProxy_CallTool_WithPrefix(t *testing.T) {
 	mcpServer := newMockUpstreamServer(t, map[string]string{
 		"greet": "hello prefixed",
 	})
-	ts := server.NewTestStreamableHTTPServer(mcpServer)
+	ts := servertest.NewTestStreamableHTTPServer(mcpServer)
 	defer ts.Close()
 
 	cfg := config.MCPServerConfig{
@@ -137,7 +138,7 @@ func TestProxy_CallTool_LazyConnect(t *testing.T) {
 	mcpServer := newMockUpstreamServer(t, map[string]string{
 		"greet": "hello lazy",
 	})
-	ts := server.NewTestStreamableHTTPServer(mcpServer)
+	ts := servertest.NewTestStreamableHTTPServer(mcpServer)
 	defer ts.Close()
 
 	cfg := config.MCPServerConfig{URL: ts.URL}
@@ -157,7 +158,7 @@ func TestProxy_Close(t *testing.T) {
 	mcpServer := newMockUpstreamServer(t, map[string]string{
 		"tool_a": "response_a",
 	})
-	ts := server.NewTestStreamableHTTPServer(mcpServer)
+	ts := servertest.NewTestStreamableHTTPServer(mcpServer)
 	defer ts.Close()
 
 	cfg := config.MCPServerConfig{URL: ts.URL}
@@ -226,7 +227,7 @@ func TestProxy_ToolFilter_WithAllowlist(t *testing.T) {
 		"auth_logout": "ok",
 		"data_query":  "ok",
 	})
-	ts := server.NewTestStreamableHTTPServer(mcpServer)
+	ts := servertest.NewTestStreamableHTTPServer(mcpServer)
 	defer ts.Close()
 
 	cfg := config.MCPServerConfig{
@@ -440,7 +441,7 @@ func TestProxy_Connect_Timeout(t *testing.T) {
 	mcpServer := newMockUpstreamServer(t, map[string]string{
 		"tool_a": "response_a",
 	})
-	ts := server.NewTestStreamableHTTPServer(mcpServer)
+	ts := servertest.NewTestStreamableHTTPServer(mcpServer)
 	defer ts.Close()
 
 	cfg := config.MCPServerConfig{

@@ -144,7 +144,7 @@ All MCP tools that accept file paths support an optional `cwd` parameter. This a
 
 There is no MCP library in `go.mod` today. We would add one:
 
-- **[`mark3labs/mcp-go`](https://github.com/mark3labs/mcp-go)** — the most popular Go MCP SDK, supports stdio + SSE transports
+- **[`mark3labs/mcp-go`](https://github.com/mark3labs/mcp-go)** — the most popular Go MCP SDK, supports stdio, SSE, and Streamable HTTP transports
 - Alternatively, hand-roll the JSON-RPC 2.0 protocol (not recommended — ~500 LoC of boilerplate)
 
 ### 2. New Package + Command
@@ -456,6 +456,7 @@ Rationale:
 - **Library call approach requires it** — Since we are calling Go library functions directly (not shelling out), the MCP server must be compiled into the same binary to access `pkg/solution/`, `pkg/provider/`, etc.
 - **Versioning is automatic** — The MCP server version always matches the CLI version. No compatibility matrix.
 - **Standard MCP client configuration** — AI clients expect a single command:
+
   ```json
   {
     "mcpServers": {
@@ -510,6 +511,7 @@ Or equivalently in workspace settings:
 ```
 
 When Copilot (or any MCP-aware extension) activates, VS Code:
+
 1. Spawns `scafctl mcp serve` as a child process
 2. Sends `initialize` over stdin, reads response from stdout
 3. Discovers tools and their schemas
@@ -529,6 +531,7 @@ This is the same pattern VS Code uses for language servers (LSP), which also def
 #### SSE for the Future
 
 SSE will be added later to support:
+
 - **Remote/shared servers** — A team running one MCP server that multiple developers connect to (e.g., a shared catalog browser)
 - **Web-based AI clients** — Browser-based tools that cannot spawn local processes
 - **Long-lived servers** — MCP servers that need to stay running independently of any single AI client session
@@ -622,11 +625,12 @@ See [Completed Preparatory Refactoring](#completed-preparatory-refactoring) for 
 
 ## Advanced Protocol Features
 
-The MCP server leverages several advanced features from the mcp-go SDK (v0.44.0):
+The MCP server leverages several advanced features from the mcp-go SDK (v1.1.1):
 
 ### Observability Hooks & Middleware
 
 All MCP requests are instrumented with timing and logging via `server.Hooks`:
+
 - `BeforeAny` / `OnSuccess` / `OnError` hooks log request lifecycle
 - `BeforeCallTool` / `AfterCallTool` hooks track tool execution duration
 - `OnRegisterSession` / `OnUnregisterSession` track client connections
@@ -637,6 +641,7 @@ Implementation: `pkg/mcp/hooks.go`
 ### Structured Errors
 
 All tool error responses use a consistent structured format (`ToolError`) with:
+
 - Machine-readable error code (`INVALID_INPUT`, `NOT_FOUND`, `LOAD_FAILED`, etc.)
 - Contextual field name identifying which input caused the error
 - Actionable suggestions for resolution
@@ -647,6 +652,7 @@ Implementation: `pkg/mcp/errors.go`
 ### Auto-Completion
 
 The server provides completion suggestions for prompt arguments and resource template URIs:
+
 - Provider names from the registry
 - Migration types, solution features
 - Solution names from the local catalog
@@ -657,15 +663,38 @@ Implementation: `pkg/mcp/completions.go`
 ### Contextual Tool Filtering
 
 A `ToolFilterFunc` dynamically hides tools whose required capabilities are unavailable:
+
 - Auth tools hidden when no auth handlers configured
 - Catalog tools hidden when no catalogs configured
 - Provider tools hidden when no registry available
 
 Implementation: `pkg/mcp/filter.go`
 
+### Dual-Era Protocol Serving and Result Caching
+
+The server speaks both MCP protocol eras, negotiated per client:
+
+- **Legacy clients** (any protocol version before 2026-07-28) get the classic
+  `initialize` handshake with byte-identical responses.
+- **Modern clients** (protocol version 2026-07-28 or later) may send requests
+  statelessly, carrying the protocol version in request `_meta`; the server
+  decorates results with the modern-required metadata.
+
+For modern clients the server advertises **SEP-2549 cache hints**
+(`server.WithMethodCacheHints` in `pkg/mcp/server.go`) on `tools/list`,
+`prompts/list`, `resources/list`, and `resources/templates/list`: list
+contents are effectively static (registrations happen during `NewServer` and
+are never removed at runtime), so clients may reuse a cached list for 5
+minutes instead of re-fetching the full tool catalog every turn.
+`resources/read` intentionally keeps the SDK's fail-closed default
+(`ttlMs: 0`, revalidate every time) because resource contents change on disk.
+
+Implementation: `pkg/mcp/server.go` (`listCacheTTLMs`, server options)
+
 ### Transport Protocols
 
 The server supports three transports via CLI flags:
+
 - **stdio** (default): JSON-RPC 2.0 over stdin/stdout
 - **sse**: Server-Sent Events over HTTP (for remote/multi-client)
 - **http**: Streamable HTTP transport

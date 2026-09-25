@@ -1137,6 +1137,26 @@ scafctl mcp serve --transport http --addr :8080
 
 SSE and HTTP transports are useful for remote or multi-client scenarios where stdio is not available.
 
+### Protocol Versions and Result Caching
+
+The server speaks both protocol eras, negotiated transparently per client:
+
+- **Legacy clients** (protocol versions before 2026-07-28) use the classic
+  `initialize` handshake and get byte-identical responses to earlier releases.
+- **Modern clients** (protocol version 2026-07-28 or later) may serve requests
+  statelessly, carrying the protocol version in request `_meta`.
+
+For modern clients the server advertises **SEP-2549 cache hints** on
+`tools/list`, `prompts/list`, `resources/list`, and `resources/templates/list`
+results: tool, prompt, and resource-template registrations are effectively
+static for the lifetime of the server process, so clients may reuse a cached
+list for 5 minutes instead of re-fetching the full tool catalog on every
+turn. Resource *contents* (`resources/read`) are always hinted with
+`ttlMs: 0` (revalidate every time) and private scope, because solution files
+change on disk.
+
+The hints are advisory metadata; no client configuration is needed.
+
 ### Structured Error Responses
 
 All tool errors return structured JSON with machine-readable context:

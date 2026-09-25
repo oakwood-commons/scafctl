@@ -28,9 +28,9 @@ These decisions were made during planning and are **final** for this implementat
 | Tool naming convention | **`snake_case`** | MCP specification convention; consistent with `get_weather`, `list_files`, etc. used in the MCP spec examples |
 | Package layout for tools | **Per-domain files** | `tools_solution.go`, `tools_provider.go`, `tools_cel.go`, `tools_catalog.go`, `tools_auth.go` — scales as tools are added |
 | `evaluate_cel` file support | **Both raw string and file-based context** | `celexp.EvaluateExpression()` already exists and accepts `rootData any` + `additionalVars map[string]any`; supporting files is a thin wrapper using `os.ReadFile` + YAML unmarshal — both modes for free |
-| Progress notifications | **Implement from the start** | `mcp-go` v0.44.0 supports `ProgressNotification` natively; all tools that do I/O or computation should send progress |
+| Progress notifications | **Implement from the start** | `mcp-go` v1.1.1 supports `ProgressNotification` natively; all tools that do I/O or computation should send progress |
 | `--info` flag | **Yes** | `scafctl mcp serve --info` prints server capabilities and tool list as JSON, then exits — useful for debugging |
-| SDK | **`mark3labs/mcp-go` v0.44.0+** | 8.2k stars, 170 contributors, used by 2.8k projects, implements MCP spec 2025-11-25 with backward compat |
+| SDK | **`mark3labs/mcp-go` v1.1.1+** | Most popular Go MCP SDK; implements MCP spec 2026-07-28 with dual-era serving (modern stateless requests plus legacy `initialize` clients unchanged) and SEP-2549 cache hints |
 
 ---
 
