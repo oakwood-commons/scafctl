@@ -1126,38 +1126,38 @@ Recommended execution order balancing impact, dependencies, and effort:
 
 ### Sprint 2: Highest-Impact MCP Tools
 
-4. **Phase 2A:** `extract_resolver_refs` tool
+1. **Phase 2A:** `extract_resolver_refs` tool
 2. **Phase 2B:** `generate_test_scaffold` tool
 3. **Phase 2C:** `list_tests` tool
 4. Update `serverInstructions` with new tool guidance
 
 ### Sprint 3: CLI Parity — Core Commands
 
-8. **Phase 1A:** `scafctl eval cel`, `scafctl eval template`, `scafctl eval validate`
+1. **Phase 1A:** `scafctl eval cel`, `scafctl eval template`, `scafctl eval validate`
 2. **Phase 1B:** `scafctl new solution`
 3. **Phase 1C:** `scafctl lint rules`, `scafctl lint explain`
 
 ### Sprint 4: Snapshot & Analysis Tools
 
-11. **Phase 2D:** `show_snapshot` tool
+1. **Phase 2D:** `show_snapshot` tool
 2. **Phase 2E:** `diff_snapshots` tool
 3. **Phase 3A:** `analyze_execution` prompt
 
 ### Sprint 5: CLI Parity — Additional Commands
 
-14. **Phase 1E:** `scafctl get examples`
+1. **Phase 1E:** `scafctl get examples`
 2. **Phase 1F:** Enhanced `--dry-run` output (full rich report replaces lightweight summary)
 
 ### Sprint 6: Supplementary MCP Enhancements
 
-16. **Phase 2F:** `catalog_inspect` tool
+1. **Phase 2F:** `catalog_inspect` tool
 2. **Phase 2G:** `list_auth_handlers` tool
 3. **Phase 2H:** `get_config_paths` tool
 4. **Phase 2I:** `validate_expressions` batch tool
 
 ### Sprint 7: Prompts, Resources & Polish
 
-20. **Phase 3B:** `migrate_solution` prompt
+1. **Phase 3B:** `migrate_solution` prompt
 2. **Phase 3C:** `optimize_solution` prompt
 3. **Phase 4A:** `solution://{name}/tests` resource
 4. **Phase 5B:** Structured error context
