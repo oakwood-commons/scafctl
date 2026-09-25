@@ -17,7 +17,7 @@ description: "CEL expression patterns, context variables, built-in functions, an
 Context variables are the special values injected into CEL evaluation (they are
 **not** functions, so `list_cel_functions` does not cover them). For the
 authoritative per-phase matrix -- which variable is available in resolve vs.
-transform vs. validate vs. forEach vs. action vs. state-backend vs. error
+transform vs. validate vs. forEach vs. action vs. state vs. error
 contexts -- call the MCP tool **`list_context_variables`** (optionally filtered
 by `phase`), or read the narrative in `explain_concepts name=context-variables`.
 
@@ -30,7 +30,8 @@ Quick orientation (see the tool for the full, correct scoping):
 - `__item` / `__index` -- current element / 0-based index inside `forEach`.
 - `__plan` -- pre-execution resolver topology (`__plan["name"].phase`).
 - `__execution` / `__actions` / `__cwd` -- available to actions.
-- `__params` -- raw CLI params, state-backend inputs only.
+- `__params` -- CLI params, in state configuration expressions only (`state.enabled`,
+  load inputs, save target inputs and `enabled`).
 - `__error` -- failure contexts (a string in resolvers; a structured map in
   actions -- use `__error.message`, `__error.statusCode`).
 

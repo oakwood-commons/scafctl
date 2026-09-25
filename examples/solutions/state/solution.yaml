@@ -24,15 +24,19 @@ metadata:
     - parameters
   description: Demonstrates state persistence across runs via parameter replay
 
-# State configuration -- persists CLI parameters to a local JSON file.
-# On subsequent runs, saved parameters are merged with any new -r flags
-# and replayed via the parameter provider.
+# State configuration -- reads and writes CLI parameters in a local JSON file.
+# load reads the saved state before resolvers run; the extends: load save
+# target writes it back to the same file after a successful run. On later runs
+# saved parameters are merged with any new -r flags and replayed via the
+# parameter provider.
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: "state-example.json"
+  save:
+    - extends: load
 
 spec:
   resolvers:

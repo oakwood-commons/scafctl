@@ -1541,10 +1541,12 @@ metadata:
   version: 1.0.0
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: state.json
+  save:
+    - extends: load
 spec:
   resolvers:
     region:
@@ -1623,10 +1625,12 @@ metadata:
   version: 1.0.0
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: state.json
+  save:
+    - extends: load
 spec:
   resolvers:
     region:
@@ -1741,10 +1745,12 @@ metadata:
   version: 1.0.0
 state:
   enabled: true
-  backend:
+  load:
     provider: http
     inputs:
       url: %s
+  save:
+    - extends: load
 spec:
   resolvers:
     region:
@@ -1798,10 +1804,12 @@ metadata:
   version: 1.0.0
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: state.json
+  save:
+    - extends: load
 spec:
   resolvers:
     region:
@@ -1853,10 +1861,12 @@ metadata:
   version: 1.0.0
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: state.json
+  save:
+    - extends: load
 spec:
   resolvers:
     region:
@@ -1901,10 +1911,12 @@ metadata:
   version: 1.0.0
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: state.json
+  save:
+    - extends: load
 spec:
   resolvers:
     region:
@@ -2036,7 +2048,1011 @@ bundle:
 	})
 }
 
-// state.backend.inputs can reference a resolver output: the state file path is
+// TestIntegration_RunSolution_StateFileFlag_NoStateBlock verifies that
+// --state-file enables state for a solution that declares no state block: an
+// intent-shaped state document (a subset carrying only schemaVersion,
+// metadata, and parameters) is a valid input and its parameters replay. The
+// flag is LOAD-ONLY: with no state block there is no save target, so the run
+// is a read-only replay and the intent file must remain byte-for-byte
+// unchanged.
+func TestIntegration_RunSolution_StateFileFlag_NoStateBlock(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: intent-input
+  version: 1.0.0
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message:
+            tmpl: "APP={{ .appName }}"
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	intentPath := filepath.Join(tmpDir, "intent.json")
+	intentContent := `{
+  "schemaVersion": 3,
+  "metadata": { "solution": "intent-input", "version": "1.0.0" },
+  "parameters": { "appName": "from-intent" }
+}`
+	require.NoError(t, os.WriteFile(intentPath, []byte(intentContent), 0o600))
+	intentBefore, err := os.ReadFile(intentPath) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+
+	stdout, _, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "--state-file", intentPath)
+	assert.Equal(t, 0, exitCode, "run with --state-file should exit zero")
+	assert.Contains(t, stdout, "APP=from-intent", "parameters must replay from the intent document")
+
+	// --state-file is load-only: with no declared save target it never writes,
+	// so the file must be byte-for-byte unchanged.
+	intentAfter, err := os.ReadFile(intentPath) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, string(intentBefore), string(intentAfter),
+		"--state-file must not write the file it reads from when the solution declares no save target")
+}
+
+// TestIntegration_RunSolution_StateFileFlag_ExtendsTargetKeepsDeclaredFormat
+// verifies that --state-file replaces only the load block and never redirects
+// the solution's declared save targets: a solution whose save target extends
+// the load block with format: intent keeps writing the declared location in
+// the declared format, while the file passed to --state-file is read but never
+// written.
+func TestIntegration_RunSolution_StateFileFlag_ExtendsTargetKeepsDeclaredFormat(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: inherits-format
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: configured-intent.json
+  save:
+    - extends: load
+      format: intent
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message:
+            tmpl: "APP={{ .appName }}"
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	// --state-file requires an existing file: seed one with a parameter that
+	// must replay into the action output.
+	overridePath := filepath.Join(tmpDir, "override.json")
+	overrideContent := `{
+  "schemaVersion": 3,
+  "metadata": { "solution": "inherits-format", "version": "1.0.0" },
+  "parameters": { "appName": "from-override" }
+}`
+	require.NoError(t, os.WriteFile(overridePath, []byte(overrideContent), 0o600))
+
+	stdout, _, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath,
+		"--state-file", overridePath, "-r", "appName=my-app")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "APP=my-app", "CLI -r parameters must win over the loaded document")
+
+	// The declared save target still writes its declared location, in its
+	// declared intent format.
+	written, err := os.ReadFile(filepath.Join(tmpDir, "configured-intent.json")) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.NotContains(t, string(written), "\"resolvers\"",
+		"the declared intent-format save target must keep writing the intent format")
+	assert.Contains(t, string(written), `"appName": "my-app"`)
+
+	// The file --state-file pointed at is never written: still byte-for-byte
+	// the seed content.
+	overrideAfter, err := os.ReadFile(overridePath) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, overrideContent, string(overrideAfter),
+		"--state-file must never write the file it reads from")
+}
+
+// TestIntegration_RunSolution_StateFileFlag_ReplacesLoadOnly verifies that
+// --state-file replaces only the load block: the run reads from the flag path
+// (which must exist), reports the replacement on stderr, and still runs the
+// solution's declared save targets -- an extends: load target keeps writing
+// the location the solution declared, while the flag path itself is never
+// written.
+func TestIntegration_RunSolution_StateFileFlag_ReplacesLoadOnly(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: override-demo
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: configured-state.json
+  save:
+    - extends: load
+spec:
+  resolvers:
+    region:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "RAN"
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+	configuredPath := filepath.Join(tmpDir, "configured-state.json")
+	overridePath := filepath.Join(tmpDir, "override-state.json")
+	overrideContent := `{
+  "schemaVersion": 3,
+  "metadata": { "solution": "override-demo", "version": "1.0.0" },
+  "parameters": { "region": "from-override" }
+}`
+	require.NoError(t, os.WriteFile(overridePath, []byte(overrideContent), 0o600))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "--state-file", overridePath)
+	assert.Equal(t, 0, exitCode, "run with --state-file should exit zero")
+	assert.Contains(t, stdout, "RAN", "the run must still execute the workflow")
+	assert.Contains(t, stderr, "--state-file: reading state from",
+		"replacing the declared load must be reported on stderr")
+	assert.Contains(t, stderr, `"file" load`, "the notice must name the replaced load provider")
+	assert.FileExists(t, configuredPath, "the solution's declared save target must still be written")
+
+	// The flag path is load-only: never rewritten.
+	overrideAfter, err := os.ReadFile(overridePath) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, overrideContent, string(overrideAfter),
+		"--state-file must never write the file it reads from")
+}
+
+// TestIntegration_StateFlags_MutuallyExclusive verifies that conflicting
+// state flag combinations are rejected up front with a clear error:
+// --no-state disables the state lifecycle entirely and cannot be combined
+// with any of the other state flags, and --state-output / --no-state-output
+// both replace the save targets so they cannot be combined either.
+func TestIntegration_StateFlags_MutuallyExclusiveWithNoState(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: mutex-demo
+  version: 1.0.0
+spec:
+  resolvers:
+    x:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: y
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "RAN"
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	testCases := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "no-state with state-file",
+			args: []string{"--state-file", filepath.Join(tmpDir, "s.json"), "--no-state"},
+		},
+		{
+			name: "no-state with state-output",
+			args: []string{"--state-output", filepath.Join(tmpDir, "out.json"), "--no-state"},
+		},
+		{
+			name: "no-state with no-state-output",
+			args: []string{"--no-state-output", "--no-state"},
+		},
+		{
+			name: "no-state with allow-missing-locks",
+			args: []string{"--allow-missing-locks", "--no-state"},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, stderr, exitCode := runScafctlInDir(t, tmpDir, append([]string{"run", "solution", "-f", solutionPath}, tc.args...)...)
+			assert.NotEqual(t, 0, exitCode, "conflicting state flags must fail")
+			assert.Contains(t, stderr, "--no-state disables state entirely and cannot be combined with",
+				"the error must name the conflict for %v", tc.args)
+		})
+	}
+
+	t.Run("state-output with no-state-output names its own conflict", func(t *testing.T) {
+		t.Parallel()
+		_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath,
+			"--state-output", filepath.Join(tmpDir, "out3.json"), "--no-state-output")
+		assert.NotEqual(t, 0, exitCode, "combining --state-output and --no-state-output must fail")
+		assert.Contains(t, stderr, "--state-output and --no-state-output are mutually exclusive")
+	})
+}
+
+// TestIntegration_RunSolution_StateFileFlag_SolutionMismatchWarns verifies that
+// a state document written for a different solution/version produces an
+// advisory warning but does not fail the run.
+func TestIntegration_RunSolution_StateFileFlag_SolutionMismatchWarns(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: real-solution
+  version: 2.0.0
+spec:
+  resolvers:
+    x:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: y
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "RAN"
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	intentPath := filepath.Join(tmpDir, "intent.json")
+	intentContent := `{
+  "schemaVersion": 3,
+  "metadata": { "solution": "some-other-solution", "version": "9.9.9" },
+  "parameters": {}
+}`
+	require.NoError(t, os.WriteFile(intentPath, []byte(intentContent), 0o600))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "--state-file", intentPath)
+	assert.Equal(t, 0, exitCode, "a solution mismatch must not fail the run")
+	assert.Contains(t, stdout, "RAN", "the run must still complete")
+	assert.Contains(t, stderr, "some-other-solution", "a mismatch warning must name the recorded solution")
+
+	// --state-file is load-only: no declared save target here, so the document
+	// must be byte-for-byte unchanged.
+	intentAfter, err := os.ReadFile(intentPath) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, intentContent, string(intentAfter), "--state-file must not write the file it reads from")
+}
+
+// TestIntegration_RunAction_StateFileFlag verifies --state-file also works on
+// `run action`.
+func TestIntegration_RunAction_StateFileFlag(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: action-intent
+  version: 1.0.0
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message:
+            tmpl: "APP={{ .appName }}"
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	intentPath := filepath.Join(tmpDir, "intent.json")
+	intentContent := `{
+  "schemaVersion": 3,
+  "metadata": { "solution": "action-intent", "version": "1.0.0" },
+  "parameters": { "appName": "from-intent" }
+}`
+	require.NoError(t, os.WriteFile(intentPath, []byte(intentContent), 0o600))
+
+	stdout, _, exitCode := runScafctlInDir(t, tmpDir, "run", "action", "notify", "-f", solutionPath, "--state-file", intentPath)
+	assert.Equal(t, 0, exitCode, "run action with --state-file should exit zero")
+	assert.Contains(t, stdout, "APP=from-intent", "parameters must replay from the intent document")
+
+	// --state-file is load-only: a solution with no state block has no save
+	// target, so the intent document must be byte-for-byte unchanged.
+	intentAfter, err := os.ReadFile(intentPath) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, intentContent, string(intentAfter), "--state-file must not write the file it reads from")
+}
+
+// TestIntegration_RunSolution_Save_PrimaryAndIntentBothWritten verifies the
+// end-to-end multi-target save flow: a full-fidelity primary state file and a
+// lean intent document are BOTH written from a single run, and the intent
+// document omits resolver locks that the primary retains.
+func TestIntegration_RunSolution_Save_PrimaryAndIntentBothWritten(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: emit-demo
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: full-state.json
+  save:
+    - extends: load
+    - provider: file
+      format: intent
+      inputs:
+        path: intent.json
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+    lockedVal:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: lockedVal
+          - provider: static
+            inputs:
+              value: locked-default
+  workflow:
+    actions:
+      show:
+        provider: message
+        inputs:
+          message:
+            tmpl: "app={{ .appName }}"
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, _, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "-r", "appName=my-app")
+	assert.Equal(t, 0, exitCode)
+
+	fullState, err := os.ReadFile(filepath.Join(tmpDir, "full-state.json")) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Contains(t, string(fullState), "\"resolvers\"", "the full-format primary must retain resolver locks")
+	assert.Contains(t, string(fullState), "lockedVal")
+
+	intent, err := os.ReadFile(filepath.Join(tmpDir, "intent.json")) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.NotContains(t, string(intent), "\"resolvers\"", "the intent-format save target must omit resolver locks")
+	assert.Contains(t, string(intent), `"appName": "my-app"`)
+
+	// The immutable lock, however, DOES live in the primary and is enforced:
+	// replaying with a different lockedVal must fail before any state is
+	// rewritten, even though the failure is driven by the lean intent file.
+	before, err := os.ReadFile(filepath.Join(tmpDir, "intent.json")) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath,
+		"-r", "appName=my-app", "-r", "lockedVal=CHANGED")
+	assert.NotEqual(t, 0, exitCode, "changing an immutable value must fail")
+	assert.Contains(t, stderr, "immutable")
+
+	after, err := os.ReadFile(filepath.Join(tmpDir, "intent.json")) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "the intent document must not be rewritten when the immutable check fails")
+}
+
+// TestIntegration_RunResolver_StateIndicators verifies that `run resolver`
+// prints a one-line stderr indicator for both the pre-execution load and the
+// post-execution save, so state's effect on a run is never silent: a first
+// run reports "no prior state", a replay reports the reused parameter/lock
+// counts, and a successful run reports the save destination and format.
+func TestIntegration_RunResolver_StateIndicators(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-indicators
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: state.json
+  save:
+    - extends: load
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+    lockedVal:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: lockedVal
+              default: locked-default
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath, "-r", "appName=my-app")
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, "no prior state", "a fresh load location must report the first-run load")
+	assert.Contains(t, stderr, "state.json", "the load notice must name the state location")
+	assert.Contains(t, stderr, "saved state.json (full)", "the save notice must name the location and format")
+
+	// Second run: state was found and replayed, and the save notice repeats.
+	_, stderr, exitCode = runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath)
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, "reusing", "a replay must report reused parameters/locks")
+	assert.Contains(t, stderr, "parameter", "the replay notice must mention parameter count")
+	assert.Contains(t, stderr, "locked value", "the replay notice must mention locked-value count")
+	assert.Contains(t, stderr, "saved state.json (full)")
+}
+
+// TestIntegration_RunResolver_StateIndicators_Save verifies the save-side
+// indicator reports every target actually written: the primary (extends)
+// target and a distinct intent target, each with its own resolved location
+// and format.
+func TestIntegration_RunResolver_StateIndicators_Save(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-indicators-emit
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: full-state.json
+  save:
+    - extends: load
+    - provider: file
+      format: intent
+      inputs:
+        path: intent.json
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath, "-r", "appName=my-app")
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, "saved full-state.json (full)", "the primary write must be reported")
+	assert.Contains(t, stderr, "saved intent.json (intent)", "the intent save target write must be reported")
+}
+
+// TestIntegration_RunResolver_Save_ParameterNarrowing verifies that an
+// intent-format save target's parameters.include projection actually reaches
+// the file on disk: a control parameter (mode) is saved to the full local
+// state but must not appear in the narrowed, committed intent.
+func TestIntegration_RunResolver_Save_ParameterNarrowing(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-save-narrowing
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: full-state.json
+  save:
+    - extends: load
+    - provider: file
+      format: intent
+      parameters:
+        include: [appName]
+      inputs:
+        path: intent.json
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+    mode:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: mode
+          - provider: static
+            inputs:
+              value: publish
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, _, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath, "-r", "appName=my-app", "-r", "mode=generate")
+	require.Equal(t, 0, exitCode)
+
+	fullRaw, err := os.ReadFile(filepath.Join(tmpDir, "full-state.json")) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	var full map[string]any
+	require.NoError(t, json.Unmarshal(fullRaw, &full))
+	fullParams, ok := full["parameters"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "generate", fullParams["mode"], "the full-format save target must carry every parameter, unnarrowed")
+
+	intentRaw, err := os.ReadFile(filepath.Join(tmpDir, "intent.json")) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	var intent map[string]any
+	require.NoError(t, json.Unmarshal(intentRaw, &intent))
+	intentParams, ok := intent["parameters"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"appName": "my-app"}, intentParams, "the narrowed intent target must carry only the included parameter")
+}
+
+// TestIntegration_RunResolver_StatePathResolvesAgainstCWD_NotSolutionDir
+// verifies the 1A fix end-to-end: a relative state path resolves against the
+// process's current working directory, not the directory containing the
+// solution file being run. This matters most for a catalog solution, whose
+// solution directory is a temp extraction the user never sees; using CWD
+// keeps the state file where the state CLI subcommands (scafctl state show,
+// etc., which already resolved relative paths against CWD) will find it too.
+func TestIntegration_RunResolver_StatePathResolvesAgainstCWD_NotSolutionDir(t *testing.T) {
+	t.Parallel()
+
+	// Solution lives in its own directory, separate from where the command
+	// is run -- mirrors a catalog solution extracted somewhere the user
+	// doesn't control.
+	solutionDir := t.TempDir()
+	workDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-cwd-resolution
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: state.json
+  save:
+    - extends: load
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+`
+	solutionPath := filepath.Join(solutionDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, _, exitCode := runScafctlInDir(t, workDir, "run", "resolver", "-f", solutionPath, "-r", "appName=my-app")
+	require.Equal(t, 0, exitCode)
+
+	assert.FileExists(t, filepath.Join(workDir, "state.json"), "a relative state path must resolve against the process's working directory")
+	assert.NoFileExists(t, filepath.Join(solutionDir, "state.json"), "a relative state path must NOT resolve against the solution's own directory")
+}
+
+// TestIntegration_RunResolver_StateIndicators_SkippedTargetIsSilent verifies
+// that a save target disabled by its Enabled condition produces NO save
+// line -- only the primary target's "saved" line is reported.
+func TestIntegration_RunResolver_StateIndicators_SkippedTargetIsSilent(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-indicators-skipped-emit
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: full-state.json
+  save:
+    - extends: load
+    - provider: file
+      format: intent
+      enabled: false
+      inputs:
+        path: intent.json
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath, "-r", "appName=my-app")
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, "saved full-state.json (full)")
+	assert.NotContains(t, stderr, "intent.json", "a disabled save target must produce no save line")
+	assert.NoFileExists(t, filepath.Join(tmpDir, "intent.json"), "a disabled save target must not be written")
+}
+
+// TestIntegration_RunResolver_StateIndicators_Quiet verifies that --quiet
+// suppresses both the load and save state indicators, leaving stderr empty.
+func TestIntegration_RunResolver_StateIndicators_Quiet(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-indicators-quiet
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: state.json
+  save:
+    - extends: load
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath, "-r", "appName=my-app", "--quiet")
+	require.Equal(t, 0, exitCode)
+	assert.NotContains(t, stderr, "state:", "--quiet must suppress the state load/save indicators")
+}
+
+// TestIntegration_RunResolver_StateIndicators_JSONStdoutStaysClean verifies
+// that the state load/save indicators (stderr-only) never leak into -o json
+// stdout, which must remain a single parseable document.
+func TestIntegration_RunResolver_StateIndicators_JSONStdoutStaysClean(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-indicators-json
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: state.json
+  save:
+    - extends: load
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath, "-r", "appName=my-app", "-o", "json")
+	require.Equal(t, 0, exitCode)
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &out), "-o json stdout must remain a single parseable document")
+	assert.Contains(t, stderr, "no prior state", "the load indicator must still print on stderr")
+	assert.Contains(t, stderr, "saved state.json (full)", "the save indicator must still print on stderr")
+}
+
+// TestIntegration_RunSolution_StateIndicators verifies the state save
+// indicator is reported by `run solution` too, on the post-action SaveParams
+// path (distinct from run resolver's single Save call).
+func TestIntegration_RunSolution_StateIndicators(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-indicators-solution
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: state.json
+  save:
+    - extends: load
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "RAN"
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "-r", "appName=my-app")
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, "no prior state", "run solution must also report the load indicator")
+	assert.Contains(t, stderr, "saved state.json (full)", "run solution must report the save indicator on the post-action SaveParams path")
+}
+
+// TestIntegration_RunResolver_StateFileFlag_IntentReplayIsNotMisreportedAsFirstRun
+// verifies that replaying a hand-authored intent document via --state-file --
+// the feature's headline pipeline path -- is reported as a replay ("reusing N
+// parameter(s)"), not "no prior state (first run)". An intent document
+// deliberately omits createdAt, so FirstRun must not key off a zero CreatedAt
+// alone or every intent replay would be misreported.
+func TestIntegration_RunResolver_StateFileFlag_IntentReplayIsNotMisreportedAsFirstRun(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: intent-replay-not-first-run
+  version: 1.0.0
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	// A hand-authored intent document -- exactly the shape projectState
+	// produces (schemaVersion, metadata.solution/version, parameters), with no
+	// createdAt/lastUpdatedAt/runtime.
+	intentContent := `{
+  "schemaVersion": 3,
+  "metadata": { "solution": "intent-replay-not-first-run", "version": "1.0.0" },
+  "parameters": { "appName": "my-app" }
+}`
+	intentPath := filepath.Join(tmpDir, "intent.json")
+	require.NoError(t, os.WriteFile(intentPath, []byte(intentContent), 0o600))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath, "--state-file", intentPath)
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "my-app", "the parameter must be replayed from the intent document")
+	assert.NotContains(t, stderr, "first run", "an intent replay carrying parameters must not be reported as a first run")
+	assert.Contains(t, stderr, "reusing 1 parameter(s)", "an intent replay must be reported as a replay")
+}
+
+// TestIntegration_RunSolution_Save_WrittenOncePerTarget verifies that each
+// save target is reported (and therefore saved) exactly once per run
+// solution/run action invocation: the final post-action Save commits every
+// target, while the pre-action Checkpoint write (an interim lock commit on
+// checkpoint: true targets) deliberately reports nothing. Before the
+// load/save split, the equivalent bug reported the emit target once per
+// internal commit; the indicators are now the observable contract, so this
+// asserts on the reported "state: saved" lines.
+func TestIntegration_RunSolution_Save_WrittenOncePerTarget(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: emit-written-once
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: full-state.json
+  save:
+    - extends: load
+      checkpoint: true
+    - provider: file
+      format: intent
+      inputs:
+        path: intent.json
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: fallback
+    lockedVal:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: lockedVal
+              default: locked-default
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "RAN"
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "-r", "appName=my-app")
+	require.Equal(t, 0, exitCode)
+
+	intentCount := strings.Count(stderr, "saved intent.json")
+	assert.Equal(t, 1, intentCount, "the intent save target must be reported (and therefore saved) exactly once per run")
+	// The checkpoint: true primary is written twice (interim lock commit
+	// before actions + final commit) but the interim write must be silent.
+	primaryCount := strings.Count(stderr, "saved full-state.json")
+	assert.Equal(t, 1, primaryCount, "the checkpoint write must not be reported; only the final save is")
+}
+
+// state.load.inputs can reference a resolver output: the state file path is
 // computed from the resolved app_name, so state is written to the per-app path.
 func TestIntegration_RunSolution_DynamicStatePath(t *testing.T) {
 	t.Parallel()
@@ -2049,11 +3065,13 @@ metadata:
   version: 1.0.0
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path:
         expr: "_.app_name + '-state.json'"
+  save:
+    - extends: load
 spec:
   resolvers:
     app_name:
@@ -2099,10 +3117,12 @@ metadata:
 state:
   enabled:
     rslvr: persist_state
-  backend:
+  load:
     provider: file
     inputs:
       path: state.json
+  save:
+    - extends: load
 spec:
   resolvers:
     persist_state:
@@ -2153,10 +3173,12 @@ metadata:
 state:
   enabled:
     rslvr: reads_state
-  backend:
+  load:
     provider: file
     inputs:
       path: state.json
+  save:
+    - extends: load
 spec:
   resolvers:
     reads_state:
@@ -2202,10 +3224,12 @@ metadata:
 state:
   enabled:
     expr: "_.side_effect.stdout.contains('ok')"
-  backend:
+  load:
     provider: file
     inputs:
       path: state.json
+  save:
+    - extends: load
 bundle:
   plugins:
     - name: exec
@@ -2253,11 +3277,13 @@ metadata:
   version: 1.0.0
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path:
         expr: "_.app_name + '-state.json'"
+  save:
+    - extends: load
 spec:
   resolvers:
     app_name:
@@ -2276,6 +3302,227 @@ spec:
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "web")
 	require.FileExists(t, filepath.Join(tmpDir, "web-state.json"), "run resolver must honor the dynamic state path")
+}
+
+// stateCheckpointSolution builds a solution with an immutable resolver and a
+// hard-failing action, whose only save target extends the load block -- with
+// checkpoint: true on request. It is the shared body of the checkpoint tests:
+// a run whose action fails must still leave the immutable lock on disk when
+// the target is checkpointed, and write nothing at all when it is not.
+func stateCheckpointSolution(checkpoint bool) string {
+	checkpointYAML := ""
+	if checkpoint {
+		checkpointYAML = "      checkpoint: true\n"
+	}
+	return `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: checkpoint-on-action-failure
+  version: 1.0.0
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: state.json
+  save:
+    - extends: load
+` + checkpointYAML + `spec:
+  resolvers:
+    locked_id:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: locked_id
+              default: generated-id-001
+  workflow:
+    actions:
+      good:
+        provider: message
+        inputs:
+          message: "GOOD_RAN"
+          type: info
+      bad:
+        provider: go-template
+        inputs:
+          template: "{{ undefinedFunc .x }}"
+          data:
+            x: hello
+`
+}
+
+// TestIntegration_RunSolution_CheckpointLocksImmutablesOnActionFailure
+// verifies the checkpoint contract: with checkpoint: true on a full-format
+// save target, an immutable resolver's lock is written BEFORE the workflow
+// actions run, so it survives a later action failure -- while the parameter
+// set stays as loaded (new -r values are saved only on overall success).
+// Without checkpoint, nothing is written at all when an action fails.
+func TestIntegration_RunSolution_CheckpointLocksImmutablesOnActionFailure(t *testing.T) {
+	t.Parallel()
+
+	t.Run("checkpoint target writes the immutable lock", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		solutionPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solutionPath, []byte(stateCheckpointSolution(true)), 0o600))
+		statePath := filepath.Join(tmpDir, "state.json")
+
+		_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution",
+			"-f", solutionPath, "-r", "locked_id=locked-on-first-run")
+		assert.NotEqual(t, 0, exitCode, "the hard-failing action must fail the run: %s", stderr)
+		require.FileExists(t, statePath, "the checkpoint write must leave state on disk despite the action failure")
+
+		var doc struct {
+			Parameters map[string]any      `json:"parameters"`
+			Resolvers  map[string]struct { //nolint:revive // anonymous struct keeps the assertion local
+				Immutable bool `json:"immutable"`
+			} `json:"resolvers"`
+		}
+		raw, err := os.ReadFile(statePath) //nolint:gosec // test-controlled path
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(raw, &doc))
+		lock, ok := doc.Resolvers["locked_id"]
+		require.True(t, ok, "the immutable lock must be checkpointed")
+		assert.True(t, lock.Immutable, "the checkpointed entry must be immutable")
+		assert.Empty(t, doc.Parameters,
+			"the checkpoint must not save the -r parameter set; parameters are saved only on overall success")
+	})
+
+	t.Run("without checkpoint nothing is written", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		solutionPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solutionPath, []byte(stateCheckpointSolution(false)), 0o600))
+		statePath := filepath.Join(tmpDir, "state.json")
+
+		_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution",
+			"-f", solutionPath, "-r", "locked_id=locked-on-first-run")
+		assert.NotEqual(t, 0, exitCode, "the hard-failing action must fail the run: %s", stderr)
+		assert.NoFileExists(t, statePath,
+			"without checkpoint: true an action failure must leave no state file -- locks are saved only on success")
+	})
+}
+
+// TestIntegration_RunSolution_LegacyStateKeysRejected verifies that a
+// solution still using the pre-split state keys (state.backend) fails loudly
+// at decode time with a migration hint, instead of silently ignoring the key
+// (which would turn state off).
+func TestIntegration_RunSolution_LegacyStateKeysRejected(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: legacy-state-backend
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+spec:
+  resolvers:
+    x:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: y
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "RAN"
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath)
+	assert.Equal(t, 3, exitCode, "a legacy state.backend key is invalid input (exit 3), not a missing file")
+	assert.Contains(t, stderr, "unsupported state configuration")
+	assert.Contains(t, stderr, "state.backend", "the error must name the rejected key")
+	assert.Contains(t, stderr, "state.load", "the error must hint at the new load/save split")
+	assert.NoFileExists(t, filepath.Join(tmpDir, "state.json"), "no state must be written for a rejected config")
+}
+
+// TestIntegration_RunSolution_BundledStatePathsResolveAgainstInvokingDir
+// verifies that relative state paths -- the declared load/save path and the
+// --state-output and --state-file paths -- resolve against the directory the
+// command was run from, even for a bundled catalog solution, which runs with
+// its temporary extraction directory as the process directory (and deletes it
+// afterwards).
+func TestIntegration_RunSolution_BundledStatePathsResolveAgainstInvokingDir(t *testing.T) {
+	t.Parallel()
+
+	catalogHome := t.TempDir()
+	env := map[string]string{"XDG_DATA_HOME": catalogHome, "XDG_CACHE_HOME": catalogHome}
+
+	srcDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: bundled-state-paths
+  version: 1.0.0
+bundle:
+  include:
+    - data.txt
+state:
+  load:
+    provider: file
+    inputs:
+      path: declared-state.json
+  save:
+    - extends: load
+spec:
+  resolvers:
+    app:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: app
+          - provider: static
+            inputs:
+              value: fallback
+  workflow:
+    actions:
+      show:
+        provider: message
+        inputs:
+          message:
+            tmpl: "APP={{ .app }}"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "solution.yaml"), []byte(solutionContent), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "data.txt"), []byte("bundled"), 0o600))
+	_, stderr, exitCode := runScafctlWithEnvInDir(t, srcDir, env, "build", "solution", "-f", "solution.yaml")
+	require.Equal(t, 0, exitCode, "build must succeed: %s", stderr)
+
+	runDir := t.TempDir()
+
+	_, stderr, exitCode = runScafctlWithEnvInDir(t, runDir, env, "run", "solution", "bundled-state-paths", "-r", "app=first")
+	require.Equal(t, 0, exitCode, stderr)
+	assert.FileExists(t, filepath.Join(runDir, "declared-state.json"), "the declared relative path resolves against the invoking directory")
+
+	_, stderr, exitCode = runScafctlWithEnvInDir(t, runDir, env, "run", "solution", "bundled-state-paths", "--state-output", "out.json")
+	require.Equal(t, 0, exitCode, stderr)
+	assert.Contains(t, stderr, "state: saved out.json (full)", "the location is reported as given")
+	out, err := os.ReadFile(filepath.Join(runDir, "out.json")) //nolint:gosec // test-controlled path
+	require.NoError(t, err, "--state-output must write into the invoking directory")
+	assert.Contains(t, string(out), `"first"`, "the declared state replayed into the output")
+
+	stdout, stderr, exitCode := runScafctlWithEnvInDir(t, runDir, env, "run", "solution", "bundled-state-paths", "--state-file", "out.json", "--no-state-output")
+	require.Equal(t, 0, exitCode, "--state-file must find a file in the invoking directory: %s", stderr)
+	assert.Contains(t, stdout, "APP=first")
 }
 
 func TestIntegration_RunSolution_FileNotFound(t *testing.T) {
@@ -13647,10 +14894,12 @@ metadata:
   version: 1.0.0
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: "state.json"
+  save:
+    - extends: load
 spec:
   resolvers:
     deployment_id:

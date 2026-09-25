@@ -14,10 +14,12 @@ metadata:
 
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: fingerprint-missing-source-state.json
+  save:
+    - extends: load
 
 bundle:
   plugins:

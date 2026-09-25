@@ -569,9 +569,7 @@ func (s *Solution) Validate() error {
 		}
 	}
 
-	if s.State != nil && s.State.Backend.Provider == "" {
-		problems = append(problems, "state.backend.provider is required when state is configured")
-	}
+	problems = append(problems, stateConfigProblems(s.State)...)
 
 	if len(problems) > 0 {
 		return fmt.Errorf("solution validation failed: %s", strings.Join(problems, "; "))
@@ -585,33 +583,72 @@ func (s *Solution) Validate() error {
 	return nil
 }
 
+// stateConfigProblems reports the structural state configuration problems
+// that make a run impossible (a load block with no provider, or a save target
+// with nothing to write to). Advisory problems -- for example a checkpoint on
+// an intent-format target -- are left to lint.
+func stateConfigProblems(cfg *state.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+
+	var problems []string
+	if cfg.Load != nil && cfg.Load.Provider == "" {
+		problems = append(problems, "state.load.provider is required when state.load is configured")
+	}
+	for i, target := range cfg.Save {
+		switch {
+		case target.Extends == "" && target.Provider == "":
+			problems = append(problems, fmt.Sprintf("state.save[%d].provider is required unless extends is set", i))
+		case target.Extends == "":
+			// A regular target naming its own provider.
+		case target.Extends != state.ExtendsLoad:
+			problems = append(problems, fmt.Sprintf("state.save[%d].extends must be %q", i, state.ExtendsLoad))
+		case target.Provider != "":
+			problems = append(problems, fmt.Sprintf("state.save[%d]: extends and provider are mutually exclusive", i))
+		case cfg.Load == nil:
+			problems = append(problems, fmt.Sprintf("state.save[%d].extends: %s requires a state.load block", i, state.ExtendsLoad))
+		}
+	}
+	return problems
+}
+
 // ReferencedProviderNames returns the unique, sorted set of provider names
 // referenced anywhere in the solution that must be registered before
 // execution. It is the whole-solution superset of Spec.ReferencedProviderNames:
 // every provider used by resolver phases, reusable calls, and workflow actions,
-// plus the state persistence backend provider (state.backend.provider) when
-// state is configured.
+// plus the state providers (state.load.provider and each state.save target's
+// provider) when state is configured.
 //
-// The state backend is included because the state manager executes it
-// (state_load / state_save) around a run, so it must be resolvable, fetchable,
-// and declared just like any spec-referenced provider. Prefer this over
-// Spec.ReferencedProviderNames() when validating, fetching, or registering the
-// providers a solution needs.
+// State providers are included because the state manager executes them
+// (state_load / state_save) around a run, so they must be resolvable,
+// fetchable, and declared just like any spec-referenced provider. An
+// extends: load save target reuses the load provider, so it adds nothing.
+// Prefer this over Spec.ReferencedProviderNames() when validating, fetching,
+// or registering the providers a solution needs.
 func (s *Solution) ReferencedProviderNames() []string {
 	if s == nil {
 		return nil
 	}
 	names := s.Spec.ReferencedProviderNames()
-	if s.State == nil || s.State.Backend.Provider == "" {
+	if s.State == nil {
 		return names
 	}
-	for _, n := range names {
-		if n == s.State.Backend.Provider {
-			return names
+	merged := slices.Clone(names)
+	add := func(p string) {
+		if p != "" && !slices.Contains(merged, p) {
+			merged = append(merged, p)
 		}
 	}
-	merged := slices.Clone(names)
-	merged = append(merged, s.State.Backend.Provider)
+	if s.State.Load != nil {
+		add(s.State.Load.Provider)
+	}
+	for _, target := range s.State.Save {
+		add(target.Provider)
+	}
+	if len(merged) == len(names) {
+		return names
+	}
 	slices.Sort(merged)
 	return merged
 }

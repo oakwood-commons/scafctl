@@ -5,17 +5,19 @@ metadata:
   name: test-state-dynamic-path-multi
   version: 1.0.0
   description: |
-    Functional tests for dynamic state backend path with multiple __params.
+    Functional tests for a dynamic state load path with multiple __params.
     Verifies that missing parameter detection works correctly when the state
     path references multiple CLI parameters and when partial params are supplied.
 
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path:
         tmpl: "state/{{ .__params.org }}/{{ .__params.env }}/{{ .__params.app }}.json"
+  save:
+    - extends: load
 
 spec:
   resolvers:

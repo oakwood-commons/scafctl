@@ -71,10 +71,10 @@ type configRefLocation struct {
 }
 
 // stateConfigRefLocations extracts the resolver references made by each state
-// config field that is evaluated at load time (enabled and every backend input).
-// SaveOverrides are excluded: they are resolved only at save time, after
+// config field that is evaluated at load time (enabled and every load input).
+// Save targets are excluded: they are resolved only at save time, after
 // resolvers have run, so they may freely reference any resolver. The result is
-// ordered deterministically (enabled first, then inputs sorted by key).
+// ordered deterministically (enabled first, then load inputs sorted by key).
 func stateConfigRefLocations(cfg *Config) []configRefLocation {
 	if cfg == nil {
 		return nil
@@ -90,13 +90,17 @@ func stateConfigRefLocations(cfg *Config) []configRefLocation {
 		}
 	}
 
-	inputKeys := make([]string, 0, len(cfg.Backend.Inputs))
-	for key := range cfg.Backend.Inputs {
+	if cfg.Load == nil {
+		return locations
+	}
+
+	inputKeys := make([]string, 0, len(cfg.Load.Inputs))
+	for key := range cfg.Load.Inputs {
 		inputKeys = append(inputKeys, key)
 	}
 	sort.Strings(inputKeys)
 	for _, key := range inputKeys {
-		vr := cfg.Backend.Inputs[key]
+		vr := cfg.Load.Inputs[key]
 		if vr == nil {
 			continue
 		}
@@ -104,7 +108,7 @@ func stateConfigRefLocations(cfg *Config) []configRefLocation {
 		resolver.ExtractRefsFromValueRef(vr, refs)
 		if len(refs) > 0 {
 			locations = append(locations, configRefLocation{
-				location: "state.backend.inputs." + key,
+				location: "state.load.inputs." + key,
 				refs:     refs,
 			})
 		}
@@ -114,8 +118,8 @@ func stateConfigRefLocations(cfg *Config) []configRefLocation {
 }
 
 // ValidateStateRefs enforces the acyclic guarantee for state config references.
-// It returns a *CycleError if any load-time field (enabled or a backend
-// input) references a state-dependent resolver, or a *UnknownStateRefError if it
+// It returns a *CycleError if any load-time field (enabled or a load input)
+// references a state-dependent resolver, or a *UnknownStateRefError if it
 // references a resolver that does not exist. References to state-independent
 // resolvers are permitted -- they are resolved in the two-phase pre-load. The
 // first offending location (in deterministic order) is reported.

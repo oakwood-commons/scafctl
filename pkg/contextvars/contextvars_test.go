@@ -71,7 +71,7 @@ func TestCanonicalNamesTrackEngine(t *testing.T) {
 }
 
 // TestCorrectedScoping locks in the accuracy fixes validated against the engine:
-// __cwd is action-only, __params is state-backend-only, __error is error-only.
+// __cwd is action-only, __params is state-config-only, __error is error-only.
 func TestCorrectedScoping(t *testing.T) {
 	cwd, ok := Get(celexp.VarCwd)
 	require.True(t, ok)
@@ -80,8 +80,8 @@ func TestCorrectedScoping(t *testing.T) {
 
 	params, ok := Get(celexp.VarParams)
 	require.True(t, ok)
-	assert.Equal(t, []string{PhaseStateBackend}, params.Phases, "__params must be state-backend-only")
-	assert.Equal(t, []string{LangCEL}, params.Languages, "__params is CEL-only")
+	assert.Equal(t, []string{PhaseState}, params.Phases, "__params must be state-config-only")
+	assert.Equal(t, []string{LangCEL, LangTemplate}, params.Languages, "__params is available to CEL and Go templates")
 
 	errVar, ok := Get(celexp.VarError)
 	require.True(t, ok)

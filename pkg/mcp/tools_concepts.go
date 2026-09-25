@@ -50,7 +50,7 @@ func (s *Server) registerConceptTools() {
 				contextvars.PhaseValidate,
 				contextvars.PhaseForEach,
 				contextvars.PhaseAction,
-				contextvars.PhaseStateBackend,
+				contextvars.PhaseState,
 				contextvars.PhaseError,
 				contextvars.PhaseTemplateFile,
 			),

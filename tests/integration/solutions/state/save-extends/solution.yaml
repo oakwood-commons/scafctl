@@ -2,27 +2,31 @@ apiVersion: scafctl.io/v1
 kind: Solution
 
 metadata:
-  name: test-state-save-overrides
+  name: test-state-save-extends
   version: 1.0.0
   description: |
-    Functional tests for state backend saveOverrides.
-    Verifies that saveOverrides inputs are resolved only at save time (when
-    resolver data is available), merged with base inputs (overriding on
-    conflict), and completely ignored at load time.
+    Functional tests for a state save target using "extends: load" and merged
+    inputs. Verifies that the target's own inputs are resolved only at save
+    time (when resolver data is available), merged on top of the inherited
+    load inputs (the target wins on conflict), and completely ignored at
+    load time.
 
-    The save-overrides mechanism allows different paths/config for load vs save.
-    This test uses the file provider where inputs.path is used at load time and
-    saveOverrides.path overrides it at save time with a resolver-derived value.
+    The extends mechanism allows different paths/config for load vs save.
+    This test uses the file provider where the load block reads inputs.path
+    and the "extends: load" target overrides path at save time with a
+    resolver-derived value.
 
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: default-state.json
-    saveOverrides:
-      path:
-        expr: "'override-' + _.env + '.json'"
+  save:
+    - extends: load
+      inputs:
+        path:
+          expr: "'override-' + _.env + '.json'"
 
 spec:
   resolvers:
@@ -53,18 +57,18 @@ spec:
   testing:
     cases:
       _base:
-        description: Base template for save-overrides tests
+        description: Base template for save-extends tests
         command: [run, resolver]
         args: ["-o", "json"]
-        tags: [state, save-overrides]
+        tags: [state, save-extends]
         assertions:
           - expression: __exitCode == 0
 
       # =====================================================================
-      # First run: empty state, saveOverrides.path resolves using _.env
+      # First run: empty state, the save target's path resolves using _.env
       # =====================================================================
-      first-run-resolves-overrides:
-        description: Save succeeds with saveOverrides using resolver data in CEL
+      first-run-resolves-target-inputs:
+        description: Save succeeds when the extends target input uses resolver data in CEL
         extends: [_base]
         args: ["-o", "json", "-r", "env=prod", "-r", "app_name=alpha"]
         tags: [smoke]
@@ -73,30 +77,30 @@ spec:
           - expression: __output.app_name == "alpha"
 
       # =====================================================================
-      # Load reads from inputs.path (default-state.json), not override path
+      # Load reads from the load block's path, not the save target's override
       # =====================================================================
-      load-uses-inputs-path:
-        description: State load reads from inputs.path, ignoring saveOverrides
+      load-uses-load-path:
+        description: Load reads the load block path; the save target override is ignored at load time
         extends: [_base]
         args: ["-o", "json", "-r", "env=staging"]
         init:
-          # Pre-seed at inputs.path -- this should be found at load time
+          # Pre-seed at the load path -- this should be found at load time
           - command: >-
-              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-save-overrides","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"app_name":"from-default-path"},"resolvers":{},"fingerprints":{}}'
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-save-extends","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"app_name":"from-default-path"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/default-state.json
         assertions:
           - expression: __output.app_name == "from-default-path"
-            message: "State should load from inputs.path (default-state.json), not saveOverrides path"
+            message: "State should load from the load block path (default-state.json), not the save target override path"
           - expression: __output.env == "staging"
             message: "CLI param should override state"
 
       # =====================================================================
-      # saveOverrides with literal values merge correctly
+      # A literal-resolved target expression merges correctly with the
+      # inherited inputs
       # =====================================================================
-      saveoverrides-literal:
-        description: Literal saveOverrides value is used without resolver data
+      save-target-literal-inputs:
+        description: An extends target expression resolves without resolver-supplied CLI data
         extends: [_base]
         assertions:
           - expression: __output.env == "dev"
             message: "Default env should resolve from static provider"
-

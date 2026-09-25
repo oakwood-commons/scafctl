@@ -1,0 +1,158 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-lockless-guard
+  version: 1.0.0
+  description: |
+    Functional tests for the lock-less replay guard: a state document that
+    carries parameters but no creation timestamp (the shape of a hand-built
+    or projected intent document) must not silently replay through a
+    solution with an immutable resolver, because proceeding would re-derive
+    the immutable value and replace any previously saved lock.
+
+    A run refuses with exit 3 and an --allow-missing-locks hint; the same run
+    with --allow-missing-locks warns and proceeds; render solution only
+    warns, because it never saves.
+
+state:
+  enabled: true
+  load:
+    provider: file
+    inputs:
+      path: state.json
+  save:
+    - extends: load
+
+spec:
+  resolvers:
+    locked_id:
+      description: Immutable identifier locked after first write
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "locked_id"
+          - provider: static
+            inputs:
+              value: "generated-id-001"
+
+    app_name:
+      description: Application name from parameter or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "app_name"
+          - provider: static
+            inputs:
+              value: "fallback-name"
+
+  workflow:
+    actions:
+      show:
+        description: Display the resolved app name and locked id
+        provider: message
+        inputs:
+          message:
+            tmpl: "APP={{ .app_name }} ID={{ .locked_id }}"
+          type: info
+
+  testing:
+    cases:
+      _base:
+        description: Template that seeds an intent-shaped state document
+        tags: [state, lockless-guard]
+        init:
+          # Intent-shaped document: parameters but NO metadata.createdAt and
+          # no immutable lock, replayed through a solution WITH an immutable
+          # resolver.
+          - command: >-
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-lockless-guard","version":"1.0.0"},"parameters":{"locked_id":"locked-from-intent","app_name":"from-intent"}}'
+              > $SCAFCTL_SANDBOX_DIR/state.json
+
+      # =====================================================================
+      # The guard: run resolver / run solution refuse (exit 3) with the
+      # actionable hint.
+      # =====================================================================
+      guard-rejects-lockless-replay:
+        description: A lock-less document with parameters is refused with exit 3 by run resolver
+        extends: [_base]
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [smoke]
+        assertions:
+          - expression: __exitCode == 3
+            message: "The lock-less replay guard must exit 3 (invalid input)"
+          - expression: __stderr.contains("has parameters but no immutable locks")
+            message: "The error must explain the lock-less replay risk"
+          - expression: __stderr.contains("re-run with --allow-missing-locks")
+            message: "The error must name the waiver flag"
+          - expression: "!('state.json' in __files)"
+            message: "A refused run must not write the state file"
+
+      guard-rejects-run-solution:
+        description: run solution also refuses a lock-less replay document
+        extends: [_base]
+        command: [run, solution]
+        args: []
+        tags: [smoke]
+        assertions:
+          - expression: __exitCode == 3
+            message: "The lock-less replay guard must exit 3 (invalid input)"
+          - expression: __stderr.contains("has parameters but no immutable locks")
+
+      guard-rejects-filtered-run-resolver:
+        description: Selecting only a mutable resolver does not bypass the guard
+        extends: [_base]
+        command: [run, resolver]
+        # app_name is mutable, but the save would still rewrite the whole
+        # document and drop the unselected immutable resolver's lock.
+        args: ["app_name", "-o", "json"]
+        assertions:
+          - expression: __exitCode == 3
+            message: "A filtered run must be refused like a full one"
+          - expression: __stderr.contains("[locked_id]")
+            message: "The unselected immutable resolver must be named"
+          - expression: "!('state.json' in __files)"
+            message: "A refused run must not write the state file"
+
+      # =====================================================================
+      # The waiver: --allow-missing-locks warns and proceeds, re-deriving
+      # and saving a fresh lock.
+      # =====================================================================
+      guard-waived-with-flag:
+        description: --allow-missing-locks warns and proceeds
+        extends: [_base]
+        command: [run, resolver]
+        args: ["-o", "json", "--allow-missing-locks"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __stderr.contains("--allow-missing-locks")
+            message: "The waiver must be reported on stderr"
+          - expression: __output.locked_id == "locked-from-intent"
+            message: "The parameter must replay from the intent document"
+          - expression: __files["state.json"].content.contains("locked_id")
+            message: "The run must save a fresh immutable lock"
+          - expression: __files["state.json"].content.contains("generated-id-001") == false
+            message: "The saved lock must mirror the replayed parameter, not the static fallback"
+
+      # =====================================================================
+      # render solution only warns: it never saves, so it cannot replace a
+      # lock.
+      # =====================================================================
+      render-warns-only:
+        description: render solution warns about lock-less replay instead of failing
+        extends: [_base]
+        command: [render, solution]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Render must not fail on a lock-less document"
+          - expression: __stderr.contains("a real run requires --allow-missing-locks")
+            message: "Render must warn about the flag a real run would need"
+          - expression: '!("state.json" in __files)'
+            message: "Render must not write any state"

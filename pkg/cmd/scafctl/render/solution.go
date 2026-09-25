@@ -974,8 +974,9 @@ func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solutio
 		return ctx, params, nil, nil
 	}
 
-	// Set solution directory so the file state backend can resolve relative
-	// state paths against the directory containing the solution file.
+	// Set the solution directory (when not already set) on the context the
+	// resolvers below render with. State paths themselves resolve against the
+	// working directory, not the solution directory.
 	// Skip pseudo-paths (catalog:, remote:, URLs) — they are not filesystem paths.
 	if solPath := sol.GetPath(); solPath != "" && !strings.Contains(solPath, ":") {
 		if _, ok := provider.SolutionDirectoryFromContext(ctx); !ok {
@@ -989,7 +990,7 @@ func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solutio
 		Parameters: formatParams(params),
 	}
 
-	// Two-phase load: state.enabled and backend inputs may reference
+	// Two-phase load: state.enabled and load inputs may reference
 	// state-independent resolvers, which are resolved in a minimal pre-load
 	// pass. Their results are returned as a seed so the main render run reuses
 	// them instead of re-executing.
@@ -1010,6 +1011,13 @@ func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solutio
 	loadResult, err := stateMgr.LoadTwoPhase(ctx, params, cmdInfo, twoPhaseInput)
 	if err != nil {
 		return ctx, params, nil, fmt.Errorf("state load: %w", err)
+	}
+	// Render never saves, so replaying a lock-less document cannot replace a
+	// lock: warn (a real run would refuse without --allow-missing-locks).
+	if lockErr := state.CheckMissingLocks(loadResult.LoadResult, twoPhaseInput.Resolvers); lockErr != nil {
+		if w := writer.FromContext(ctx); w != nil {
+			w.WarnStderrf("state: %v; a real run requires --allow-missing-locks", lockErr)
+		}
 	}
 	if !loadResult.Skipped {
 		ctx = loadResult.Ctx

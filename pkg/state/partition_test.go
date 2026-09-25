@@ -79,7 +79,7 @@ func TestValidateStateRefs_AllowsStateIndependent(t *testing.T) {
 
 	cfg := &Config{
 		Enabled: &spec.ValueRef{Literal: true},
-		Backend: Backend{
+		Load: &LoadConfig{
 			Provider: "file",
 			Inputs:   map[string]*spec.ValueRef{"path": rslvrRef("app_name")},
 		},
@@ -94,7 +94,7 @@ func TestValidateStateRefs_RejectsStateDependent(t *testing.T) {
 
 	cfg := &Config{
 		Enabled: rslvrRef("saved"),
-		Backend: Backend{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "s.json"}}},
+		Load:    &LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "s.json"}}},
 	}
 
 	err := ValidateStateRefs(cfg, part)
@@ -111,14 +111,14 @@ func TestValidateStateRefs_RejectsUnknown(t *testing.T) {
 
 	cfg := &Config{
 		Enabled: &spec.ValueRef{Literal: true},
-		Backend: Backend{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("typo")}},
+		Load:    &LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("typo")}},
 	}
 
 	err := ValidateStateRefs(cfg, part)
 	require.Error(t, err)
 	var unknownErr *UnknownStateRefError
 	require.True(t, errors.As(err, &unknownErr))
-	assert.Equal(t, "state.backend.inputs.path", unknownErr.Location)
+	assert.Equal(t, "state.load.inputs.path", unknownErr.Location)
 	assert.Equal(t, []string{"typo"}, unknownErr.Refs)
 }
 
@@ -130,7 +130,7 @@ func TestValidateStateRefs_UnknownTakesPriorityOverDependent(t *testing.T) {
 
 	cfg := &Config{
 		Enabled: &spec.ValueRef{Expr: exprPtr("_.saved + _.ghost")},
-		Backend: Backend{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "s.json"}}},
+		Load:    &LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "s.json"}}},
 	}
 
 	err := ValidateStateRefs(cfg, part)
@@ -150,7 +150,7 @@ func TestPhaseARoots(t *testing.T) {
 
 	cfg := &Config{
 		Enabled: rslvrRef("region"),
-		Backend: Backend{
+		Load: &LoadConfig{
 			Provider: "file",
 			Inputs:   map[string]*spec.ValueRef{"path": rslvrRef("app_name")},
 		},
@@ -169,7 +169,7 @@ func TestPhaseARoots_ExcludesStateDependentAndUnknown(t *testing.T) {
 
 	cfg := &Config{
 		Enabled: &spec.ValueRef{Expr: exprPtr("_.ok")},
-		Backend: Backend{
+		Load: &LoadConfig{
 			Provider: "file",
 			// "saved" is state-dependent and "ghost" is unknown; neither is a root.
 			Inputs: map[string]*spec.ValueRef{"path": {Expr: exprPtr("_.saved + _.ghost")}},
@@ -178,4 +178,28 @@ func TestPhaseARoots_ExcludesStateDependentAndUnknown(t *testing.T) {
 
 	roots := PhaseARoots(cfg, part)
 	assert.Equal(t, []string{"ok"}, sortedKeys(roots))
+}
+
+// TestStateRefs_SaveTargetsAreNotLoadTime verifies that save-target fields are
+// outside the pre-load analysis: they resolve at save time, so they may
+// reference any resolver -- including a state-dependent or not-yet-run one --
+// and never become Phase-A roots. It also covers a config without a load block.
+func TestStateRefs_SaveTargetsAreNotLoadTime(t *testing.T) {
+	resolvers := []*resolver.Resolver{
+		staticResolver("region"),
+		stateReadingResolver("saved"),
+	}
+	part := BuildPartition(resolvers, nil, nil, ReadProviderName)
+
+	cfg := &Config{
+		Enabled: rslvrRef("region"),
+		Save: []SaveTarget{{
+			Provider: "file",
+			Enabled:  rslvrRef("saved"),
+			Inputs:   map[string]*spec.ValueRef{"path": {Expr: exprPtr("_.saved + _.ghost")}},
+		}},
+	}
+
+	assert.NoError(t, ValidateStateRefs(cfg, part), "save targets are never validated as load-time fields")
+	assert.Equal(t, []string{"region"}, sortedKeys(PhaseARoots(cfg, part)))
 }

@@ -39,8 +39,9 @@ const (
 	PhaseForEach = "forEach"
 	// PhaseAction is an action's when conditions and inputs.
 	PhaseAction = "action"
-	// PhaseStateBackend is a state backend's input expressions.
-	PhaseStateBackend = "state-backend"
+	// PhaseState is state configuration expressions: state.enabled, the load
+	// inputs, and each save target's inputs and enabled condition.
+	PhaseState = "state"
 	// PhaseError is a failure context (continueOnError conditions, error messages).
 	PhaseError = "error"
 	// PhaseTemplateFile is Go-template file generation (directory/render-tree/
@@ -161,9 +162,9 @@ var builtinVariables = []ContextVariable{
 	},
 	{
 		Name:        celexp.VarParams, // "__params"
-		Languages:   langCELOnly,
-		Phases:      []string{PhaseStateBackend},
-		Description: "Raw CLI parameters (-r key=value), available in STATE BACKEND input expressions only. Unlike _, which holds resolver outputs, __params always holds the raw parameters regardless of resolver execution state.",
+		Languages:   langBoth,
+		Phases:      []string{PhaseState},
+		Description: "CLI parameters (-r key=value), available in state configuration expressions only (state.enabled, state.load.inputs, and save target inputs and enabled). Load-time fields see the raw CLI parameters; save targets see the merged set (replayed plus CLI). Unlike _, which holds resolver outputs, __params is always populated regardless of resolver execution state.",
 		Example:     "__params.gcp_project",
 	},
 	{

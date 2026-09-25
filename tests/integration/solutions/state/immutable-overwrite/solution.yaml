@@ -16,10 +16,12 @@ metadata:
 
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: state.json
+  save:
+    - extends: load
 
 spec:
   resolvers:

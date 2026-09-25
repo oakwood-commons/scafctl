@@ -24,6 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 )
 
 // SolutionExplanation holds structured explanation data for a solution.
@@ -95,12 +96,26 @@ type MaintainerInfo struct {
 	Email string `json:"email,omitempty" yaml:"email,omitempty" doc:"Maintainer email" maxLength:"256" example:"jane@example.com"`
 }
 
-// StateInfo holds structured information about state persistence configuration.
+// StateInfo holds structured information about the state configuration.
 type StateInfo struct {
-	Enabled      bool     `json:"enabled" yaml:"enabled" doc:"Whether state persistence is configured"`
-	Provider     string   `json:"provider" yaml:"provider" doc:"Backend provider name" maxLength:"253" example:"file"`
-	InputKeys    []string `json:"inputKeys,omitempty" yaml:"inputKeys,omitempty" doc:"Configured backend input keys" maxItems:"50"`
-	OverrideKeys []string `json:"overrideKeys,omitempty" yaml:"overrideKeys,omitempty" doc:"Configured saveOverrides keys" maxItems:"50"`
+	Enabled bool            `json:"enabled" yaml:"enabled" doc:"Whether state is configured as enabled"`
+	Load    *StateLoadInfo  `json:"load,omitempty" yaml:"load,omitempty" doc:"Where state is read from, when a load block is configured"`
+	Save    []StateSaveInfo `json:"save,omitempty" yaml:"save,omitempty" doc:"Where state is written, one entry per save target" maxItems:"20"`
+}
+
+// StateLoadInfo describes the state load block.
+type StateLoadInfo struct {
+	Provider  string   `json:"provider" yaml:"provider" doc:"Load provider name" maxLength:"253" example:"file"`
+	InputKeys []string `json:"inputKeys,omitempty" yaml:"inputKeys,omitempty" doc:"Configured load input keys" maxItems:"50"`
+}
+
+// StateSaveInfo describes one state save target.
+type StateSaveInfo struct {
+	Provider   string   `json:"provider,omitempty" yaml:"provider,omitempty" doc:"Save provider name (the load provider when extends is set)" maxLength:"253" example:"file"`
+	Extends    string   `json:"extends,omitempty" yaml:"extends,omitempty" doc:"Block the target inherits provider and inputs from, when set" maxLength:"16" example:"load"`
+	Format     string   `json:"format" yaml:"format" doc:"Document shape written: full or intent" maxLength:"16" example:"full"`
+	Checkpoint bool     `json:"checkpoint,omitempty" yaml:"checkpoint,omitempty" doc:"Whether the target is also written before actions run"`
+	InputKeys  []string `json:"inputKeys,omitempty" yaml:"inputKeys,omitempty" doc:"The target's own input keys (excluding keys inherited via extends)" maxItems:"50"`
 }
 
 // FileDependencyInfo describes a file dependency discovered via static analysis.
@@ -430,15 +445,30 @@ func extractPhases(r *resolver.Resolver) []string {
 	return phases
 }
 
-// buildStateInfo extracts structured state persistence information from a solution.
+// buildStateInfo extracts structured state configuration information from a solution.
 func buildStateInfo(sol *solution.Solution) *StateInfo {
-	info := &StateInfo{
-		Enabled:  stateEnabled(sol.State.Enabled),
-		Provider: sol.State.Backend.Provider,
+	info := &StateInfo{Enabled: stateEnabled(sol.State.Enabled)}
+
+	if load := sol.State.Load; load != nil {
+		info.Load = &StateLoadInfo{Provider: load.Provider, InputKeys: sortedKeys(load.Inputs)}
 	}
 
-	info.InputKeys = sortedKeys(sol.State.Backend.Inputs)
-	info.OverrideKeys = sortedKeys(sol.State.Backend.SaveOverrides)
+	for _, target := range sol.State.Save {
+		save := StateSaveInfo{
+			Provider:   target.Provider,
+			Extends:    target.Extends,
+			Format:     target.Format,
+			Checkpoint: target.Checkpoint,
+			InputKeys:  sortedKeys(target.Inputs),
+		}
+		if save.Format == "" {
+			save.Format = state.FormatFull
+		}
+		if target.Extends == state.ExtendsLoad && info.Load != nil {
+			save.Provider = info.Load.Provider
+		}
+		info.Save = append(info.Save, save)
+	}
 
 	return info
 }

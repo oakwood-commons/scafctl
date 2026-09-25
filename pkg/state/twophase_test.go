@@ -54,7 +54,7 @@ func TestLoadTwoPhase_NilConfig(t *testing.T) {
 func TestLoadTwoPhase_NoRootsIdenticalToLoad(t *testing.T) {
 	cfg := &Config{
 		Enabled: literalValueRef(true),
-		Backend: Backend{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("s.json")}},
+		Load:    &LoadConfig{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("s.json")}},
 	}
 	mgr := newTwoPhaseManager(t, cfg)
 
@@ -78,7 +78,7 @@ func TestLoadTwoPhase_NoRootsLoadErrorReturnsNilResult(t *testing.T) {
 	// cannot accidentally dereference a nil embedded LoadResult.
 	cfg := &Config{
 		Enabled: literalValueRef(true),
-		Backend: Backend{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("s.json")}},
+		Load:    &LoadConfig{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("s.json")}},
 	}
 	reg := newTestRegistry(t, &mockBackendProvider{loadErr: assert.AnError})
 	mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
@@ -93,7 +93,7 @@ func TestLoadTwoPhase_NoRootsLoadErrorReturnsNilResult(t *testing.T) {
 func TestLoadTwoPhase_RunsPhaseAAndSeeds(t *testing.T) {
 	cfg := &Config{
 		Enabled: literalValueRef(true),
-		Backend: Backend{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("app_name")}},
+		Load:    &LoadConfig{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("app_name")}},
 	}
 	mgr := newTwoPhaseManager(t, cfg)
 
@@ -122,7 +122,7 @@ func TestLoadTwoPhase_IncludesTransitiveDependencies(t *testing.T) {
 	}
 	cfg := &Config{
 		Enabled: literalValueRef(true),
-		Backend: Backend{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("app_name")}},
+		Load:    &LoadConfig{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("app_name")}},
 	}
 	mgr := newTwoPhaseManager(t, cfg)
 
@@ -147,7 +147,7 @@ func TestLoadTwoPhase_IncludesTransitiveDependencies(t *testing.T) {
 func TestLoadTwoPhase_RejectsStateDependent(t *testing.T) {
 	cfg := &Config{
 		Enabled: rslvrRef("saved"),
-		Backend: Backend{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("s.json")}},
+		Load:    &LoadConfig{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("s.json")}},
 	}
 	mgr := newTwoPhaseManager(t, cfg)
 
@@ -168,7 +168,7 @@ func TestLoadTwoPhase_RejectsStateDependent(t *testing.T) {
 func TestLoadTwoPhase_RejectsUnknown(t *testing.T) {
 	cfg := &Config{
 		Enabled: rslvrRef("ghost"),
-		Backend: Backend{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("s.json")}},
+		Load:    &LoadConfig{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("s.json")}},
 	}
 	mgr := newTwoPhaseManager(t, cfg)
 
@@ -184,7 +184,7 @@ func TestLoadTwoPhase_RejectsUnknown(t *testing.T) {
 func TestLoadTwoPhase_NilRunnerErrors(t *testing.T) {
 	cfg := &Config{
 		Enabled: literalValueRef(true),
-		Backend: Backend{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("app_name")}},
+		Load:    &LoadConfig{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("app_name")}},
 	}
 	mgr := newTwoPhaseManager(t, cfg)
 
@@ -199,7 +199,7 @@ func TestLoadTwoPhase_NilRunnerErrors(t *testing.T) {
 func TestLoadTwoPhase_RunnerReturnsNilContext(t *testing.T) {
 	cfg := &Config{
 		Enabled: literalValueRef(true),
-		Backend: Backend{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("app_name")}},
+		Load:    &LoadConfig{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("app_name")}},
 	}
 	mgr := newTwoPhaseManager(t, cfg)
 
@@ -216,7 +216,7 @@ func TestLoadTwoPhase_RunnerReturnsNilContext(t *testing.T) {
 func TestLoadTwoPhase_RunnerError(t *testing.T) {
 	cfg := &Config{
 		Enabled: literalValueRef(true),
-		Backend: Backend{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("app_name")}},
+		Load:    &LoadConfig{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("app_name")}},
 	}
 	mgr := newTwoPhaseManager(t, cfg)
 

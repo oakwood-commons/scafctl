@@ -271,7 +271,7 @@ func TestBuildSolutionExplanation_WithState(t *testing.T) {
 	sol := &solution.Solution{
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs: map[string]*spec.ValueRef{
 					"path": {Literal: "state.json"},
@@ -284,44 +284,58 @@ func TestBuildSolutionExplanation_WithState(t *testing.T) {
 	exp := BuildSolutionExplanation(sol)
 	require.NotNil(t, exp.State)
 	assert.True(t, exp.State.Enabled)
-	assert.Equal(t, "file", exp.State.Provider)
-	assert.Equal(t, []string{"path"}, exp.State.InputKeys)
-	assert.Nil(t, exp.State.OverrideKeys)
+	require.NotNil(t, exp.State.Load)
+	assert.Equal(t, "file", exp.State.Load.Provider)
+	assert.Equal(t, []string{"path"}, exp.State.Load.InputKeys)
+	assert.Empty(t, exp.State.Save)
 }
 
-func TestBuildSolutionExplanation_WithSaveOverrides(t *testing.T) {
+func TestBuildSolutionExplanation_WithSaveTarget(t *testing.T) {
 	rslvrName := "featureBranch"
 	sol := &solution.Solution{
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: true},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "github",
 				Inputs: map[string]*spec.ValueRef{
 					"owner": {Literal: "my-org"},
 					"repo":  {Literal: "my-repo"},
 					"path":  {Literal: "state.json"},
 				},
-				SaveOverrides: map[string]*spec.ValueRef{
-					"branch":  {Resolver: &rslvrName},
-					"message": {Literal: "commit msg"},
+			},
+			Save: []state.SaveTarget{
+				{
+					Extends: state.ExtendsLoad,
+					Inputs: map[string]*spec.ValueRef{
+						"branch":  {Resolver: &rslvrName},
+						"message": {Literal: "commit msg"},
+					},
 				},
 			},
 		},
 	}
-	sol.Metadata.Name = "with-overrides"
+	sol.Metadata.Name = "with-save-target"
 
 	exp := BuildSolutionExplanation(sol)
 	require.NotNil(t, exp.State)
-	assert.Equal(t, "github", exp.State.Provider)
-	assert.Equal(t, []string{"owner", "path", "repo"}, exp.State.InputKeys)
-	assert.Equal(t, []string{"branch", "message"}, exp.State.OverrideKeys)
+	require.NotNil(t, exp.State.Load)
+	assert.Equal(t, "github", exp.State.Load.Provider)
+	assert.Equal(t, []string{"owner", "path", "repo"}, exp.State.Load.InputKeys)
+	require.Len(t, exp.State.Save, 1)
+	// An extends target inherits the load block's provider.
+	assert.Equal(t, "github", exp.State.Save[0].Provider)
+	assert.Equal(t, state.ExtendsLoad, exp.State.Save[0].Extends)
+	// Format defaults to full; own input keys exclude inherited ones.
+	assert.Equal(t, state.FormatFull, exp.State.Save[0].Format)
+	assert.Equal(t, []string{"branch", "message"}, exp.State.Save[0].InputKeys)
+	assert.False(t, exp.State.Save[0].Checkpoint)
 }
 
 func TestBuildSolutionExplanation_StateDisabled(t *testing.T) {
 	sol := &solution.Solution{
 		State: &state.Config{
 			Enabled: &spec.ValueRef{Literal: false},
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
 			},
@@ -338,7 +352,7 @@ func TestBuildSolutionExplanation_StateEnabledNil(t *testing.T) {
 	sol := &solution.Solution{
 		State: &state.Config{
 			Enabled: nil,
-			Backend: state.Backend{
+			Load: &state.LoadConfig{
 				Provider: "file",
 				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
 			},
@@ -349,6 +363,73 @@ func TestBuildSolutionExplanation_StateEnabledNil(t *testing.T) {
 	exp := BuildSolutionExplanation(sol)
 	require.NotNil(t, exp.State)
 	assert.True(t, exp.State.Enabled, "nil Enabled defaults to true")
+	// A config with no save targets reports none.
+	assert.Empty(t, exp.State.Save)
+}
+
+// TestBuildStateInfoScenarios covers buildStateInfo's handling of the
+// load/save split: a load+save pair with an extends target, a save-only
+// config (nil Load), and a checkpointed save target.
+func TestBuildStateInfoScenarios(t *testing.T) {
+	tests := []struct {
+		name  string
+		state *state.Config
+		want  StateInfo
+	}{
+		{
+			name: "load and check-pointed save target",
+			state: &state.Config{
+				Load: &state.LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": {Literal: "s.json"}}},
+				Save: []state.SaveTarget{{Extends: state.ExtendsLoad, Checkpoint: true}},
+			},
+			want: StateInfo{
+				Enabled: true,
+				Load:    &StateLoadInfo{Provider: "file", InputKeys: []string{"path"}},
+				Save: []StateSaveInfo{{
+					Provider:   "file",
+					Extends:    state.ExtendsLoad,
+					Format:     state.FormatFull,
+					Checkpoint: true,
+				}},
+			},
+		},
+		{
+			name: "save only: load is nil and extends resolves no provider",
+			state: &state.Config{
+				Save: []state.SaveTarget{{Provider: "file", Format: state.FormatIntent, Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}}}},
+			},
+			want: StateInfo{
+				Enabled: true,
+				Save: []StateSaveInfo{{
+					Provider:  "file",
+					Format:    state.FormatIntent,
+					InputKeys: []string{"path"},
+				}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sol := &solution.Solution{State: tc.state}
+			sol.Metadata.Name = "scenario"
+
+			info := buildStateInfo(sol)
+			require.NotNil(t, info)
+			assert.Equal(t, tc.want.Enabled, info.Enabled)
+			if tc.want.Load == nil {
+				assert.Nil(t, info.Load)
+			} else {
+				require.NotNil(t, info.Load)
+				assert.Equal(t, tc.want.Load.Provider, info.Load.Provider)
+				assert.Equal(t, tc.want.Load.InputKeys, info.Load.InputKeys)
+			}
+			require.Len(t, info.Save, len(tc.want.Save))
+			for i := range tc.want.Save {
+				assert.Equal(t, tc.want.Save[i], info.Save[i])
+			}
+		})
+	}
 }
 
 func TestSortedKeys(t *testing.T) {

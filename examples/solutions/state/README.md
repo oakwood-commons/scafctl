@@ -6,8 +6,10 @@ parameter-replay pattern.
 ## solution.yaml
 
 A solution that persists CLI parameters to a local state file.
-On first run, values are provided via `-r` flags. On subsequent runs,
-saved parameters are automatically replayed via the parameter provider.
+`state.load` reads the file before resolvers run and the `extends: load` save
+target writes it back after a successful run. On first run, values are
+provided via `-r` flags. On subsequent runs, saved parameters are
+automatically replayed via the parameter provider.
 
 ### First Run
 
@@ -30,9 +32,9 @@ scafctl state list --path state-example.json
 
 ## github-state.yaml
 
-GitHub-based state persistence with PR workflows using `saveOverrides`.
-State is loaded from `main` and saved to a resolver-derived feature branch,
-enabling PR-based review of state changes.
+GitHub-based state persistence with PR workflows using an `extends: load`
+save target. State is loaded from `main` and saved to a resolver-derived
+feature branch, enabling PR-based review of state changes.
 
 Requires the `github` provider plugin (>= 0.6.0).
 
@@ -46,9 +48,10 @@ scafctl run resolver -f ./github-state.yaml \
 ### How it works
 
 - **Load**: reads state from `refs/heads/main` at `state/<app_name>.json`
-- **Save**: writes state to the `featureBranch` resolver value (e.g., `feat/my-feature`)
-- **saveOverrides**: the `branch` and `message` inputs are only resolved at
-  save time when resolver data (`_`) is available
+- **Save**: the `extends: load` target reuses the load block's provider and
+  inputs, and adds `branch` (the `featureBranch` resolver value, e.g.
+  `feat/my-feature`) and a commit `message`. Save target inputs resolve after
+  every resolver has run, so they may reference resolver data (`_`)
 
 ### Prerequisites
 

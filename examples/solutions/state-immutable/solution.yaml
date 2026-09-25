@@ -34,6 +34,13 @@
 #
 # Lint check -- verify no immutable misconfigurations:
 #   scafctl lint -f solution.yaml
+#
+# Lint also reports an info hint (immutable-without-checkpoint): state is saved
+# only after every workflow action succeeds, so a lock minted by a run whose
+# action then fails is not kept. That matters when an action creates something
+# named from a freshly generated immutable value -- add `checkpoint: true` to
+# the save target then. Here deployment_id comes from -r and the only action
+# prints a message, so no checkpoint is needed.
 # =============================================================================
 apiVersion: scafctl.io/v1
 kind: Solution
@@ -47,12 +54,17 @@ metadata:
     - immutable
   description: Demonstrates immutable resolver state entries
 
+# Locks live only in the full state document, so an immutable resolver needs
+# both a load block (to read locks back) and a full-format save target (to
+# write them) -- here the same file via extends: load.
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path: "state-immutable-demo.json"
+  save:
+    - extends: load
 
 spec:
   resolvers:

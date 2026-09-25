@@ -204,7 +204,38 @@ type sharedResolverOptions struct {
 	// loaded before resolvers, immutable values are neither verified nor
 	// locked, and no state is saved afterward. Resolvers that read the state
 	// provider fall back to their defaults. Intended for CI/offline runs.
+	// Mutually exclusive with every other state flag.
 	NoState bool
+
+	// StateFile replaces the solution's state.load block with a read of this
+	// file (builtin file provider). It only READS: the solution's own save
+	// targets still run, and an extends: load target keeps writing to the load
+	// location the solution DECLARED -- so the file passed here is never
+	// overwritten. It enables state for the run: with no state block the run
+	// is a read-only replay; over a declared enabled condition it forces state
+	// on, with a stderr notice (the condition may depend on parameters only the
+	// file carries, so it is not evaluated first). The file must exist: a
+	// missing file is an error, not a first run. A relative path resolves
+	// against the invoking working directory. Set via the --state-file flag.
+	StateFile string
+
+	// StateOutput replaces every declared save target with a single write of
+	// the full state document to this file, enabling state for the run. A
+	// relative path resolves against the invoking working directory. Mutually
+	// exclusive with NoStateOutput. Set via the --state-output flag.
+	StateOutput string
+
+	// NoStateOutput disables every save target for the run. State is still
+	// loaded and immutable values are still verified. Set via the
+	// --no-state-output flag.
+	NoStateOutput bool
+
+	// AllowMissingLocks lets a run replay a state document that has parameters
+	// but no immutable locks (typically an intent document) through a solution
+	// with immutable resolvers. Without it such a run fails, because those
+	// values would be re-derived and any saved locks replaced. Set via the
+	// --allow-missing-locks flag.
+	AllowMissingLocks bool
 
 	// OnUnknownResolver controls how -r/--resolver parameters whose key is not
 	// consumed by any declared parameter resolver are handled: "error"
@@ -712,7 +743,7 @@ func (o *sharedResolverOptions) executeResolvers(
 // buildStateTwoPhaseInput constructs the input for state's two-phase pre-load,
 // wiring the resolver runner to this option set's execution pipeline. The state
 // manager uses it to run only the minimal set of resolvers that a load-time
-// state field (state.enabled or a backend input) transitively depends on, then
+// state field (state.enabled or a load input) transitively depends on, then
 // returns their results as a seed so the main run does not re-execute them.
 func (o *sharedResolverOptions) buildStateTwoPhaseInput(
 	sol *solution.Solution,
@@ -963,7 +994,7 @@ func (o *sharedResolverOptions) resolveVersionConstraintForFile(ctx context.Cont
 // addSharedResolverFlags adds common resolver flags to a cobra command.
 func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().StringVarP(&o.File, "file", "f", "", "Solution file path or catalog name (auto-discovered if not provided, use '-' for stdin)")
-	cCmd.Flags().StringArrayVarP(&o.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value, key=@- for raw stdin, @file.yaml, or @- for stdin). Available as __params in state backend expressions")
+	cCmd.Flags().StringArrayVarP(&o.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value, key=@- for raw stdin, @file.yaml, or @- for stdin). Available as __params in state configuration expressions")
 	flags.AddKvxOutputFlagsToStruct(cCmd, &o.KvxOutputFlags)
 
 	cCmd.Flags().BoolVar(&o.ResolveAll, "resolve-all", false, "Execute all resolvers regardless of action requirements")
@@ -983,7 +1014,11 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().StringVar(&o.BaseDir, "base-dir", "", "Override base directory for resolver path resolution (when unset, paths resolve from the solution file's directory when known, otherwise the current directory; use '.' for CWD)")
 	cCmd.Flags().BoolVar(&o.PreRelease, "pre-release", false, "Include pre-release versions when resolving latest from catalog")
 	cCmd.Flags().BoolVar(&o.Strict, "strict", false, "Disable auto-resolution of official providers; require explicit bundle.plugins declarations")
-	cCmd.Flags().BoolVar(&o.NoState, "no-state", false, "Skip the entire state lifecycle: do not load, verify immutables, or save state (for CI/offline runs)")
+	cCmd.Flags().BoolVar(&o.NoState, "no-state", false, "Skip the entire state lifecycle: do not load, verify immutables, or save state (for CI/offline runs). Mutually exclusive with the other state flags")
+	cCmd.Flags().StringVar(&o.StateFile, "state-file", "", "Read state from this existing file instead of the solution's state.load block, enabling state for the run. Only reads: the solution's save targets still run, and never write to this file unless it is their declared location")
+	cCmd.Flags().StringVar(&o.StateOutput, "state-output", "", "Write the full state document to this file instead of the solution's state.save targets")
+	cCmd.Flags().BoolVar(&o.NoStateOutput, "no-state-output", false, "Skip every state.save target (state is still loaded and immutable values still verified)")
+	cCmd.Flags().BoolVar(&o.AllowMissingLocks, "allow-missing-locks", false, "Allow replaying state that has parameters but no immutable locks (e.g. an intent document); immutable values are re-derived and saved locks replaced")
 	cCmd.Flags().StringVar(&o.OnUnknownResolver, "on-unknown-resolver", string(settings.DefaultUnknownResolverPolicy), "Policy for -r keys not consumed by any declared parameter: error (reject), warn (proceed with warning), or ignore (accept silently)")
 	cCmd.Flags().StringVar(&o.LockMode, "lock-mode", "", "Lock file resolution mode: strict (pin exact version), constrained (use constraint range), or bestEffort (use lock when available, fall back when absent). Default is source-dependent: strict for catalog/remote solutions carrying an embedded lock layer, bestEffort for local files, stdin, and lock-less artifacts")
 }
@@ -1080,6 +1115,243 @@ func warnStateSkipped(ctx context.Context, sol *solution.Solution) {
 	}
 }
 
+// stateOverrides returns the state overrides requested by the run's flags.
+func (o *sharedResolverOptions) stateOverrides() state.Overrides {
+	return state.Overrides{
+		LoadFile:   o.StateFile,
+		OutputFile: o.StateOutput,
+		NoOutput:   o.NoStateOutput,
+	}
+}
+
+// resolveStateConfig returns the state configuration a run should use: the
+// solution's own state block with the --state-file, --state-output, and
+// --no-state-output overrides applied (see state.ApplyOverrides). Each flag
+// replaces exactly one half of the configuration -- --state-file the load
+// block, --state-output / --no-state-output the save targets -- and each
+// replacement of something the solution declared is reported on stderr, so a
+// user is never silently switched off a configured load or save.
+//
+// The returned config is nil when neither source configures state, which
+// callers treat as "state is not enabled for this run".
+func (o *sharedResolverOptions) resolveStateConfig(ctx context.Context, sol *solution.Solution) (*state.Config, error) {
+	var declared *state.Config
+	if sol != nil {
+		declared = sol.State
+	}
+
+	overrides := o.stateOverrides()
+	cfg, err := state.ApplyOverrides(declared, overrides)
+	if err != nil {
+		return nil, err
+	}
+
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return cfg, nil
+	}
+	info := state.DescribeOverrides(declared, overrides)
+	if info.OverridesEnabled {
+		// The declared condition is not evaluated: it may depend on
+		// parameters that only the state being loaded carries.
+		flag := "--state-file"
+		if o.StateFile == "" {
+			flag = "--state-output"
+		}
+		w.WarnStderrf("%s: overriding the solution's state.enabled; state is enabled for this run", flag)
+	}
+	if info.ReplacedLoad {
+		w.WarnStderrf("--state-file: reading state from %s instead of the solution's %q load", o.StateFile, info.ReplacedLoadProvider)
+	}
+	if info.ReplacedSaveTargets > 0 {
+		switch {
+		case o.StateOutput != "":
+			w.WarnStderrf("--state-output: writing full state to %s instead of the solution's %d save target(s)", o.StateOutput, info.ReplacedSaveTargets)
+		case o.NoStateOutput:
+			w.WarnStderrf("--no-state-output: skipping the solution's %d save target(s)", info.ReplacedSaveTargets)
+		}
+	}
+
+	return cfg, nil
+}
+
+// stateManagerOptions returns the state manager options implied by the run.
+// Relative state locations -- declared ones and the --state-file /
+// --state-output paths -- resolve against workDir, the invoking working
+// directory captured before a bundled solution's extraction directory becomes
+// the process directory. An explicitly named --state-file must exist.
+func (o *sharedResolverOptions) stateManagerOptions(workDir string) []state.ManagerOption {
+	opts := []state.ManagerOption{state.WithWorkingDirectory(workDir)}
+	if o.StateFile != "" {
+		opts = append(opts, state.WithRequireExisting())
+	}
+	return opts
+}
+
+// checkMissingLocks refuses to replay a lock-less state document (typically an
+// intent document) through a solution with immutable resolvers, unless
+// --allow-missing-locks was given, in which case the waiver is reported on
+// stderr. A dry run only warns: it never saves, so it cannot replace a lock,
+// but a real run would still need the flag. It returns an exit-coded error, or
+// nil when the run may proceed. See state.CheckMissingLocks.
+func (o *sharedResolverOptions) checkMissingLocks(ctx context.Context, lr *state.LoadResult, resolvers []*resolver.Resolver, dryRun bool) error {
+	err := state.CheckMissingLocks(lr, resolvers)
+	if err == nil {
+		return nil
+	}
+	w := writer.FromContext(ctx)
+	switch {
+	case o.AllowMissingLocks:
+		if w != nil {
+			w.WarnStderrf("--allow-missing-locks: %v", err)
+		}
+		return nil
+	case dryRun:
+		if w != nil {
+			w.WarnStderrf("state: %v; a real run requires --allow-missing-locks", err)
+		}
+		return nil
+	}
+	return o.exitWithCode(ctx,
+		fmt.Errorf("state load: %w; re-run with --allow-missing-locks if this is intended", err),
+		exitcode.InvalidInput)
+}
+
+// verifyImmutables checks resolved immutable values against the loaded locks,
+// before any action runs or anything is saved. It runs whenever state was
+// loaded -- whether or not a save target will write -- so --no-state-output
+// and read-only replays still enforce locks. It returns an exit-coded error,
+// or nil when the run may proceed.
+func (o *sharedResolverOptions) verifyImmutables(ctx context.Context, stateMgr *state.Manager, stateData *state.Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver) error {
+	if stateMgr == nil || stateData == nil {
+		return nil
+	}
+	if err := stateMgr.VerifyImmutables(stateData, resolverCtx, resolvers); err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("state: %w", err), exitcode.GeneralError)
+	}
+	return nil
+}
+
+// validateStateFlags rejects mutually exclusive state flag combinations. It is
+// called before any state work so the user gets a clear error instead of a
+// silently ignored flag.
+func (o *sharedResolverOptions) validateStateFlags() error {
+	if o.NoState {
+		var set []string
+		if o.StateFile != "" {
+			set = append(set, "--state-file")
+		}
+		if o.StateOutput != "" {
+			set = append(set, "--state-output")
+		}
+		if o.NoStateOutput {
+			set = append(set, "--no-state-output")
+		}
+		if o.AllowMissingLocks {
+			set = append(set, "--allow-missing-locks")
+		}
+		if len(set) > 0 {
+			return fmt.Errorf("--no-state disables state entirely and cannot be combined with %s", strings.Join(set, ", "))
+		}
+	}
+	if o.StateOutput != "" && o.NoStateOutput {
+		return fmt.Errorf("--state-output and --no-state-output are mutually exclusive: one replaces the solution's save targets, the other disables them")
+	}
+	return nil
+}
+
+// warnSolutionMismatch emits a one-line stderr notice when a loaded state
+// document was written for a different solution or version than the one being
+// run. It is advisory only: a mismatch never fails the run, because a state
+// document is a legitimate hand-authorable input (an "intent" document) that
+// may omit metadata entirely, and because running a newer solution version
+// against older state is a normal upgrade path.
+//
+// Empty recorded values are not a mismatch -- they mean the document simply did
+// not record that field.
+func warnSolutionMismatch(ctx context.Context, sd *state.Data, sol *solution.Solution) {
+	if sd == nil || sol == nil {
+		return
+	}
+
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return
+	}
+
+	if name := sd.Metadata.Solution; name != "" && name != sol.Metadata.Name {
+		w.WarnStderrf("state was written for solution %q but this run is %q; verify the state file matches the solution", name, sol.Metadata.Name)
+	}
+
+	// Version is a *semver.Version (optional); guard the nil pointer before
+	// String() (a value receiver that panics on a nil pointer). It is normally
+	// defaulted during load, but an embedder may construct a solution directly.
+	var version string
+	if sol.Metadata.Version != nil {
+		version = sol.Metadata.Version.String()
+	}
+	if recorded := sd.Metadata.Version; recorded != "" && version != "" && recorded != version {
+		w.WarnStderrf("state was written by solution version %s but this run is %s", recorded, version)
+	}
+}
+
+// locationOrProvider returns location when set, otherwise a fallback naming
+// provider -- used when a provider (e.g. one with no "path" or "url" input,
+// such as a custom plugin) has no reportable location.
+func locationOrProvider(location, provider string) string {
+	if location != "" {
+		return location
+	}
+	return fmt.Sprintf("%s provider", provider)
+}
+
+// reportStateLoaded prints a one-line stderr notice describing what state was
+// (or was not) found before this run, so state's effect on parameters and
+// immutable locks is never silent. It is a no-op when load was skipped (state
+// disabled) or no load block is configured (nothing was read), and respects
+// --quiet via the writer.
+//
+// This is informational only (PlainStderr, not a warning): a fresh first-run
+// document is the expected, unremarkable steady state for a brand-new location.
+func reportStateLoaded(ctx context.Context, lr *state.LoadResult) {
+	if lr == nil || lr.Skipped || !lr.Loaded {
+		return
+	}
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return
+	}
+	loc := locationOrProvider(lr.Location, lr.Provider)
+	if lr.FirstRun {
+		w.PlainStderrf("state: no prior state at %s (first run)", loc)
+		return
+	}
+	w.PlainStderrf("state: reusing %d parameter(s) and %d locked value(s) from %s",
+		lr.LoadedParams, lr.LoadedResolvers, loc)
+}
+
+// reportStateSaved prints a one-line stderr success notice per save target this
+// run actually wrote, so a save is never silent. Targets skipped by their
+// Enabled condition are not reported -- an explicitly disabled target is not
+// news. It is a no-op when sr is nil (state disabled, or no save target
+// configured) and respects --quiet via the writer. Checkpoint writes are never
+// reported: they are interim writes, not the run's save confirmation.
+func reportStateSaved(ctx context.Context, sr *state.SaveResult) {
+	if sr == nil {
+		return
+	}
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return
+	}
+	for _, target := range sr.Targets {
+		if target.Skipped {
+			continue
+		}
+		w.SuccessStderrf("state: saved %s (%s)", locationOrProvider(target.Location, target.Provider), target.Format)
+	}
+}
+
 // buildParamFlagHint formats missing param names as -r flags for user hints.
 func buildParamFlagHint(params []string) string {
 	parts := make([]string, 0, len(params))
@@ -1087,6 +1359,17 @@ func buildParamFlagHint(params []string) string {
 		parts = append(parts, fmt.Sprintf("-r %s=<value>", p))
 	}
 	return strings.Join(parts, " ")
+}
+
+// prepareErrorCode maps a solution-preparation failure to its exit code. A
+// solution that still uses removed state configuration keys was found and
+// parsed, so it is invalid input rather than the FileNotFound every other
+// preparation failure reports.
+func prepareErrorCode(err error) int {
+	if errors.Is(err, state.ErrLegacyStateConfig) {
+		return exitcode.InvalidInput
+	}
+	return exitcode.FileNotFound
 }
 
 // handleStateLoadError checks whether a state load error is caused by missing
@@ -1100,6 +1383,11 @@ func (o *sharedResolverOptions) handleStateLoadError(ctx context.Context, loadEr
 		err := fmt.Errorf("state load: missing required parameters [%s]. Supply with: %s",
 			strings.Join(missingErr.Missing, ", "), paramFlags)
 		return o.exitWithCode(ctx, err, exitcode.GeneralError)
+	}
+	// Only an explicitly named --state-file requires existing state.
+	var notFoundErr *state.NotFoundError
+	if errors.As(loadErr, &notFoundErr) {
+		return o.exitWithCode(ctx, fmt.Errorf("--state-file: %w", loadErr), exitcode.InvalidInput)
 	}
 	return o.exitWithCode(ctx, fmt.Errorf("state load: %w", loadErr), exitcode.GeneralError)
 }

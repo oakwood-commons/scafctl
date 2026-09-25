@@ -14,10 +14,12 @@ metadata:
 state:
   enabled:
     expr: "has(__params.use_state) && __params.use_state == 'true'"
-  backend:
+  load:
     provider: file
     inputs:
       path: dynamic-enabled-state.json
+  save:
+    - extends: load
 
 spec:
   resolvers:

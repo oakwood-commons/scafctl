@@ -11,7 +11,7 @@ when source files haven't changed.
 
 | Feature | Where |
 | --------- | ------- |
-| `state.enabled` + `state.backend` config | Top-level `state:` block |
+| `state.enabled` + `state.load` / `state.save` config | Top-level `state:` block |
 | Automatic parameter replay | CLI `-r` values saved and restored |
 | Computed resolvers using replayed values | `output_dir`, `file_header` |
 | Immutable resolver values (optional) | Shown in state-immutable example |

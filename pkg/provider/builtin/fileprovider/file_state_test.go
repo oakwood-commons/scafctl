@@ -96,9 +96,9 @@ func TestFileProvider_StateDeleteNotFound(t *testing.T) {
 
 func TestFileProvider_StateDispatch(t *testing.T) {
 	p := NewFileProvider()
-	solDir := t.TempDir()
+	workDir := t.TempDir()
 	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityState)
-	ctx = provider.WithSolutionDirectory(ctx, solDir)
+	ctx = provider.WithWorkingDirectory(ctx, workDir)
 
 	// Dispatch routes state_load through the Execute path
 	result, err := p.Execute(ctx, map[string]any{
@@ -111,16 +111,20 @@ func TestFileProvider_StateDispatch(t *testing.T) {
 	assert.True(t, data["success"].(bool))
 }
 
-func TestFileProvider_StateDispatch_RelativeResolvesToSolutionDir(t *testing.T) {
+func TestFileProvider_StateDispatch_RelativeResolvesToWorkingDirectory(t *testing.T) {
 	p := NewFileProvider()
-	solDir := t.TempDir()
+	workDir := t.TempDir()
 	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityState)
-	ctx = provider.WithSolutionDirectory(ctx, solDir)
+	ctx = provider.WithWorkingDirectory(ctx, workDir)
 
 	stateData := state.NewData()
 	stateData.Parameters["key"] = "value"
 
-	// Save with a relative path -- should resolve to solDir
+	// Save with a relative path -- should resolve to the context working
+	// directory, not the solution's directory (a solution dir set in context
+	// alongside a working dir must not win -- working dir takes precedence).
+	solDir := t.TempDir()
+	ctx = provider.WithSolutionDirectory(ctx, solDir)
 	_, err := p.Execute(ctx, map[string]any{
 		"operation": "state_save",
 		"path":      "my-state.json",
@@ -128,9 +132,11 @@ func TestFileProvider_StateDispatch_RelativeResolvesToSolutionDir(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	// Verify file exists in solution directory
-	_, err = os.Stat(filepath.Join(solDir, "my-state.json"))
+	// Verify file exists in the working directory, NOT the solution directory.
+	_, err = os.Stat(filepath.Join(workDir, "my-state.json"))
 	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(solDir, "my-state.json"))
+	assert.True(t, os.IsNotExist(err), "relative state path must not resolve to the solution directory")
 
 	// Load back via relative path
 	result, err := p.Execute(ctx, map[string]any{
@@ -142,17 +148,56 @@ func TestFileProvider_StateDispatch_RelativeResolvesToSolutionDir(t *testing.T) 
 	assert.True(t, data["success"].(bool))
 }
 
-func TestFileProvider_StateDispatch_NoSolutionDir_RejectsRelative(t *testing.T) {
+func TestFileProvider_StateDispatch_NoContextWorkingDir_FallsBackToProcessCWD(t *testing.T) {
 	p := NewFileProvider()
+	workDir := t.TempDir()
+	t.Chdir(workDir) // safely restores the process CWD when the test ends
+
 	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityState)
 
-	// Relative path without solution directory should error
+	stateData := state.NewData()
+	stateData.Parameters["key"] = "value"
+
+	// No WithWorkingDirectory and no WithSolutionDirectory set -- must fall
+	// back to the process's actual current working directory (os.Getwd()),
+	// matching every `scafctl state` CLI subcommand's own resolution.
 	_, err := p.Execute(ctx, map[string]any{
-		"operation": "state_load",
-		"path":      "relative/path.json",
+		"operation": "state_save",
+		"path":      "cwd-state.json",
+		"data":      stateData,
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "base directory is required")
+	require.NoError(t, err)
+
+	_, err = os.Stat(filepath.Join(workDir, "cwd-state.json"))
+	require.NoError(t, err)
+}
+
+func TestFileProvider_StateDispatch_SolutionDirAloneIsNoLongerUsed(t *testing.T) {
+	p := NewFileProvider()
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+
+	solDir := t.TempDir()
+	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityState)
+	ctx = provider.WithSolutionDirectory(ctx, solDir)
+
+	stateData := state.NewData()
+	stateData.Parameters["key"] = "value"
+
+	// A solution directory in context, with no working directory set, must
+	// NOT be used as the base for a relative state path -- only the process
+	// CWD (or an explicit WithWorkingDirectory) resolves relative paths now.
+	_, err := p.Execute(ctx, map[string]any{
+		"operation": "state_save",
+		"path":      "state.json",
+		"data":      stateData,
+	})
+	require.NoError(t, err)
+
+	_, err = os.Stat(filepath.Join(workDir, "state.json"))
+	require.NoError(t, err, "relative state path must resolve against the process CWD")
+	_, err = os.Stat(filepath.Join(solDir, "state.json"))
+	assert.True(t, os.IsNotExist(err), "the solution directory must no longer be used for state paths")
 }
 
 func TestFileProvider_StateDryRun(t *testing.T) {

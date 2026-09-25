@@ -1,9 +1,14 @@
 # =============================================================================
-# GitHub State Backend Example (PR Workflow)
+# GitHub State Example (PR Workflow)
 # =============================================================================
-# Demonstrates GitHub-based state persistence with PR-based workflows using
-# saveOverrides. State is loaded from the main branch and saved to a
-# resolver-derived feature branch, enabling PR-based review of state changes.
+# Demonstrates GitHub-based state persistence with PR-based workflows. State is
+# loaded from the main branch and saved to a resolver-derived feature branch,
+# enabling PR-based review of state changes.
+#
+# The save target uses `extends: load`: it writes through the load block's
+# provider with the load inputs (owner, repo, path, ref), and its own inputs
+# are merged on top. Save target inputs resolve after every resolver has run,
+# so they may reference resolvers (rslvr:, or _ in CEL).
 #
 # This example requires the github provider plugin (>= 0.6.0).
 #
@@ -35,11 +40,12 @@ metadata:
     Loads state from main, saves to a feature branch derived from a resolver.
 
 # State configuration:
-# - Loads from refs/heads/main (fixed ref in inputs)
-# - Saves to the branch specified in saveOverrides (resolved at save time)
+# - load reads from refs/heads/main (the fixed ref input)
+# - the save target extends load and adds the branch to write to plus a commit
+#   message, both resolved at save time
 state:
   enabled: true
-  backend:
+  load:
     provider: github
     inputs:
       owner: { literal: "my-org" }
@@ -47,10 +53,12 @@ state:
       path:
         expr: "'state/' + __params.app_name + '.json'"
       ref: { literal: "main" }
-    saveOverrides:
-      branch: { rslvr: featureBranch }
-      message:
-        expr: "'chore(state): update state for ' + _.app_name"
+  save:
+    - extends: load
+      inputs:
+        branch: { rslvr: featureBranch }
+        message:
+          expr: "'chore(state): update state for ' + _.app_name"
 
 spec:
   resolvers:

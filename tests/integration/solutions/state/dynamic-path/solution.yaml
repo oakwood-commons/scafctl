@@ -5,17 +5,19 @@ metadata:
   name: test-state-dynamic-path
   version: 1.0.0
   description: |
-    Functional tests for dynamic state backend path.
-    Verifies that backend inputs support Go template ValueRefs using __params,
+    Functional tests for a dynamic state load path.
+    Verifies that load inputs support Go template ValueRefs using __params,
     enabling per-project state files resolved at runtime from CLI parameters.
 
 state:
   enabled: true
-  backend:
+  load:
     provider: file
     inputs:
       path:
         tmpl: "dynamic/{{ .__params.project }}.json"
+  save:
+    - extends: load
 
 spec:
   resolvers:
@@ -106,7 +108,7 @@ spec:
         description: Missing __params.project produces actionable error with param hint
         command: [run, resolver]
         args: ["-o", "json"]
-        # No -r project=... supplied -- state backend path cannot be resolved
+        # No -r project=... supplied -- state load path cannot be resolved
         tags: [state, dynamic-path, error-handling]
         assertions:
           - expression: __exitCode != 0

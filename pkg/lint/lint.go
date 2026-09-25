@@ -1877,15 +1877,21 @@ func collectReferencedResolvers(sol *solution.Solution) map[string]bool {
 		}
 	}
 
-	// State configuration (enabled, backend inputs, saveOverrides) can reference
-	// resolvers. The walker does not traverse state, so scan it explicitly.
+	// State configuration (enabled, load inputs, and every save target's inputs
+	// and enabled condition) can reference resolvers. The walker does not
+	// traverse state, so scan it explicitly.
 	if sol.State != nil {
 		resolver.ExtractRefsFromValueRef(sol.State.Enabled, refs)
-		for _, vr := range sol.State.Backend.Inputs {
-			resolver.ExtractRefsFromValueRef(vr, refs)
+		if sol.State.Load != nil {
+			for _, vr := range sol.State.Load.Inputs {
+				resolver.ExtractRefsFromValueRef(vr, refs)
+			}
 		}
-		for _, vr := range sol.State.Backend.SaveOverrides {
-			resolver.ExtractRefsFromValueRef(vr, refs)
+		for _, target := range sol.State.Save {
+			resolver.ExtractRefsFromValueRef(target.Enabled, refs)
+			for _, vr := range target.Inputs {
+				resolver.ExtractRefsFromValueRef(vr, refs)
+			}
 		}
 	}
 
@@ -2719,68 +2725,297 @@ func FilterBySeverity(result *Result, minSeverity string) *Result {
 	return filtered
 }
 
+// githubStateProvider is the name of the GitHub state provider plugin, used to
+// hint at a missing save branch for PR workflows.
+const githubStateProvider = "github"
+
 // lintState validates the solution's state configuration.
 func lintState(sol *solution.Solution, result *Result, registry providerLookup) {
 	if sol.State == nil {
 		return
 	}
 
-	if !lintStateBackend(sol, result, registry) {
+	if sol.State.Load == nil && len(sol.State.Save) == 0 {
+		result.addFinding(SeverityWarning, "state", "state",
+			"the state block configures neither load nor save",
+			"Add a state.load block to read state, state.save targets to write it, or remove the state block",
+			"empty-state-config")
 		return
 	}
+
+	lintStateLoad(sol, result, registry)
 	lintStateRefs(sol, result, registry)
-	lintStateSaveOverrides(sol, result)
-	lintStateGitHubNoSaveBranch(sol, result)
+	lintStateSave(sol, result, registry)
+	lintStateRequirements(sol, result)
 }
 
-// lintStateBackend validates the backend provider configuration.
-// Returns false if further state linting should be skipped (e.g., backend is missing).
-func lintStateBackend(sol *solution.Solution, result *Result, registry providerLookup) bool {
-	location := "state"
+// lintStateLoad validates the load block's provider and inputs.
+func lintStateLoad(sol *solution.Solution, result *Result, registry providerLookup) {
+	load := sol.State.Load
+	if load == nil {
+		return
+	}
+	if lintStateProvider(load.Provider, "state.load", result, registry,
+		"missing-state-load-provider", "invalid-state-load-provider") {
+		lintNilInputs(load.Inputs, "state.load", result)
+	}
+}
 
-	backendName := sol.State.Backend.Provider
-	if backendName == "" {
-		result.addFinding(SeverityError, "state", location+".backend.provider",
-			"state backend provider is not specified",
-			"Set backend.provider to a registered provider with CapabilityState (e.g., 'file')",
-			"missing-state-backend")
+// lintStateProvider validates that a state provider name is set and refers to
+// a registered provider with CapabilityState. location is the config path of
+// the block naming the provider (e.g. "state.load" or "state.save[0]");
+// missingRule/invalidRule name the findings for a missing/unregistered
+// provider so each call site reports under its own rule name. Returns false
+// when the provider name is empty, so the caller can skip provider-dependent
+// checks (there is nothing to validate against an unspecified provider).
+func lintStateProvider(name, location string, result *Result, registry providerLookup, missingRule, invalidRule string) bool {
+	if name == "" {
+		result.addFinding(SeverityError, "state", location+".provider",
+			"state provider is not specified",
+			"Set provider to a registered provider with CapabilityState (e.g., 'file')",
+			missingRule)
 		return false
 	}
 
-	prov, found := registry.Get(backendName)
+	prov, found := registry.Get(name)
 	if !found {
 		// If the provider is declared in bundle.plugins (or is an official
 		// provider), it will be resolved at runtime. We cannot verify
 		// capabilities at lint time, so skip the finding.
-		if !registry.Has(backendName) {
-			result.addFinding(SeverityError, "state", location+".backend.provider",
-				fmt.Sprintf("state backend provider '%s' not found in registry", backendName),
+		if !registry.Has(name) {
+			result.addFinding(SeverityError, "state", location+".provider",
+				fmt.Sprintf("state provider '%s' not found in registry", name),
 				"Use a registered provider with CapabilityState such as 'file' or 'http'. External providers like 'github' require an installed plugin",
-				"invalid-state-backend")
+				invalidRule)
 		}
-	} else {
-		desc := prov.Descriptor()
-		hasState := false
-		for _, cap := range desc.Capabilities {
-			if cap == provider.CapabilityState {
-				hasState = true
-				break
-			}
-		}
-		if !hasState {
-			result.addFinding(SeverityError, "state", location+".backend.provider",
-				fmt.Sprintf("provider '%s' does not have CapabilityState", backendName),
-				"Use a provider that implements CapabilityState",
-				"invalid-state-backend")
-		}
+		return true
 	}
 
-	lintNilInputs(sol.State.Backend.Inputs, location+".backend", result)
+	for _, capability := range prov.Descriptor().Capabilities {
+		if capability == provider.CapabilityState {
+			return true
+		}
+	}
+	result.addFinding(SeverityError, "state", location+".provider",
+		fmt.Sprintf("provider '%s' does not have CapabilityState", name),
+		"Use a provider that implements CapabilityState",
+		invalidRule)
 	return true
 }
 
+// lintStateSave validates each save target. Targets are independent of the
+// load block and of each other, so a problem with one does not block validating
+// the rest.
+func lintStateSave(sol *solution.Solution, result *Result, registry providerLookup) {
+	for i, target := range sol.State.Save {
+		location := fmt.Sprintf("state.save[%d]", i)
+		lintSaveTargetShape(target, location, result)
+		lintSaveTargetSource(sol, target, location, result, registry)
+		lintNilInputs(target.Inputs, location, result)
+		lintSaveTargetStateRefs(target, location, result)
+		lintSaveTargetGitHubBranch(sol, target, location, result)
+	}
+}
+
+// lintSaveTargetShape validates a save target's format, parameter narrowing,
+// and checkpoint flag. Parameter narrowing is only meaningful under format:
+// intent (narrowing the authoritative "full" document would silently drop a
+// value still relied on for replay), include/exclude are mutually exclusive,
+// and a checkpoint is only meaningful for a full-format target (an intent
+// document carries no locks).
+func lintSaveTargetShape(target state.SaveTarget, location string, result *Result) {
+	format := target.Format
+	if format == "" {
+		format = state.FormatFull
+	}
+
+	// The format-dependent checks below only apply to a recognized format; an
+	// unrecognized one is reported once, here.
+	knownFormat := format == state.FormatFull || format == state.FormatIntent
+	if !knownFormat {
+		result.addFinding(SeverityError, "state", location+".format",
+			fmt.Sprintf("unknown state save target format %q", target.Format),
+			fmt.Sprintf("Use %q (default) or %q", state.FormatFull, state.FormatIntent),
+			"invalid-state-format")
+	}
+
+	if p := target.Parameters; p != nil {
+		if knownFormat && format != state.FormatIntent {
+			result.addFinding(SeverityError, "state", location+".parameters",
+				"parameter narrowing is only valid with format: intent",
+				fmt.Sprintf("Remove %s.parameters, or set %s.format to %q -- narrowing a %q (or unset) target would silently drop parameters from the authoritative state document, breaking replay", location, location, state.FormatIntent, state.FormatFull),
+				"invalid-state-parameter-narrowing")
+		}
+		if len(p.Include) > 0 && len(p.Exclude) > 0 {
+			result.addFinding(SeverityError, "state", location+".parameters",
+				fmt.Sprintf("%s.parameters.include and %s.parameters.exclude are mutually exclusive", location, location),
+				"Set only one of include or exclude",
+				"conflicting-state-parameter-narrowing")
+		}
+	}
+
+	if target.Checkpoint && knownFormat && format != state.FormatFull {
+		result.addFinding(SeverityError, "state", location+".checkpoint",
+			fmt.Sprintf("checkpoint is only valid on a %q-format save target", state.FormatFull),
+			fmt.Sprintf("Remove %s.checkpoint, or move checkpoint: true to a %q-format target -- a checkpoint locks immutable values, and a %q document carries no locks", location, state.FormatFull, format),
+			"invalid-state-save-checkpoint")
+	}
+}
+
+// lintSaveTargetSource validates where a save target writes: either through
+// its own provider, or via extends: load (which inherits the load block's
+// provider, already validated by lintStateLoad) -- never both.
+func lintSaveTargetSource(sol *solution.Solution, target state.SaveTarget, location string, result *Result, registry providerLookup) {
+	switch {
+	case target.Extends == "":
+		lintStateProvider(target.Provider, location, result, registry,
+			"missing-state-save-provider", "invalid-state-save-provider")
+	case target.Extends != state.ExtendsLoad:
+		result.addFinding(SeverityError, "state", location+".extends",
+			fmt.Sprintf("unsupported extends value %q", target.Extends),
+			fmt.Sprintf("Set extends: %s, or remove extends and set provider instead", state.ExtendsLoad),
+			"invalid-state-save-extends")
+	case target.Provider != "":
+		result.addFinding(SeverityError, "state", location+".extends",
+			"extends and provider are mutually exclusive",
+			fmt.Sprintf("Remove %s.provider to inherit the load block's provider, or remove extends to write through a different provider", location),
+			"invalid-state-save-extends")
+	case sol.State.Load == nil:
+		result.addFinding(SeverityError, "state", location+".extends",
+			fmt.Sprintf("extends: %s requires a state.load block", state.ExtendsLoad),
+			"Add a state.load block, or remove extends and set provider and inputs on this target",
+			"invalid-state-save-extends")
+	}
+}
+
+// lintSaveTargetStateRefs flags save-target fields that reference the state
+// being saved (__state), a circular dependency. Unlike load inputs, save-target
+// fields may freely reference resolvers -- every resolver has run by save time.
+func lintSaveTargetStateRefs(target state.SaveTarget, location string, result *Result) {
+	check := func(vr *spec.ValueRef, field string) {
+		if vr != nil && vr.ReferencesVariable("__state") {
+			result.addFinding(SeverityError, "state", field,
+				fmt.Sprintf("%s references the state being saved, creating a circular dependency", field),
+				"Use a resolver reference (rslvr:) or CEL expression that does not depend on the state provider",
+				"state-save-state-ref")
+		}
+	}
+
+	check(target.Enabled, location+".enabled")
+	keys := make([]string, 0, len(target.Inputs))
+	for key := range target.Inputs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		check(target.Inputs[key], location+".inputs."+key)
+	}
+}
+
+// lintSaveTargetGitHubBranch fires an info hint when a save target writes
+// through the github provider without a branch input: state is then saved to
+// the branch it was loaded from (typically main) rather than a PR branch.
+func lintSaveTargetGitHubBranch(sol *solution.Solution, target state.SaveTarget, location string, result *Result) {
+	providerName := target.Provider
+	if target.Extends == state.ExtendsLoad && sol.State.Load != nil {
+		providerName = sol.State.Load.Provider
+		if _, ok := sol.State.Load.Inputs["branch"]; ok {
+			return
+		}
+	}
+	if providerName != githubStateProvider {
+		return
+	}
+	if _, ok := target.Inputs["branch"]; ok {
+		return
+	}
+	result.addFinding(SeverityInfo, "state", location,
+		"GitHub save target has no branch configured",
+		"For PR workflows, set the branch on this target from a resolver:\n  inputs:\n    branch: { rslvr: <your-branch-resolver> }\nThis saves state to the same branch as your scaffolded files",
+		"state-github-no-save-branch")
+}
+
+// lintStateRequirements checks that a solution relying on what only a full
+// state document carries -- immutable resolver locks and action fingerprints
+// -- both reads state back (a load block) and writes a full document (a
+// full-format save target). It also hints when immutable values locked before
+// workflow actions would be lost to a later action failure.
+func lintStateRequirements(sol *solution.Solution, result *Result) {
+	hasImmutable := solutionHasImmutableResolver(sol)
+	usesFingerprints := solutionUsesFingerprints(sol)
+	if !hasImmutable && !usesFingerprints {
+		return
+	}
+
+	features := "action fingerprints"
+	switch {
+	case hasImmutable && usesFingerprints:
+		features = "immutable resolvers and action fingerprints"
+	case hasImmutable:
+		features = "immutable resolvers"
+	}
+
+	if sol.State.Load == nil {
+		result.addFinding(SeverityWarning, "state", "state.load",
+			fmt.Sprintf("the solution uses %s but state has no load block, so saved values are never read back", features),
+			"Add a state.load block that reads the full state document a save target writes (e.g. pair it with save: [{extends: load}])",
+			"state-requires-load")
+	}
+
+	hasFullTarget, hasCheckpoint := false, false
+	for _, target := range sol.State.Save {
+		if target.Format == "" || target.Format == state.FormatFull {
+			hasFullTarget = true
+			// Only a full-format target can checkpoint; a checkpoint on any
+			// other target is invalid-state-save-checkpoint and locks nothing.
+			if target.Checkpoint {
+				hasCheckpoint = true
+			}
+		}
+	}
+	if !hasFullTarget {
+		result.addFinding(SeverityWarning, "state", "state.save",
+			fmt.Sprintf("the solution uses %s but no save target writes the %q format, so they are never saved", features, state.FormatFull),
+			fmt.Sprintf("Add a %q-format save target (e.g. extends: load); an %q document carries no resolver locks or fingerprints", state.FormatFull, state.FormatIntent),
+			"state-requires-full-save")
+	}
+
+	if hasImmutable && sol.Spec.HasActions() && !hasCheckpoint {
+		result.addFinding(SeverityInfo, "state", "state.save",
+			"immutable values locked this run are saved only after every workflow action succeeds",
+			"If an action can fail after creating something named from an immutable value, add checkpoint: true to a full-format save target so the value is kept for the next run",
+			"immutable-without-checkpoint")
+	}
+}
+
+// solutionHasImmutableResolver reports whether any resolver is immutable: true.
+func solutionHasImmutableResolver(sol *solution.Solution) bool {
+	for _, res := range sol.Spec.Resolvers {
+		if res != nil && res.Immutable {
+			return true
+		}
+	}
+	return false
+}
+
+// solutionUsesFingerprints reports whether any workflow action (regular or
+// finally) declares a fingerprint block.
+func solutionUsesFingerprints(sol *solution.Solution) bool {
+	if sol.Spec.Workflow == nil {
+		return false
+	}
+	for _, group := range []map[string]*action.Action{sol.Spec.Workflow.Actions, sol.Spec.Workflow.Finally} {
+		for _, act := range group {
+			if act != nil && act.Fingerprint != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // lintStateRefs validates that state config fields evaluated at load time
-// (state.enabled and backend inputs) reference only state-INDEPENDENT resolvers.
+// (state.enabled and load inputs) reference only state-INDEPENDENT resolvers.
 //
 // The engine resolves these fields in a pre-load pass, so references to
 // state-independent resolvers are permitted. Two things are still errors:
@@ -2789,8 +3024,8 @@ func lintStateBackend(sol *solution.Solution, result *Result, registry providerL
 //     state is loaded, so this is a circular dependency;
 //   - a reference to an undefined resolver: almost always a typo.
 //
-// saveOverrides are excluded here because they resolve at SAVE time (after all
-// resolvers have run); lintStateSaveOverrides covers them.
+// Save targets are excluded here because they resolve at SAVE time (after all
+// resolvers have run); lintSaveTargetStateRefs covers them.
 func lintStateRefs(sol *solution.Solution, result *Result, registry providerLookup) {
 	var lookup resolver.DescriptorLookup
 	if registry != nil {
@@ -2834,63 +3069,16 @@ func lintStateRefs(sol *solution.Solution, result *Result, registry providerLook
 
 	check(sol.State.Enabled, "state.enabled")
 
-	inputKeys := make([]string, 0, len(sol.State.Backend.Inputs))
-	for key := range sol.State.Backend.Inputs {
+	if sol.State.Load == nil {
+		return
+	}
+	inputKeys := make([]string, 0, len(sol.State.Load.Inputs))
+	for key := range sol.State.Load.Inputs {
 		inputKeys = append(inputKeys, key)
 	}
 	sort.Strings(inputKeys)
 	for _, key := range inputKeys {
-		check(sol.State.Backend.Inputs[key], "state.backend.inputs."+key)
-	}
-}
-
-// lintStateSaveOverrides validates saveOverrides fields.
-// saveOverrides MAY contain rslvr: references (unlike inputs), but must NOT
-// reference the state provider (circular dependency).
-func lintStateSaveOverrides(sol *solution.Solution, result *Result) {
-	for key, vr := range sol.State.Backend.SaveOverrides {
-		location := fmt.Sprintf("state.backend.saveOverrides.%s", key)
-		if vr == nil {
-			result.addFinding(SeverityError, "provider", location,
-				fmt.Sprintf("input '%s' has no value (dangling YAML key)", key),
-				"Provide a value for the input or remove the key entirely",
-				"nil-provider-input")
-			continue
-		}
-		// Check for state provider references using ReferencedVariables
-		if vr.ReferencesVariable("__state") {
-			result.addFinding(SeverityError, "state", location,
-				fmt.Sprintf("saveOverrides input %q references the state provider, creating a circular dependency", key),
-				"Use a resolver reference (rslvr:) or CEL expression that does not depend on the state provider",
-				"state-save-override-state-ref")
-		}
-	}
-}
-
-// lintStateGitHubNoSaveBranch fires an info hint when the state backend is
-// github and neither inputs.branch nor saveOverrides.branch is configured.
-func lintStateGitHubNoSaveBranch(sol *solution.Solution, result *Result) {
-	if sol.State.Backend.Provider != "github" {
-		return
-	}
-
-	hasBranch := false
-
-	// Check inputs for branch
-	if _, ok := sol.State.Backend.Inputs["branch"]; ok {
-		hasBranch = true
-	}
-
-	// Check saveOverrides for branch
-	if _, ok := sol.State.Backend.SaveOverrides["branch"]; ok {
-		hasBranch = true
-	}
-
-	if !hasBranch {
-		result.addFinding(SeverityInfo, "state", "state.backend",
-			"GitHub state backend has no save branch configured",
-			"For PR workflows, create a resolver for the branch name and reference it:\n  saveOverrides:\n    branch: { rslvr: <your-branch-resolver> }\nThis ensures state is saved to the same branch as your scaffolded files",
-			"state-github-no-save-branch")
+		check(sol.State.Load.Inputs[key], "state.load.inputs."+key)
 	}
 }
 
@@ -2898,17 +3086,26 @@ func lintStateGitHubNoSaveBranch(sol *solution.Solution, result *Result) {
 // state block configured on the solution. Without state, immutable values
 // cannot be persisted or verified across runs.
 func lintImmutableResolvers(sol *solution.Solution, result *Result) {
+	// A state block that configures neither load nor save persists nothing,
+	// so it cannot honor the immutable contract any better than no block.
+	var problem string
+	switch {
+	case sol.State == nil:
+		problem = "no state block is configured on the solution"
+	case sol.State.Load == nil && len(sol.State.Save) == 0:
+		problem = "the solution's state block configures neither load nor save"
+	default:
+		return
+	}
 	for name, res := range sol.Spec.Resolvers {
 		if res == nil || !res.Immutable {
 			continue
 		}
-		if sol.State == nil {
-			location := fmt.Sprintf("resolvers.%s", name)
-			result.addFinding(SeverityError, "state", location,
-				fmt.Sprintf("resolver %q has immutable: true but no state block is configured on the solution", name),
-				"Add a state block with a backend provider to the solution so that the resolver value can be persisted.",
-				"immutable-requires-state")
-		}
+		location := fmt.Sprintf("resolvers.%s", name)
+		result.addFinding(SeverityError, "state", location,
+			fmt.Sprintf("resolver %q has immutable: true but %s", name, problem),
+			"Add a state block with a load block and a full-format save target (e.g. save: [{extends: load}]) so the resolver value can be persisted and verified.",
+			"immutable-requires-state")
 	}
 }
 
