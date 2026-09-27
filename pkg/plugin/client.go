@@ -274,7 +274,8 @@ func WithHostDeps(deps *HostServiceDeps) ClientOption {
 // matches no valid secret name, so every secret RPC is denied. The scope
 // applies to the whole plugin client, so a binary exposing several auth
 // handlers would see all of them under the resolved name's namespace --
-// one auth handler per plugin binary is assumed.
+// register only the scoped handler from such a client (see
+// RegisterFetchedAuthHandlerPluginsNamed).
 func WithSecretScope(handlerName string) ClientOption {
 	return func(o *clientOptions) {
 		o.secretScope = handlerName
@@ -298,6 +299,23 @@ func (o *clientOptions) applySecretScope() {
 		scoped.AllowedSecretPrefix = "scafctl.auth." + o.secretScope + "."
 	}
 	o.hostDeps = &scoped
+}
+
+// resolveClientOptions applies opts in order, then finalizes the secret scope.
+func resolveClientOptions(opts []ClientOption) clientOptions {
+	var o clientOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	o.applySecretScope()
+	return o
+}
+
+// ResolvedHostDeps returns the HostServiceDeps a plugin client built with opts
+// would serve, after WithSecretScope finalization. It lets callers verify
+// their option composition without starting a plugin.
+func ResolvedHostDeps(opts ...ClientOption) *HostServiceDeps {
+	return resolveClientOptions(opts).hostDeps
 }
 
 // WithSanitizedEnv restricts the environment variables passed to the plugin
@@ -351,11 +369,7 @@ func buildPluginClient[T any](
 		connectFn = connectPlugin
 	}
 
-	var o clientOptions
-	for _, opt := range opts {
-		opt(&o)
-	}
-	o.applySecretScope()
+	o := resolveClientOptions(opts)
 
 	cmdFn := pluginCmd
 	if o.sanitizeEnv {

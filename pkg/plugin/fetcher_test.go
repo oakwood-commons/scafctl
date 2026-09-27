@@ -1625,6 +1625,35 @@ func TestRegisterFetchedAuthHandlerPlugins_KillsClientWhenNoNewHandlers(t *testi
 		"a plugin that registers no new handlers must have its subprocess killed and not be returned")
 }
 
+func TestRegisterFetchedAuthHandlerPluginsNamed_SkipsUnrequestedHandlers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping auth handler plugin test in short mode (requires go build)")
+	}
+	binPath := buildTestAuthHandlerPlugin(t)
+
+	ctx := context.Background()
+	reg := auth.NewRegistry()
+	results := []FetchResult{
+		{Name: "test-auth", Kind: solution.PluginKindAuthHandler, Path: binPath},
+	}
+
+	// The plugin advertises only "test-auth"; requesting another name must
+	// register nothing and kill the client.
+	clients, err := RegisterFetchedAuthHandlerPluginsNamed(ctx, reg, results, nil, "other")
+	require.NoError(t, err)
+	assert.Empty(t, clients)
+	assert.False(t, reg.Has("test-auth"))
+}
+
+func TestFilterAuthHandlers(t *testing.T) {
+	t.Parallel()
+	handlers := []AuthHandlerInfo{{Name: "entra"}, {Name: "github"}, {Name: "gcp"}}
+
+	kept := filterAuthHandlers(context.Background(), handlers, "github", "multi")
+	assert.Equal(t, []AuthHandlerInfo{{Name: "github"}}, kept)
+	assert.Empty(t, filterAuthHandlers(context.Background(), handlers, "missing", "multi"))
+}
+
 func TestFetcher_ResolvePlugins_Empty(t *testing.T) {
 	t.Parallel()
 	f := NewFetcher(FetcherConfig{

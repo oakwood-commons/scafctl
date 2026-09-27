@@ -1130,6 +1130,16 @@ func RegisterFetchedVersionedPlugins(
 // plugin binaries into the auth registry. Returns the created clients
 // (caller should Kill() them on cleanup).
 func RegisterFetchedAuthHandlerPlugins(ctx context.Context, registry *auth.Registry, results []FetchResult, cfg *ProviderConfig, clientOpts ...ClientOption) ([]*AuthHandlerClient, error) {
+	return RegisterFetchedAuthHandlerPluginsNamed(ctx, registry, results, cfg, "", clientOpts...)
+}
+
+// RegisterFetchedAuthHandlerPluginsNamed is RegisterFetchedAuthHandlerPlugins
+// restricted to the handler named only: any other handler a plugin binary
+// advertises is skipped with a warning. Use it when the client options are
+// scoped to that one handler (see WithSecretScope), since extra handlers
+// sharing the client would be denied access to their own secret namespace.
+// An empty only registers every advertised handler.
+func RegisterFetchedAuthHandlerPluginsNamed(ctx context.Context, registry *auth.Registry, results []FetchResult, cfg *ProviderConfig, only string, clientOpts ...ClientOption) ([]*AuthHandlerClient, error) {
 	var clients []*AuthHandlerClient
 
 	for _, r := range results {
@@ -1154,6 +1164,10 @@ func RegisterFetchedAuthHandlerPlugins(ctx context.Context, registry *auth.Regis
 			return nil, fmt.Errorf("getting auth handlers from plugin %s: %w", r.Name, err)
 		}
 
+		if only != "" {
+			handlers = filterAuthHandlers(ctx, handlers, only, r.Name)
+		}
+
 		registered := configureAndRegisterAuthHandlers(ctx, registry, client, handlers, cfg)
 		if len(registered) == 0 {
 			// This plugin registered no new handlers -- every name it exposes
@@ -1169,6 +1183,21 @@ func RegisterFetchedAuthHandlerPlugins(ctx context.Context, registry *auth.Regis
 	}
 
 	return clients, nil
+}
+
+// filterAuthHandlers keeps only the handler named only, warning about every
+// other handler the plugin advertises.
+func filterAuthHandlers(ctx context.Context, handlers []AuthHandlerInfo, only, pluginName string) []AuthHandlerInfo {
+	var kept []AuthHandlerInfo
+	for _, h := range handlers {
+		if h.Name == only {
+			kept = append(kept, h)
+			continue
+		}
+		logr.FromContextOrDiscard(ctx).V(0).Info("WARNING: skipping auth handler not requested from plugin",
+			"plugin", pluginName, "handler", h.Name, "requested", only)
+	}
+	return kept
 }
 
 // pluginKindToArtifactKind converts solution.PluginKind to catalog.ArtifactKind.

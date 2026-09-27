@@ -701,11 +701,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				clientOpts := []plugin.ClientOption{plugin.WithHostDeps(hostDeps)}
 
 				authRegistry.SetFallbackResolver(func(resolverCtx context.Context, name string) (auth.Handler, error) {
-					// Scope the resolved plugin's host secret-store access to
-					// this handler's own namespace ("scafctl.auth.<name>.") so
-					// a fetched auth-handler plugin cannot read, overwrite, or
-					// delete other handlers' secrets (e.g. refresh tokens).
-					scopedOpts := slices.Concat(clientOpts, []plugin.ClientOption{plugin.WithSecretScope(name)})
+					scopedOpts := scopedAuthClientOpts(clientOpts, name)
 					// Use cCmd.Context() to capture the fully-wired context at
 					// call time, not the stale ctx from closure capture time.
 					// Values like the official provider registry are added to
@@ -737,7 +733,10 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 						return nil, fmt.Errorf("fetching auth handler plugin %q: %w", name, fetchErr)
 					}
 
-					clients, regErr := plugin.RegisterFetchedAuthHandlerPlugins(liveCtx, authRegistry, results, pluginCfg, scopedOpts...)
+					// Register only the requested handler: the client is scoped to
+					// its namespace, so extra handlers the binary advertises would
+					// be denied their own secrets.
+					clients, regErr := plugin.RegisterFetchedAuthHandlerPluginsNamed(liveCtx, authRegistry, results, pluginCfg, name, scopedOpts...)
 					if regErr != nil {
 						_ = cooldown.RecordFailure(name)
 						return nil, fmt.Errorf("registering auth handler plugin %q: %w", name, regErr)
@@ -790,17 +789,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 					if !ok {
 						continue // not cached, skip (will use fallback on demand)
 					}
-					lazy := plugin.NewLazyAuthHandlerWrapper(plugin.LazyAuthHandlerConfig{
-						Name:      name,
-						BinPath:   binPath,
-						PluginCfg: pluginCfg,
-						// Scope the cached plugin's secret-store access to this
-						// handler's own namespace ("scafctl.auth.<name>.") so it
-						// cannot read, overwrite, or delete other handlers'
-						// secrets (e.g. refresh tokens).
-						ClientOpts:       slices.Concat(clientOpts, []plugin.ClientOption{plugin.WithSecretScope(name)}),
-						OfficialRegistry: officialReg,
-					})
+					lazy := plugin.NewLazyAuthHandlerWrapper(cachedAuthHandlerConfig(name, binPath, pluginCfg, clientOpts, officialReg))
 					lazy.SetContext(ctx)
 					if err := authRegistry.Register(lazy); err != nil {
 						lgr.V(1).Info("failed to register lazy auth handler", "handler", name, "error", err)
@@ -1010,4 +999,23 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 func withGroup(group string, cmd *cobra.Command) *cobra.Command {
 	cmd.GroupID = group
 	return cmd
+}
+
+// scopedAuthClientOpts appends WithSecretScope(name) to base so the auth
+// handler plugin can only read, overwrite, or delete secrets in its own
+// "scafctl.auth.<name>." namespace, not other handlers' (e.g. refresh tokens).
+func scopedAuthClientOpts(base []plugin.ClientOption, name string) []plugin.ClientOption {
+	return slices.Concat(base, []plugin.ClientOption{plugin.WithSecretScope(name)})
+}
+
+// cachedAuthHandlerConfig builds the lazy wrapper config for a cached official
+// auth handler, with client options scoped to that handler's namespace.
+func cachedAuthHandlerConfig(name, binPath string, pluginCfg *plugin.ProviderConfig, base []plugin.ClientOption, officialReg *authofficial.Registry) plugin.LazyAuthHandlerConfig {
+	return plugin.LazyAuthHandlerConfig{
+		Name:             name,
+		BinPath:          binPath,
+		PluginCfg:        pluginCfg,
+		ClientOpts:       scopedAuthClientOpts(base, name),
+		OfficialRegistry: officialReg,
+	}
 }
