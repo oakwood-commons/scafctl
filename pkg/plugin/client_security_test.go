@@ -5,6 +5,7 @@ package plugin
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	hplugin "github.com/hashicorp/go-plugin"
@@ -57,6 +58,24 @@ func TestWithSecretScope(t *testing.T) {
 		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.auth.entra.refresh_token"))
 		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.auth..x"))
 		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.secrets.x"))
+	})
+
+	t.Run("non-segment handler names fail closed", func(t *testing.T) {
+		t.Parallel()
+		// A dotted name would nest one handler's namespace inside
+		// another's ("entra" reaching "entra.evil.*") under raw prefix
+		// matching, so anything but a single dot-free segment denies all.
+		for _, name := range []string{"entra.evil", "Entra", "entra evil", "entra_", ".entra", "entra-"} {
+			scoped := applyOptions(WithHostDeps(&HostServiceDeps{}), WithSecretScope(name))
+			assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.auth."+strings.ToLower(name)+".refresh_token"), "scope %q", name)
+			assert.False(t, scoped.hostDeps.isSecretAllowed("anything"), "scope %q", name)
+		}
+
+		// Single characters and hyphen-interior names stay valid scopes.
+		for _, name := range []string{"a", "entra-gov"} {
+			scoped := applyOptions(WithHostDeps(&HostServiceDeps{}), WithSecretScope(name))
+			assert.Equal(t, "scafctl.auth."+name+".", scoped.hostDeps.AllowedSecretPrefix)
+		}
 	})
 
 	t.Run("no host deps is a no-op", func(t *testing.T) {

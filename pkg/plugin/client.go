@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -270,12 +271,17 @@ func WithHostDeps(deps *HostServiceDeps) ClientOption {
 // Every auth-handler plugin client must be given its own scope: without it,
 // an empty AllowedSecretPrefix grants access to every secret in the store,
 // including other handlers' credentials. A client that never receives host
-// deps is a no-op. An empty handlerName fails closed: the resulting prefix
-// matches no valid secret name, so every secret RPC is denied. The scope
-// applies to the whole plugin client, so a binary exposing several auth
-// handlers would see all of them under the resolved name's namespace --
-// register only the scoped handler from such a client (see
-// RegisterFetchedAuthHandlerPluginsNamed).
+// deps is a no-op. A handlerName that is not a single dot-free segment
+// (lowercase alphanumeric plus hyphens, matching the plugin name charset)
+// -- including an empty one -- fails closed: the resulting prefix matches
+// no valid secret name, so every secret RPC is denied. This keeps the
+// namespace prefix unambiguous even if an upstream name source (such as a
+// config-pinned handler key) is not validated: a dotted name would
+// otherwise nest one handler's namespace inside another's under plain
+// prefix matching. The scope applies to the whole plugin client, so a
+// binary exposing several auth handlers would see all of them under the
+// resolved name's namespace -- register only the scoped handler from such
+// a client (see RegisterFetchedAuthHandlerPluginsNamed).
 func WithSecretScope(handlerName string) ClientOption {
 	return func(o *clientOptions) {
 		o.secretScope = handlerName
@@ -291,15 +297,29 @@ func (o *clientOptions) applySecretScope() {
 		return
 	}
 	scoped := *o.hostDeps
-	if o.secretScope == "" {
+	if !validSecretScopeName(o.secretScope) {
 		// Fail closed: a space is rejected by validSecretName, so no valid
 		// secret name can match this prefix and every secret RPC is denied.
+		// This covers an empty name and any name that is not a single
+		// dot-free segment: a dotted handler name would nest one handler's
+		// namespace inside another's ("foo" reaching "foo.bar.*") under raw
+		// prefix matching, and upstream name sources (e.g. config-pinned
+		// handler keys) are not all validated.
 		scoped.AllowedSecretPrefix = " "
 	} else {
 		scoped.AllowedSecretPrefix = "scafctl.auth." + o.secretScope + "."
 	}
 	o.hostDeps = &scoped
 }
+
+// validSecretScopeName reports whether handlerName is safe to embed in a
+// namespace prefix: a single lowercase alphanumeric segment, hyphens allowed
+// (matching the plugin name charset), no dots.
+func validSecretScopeName(handlerName string) bool {
+	return secretScopeNamePattern.MatchString(handlerName)
+}
+
+var secretScopeNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // resolveClientOptions applies opts in order, then finalizes the secret scope.
 func resolveClientOptions(opts []ClientOption) clientOptions {
