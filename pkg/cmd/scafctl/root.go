@@ -700,6 +700,14 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				clientOpts := []plugin.ClientOption{plugin.WithHostDeps(hostDeps)}
 
 				authRegistry.SetFallbackResolver(func(resolverCtx context.Context, name string) (auth.Handler, error) {
+					// Scope the plugin's host secret-store access to this
+					// handler's own namespace ("scafctl.auth.<name>.") so a
+					// fetched auth-handler plugin cannot read, overwrite, or
+					// delete other handlers' secrets (e.g. refresh tokens).
+					// The base opts are cloned because the slice is shared
+					// across resolver invocations.
+					scopedOpts := append([]plugin.ClientOption{}, clientOpts...)
+					scopedOpts = append(scopedOpts, plugin.WithSecretScope(name))
 					// Use cCmd.Context() to capture the fully-wired context at
 					// call time, not the stale ctx from closure capture time.
 					// Values like the official provider registry are added to
@@ -731,7 +739,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 						return nil, fmt.Errorf("fetching auth handler plugin %q: %w", name, fetchErr)
 					}
 
-					clients, regErr := plugin.RegisterFetchedAuthHandlerPlugins(liveCtx, authRegistry, results, pluginCfg, clientOpts...)
+					clients, regErr := plugin.RegisterFetchedAuthHandlerPlugins(liveCtx, authRegistry, results, pluginCfg, scopedOpts...)
 					if regErr != nil {
 						_ = cooldown.RecordFailure(name)
 						return nil, fmt.Errorf("registering auth handler plugin %q: %w", name, regErr)
@@ -785,10 +793,13 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 						continue // not cached, skip (will use fallback on demand)
 					}
 					lazy := plugin.NewLazyAuthHandlerWrapper(plugin.LazyAuthHandlerConfig{
-						Name:             name,
-						BinPath:          binPath,
-						PluginCfg:        pluginCfg,
-						ClientOpts:       clientOpts,
+						Name:      name,
+						BinPath:   binPath,
+						PluginCfg: pluginCfg,
+						// Scope the cached plugin's secret-store access to this
+						// handler's own namespace so it cannot read, overwrite,
+						// or delete other handlers' secrets (e.g. refresh tokens).
+						ClientOpts:       append(append([]plugin.ClientOption{}, clientOpts...), plugin.WithSecretScope(name)),
 						OfficialRegistry: officialReg,
 					})
 					lazy.SetContext(ctx)

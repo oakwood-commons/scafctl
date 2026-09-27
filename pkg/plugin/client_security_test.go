@@ -10,6 +10,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWithSecretScope(t *testing.T) {
+	t.Parallel()
+
+	t.Run("scopes deps without mutating the original", func(t *testing.T) {
+		t.Parallel()
+		deps := &HostServiceDeps{}
+		scoped := &clientOptions{}
+		WithHostDeps(deps)(scoped)
+		WithSecretScope("entra")(scoped)
+
+		assert.Equal(t, "scafctl.auth.entra.", scoped.hostDeps.AllowedSecretPrefix)
+		assert.NotSame(t, deps, scoped.hostDeps)
+		// The shared original must stay untouched: callers hand it to other
+		// plugins and scope those copies separately.
+		assert.Empty(t, deps.AllowedSecretPrefix)
+		assert.True(t, deps.isSecretAllowed("anything"))
+		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.auth.github.refresh_token"))
+		assert.True(t, scoped.hostDeps.isSecretAllowed("scafctl.auth.entra.refresh_token"))
+	})
+
+	t.Run("empty handler name fails closed", func(t *testing.T) {
+		t.Parallel()
+		scoped := &clientOptions{}
+		WithHostDeps(&HostServiceDeps{})(scoped)
+		WithSecretScope("")(scoped)
+
+		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.auth.entra.refresh_token"))
+		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.secrets.x"))
+	})
+
+	t.Run("no host deps is a no-op", func(t *testing.T) {
+		t.Parallel()
+		scoped := &clientOptions{}
+		WithSecretScope("entra")(scoped)
+
+		assert.Nil(t, scoped.hostDeps)
+	})
+}
+
 func TestSafePluginEnv_OnlyAllowedKeys(t *testing.T) {
 	// Set some dangerous env vars for the test
 	t.Setenv("PATH", "/usr/bin:/bin")

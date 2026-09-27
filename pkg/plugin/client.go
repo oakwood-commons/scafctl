@@ -259,6 +259,27 @@ func WithHostDeps(deps *HostServiceDeps) ClientOption {
 	}
 }
 
+// WithSecretScope restricts the host secret store provided via WithHostDeps
+// to the named auth handler's own secret namespace: names starting with
+// "scafctl.auth.<handlerName>." — the namespace auth-handler SDKs use for
+// their persisted secrets (refresh tokens, metadata, cached tokens). The
+// deps are copied, so the value passed to WithHostDeps is not modified.
+// Every auth-handler plugin client must be given its own scope: without it,
+// an empty AllowedSecretPrefix grants access to every secret in the store,
+// including other handlers' credentials. A nil deps value is a no-op. An
+// empty handlerName fails closed: nothing matches the resulting prefix, so
+// every secret RPC is denied.
+func WithSecretScope(handlerName string) ClientOption {
+	return func(o *clientOptions) {
+		if o.hostDeps == nil {
+			return
+		}
+		scoped := *o.hostDeps
+		scoped.AllowedSecretPrefix = "scafctl.auth." + handlerName + "."
+		o.hostDeps = &scoped
+	}
+}
+
 // WithSanitizedEnv restricts the environment variables passed to the plugin
 // process. Only safe variables (PATH, HOME, TMPDIR, etc.) are inherited.
 // Use this in API server contexts to prevent leaking secrets to plugins.
