@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -245,6 +246,8 @@ type ClientOption func(*clientOptions)
 
 type clientOptions struct {
 	hostDeps           *HostServiceDeps
+	secretScope        string        // WithSecretScope handler name; applied by applySecretScope at build time
+	secretScopeSet     bool          // WithSecretScope was called (an empty name means fail-closed, not "unset")
 	sanitizeEnv        bool          // strip sensitive env vars from plugin process
 	debugLog           bool          // emit plugin startup/lifecycle debug traces
 	startTimeout       time.Duration // bounds plugin startup/handshake
@@ -257,6 +260,82 @@ func WithHostDeps(deps *HostServiceDeps) ClientOption {
 	return func(o *clientOptions) {
 		o.hostDeps = deps
 	}
+}
+
+// WithSecretScope restricts the host secret store provided via WithHostDeps
+// to the named auth handler's own secret namespace: names starting with
+// "scafctl.auth.<handlerName>." — the namespace auth-handler SDKs use for
+// their persisted secrets (refresh tokens, metadata, cached tokens). The
+// scope is applied when the client is built, so the option is independent
+// of WithHostDeps ordering, and the deps value is copied, not modified.
+// Every auth-handler plugin client must be given its own scope: without it,
+// an empty AllowedSecretPrefix grants access to every secret in the store,
+// including other handlers' credentials. A client that never receives host
+// deps is a no-op. A handlerName that is not a single dot-free segment
+// (lowercase alphanumeric plus hyphens, matching the plugin name charset)
+// -- including an empty one -- fails closed: the resulting prefix matches
+// no valid secret name, so every secret RPC is denied. This keeps the
+// namespace prefix unambiguous even if an upstream name source (such as a
+// config-pinned handler key) is not validated: a dotted name would
+// otherwise nest one handler's namespace inside another's under plain
+// prefix matching. The scope applies to the whole plugin client, so a
+// binary exposing several auth handlers would see all of them under the
+// resolved name's namespace -- register only the scoped handler from such
+// a client (see RegisterFetchedAuthHandlerPluginsNamed).
+func WithSecretScope(handlerName string) ClientOption {
+	return func(o *clientOptions) {
+		o.secretScope = handlerName
+		o.secretScopeSet = true
+	}
+}
+
+// applySecretScope applies WithSecretScope after all client options have
+// run, making it independent of option order. It copies the deps so the
+// value passed to WithHostDeps is never modified.
+func (o *clientOptions) applySecretScope() {
+	if !o.secretScopeSet || o.hostDeps == nil {
+		return
+	}
+	scoped := *o.hostDeps
+	if !validSecretScopeName(o.secretScope) {
+		// Fail closed: a space is rejected by validSecretName, so no valid
+		// secret name can match this prefix and every secret RPC is denied.
+		// This covers an empty name and any name that is not a single
+		// dot-free segment: a dotted handler name would nest one handler's
+		// namespace inside another's ("foo" reaching "foo.bar.*") under raw
+		// prefix matching, and upstream name sources (e.g. config-pinned
+		// handler keys) are not all validated.
+		scoped.AllowedSecretPrefix = " "
+	} else {
+		scoped.AllowedSecretPrefix = "scafctl.auth." + o.secretScope + "."
+	}
+	o.hostDeps = &scoped
+}
+
+// validSecretScopeName reports whether handlerName is safe to embed in a
+// namespace prefix: a single lowercase alphanumeric segment, hyphens allowed
+// (matching the plugin name charset), no dots.
+func validSecretScopeName(handlerName string) bool {
+	return secretScopeNamePattern.MatchString(handlerName)
+}
+
+var secretScopeNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
+// resolveClientOptions applies opts in order, then finalizes the secret scope.
+func resolveClientOptions(opts []ClientOption) clientOptions {
+	var o clientOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	o.applySecretScope()
+	return o
+}
+
+// ResolvedHostDeps returns the HostServiceDeps a plugin client built with opts
+// would serve, after WithSecretScope finalization. It lets callers verify
+// their option composition without starting a plugin.
+func ResolvedHostDeps(opts ...ClientOption) *HostServiceDeps {
+	return resolveClientOptions(opts).hostDeps
 }
 
 // WithSanitizedEnv restricts the environment variables passed to the plugin
@@ -310,10 +389,7 @@ func buildPluginClient[T any](
 		connectFn = connectPlugin
 	}
 
-	var o clientOptions
-	for _, opt := range opts {
-		opt(&o)
-	}
+	o := resolveClientOptions(opts)
 
 	cmdFn := pluginCmd
 	if o.sanitizeEnv {

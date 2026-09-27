@@ -4,11 +4,148 @@
 package plugin
 
 import (
+	"context"
+	"strings"
 	"testing"
+
+	hplugin "github.com/hashicorp/go-plugin"
+	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWithSecretScope(t *testing.T) {
+	t.Parallel()
+
+	// applyOptions mirrors the option loop plus finalization step that
+	// buildPluginClient runs, which is the production composition.
+	applyOptions := func(opts ...ClientOption) *clientOptions {
+		o := &clientOptions{}
+		for _, opt := range opts {
+			opt(o)
+		}
+		o.applySecretScope()
+		return o
+	}
+
+	t.Run("scopes deps without mutating the original", func(t *testing.T) {
+		t.Parallel()
+		deps := &HostServiceDeps{}
+		scoped := applyOptions(WithHostDeps(deps), WithSecretScope("entra"))
+
+		assert.Equal(t, "scafctl.auth.entra.", scoped.hostDeps.AllowedSecretPrefix)
+		assert.NotSame(t, deps, scoped.hostDeps)
+		// The shared original must stay untouched: callers hand it to other
+		// plugins and scope those copies separately.
+		assert.Empty(t, deps.AllowedSecretPrefix)
+		assert.True(t, deps.isSecretAllowed("anything"))
+		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.auth.github.refresh_token"))
+		assert.True(t, scoped.hostDeps.isSecretAllowed("scafctl.auth.entra.refresh_token"))
+	})
+
+	t.Run("independent of WithHostDeps order", func(t *testing.T) {
+		t.Parallel()
+		scoped := applyOptions(WithSecretScope("entra"), WithHostDeps(&HostServiceDeps{}))
+
+		assert.Equal(t, "scafctl.auth.entra.", scoped.hostDeps.AllowedSecretPrefix)
+	})
+
+	t.Run("empty handler name fails closed", func(t *testing.T) {
+		t.Parallel()
+		scoped := applyOptions(WithHostDeps(&HostServiceDeps{}), WithSecretScope(""))
+
+		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.auth.entra.refresh_token"))
+		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.auth..x"))
+		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.secrets.x"))
+	})
+
+	t.Run("non-segment handler names fail closed", func(t *testing.T) {
+		t.Parallel()
+		// A dotted name would nest one handler's namespace inside
+		// another's ("entra" reaching "entra.evil.*") under raw prefix
+		// matching, so anything but a single dot-free segment denies all.
+		for _, name := range []string{"entra.evil", "Entra", "entra evil", "entra_", ".entra", "entra-"} {
+			scoped := applyOptions(WithHostDeps(&HostServiceDeps{}), WithSecretScope(name))
+			assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.auth."+strings.ToLower(name)+".refresh_token"), "scope %q", name)
+			assert.False(t, scoped.hostDeps.isSecretAllowed("anything"), "scope %q", name)
+		}
+
+		// Single characters and hyphen-interior names stay valid scopes.
+		for _, name := range []string{"a", "entra-gov"} {
+			scoped := applyOptions(WithHostDeps(&HostServiceDeps{}), WithSecretScope(name))
+			assert.Equal(t, "scafctl.auth."+name+".", scoped.hostDeps.AllowedSecretPrefix)
+		}
+	})
+
+	t.Run("no host deps is a no-op", func(t *testing.T) {
+		t.Parallel()
+		scoped := applyOptions(WithSecretScope("entra"))
+
+		assert.Nil(t, scoped.hostDeps)
+	})
+
+	t.Run("without scope the existing allow-all semantics hold", func(t *testing.T) {
+		t.Parallel()
+		deps := &HostServiceDeps{}
+		scoped := applyOptions(WithHostDeps(deps))
+
+		assert.Empty(t, scoped.hostDeps.AllowedSecretPrefix)
+		assert.True(t, scoped.hostDeps.isSecretAllowed("anything"))
+	})
+}
+
+// TestNewAuthHandlerClient_EnforcesSecretScope drives WithSecretScope through
+// the production client build path and the HostService the plugin would be
+// served, so it fails if buildPluginClient stops finalizing the scope.
+func TestNewAuthHandlerClient_EnforcesSecretScope(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeSecretStore{secrets: map[string][]byte{
+		"scafctl.auth.entra.refresh_token":  []byte("mine"),
+		"scafctl.auth.github.refresh_token": []byte("theirs"),
+	}}
+	deps := &HostServiceDeps{SecretStore: store}
+
+	for name, opts := range map[string][]ClientOption{
+		"scope after deps":  {WithHostDeps(deps), WithSecretScope("entra")},
+		"scope before deps": {WithSecretScope("entra"), WithHostDeps(deps)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var captured pluginConfig
+			_, err := newAuthHandlerClientWithConnector("ignored", func(_ string, cfg pluginConfig) (any, *hplugin.Client, error) {
+				captured = cfg
+				return &MockAuthHandlerPlugin{}, &hplugin.Client{}, nil
+			}, opts...)
+			require.NoError(t, err)
+
+			grpcPlugin, ok := captured.grpcPlugin.(*AuthHandlerGRPCPlugin)
+			require.True(t, ok)
+			require.NotNil(t, grpcPlugin.HostDeps)
+			assert.Empty(t, deps.AllowedSecretPrefix, "caller's deps must not be mutated")
+
+			server := &HostServiceServer{Deps: *grpcPlugin.HostDeps}
+			ctx := context.Background()
+
+			resp, err := server.GetSecret(ctx, &proto.GetSecretRequest{Name: "scafctl.auth.entra.refresh_token"})
+			require.NoError(t, err)
+			assert.True(t, resp.Found)
+
+			resp, err = server.GetSecret(ctx, &proto.GetSecretRequest{Name: "scafctl.auth.github.refresh_token"})
+			require.NoError(t, err)
+			assert.Contains(t, resp.Error, "access denied")
+
+			setResp, err := server.SetSecret(ctx, &proto.SetSecretRequest{Name: "scafctl.auth.github.refresh_token", Value: "x"})
+			require.NoError(t, err)
+			assert.Contains(t, setResp.Error, "access denied")
+
+			delResp, err := server.DeleteSecret(ctx, &proto.DeleteSecretRequest{Name: "scafctl.auth.github.refresh_token"})
+			require.NoError(t, err)
+			assert.Contains(t, delResp.Error, "access denied")
+		})
+	}
+}
 
 func TestSafePluginEnv_OnlyAllowedKeys(t *testing.T) {
 	// Set some dangerous env vars for the test
