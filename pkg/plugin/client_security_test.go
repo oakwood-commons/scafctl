@@ -4,7 +4,11 @@
 package plugin
 
 import (
+	"context"
 	"testing"
+
+	hplugin "github.com/hashicorp/go-plugin"
+	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,6 +74,58 @@ func TestWithSecretScope(t *testing.T) {
 		assert.Empty(t, scoped.hostDeps.AllowedSecretPrefix)
 		assert.True(t, scoped.hostDeps.isSecretAllowed("anything"))
 	})
+}
+
+// TestNewAuthHandlerClient_EnforcesSecretScope drives WithSecretScope through
+// the production client build path and the HostService the plugin would be
+// served, so it fails if buildPluginClient stops finalizing the scope.
+func TestNewAuthHandlerClient_EnforcesSecretScope(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeSecretStore{secrets: map[string][]byte{
+		"scafctl.auth.entra.refresh_token":  []byte("mine"),
+		"scafctl.auth.github.refresh_token": []byte("theirs"),
+	}}
+	deps := &HostServiceDeps{SecretStore: store}
+
+	for name, opts := range map[string][]ClientOption{
+		"scope after deps":  {WithHostDeps(deps), WithSecretScope("entra")},
+		"scope before deps": {WithSecretScope("entra"), WithHostDeps(deps)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var captured pluginConfig
+			_, err := newAuthHandlerClientWithConnector("ignored", func(_ string, cfg pluginConfig) (any, *hplugin.Client, error) {
+				captured = cfg
+				return &MockAuthHandlerPlugin{}, &hplugin.Client{}, nil
+			}, opts...)
+			require.NoError(t, err)
+
+			grpcPlugin, ok := captured.grpcPlugin.(*AuthHandlerGRPCPlugin)
+			require.True(t, ok)
+			require.NotNil(t, grpcPlugin.HostDeps)
+			assert.Empty(t, deps.AllowedSecretPrefix, "caller's deps must not be mutated")
+
+			server := &HostServiceServer{Deps: *grpcPlugin.HostDeps}
+			ctx := context.Background()
+
+			resp, err := server.GetSecret(ctx, &proto.GetSecretRequest{Name: "scafctl.auth.entra.refresh_token"})
+			require.NoError(t, err)
+			assert.True(t, resp.Found)
+
+			resp, err = server.GetSecret(ctx, &proto.GetSecretRequest{Name: "scafctl.auth.github.refresh_token"})
+			require.NoError(t, err)
+			assert.Contains(t, resp.Error, "access denied")
+
+			setResp, err := server.SetSecret(ctx, &proto.SetSecretRequest{Name: "scafctl.auth.github.refresh_token", Value: "x"})
+			require.NoError(t, err)
+			assert.Contains(t, setResp.Error, "access denied")
+
+			delResp, err := server.DeleteSecret(ctx, &proto.DeleteSecretRequest{Name: "scafctl.auth.github.refresh_token"})
+			require.NoError(t, err)
+			assert.Contains(t, delResp.Error, "access denied")
+		})
+	}
 }
 
 func TestSafePluginEnv_OnlyAllowedKeys(t *testing.T) {
