@@ -13,12 +13,21 @@ import (
 func TestWithSecretScope(t *testing.T) {
 	t.Parallel()
 
+	// applyOptions mirrors the option loop plus finalization step that
+	// buildPluginClient runs, which is the production composition.
+	applyOptions := func(opts ...ClientOption) *clientOptions {
+		o := &clientOptions{}
+		for _, opt := range opts {
+			opt(o)
+		}
+		o.applySecretScope()
+		return o
+	}
+
 	t.Run("scopes deps without mutating the original", func(t *testing.T) {
 		t.Parallel()
 		deps := &HostServiceDeps{}
-		scoped := &clientOptions{}
-		WithHostDeps(deps)(scoped)
-		WithSecretScope("entra")(scoped)
+		scoped := applyOptions(WithHostDeps(deps), WithSecretScope("entra"))
 
 		assert.Equal(t, "scafctl.auth.entra.", scoped.hostDeps.AllowedSecretPrefix)
 		assert.NotSame(t, deps, scoped.hostDeps)
@@ -30,22 +39,36 @@ func TestWithSecretScope(t *testing.T) {
 		assert.True(t, scoped.hostDeps.isSecretAllowed("scafctl.auth.entra.refresh_token"))
 	})
 
+	t.Run("independent of WithHostDeps order", func(t *testing.T) {
+		t.Parallel()
+		scoped := applyOptions(WithSecretScope("entra"), WithHostDeps(&HostServiceDeps{}))
+
+		assert.Equal(t, "scafctl.auth.entra.", scoped.hostDeps.AllowedSecretPrefix)
+	})
+
 	t.Run("empty handler name fails closed", func(t *testing.T) {
 		t.Parallel()
-		scoped := &clientOptions{}
-		WithHostDeps(&HostServiceDeps{})(scoped)
-		WithSecretScope("")(scoped)
+		scoped := applyOptions(WithHostDeps(&HostServiceDeps{}), WithSecretScope(""))
 
 		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.auth.entra.refresh_token"))
+		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.auth..x"))
 		assert.False(t, scoped.hostDeps.isSecretAllowed("scafctl.secrets.x"))
 	})
 
 	t.Run("no host deps is a no-op", func(t *testing.T) {
 		t.Parallel()
-		scoped := &clientOptions{}
-		WithSecretScope("entra")(scoped)
+		scoped := applyOptions(WithSecretScope("entra"))
 
 		assert.Nil(t, scoped.hostDeps)
+	})
+
+	t.Run("without scope the existing allow-all semantics hold", func(t *testing.T) {
+		t.Parallel()
+		deps := &HostServiceDeps{}
+		scoped := applyOptions(WithHostDeps(deps))
+
+		assert.Empty(t, scoped.hostDeps.AllowedSecretPrefix)
+		assert.True(t, scoped.hostDeps.isSecretAllowed("anything"))
 	})
 }
 

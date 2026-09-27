@@ -52,7 +52,7 @@ type ProviderPlugin interface {
 After plugin load, scafctl calls `ConfigureProvider` once per provider with host-side settings:
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `Quiet` | `bool` | Suppress non-essential output |
 | `NoColor` | `bool` | Disable colored output |
 | `BinaryName` | `string` | CLI binary name (e.g. "scafctl" or an embedder name) |
@@ -97,7 +97,7 @@ Plugins that need host-side resources use the HostService callback service,
 accessed via the GRPCBroker using the service ID from `ProviderConfig.HostServiceID`.
 
 | Callback | Purpose |
-|----------|---------|
+| ---------- | --------- |
 | `GetSecret` / `SetSecret` / `DeleteSecret` / `ListSecrets` | Access the host's secret store |
 | `GetAuthIdentity` | Retrieve identity claims from the host's auth registry |
 | `ListAuthHandlers` | List available auth handlers (filtered by AllowedAuthHandlers) |
@@ -206,6 +206,7 @@ See `examples/plugins/echo/` for a complete example plugin implementation.
 - Plugins are validated using handshake configuration
 - Failed plugins don't crash the main process
 - Secret access is scoped by plugin-specific prefix
+- Auth handler plugins registered by the CLI get secret access scoped to their own `scafctl.auth.<name>.` namespace (`WithSecretScope`); embedders composing `WithHostDeps` themselves keep allow-all semantics until they add `WithSecretScope`
 - Auth handler access restricted by AllowedAuthHandlers allowlist
 - Plugin binary signatures can be verified via Sigstore/cosign (see below)
 
@@ -215,7 +216,7 @@ Plugin binaries fetched from catalogs support Sigstore/cosign keyless signature
 verification. This is controlled by a `SignaturePolicy`:
 
 | Mode | Behavior |
-|------|----------|
+| ------ | ---------- |
 | `off` | Digest-only verification (default) |
 | `warn` | Verify signature; warn on failure |
 | `enforce` | Verify signature; fail on missing or invalid signature |

@@ -245,6 +245,8 @@ type ClientOption func(*clientOptions)
 
 type clientOptions struct {
 	hostDeps           *HostServiceDeps
+	secretScope        string        // WithSecretScope handler name; applied by applySecretScope at build time
+	secretScopeSet     bool          // WithSecretScope was called (an empty name means fail-closed, not "unset")
 	sanitizeEnv        bool          // strip sensitive env vars from plugin process
 	debugLog           bool          // emit plugin startup/lifecycle debug traces
 	startTimeout       time.Duration // bounds plugin startup/handshake
@@ -263,21 +265,39 @@ func WithHostDeps(deps *HostServiceDeps) ClientOption {
 // to the named auth handler's own secret namespace: names starting with
 // "scafctl.auth.<handlerName>." — the namespace auth-handler SDKs use for
 // their persisted secrets (refresh tokens, metadata, cached tokens). The
-// deps are copied, so the value passed to WithHostDeps is not modified.
+// scope is applied when the client is built, so the option is independent
+// of WithHostDeps ordering, and the deps value is copied, not modified.
 // Every auth-handler plugin client must be given its own scope: without it,
 // an empty AllowedSecretPrefix grants access to every secret in the store,
-// including other handlers' credentials. A nil deps value is a no-op. An
-// empty handlerName fails closed: nothing matches the resulting prefix, so
-// every secret RPC is denied.
+// including other handlers' credentials. A client that never receives host
+// deps is a no-op. An empty handlerName fails closed: the resulting prefix
+// matches no valid secret name, so every secret RPC is denied. The scope
+// applies to the whole plugin client, so a binary exposing several auth
+// handlers would see all of them under the resolved name's namespace --
+// one auth handler per plugin binary is assumed.
 func WithSecretScope(handlerName string) ClientOption {
 	return func(o *clientOptions) {
-		if o.hostDeps == nil {
-			return
-		}
-		scoped := *o.hostDeps
-		scoped.AllowedSecretPrefix = "scafctl.auth." + handlerName + "."
-		o.hostDeps = &scoped
+		o.secretScope = handlerName
+		o.secretScopeSet = true
 	}
+}
+
+// applySecretScope applies WithSecretScope after all client options have
+// run, making it independent of option order. It copies the deps so the
+// value passed to WithHostDeps is never modified.
+func (o *clientOptions) applySecretScope() {
+	if !o.secretScopeSet || o.hostDeps == nil {
+		return
+	}
+	scoped := *o.hostDeps
+	if o.secretScope == "" {
+		// Fail closed: a space is rejected by validSecretName, so no valid
+		// secret name can match this prefix and every secret RPC is denied.
+		scoped.AllowedSecretPrefix = " "
+	} else {
+		scoped.AllowedSecretPrefix = "scafctl.auth." + o.secretScope + "."
+	}
+	o.hostDeps = &scoped
 }
 
 // WithSanitizedEnv restricts the environment variables passed to the plugin
@@ -335,6 +355,7 @@ func buildPluginClient[T any](
 	for _, opt := range opts {
 		opt(&o)
 	}
+	o.applySecretScope()
 
 	cmdFn := pluginCmd
 	if o.sanitizeEnv {

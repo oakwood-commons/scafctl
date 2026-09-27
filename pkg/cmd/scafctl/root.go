@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"text/template"
 	"time"
@@ -700,14 +701,11 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				clientOpts := []plugin.ClientOption{plugin.WithHostDeps(hostDeps)}
 
 				authRegistry.SetFallbackResolver(func(resolverCtx context.Context, name string) (auth.Handler, error) {
-					// Scope the plugin's host secret-store access to this
-					// handler's own namespace ("scafctl.auth.<name>.") so a
-					// fetched auth-handler plugin cannot read, overwrite, or
+					// Scope the resolved plugin's host secret-store access to
+					// this handler's own namespace ("scafctl.auth.<name>.") so
+					// a fetched auth-handler plugin cannot read, overwrite, or
 					// delete other handlers' secrets (e.g. refresh tokens).
-					// The base opts are cloned because the slice is shared
-					// across resolver invocations.
-					scopedOpts := append([]plugin.ClientOption{}, clientOpts...)
-					scopedOpts = append(scopedOpts, plugin.WithSecretScope(name))
+					scopedOpts := slices.Concat(clientOpts, []plugin.ClientOption{plugin.WithSecretScope(name)})
 					// Use cCmd.Context() to capture the fully-wired context at
 					// call time, not the stale ctx from closure capture time.
 					// Values like the official provider registry are added to
@@ -797,9 +795,10 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 						BinPath:   binPath,
 						PluginCfg: pluginCfg,
 						// Scope the cached plugin's secret-store access to this
-						// handler's own namespace so it cannot read, overwrite,
-						// or delete other handlers' secrets (e.g. refresh tokens).
-						ClientOpts:       append(append([]plugin.ClientOption{}, clientOpts...), plugin.WithSecretScope(name)),
+						// handler's own namespace ("scafctl.auth.<name>.") so it
+						// cannot read, overwrite, or delete other handlers'
+						// secrets (e.g. refresh tokens).
+						ClientOpts:       slices.Concat(clientOpts, []plugin.ClientOption{plugin.WithSecretScope(name)}),
 						OfficialRegistry: officialReg,
 					})
 					lazy.SetContext(ctx)
