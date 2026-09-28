@@ -592,16 +592,17 @@ func newAuthHandlerClientWithConnector(
 	opts ...ClientOption,
 ) (*AuthHandlerClient, error) {
 	startupStart := time.Now()
-	// Resolve once here (buildPluginClient resolves again internally; the
-	// operation is pure) so this client remembers the host deps it serves --
-	// the login wrapper uses the shared PromptBroker to gate
-	// PromptAuthResponse callbacks.
-	resolved := resolveClientOptions(opts)
+	// Capture the host deps buildPluginClient actually serves: the login
+	// wrapper must gate PromptAuthResponse on the SAME per-client
+	// PromptBroker the HostService server sees. Resolving options a second
+	// time would allocate a different isolated broker.
+	var served *HostServiceDeps
 	authPlugin, client, err := buildPluginClient(
 		pluginPath,
 		opts,
 		connectFn,
 		func(o clientOptions, logger hclog.Logger, cmdFn func(string) *exec.Cmd) pluginConfig {
+			served = o.hostDeps
 			return pluginConfig{
 				handshake:          AuthHandlerHandshakeConfig,
 				pluginName:         AuthHandlerPluginName,
@@ -630,7 +631,7 @@ func newAuthHandlerClientWithConnector(
 		path:            pluginPath,
 		name:            pluginNameFromPath(pluginPath),
 		startupDuration: time.Since(startupStart),
-		hostDeps:        resolved.hostDeps,
+		hostDeps:        served,
 	}, nil
 }
 

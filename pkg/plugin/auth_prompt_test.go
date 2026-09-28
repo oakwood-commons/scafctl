@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr/funcr"
+	hplugin "github.com/hashicorp/go-plugin"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -592,4 +593,25 @@ func TestIsolatePromptBroker(t *testing.T) {
 	none.isolatePromptBroker()
 	assert.Nil(t, none.hostDeps.PromptBroker, "no broker stays nil")
 	(&clientOptions{}).isolatePromptBroker() // nil deps: no panic
+}
+
+func TestNewAuthHandlerClient_BrokerMatchesServedDeps(t *testing.T) {
+	t.Parallel()
+
+	shared := &HostServiceDeps{PromptBroker: &AuthPromptBroker{}}
+	var servedBroker *AuthPromptBroker
+	client, err := newAuthHandlerClientWithConnector(
+		"/tmp/auth-plugin",
+		func(_ string, cfg pluginConfig) (any, *hplugin.Client, error) {
+			gp, ok := cfg.grpcPlugin.(*AuthHandlerGRPCPlugin)
+			require.True(t, ok)
+			servedBroker = gp.HostDeps.PromptBroker
+			return &MockAuthHandlerPlugin{}, &hplugin.Client{}, nil
+		},
+		WithHostDeps(shared),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, servedBroker)
+	assert.Same(t, servedBroker, client.hostDeps.PromptBroker, "login wrapper and HostService must share one broker")
+	assert.NotSame(t, shared.PromptBroker, servedBroker, "broker is still isolated per client")
 }
