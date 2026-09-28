@@ -325,9 +325,9 @@ device-code URLs), asks the user to paste the address they landed on, and
 validates the paste against the expected `redirect_uri` prefix (required: a
 missing or non-absolute `redirect_uri` is rejected with `InvalidArgument`).
 Each auth plugin client gets its own broker, so one plugin cannot answer
-another handler's prompt window; `--quiet` or a redirected stderr (where the
-typed paste is echoed) disables the prompt. The pasted value (which
-carries an authorization code) is never logged at any verbosity, and a
+another handler's prompt window; `--quiet` or any non-terminal
+stdin/stdout/stderr disables the prompt. The pasted value (which
+carries an authorization code) is never echoed or logged at any verbosity, and a
 canceled RPC (the plugin's own localhost callback arrived first) stops the
 prompt without leaving a reader on the terminal. In scafctl the gate is the
 `AuthPromptBroker` window opened by the auth handler login wrapper; embedders

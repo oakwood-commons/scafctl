@@ -15,6 +15,7 @@ package loginui
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -260,12 +261,11 @@ func runStatusTUI(
 // interactive login offers the paste-back path. By contract the prompt
 // wording is written by the host only -- plugins supply URLs, never text --
 // so a handler cannot use PromptAuthResponse to phish for input.
-const pasteBackPromptText = "If your browser shows a connection error after sign-in, paste the full address from its address bar:"
+const pasteBackPromptText = "If your browser shows a connection error after sign-in, paste the full address from its address bar (input is hidden):"
 
 // interactiveTerminal reports whether stdin, stdout, and stderr are all
 // terminals, i.e. the session can render prompts and read answers from a
-// human. stderr must be a terminal too: the paste read echoes typed bytes
-// there, and a redirected stderr would capture the authorization code.
+// human.
 func interactiveTerminal(ioStreams *terminal.IOStreams) bool {
 	// A real TTY check (not os.ModeCharDevice): /dev/null is a char device,
 	// and a prompt written there would leave the login blocked invisibly.
@@ -282,8 +282,8 @@ func isTTY(s any) bool {
 // pasted redirect URL with a cancellation-safe terminal read (the RPC
 // context cancels when the plugin's own localhost callback arrives first,
 // and the read leaves no reader behind to steal the next input). The pasted
-// value is never written to any log or debug output: typed characters are
-// echoed to stderr only, mirroring plain terminal input.
+// value is never written anywhere: it carries an authorization code, so the
+// read does not echo it (like a password prompt) and it is never logged.
 func newPasteBackPrompt(w *writer.Writer, ioStreams *terminal.IOStreams) auth.PasteBackFunc {
 	return func(ctx context.Context, authorizationURL, _ string) (string, error) {
 		w.Info("")
@@ -291,12 +291,13 @@ func newPasteBackPrompt(w *writer.Writer, ioStreams *terminal.IOStreams) auth.Pa
 		w.Infof("  %s", authorizationURL)
 		w.Info("")
 		w.Info(pasteBackPromptText)
-		line, err := input.ReadInteractiveLine(ctx, ioStreams.In, ioStreams.ErrOut)
+		line, err := input.ReadInteractiveLine(ctx, ioStreams.In, io.Discard)
+		// No echo means the terminal never saw a newline: end the prompt line.
+		w.PlainStderr("")
 		if err != nil {
 			if ctx.Err() != nil {
 				// The callback arrived (or the login was canceled): the
 				// prompt goes away and the half-typed line is discarded.
-				w.PlainStderr("")
 				return "", ctx.Err()
 			}
 			return "", fmt.Errorf("reading pasted address: %w", err)

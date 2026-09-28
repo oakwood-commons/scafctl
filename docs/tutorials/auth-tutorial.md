@@ -1178,13 +1178,13 @@ To sign in, use a web browser to open the page:
 Open this URL in your browser:
   https://login.example.com/authorize?...
 
-If your browser shows a connection error after sign-in, paste the full address from its address bar:
-http://localhost:8400/callback?code=...
+If your browser shows a connection error after sign-in, paste the full address from its address bar (input is hidden):
 ```
 
 Copy the full address from the browser's address bar after sign-in and paste
-it at the prompt; scafctl completes the login from the pasted authorization
-code. The prompt only appears while a login is in progress, its wording is
+it at the prompt (the pasted text is not echoed, since it carries an
+authorization code), then press Enter; scafctl completes the login from the
+pasted authorization code. The prompt only appears while a login is in progress, its wording is
 host-written (handlers cannot inject text), and it requires an interactive
 terminal -- in CI, MCP sessions, and other non-interactive contexts the
 handler is told the prompt is unavailable and falls back to another flow.
