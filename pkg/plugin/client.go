@@ -312,6 +312,21 @@ func (o *clientOptions) applySecretScope() {
 	o.hostDeps = &scoped
 }
 
+// isolatePromptBroker gives this client its own AuthPromptBroker. Deps are
+// commonly shared across every auth client (and WithSecretScope only
+// shallow-copies them), so a shared broker would let plugin B answer a
+// prompt window opened for plugin A's login. The copy keeps the value passed
+// to WithHostDeps unmodified; the per-client broker is shared by this
+// client's login wrapper and HostService server.
+func (o *clientOptions) isolatePromptBroker() {
+	if o.hostDeps == nil || o.hostDeps.PromptBroker == nil {
+		return
+	}
+	isolated := *o.hostDeps
+	isolated.PromptBroker = &AuthPromptBroker{}
+	o.hostDeps = &isolated
+}
+
 // validSecretScopeName reports whether handlerName is safe to embed in a
 // namespace prefix: a single lowercase alphanumeric segment, hyphens allowed
 // (matching the plugin name charset), no dots.
@@ -328,6 +343,7 @@ func resolveClientOptions(opts []ClientOption) clientOptions {
 		opt(&o)
 	}
 	o.applySecretScope()
+	o.isolatePromptBroker()
 	return o
 }
 

@@ -100,7 +100,7 @@ func RunLogin(ctx context.Context, w *writer.Writer, binaryName string, handler 
 	// an interactive terminal on a platform with cancellation-safe reads.
 	// Plugin-backed handlers bridge the installed function to
 	// HostService.PromptAuthResponse (see AuthPromptBroker).
-	if interactiveFlow && interactiveTerminal(ioStreams) && input.InteractiveLineSupported() {
+	if interactiveFlow && !w.IsQuiet() && interactiveTerminal(ioStreams) && input.InteractiveLineSupported() {
 		ctx = auth.WithPasteBack(ctx, newPasteBackPrompt(w, ioStreams))
 	}
 
@@ -262,10 +262,12 @@ func runStatusTUI(
 // so a handler cannot use PromptAuthResponse to phish for input.
 const pasteBackPromptText = "If your browser shows a connection error after sign-in, paste the full address from its address bar:"
 
-// interactiveTerminal reports whether both stdin and stdout are terminals,
-// i.e. the session can render prompts and read answers from a human.
+// interactiveTerminal reports whether stdin, stdout, and stderr are all
+// terminals, i.e. the session can render prompts and read answers from a
+// human. stderr must be a terminal too: the paste read echoes typed bytes
+// there, and a redirected stderr would capture the authorization code.
 func interactiveTerminal(ioStreams *terminal.IOStreams) bool {
-	if !skvx.IsTerminal(ioStreams.Out) {
+	if !skvx.IsTerminal(ioStreams.Out) || !skvx.IsTerminal(ioStreams.ErrOut) {
 		return false
 	}
 	in, ok := ioStreams.In.(*os.File)

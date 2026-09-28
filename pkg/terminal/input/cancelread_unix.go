@@ -136,7 +136,7 @@ func ReadInteractiveLine(ctx context.Context, in io.Reader, echo io.Writer) (str
 		_ = unix.IoctlSetTermios(fd, ioctlWriteTermios, oldState)
 		// Discard queued input so an abandoned prompt cannot leak its bytes
 		// into the next reader's line.
-		_ = unix.IoctlSetInt(fd, ioctlFlushQueue, flushDiscardInput)
+		_ = flushInput(fd)
 	}()
 
 	poller := linePoller{

@@ -862,8 +862,10 @@ Call it only during your `Login`, and shape the flow as:
    `Canceled` means the RPC context was canceled (your own callback arrived --
    stop prompting); `Unimplemented` means an older host -- fall back to device
    code via `plugin.IsUnimplemented(err)`.
-4. If the paste does not match your `redirect_uri` prefix the host rejects it
-   with `InvalidArgument` -- re-prompt or surface a clear error.
+4. `redirect_uri` is required (an absolute URL with a host). If the paste
+   does not match its prefix, or the `authorization_url` is outside the
+   handler's `trustedVerificationDomains`, the host rejects the call with
+   `InvalidArgument` -- re-prompt or surface a clear error.
 
 The host never logs the pasted value, writes all prompt text itself (you
 supply only URLs), and requires an interactive terminal.

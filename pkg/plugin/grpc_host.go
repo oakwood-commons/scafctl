@@ -439,12 +439,18 @@ func (h *HostServiceServer) PromptAuthResponse(ctx context.Context, req *proto.P
 	if err := validateAuthorizationURL(req.AuthorizationUrl); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	if err := validateExpectedRedirectURI(req.RedirectUri); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	value, err := prompt(ctx, req.AuthorizationUrl, req.RedirectUri)
 	if err != nil {
 		// Never include the value in any error path.
 		if ctx.Err() != nil {
 			return nil, status.Error(codes.Canceled, "paste-back prompt canceled")
+		}
+		if errors.Is(err, ErrUntrustedAuthorizationURL) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
 		return nil, status.Errorf(codes.Internal, "reading pasted redirect URL: %v", err)
 	}
@@ -468,8 +474,8 @@ func validateAuthorizationURL(authURL string) error {
 		return errors.New("authorization URL must not be empty")
 	}
 	parsed, err := url.Parse(authURL)
-	if err != nil || !parsed.IsAbs() {
-		return errors.New("authorization URL is not an absolute URL")
+	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" {
+		return errors.New("authorization URL is not an absolute URL with a host")
 	}
 	switch parsed.Scheme {
 	case "https":
@@ -485,6 +491,17 @@ func validateAuthorizationURL(authURL string) error {
 	}
 }
 
+// validateExpectedRedirectURI requires the plugin-supplied redirect prefix
+// to be an absolute URL with a host: it is the main guard on the pasted
+// value, so a missing or malformed one must not silently disable it.
+func validateExpectedRedirectURI(redirectURI string) error {
+	parsed, err := url.Parse(redirectURI)
+	if redirectURI == "" || err != nil || !parsed.IsAbs() || parsed.Host == "" {
+		return errors.New("redirect URI must be an absolute URL with a host")
+	}
+	return nil
+}
+
 // validatePastedRedirectURL checks that a pasted value looks like the
 // expected redirect URL. Errors never embed the value itself.
 func validatePastedRedirectURL(value, redirectURI string) error {
@@ -498,15 +515,10 @@ func validatePastedRedirectURL(value, redirectURI string) error {
 	if err != nil || !parsed.IsAbs() || parsed.Scheme == "" || parsed.Host == "" {
 		return errors.New("pasted value is not an absolute URL (e.g. http://localhost:8400/callback?code=...)")
 	}
-	if redirectURI == "" {
-		return nil
+	if err := validateExpectedRedirectURI(redirectURI); err != nil {
+		return err
 	}
-	want, err := url.Parse(redirectURI)
-	if err != nil || want.Host == "" {
-		//nolint:nilerr // The plugin sent an unusable expected prefix; do not
-		// block the login on it, the URL-shape check above already ran.
-		return nil
-	}
+	want, _ := url.Parse(redirectURI) // validated above
 	if parsed.Scheme != want.Scheme || parsed.Host != want.Host {
 		return fmt.Errorf("pasted URL does not match the expected redirect address %s", redirectURI)
 	}

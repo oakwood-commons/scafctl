@@ -10,8 +10,11 @@ import "golang.org/x/sys/unix"
 const (
 	ioctlReadTermios  = unix.TIOCGETA
 	ioctlWriteTermios = unix.TIOCSETA
-	// ioctlFlushQueue drives the TIOCFLUSH ioctl; the arg below selects
-	// flushing of received-but-unread input only.
-	ioctlFlushQueue   = unix.TIOCFLUSH
-	flushDiscardInput = unix.TCIFLUSH
 )
+
+// flushInput discards received-but-unread terminal input. TIOCFLUSH takes
+// its queue selector by pointer (unlike Linux TCFLSH, which takes it by
+// value), so IoctlSetInt would fail silently here.
+func flushInput(fd int) error {
+	return unix.IoctlSetPointerInt(fd, unix.TIOCFLUSH, unix.TCIFLUSH)
+}

@@ -10,10 +10,10 @@ import "golang.org/x/sys/unix"
 const (
 	ioctlReadTermios  = unix.TCGETS
 	ioctlWriteTermios = unix.TCSETS
-	// ioctlFlushQueue drives the TCFLSH ioctl; keep the flush constant here
-	// rather than in the shared unix file because its value is also
-	// per-platform.
-	ioctlFlushQueue = unix.TCFLSH
-	// flushDiscardInput flushes received-but-unread input only.
-	flushDiscardInput = unix.TCIFLUSH
 )
+
+// flushInput discards received-but-unread terminal input (TCFLSH takes its
+// queue selector by value).
+func flushInput(fd int) error {
+	return unix.IoctlSetInt(fd, unix.TCFLSH, unix.TCIFLUSH)
+}

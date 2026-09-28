@@ -189,7 +189,7 @@ func TestHostServiceServer_PromptAuthResponse(t *testing.T) {
 		t.Parallel()
 		broker := &AuthPromptBroker{}
 		server := &HostServiceServer{Deps: HostServiceDeps{PromptBroker: broker}}
-		for _, authURL := range []string{"", "not a url", "ftp://example/auth"} {
+		for _, authURL := range []string{"", "not a url", "ftp://example/auth", "https:evil.example/auth", "https:///auth"} {
 			end := broker.Begin("entra", func(context.Context, string, string) (string, error) {
 				t.Error("prompt must not run for a rejected authorization URL")
 				return "", nil
@@ -202,6 +202,44 @@ func TestHostServiceServer_PromptAuthResponse(t *testing.T) {
 			require.Error(t, err)
 			assert.Equal(t, codes.InvalidArgument, status.Code(err))
 		}
+	})
+
+	t.Run("rejects a missing or malformed redirect URI before prompting", func(t *testing.T) {
+		t.Parallel()
+		broker := &AuthPromptBroker{}
+		server := &HostServiceServer{Deps: HostServiceDeps{PromptBroker: broker}}
+		for _, redirectURI := range []string{"", "/callback", "not a url"} {
+			end := broker.Begin("entra", func(context.Context, string, string) (string, error) {
+				t.Error("prompt must not run for a rejected redirect URI")
+				return "", nil
+			})
+			_, err := server.PromptAuthResponse(context.Background(), &proto.PromptAuthResponseRequest{
+				HandlerName:      "entra",
+				AuthorizationUrl: "https://login.example/auth",
+				RedirectUri:      redirectURI,
+			})
+			end()
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+		}
+	})
+
+	t.Run("untrusted authorization URL maps to InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		broker := &AuthPromptBroker{}
+		server := &HostServiceServer{Deps: HostServiceDeps{PromptBroker: broker}}
+		inner := func(context.Context, string, string) (string, error) {
+			t.Error("inner prompt must not run for an untrusted authorization URL")
+			return "", nil
+		}
+		defer broker.Begin("entra", trustedPasteBack(inner, "entra", []string{"login.example"}, false))()
+		_, err := server.PromptAuthResponse(context.Background(), &proto.PromptAuthResponseRequest{
+			HandlerName:      "entra",
+			AuthorizationUrl: "https://evil.example/auth",
+			RedirectUri:      "http://localhost:8400/callback",
+		})
+		require.Error(t, err)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
 	})
 
 	t.Run("accepts a loopback http authorization URL", func(t *testing.T) {
@@ -234,6 +272,7 @@ func TestHostServiceServer_PromptAuthResponse(t *testing.T) {
 		_, err := server.PromptAuthResponse(ctx, &proto.PromptAuthResponseRequest{
 			HandlerName:      "entra",
 			AuthorizationUrl: "https://login.example/auth",
+			RedirectUri:      "http://localhost:8400/callback",
 		})
 		require.Error(t, err)
 		assert.Equal(t, codes.Canceled, status.Code(err))
@@ -251,6 +290,7 @@ func TestHostServiceServer_PromptAuthResponse(t *testing.T) {
 		_, err := server.PromptAuthResponse(context.Background(), &proto.PromptAuthResponseRequest{
 			HandlerName:      "entra",
 			AuthorizationUrl: "https://login.example/auth",
+			RedirectUri:      "http://localhost:8400/callback",
 		})
 		require.Error(t, err)
 		assert.Equal(t, codes.Internal, status.Code(err))
@@ -300,6 +340,12 @@ func TestValidatePastedRedirectURL(t *testing.T) {
 		})
 	}
 
+	// A missing or malformed expected prefix must fail closed rather than
+	// disable the redirect guard.
+	for _, redirectURI := range []string{"", ":", "/callback", "https:///cb"} {
+		assert.Error(t, validatePastedRedirectURL("https://other.example/done?code=x", redirectURI), redirectURI)
+	}
+
 	okCases := []struct {
 		name        string
 		value       string
@@ -307,8 +353,6 @@ func TestValidatePastedRedirectURL(t *testing.T) {
 	}{
 		{"exact match with query", "http://localhost:8400/callback?code=x&state=y", "http://localhost:8400/callback"},
 		{"trailing slash tolerance", "http://localhost:8400/callback/?code=x", "http://localhost:8400/callback"},
-		{"no expected prefix accepts any absolute url", "https://other.example/done?code=x", ""},
-		{"unparseable expected prefix is tolerated", "http://ok.example/cb", ":"},
 	}
 	for _, tc := range okCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -489,4 +533,63 @@ func TestAuthHandlerWrapper_LoginNoBroker(t *testing.T) {
 		return "pasted", nil
 	}), auth.LoginOptions{})
 	require.NoError(t, err)
+}
+
+func TestTrustedPasteBack(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, trustedPasteBack(nil, "h", nil, true), "nil prompt stays nil")
+
+	called := false
+	inner := func(context.Context, string, string) (string, error) {
+		called = true
+		return "ok", nil
+	}
+	cases := []struct {
+		name    string
+		trusted []string
+		require bool
+		authURL string
+		wantErr bool
+	}{
+		{"no policy allows any", nil, false, "https://any.example/a", false},
+		{"exact domain", []string{"login.example"}, false, "https://login.example/a", false},
+		{"subdomain", []string{"example"}, false, "https://login.example/a", false},
+		{"case and trailing dot", []string{"Login.Example."}, false, "https://login.example./a", false},
+		{"outside trusted list", []string{"login.example"}, false, "https://evil.example/a", true},
+		{"suffix lookalike", []string{"login.example"}, false, "https://badlogin.example/a", true},
+		{"hostless", []string{"login.example"}, false, "https:///a", true},
+		{"required but unconfigured", nil, true, "https://login.example/a", true},
+	}
+	for _, tc := range cases {
+		called = false
+		v, err := trustedPasteBack(inner, "h", tc.trusted, tc.require)(context.Background(), tc.authURL, "http://localhost/cb")
+		if tc.wantErr {
+			require.ErrorIs(t, err, ErrUntrustedAuthorizationURL, tc.name)
+			assert.False(t, called, tc.name)
+			continue
+		}
+		require.NoError(t, err, tc.name)
+		assert.Equal(t, "ok", v, tc.name)
+	}
+}
+
+func TestIsolatePromptBroker(t *testing.T) {
+	t.Parallel()
+
+	orig := &AuthPromptBroker{}
+	shared := &HostServiceDeps{PromptBroker: orig}
+	a := &clientOptions{hostDeps: shared}
+	b := &clientOptions{hostDeps: shared}
+	a.isolatePromptBroker()
+	b.isolatePromptBroker()
+	require.NotNil(t, a.hostDeps.PromptBroker)
+	assert.NotSame(t, a.hostDeps.PromptBroker, b.hostDeps.PromptBroker, "each client gets its own broker")
+	assert.NotSame(t, shared.PromptBroker, a.hostDeps.PromptBroker)
+	assert.Same(t, orig, shared.PromptBroker, "input deps untouched")
+
+	none := &clientOptions{hostDeps: &HostServiceDeps{}}
+	none.isolatePromptBroker()
+	assert.Nil(t, none.hostDeps.PromptBroker, "no broker stays nil")
+	(&clientOptions{}).isolatePromptBroker() // nil deps: no panic
 }

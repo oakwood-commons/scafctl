@@ -319,9 +319,14 @@ login or in a non-interactive session (no terminal, piped stdin, MCP/CI) the
 host returns `Unavailable`, and hosts that predate the RPC return
 `Unimplemented` (plugins detect it with `IsUnimplemented` and fall back to
 another flow). The host writes the prompt text itself -- it displays the
-plugin-supplied `authorization_url` (shape-checked: https, or http on
-loopback), asks the user to paste the address they landed on, and validates
-the paste against the expected `redirect_uri` prefix. The pasted value (which
+plugin-supplied `authorization_url` (shape-checked: https with a host, or
+http on loopback; held to the handler's `trustedVerificationDomains` like
+device-code URLs), asks the user to paste the address they landed on, and
+validates the paste against the expected `redirect_uri` prefix (required: a
+missing or non-absolute `redirect_uri` is rejected with `InvalidArgument`).
+Each auth plugin client gets its own broker, so one plugin cannot answer
+another handler's prompt window; `--quiet` or a redirected stderr (where the
+typed paste is echoed) disables the prompt. The pasted value (which
 carries an authorization code) is never logged at any verbosity, and a
 canceled RPC (the plugin's own localhost callback arrived first) stops the
 prompt without leaving a reader on the terminal. In scafctl the gate is the
