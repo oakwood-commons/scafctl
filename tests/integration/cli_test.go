@@ -5172,6 +5172,17 @@ func TestIntegration_AuthLoginHelp_ShowsHostname(t *testing.T) {
 	assert.Contains(t, stdout, "--hostname")
 }
 
+func TestIntegration_AuthLoginHelp_ShowsRemoteWorkspacePasteBack(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "login", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	// Remote-workspace (DevSpaces/Codespaces) interactive login is offered
+	// via the paste-back prompt; the help must tell users it exists.
+	assert.Contains(t, stdout, "remote workspaces")
+	assert.Contains(t, stdout, "paste")
+}
+
 func TestIntegration_AuthAliasList_Seeded(t *testing.T) {
 	t.Parallel()
 	// 'auth alias list' reads config directly and does not require a live

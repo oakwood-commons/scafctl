@@ -6,9 +6,12 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +36,49 @@ var (
 	_ auth.FlowDetector = (*AuthHandlerWrapper)(nil)
 	_ auth.Configurer   = (*AuthHandlerWrapper)(nil)
 )
+
+// ErrUntrustedAuthorizationURL is returned by a paste-back prompt whose
+// authorization URL falls outside the handler's trusted domains.
+var ErrUntrustedAuthorizationURL = errors.New("authorization URL is not in the handler's trusted domains")
+
+// trustedPasteBack wraps prompt so the authorization URL is checked against
+// the handler's trusted domains before any host-authored text displays it.
+// A nil prompt stays nil (non-interactive session).
+func trustedPasteBack(prompt auth.PasteBackFunc, handlerName string, trusted []string, requireTrust bool) auth.PasteBackFunc {
+	if prompt == nil {
+		return nil
+	}
+	return func(ctx context.Context, authorizationURL, redirectURI string) (string, error) {
+		if requireTrust && len(trusted) == 0 {
+			return "", fmt.Errorf("%w: handler %q has no configured trusted domains; set auth.handlers.%s.trustedVerificationDomains",
+				ErrUntrustedAuthorizationURL, handlerName, handlerName)
+		}
+		if len(trusted) > 0 && !hostInTrustedDomains(authorizationURL, trusted) {
+			return "", ErrUntrustedAuthorizationURL
+		}
+		return prompt(ctx, authorizationURL, redirectURI)
+	}
+}
+
+// hostInTrustedDomains reports whether rawURL's host equals, or is a
+// subdomain of, an entry in trusted.
+func hostInTrustedDomains(rawURL string, trusted []string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	if host == "" {
+		return false
+	}
+	for _, domain := range trusted {
+		d := strings.ToLower(strings.TrimSuffix(domain, "."))
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	return false
+}
 
 // AuthHandlerWrapper wraps a plugin auth handler to implement the auth.Handler
 // (and optionally auth.TokenLister / auth.TokenPurger) interfaces.
@@ -152,6 +198,16 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 	copy(trustedSnapshot, w.trustedDomains)
 	requireTrust := w.requireTrustedDomains
 	w.mu.RUnlock()
+
+	// Gate PromptAuthResponse callbacks to this Login: the broker window is
+	// open exactly while the plugin's Login RPC runs. The prompt function was
+	// installed into ctx by the login UI when the session is interactive; a
+	// nil prompt yields Unavailable on the RPC (non-interactive session).
+	// The authorization URL is held to the same trusted-domain policy as
+	// device-code verification URLs before the host displays it.
+	if broker := w.client.authPromptBroker(); broker != nil {
+		defer broker.Begin(w.handlerName, trustedPasteBack(auth.PasteBackFromContext(ctx), w.handlerName, trustedSnapshot, requireTrust))()
+	}
 
 	var deviceCodeCb func(DeviceCodePrompt)
 	if opts.DeviceCodeCallback != nil {

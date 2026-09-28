@@ -312,6 +312,21 @@ func (o *clientOptions) applySecretScope() {
 	o.hostDeps = &scoped
 }
 
+// isolatePromptBroker gives this client its own AuthPromptBroker. Deps are
+// commonly shared across every auth client (and WithSecretScope only
+// shallow-copies them), so a shared broker would let plugin B answer a
+// prompt window opened for plugin A's login. The copy keeps the value passed
+// to WithHostDeps unmodified; the per-client broker is shared by this
+// client's login wrapper and HostService server.
+func (o *clientOptions) isolatePromptBroker() {
+	if o.hostDeps == nil || o.hostDeps.PromptBroker == nil {
+		return
+	}
+	isolated := *o.hostDeps
+	isolated.PromptBroker = &AuthPromptBroker{}
+	o.hostDeps = &isolated
+}
+
 // validSecretScopeName reports whether handlerName is safe to embed in a
 // namespace prefix: a single lowercase alphanumeric segment, hyphens allowed
 // (matching the plugin name charset), no dots.
@@ -328,6 +343,7 @@ func resolveClientOptions(opts []ClientOption) clientOptions {
 		opt(&o)
 	}
 	o.applySecretScope()
+	o.isolatePromptBroker()
 	return o
 }
 
@@ -563,6 +579,7 @@ type AuthHandlerClient struct {
 	path            string
 	name            string
 	startupDuration time.Duration
+	hostDeps        *HostServiceDeps
 }
 
 // newAuthHandlerClientWithConnector creates an auth handler plugin client
@@ -575,11 +592,17 @@ func newAuthHandlerClientWithConnector(
 	opts ...ClientOption,
 ) (*AuthHandlerClient, error) {
 	startupStart := time.Now()
+	// Capture the host deps buildPluginClient actually serves: the login
+	// wrapper must gate PromptAuthResponse on the SAME per-client
+	// PromptBroker the HostService server sees. Resolving options a second
+	// time would allocate a different isolated broker.
+	var served *HostServiceDeps
 	authPlugin, client, err := buildPluginClient(
 		pluginPath,
 		opts,
 		connectFn,
 		func(o clientOptions, logger hclog.Logger, cmdFn func(string) *exec.Cmd) pluginConfig {
+			served = o.hostDeps
 			return pluginConfig{
 				handshake:          AuthHandlerHandshakeConfig,
 				pluginName:         AuthHandlerPluginName,
@@ -608,6 +631,7 @@ func newAuthHandlerClientWithConnector(
 		path:            pluginPath,
 		name:            pluginNameFromPath(pluginPath),
 		startupDuration: time.Since(startupStart),
+		hostDeps:        served,
 	}, nil
 }
 
@@ -658,6 +682,15 @@ func (c *AuthHandlerClient) HostServiceID() uint32 {
 		return gc.hostServiceID
 	}
 	return 0
+}
+
+// authPromptBroker returns the shared PromptAuthResponse broker for this
+// client's HostService, or nil when no host deps are wired.
+func (c *AuthHandlerClient) authPromptBroker() *AuthPromptBroker {
+	if c.hostDeps == nil {
+		return nil
+	}
+	return c.hostDeps.PromptBroker
 }
 
 func (c *AuthHandlerClient) ActivateServerMode(ctx context.Context, settings []byte) error {
