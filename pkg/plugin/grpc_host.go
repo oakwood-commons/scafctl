@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -464,6 +465,20 @@ func (h *HostServiceServer) PromptAuthResponse(ctx context.Context, req *proto.P
 	return &proto.PromptAuthResponseResponse{Value: value}, nil
 }
 
+// isLoopbackHost reports whether an URL hostname is a loopback endpoint:
+// the literal name "localhost" or any loopback IP (each address of
+// 127.0.0.0/8, ::1), covering dev login servers bound to 127.0.0.2 and
+// similar addresses.
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
 // validateAuthorizationURL shape-checks the plugin-supplied authorization URL
 // (the sign-in page the host displays) before any host-authored prompt text
 // renders it: an absolute https URL, or an http URL on a loopback host (local
@@ -481,8 +496,7 @@ func validateAuthorizationURL(authURL string) error {
 	case "https":
 		return nil
 	case "http":
-		host := parsed.Hostname()
-		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		if isLoopbackHost(parsed.Hostname()) {
 			return nil
 		}
 		return errors.New("http authorization URL is only allowed on loopback hosts")

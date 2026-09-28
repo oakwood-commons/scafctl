@@ -243,21 +243,48 @@ func TestHostServiceServer_PromptAuthResponse(t *testing.T) {
 		assert.Equal(t, codes.InvalidArgument, status.Code(err))
 	})
 
-	t.Run("accepts a loopback http authorization URL", func(t *testing.T) {
+	t.Run("accepts loopback http authorization URLs", func(t *testing.T) {
 		t.Parallel()
-		broker := &AuthPromptBroker{}
-		server := &HostServiceServer{Deps: HostServiceDeps{PromptBroker: broker}}
-		end := broker.Begin("entra", func(context.Context, string, string) (string, error) {
-			return "http://localhost:8400/callback?code=x", nil
-		})
-		defer end()
-		resp, err := server.PromptAuthResponse(context.Background(), &proto.PromptAuthResponseRequest{
-			HandlerName:      "entra",
-			AuthorizationUrl: "http://localhost:8400/authorize",
-			RedirectUri:      "http://localhost:8400/callback",
-		})
-		require.NoError(t, err)
-		assert.Equal(t, "http://localhost:8400/callback?code=x", resp.Value)
+		for _, authURL := range []string{
+			"http://localhost:8400/authorize",
+			"http://127.0.0.1:8400/authorize",
+			"http://127.0.0.2:8400/authorize",
+			"http://127.10.20.30/authorize",
+			"http://[::1]:8400/authorize",
+		} {
+			broker := &AuthPromptBroker{}
+			server := &HostServiceServer{Deps: HostServiceDeps{PromptBroker: broker}}
+			end := broker.Begin("entra", func(context.Context, string, string) (string, error) {
+				return "http://localhost:8400/callback?code=x", nil
+			})
+			resp, err := server.PromptAuthResponse(context.Background(), &proto.PromptAuthResponseRequest{
+				HandlerName:      "entra",
+				AuthorizationUrl: authURL,
+				RedirectUri:      "http://localhost:8400/callback",
+			})
+			end()
+			require.NoError(t, err, authURL)
+			assert.Equal(t, "http://localhost:8400/callback?code=x", resp.Value)
+		}
+	})
+
+	t.Run("rejects non-loopback http hosts", func(t *testing.T) {
+		t.Parallel()
+		for _, authURL := range []string{"http://192.168.1.10/authorize", "http://10.0.0.5/authorize"} {
+			broker := &AuthPromptBroker{}
+			server := &HostServiceServer{Deps: HostServiceDeps{PromptBroker: broker}}
+			end := broker.Begin("entra", func(context.Context, string, string) (string, error) {
+				t.Error("prompt must not run for a rejected authorization URL")
+				return "", nil
+			})
+			_, err := server.PromptAuthResponse(context.Background(), &proto.PromptAuthResponseRequest{
+				HandlerName:      "entra",
+				AuthorizationUrl: authURL,
+			})
+			end()
+			require.Error(t, err, authURL)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+		}
 	})
 
 	t.Run("canceled context maps to gRPC Canceled", func(t *testing.T) {
