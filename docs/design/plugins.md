@@ -210,6 +210,7 @@ service HostService {
   rpc ListAuthHandlers(ListAuthHandlersRequest) returns (ListAuthHandlersResponse);
   rpc GetAuthToken(GetAuthTokenRequest) returns (GetAuthTokenResponse);
   rpc GetAuthGroups(GetAuthGroupsRequest) returns (GetAuthGroupsResponse);
+  rpc PromptAuthResponse(PromptAuthResponseRequest) returns (PromptAuthResponseResponse);
 }
 ```
 
@@ -262,8 +263,24 @@ Called once after auth handler plugin load, using the same configuration model a
 - `settings` -- extensible key-value JSON settings
 - `host_service_id` -- GRPCBroker service ID for HostService callbacks
 - `protocol_version` -- the host's plugin protocol version for feature detection
+- `host_capabilities` -- optional host features advertised at configure time
+  (see below)
 
 The response includes a `protocol_version` field and optional `diagnostics` (repeated `Diagnostic` messages) for structured warning/error reporting.
+
+#### Host Capabilities
+
+The `host_capabilities` field of `ConfigureAuthHandlerRequest` advertises
+optional host features so handlers can rank login flows before the first
+`Login` call. The current capability:
+
+- `prompt_auth_response` -- the host implements `HostService.PromptAuthResponse`
+  and can collect a pasted OAuth redirect URL from the user during a login.
+  In remote sessions (DevSpaces, Codespaces) the browser redirect cannot reach
+  the machine running the plugin, so the user pastes the URL they landed on;
+  handlers may use this to rank interactive flows (authorization code + PKCE)
+  ahead of device code. Plugins consult it via
+  `ProviderConfig.SupportsPromptAuthResponse()`.
 
 ### StopAuthHandler
 
@@ -280,6 +297,7 @@ Plugins that need host-side resources (secrets, auth tokens) use the `HostServic
 | `ListAuthHandlers` | List available auth handlers (filtered by AllowedAuthHandlers) |
 | `GetAuthToken` | Retrieve a valid access token from the host's auth registry |
 | `GetAuthGroups` | Retrieve the authenticated user's group memberships |
+| `PromptAuthResponse` | Collect a pasted OAuth redirect URL from the user during an interactive login |
 
 Plugins access HostService via a client injected during `ConfigureProvider`.
 
@@ -293,6 +311,23 @@ callback requires the resolved handler to implement the `auth.GroupsProvider`
 interface; handlers that do not implement it return an actionable error rather
 than an empty list. As with the other auth callbacks, the request is gated by
 `AllowedAuthHandlers`.
+
+`PromptAuthResponse` asks the host to prompt the user for the redirect URL of
+an authorization code + PKCE login and returns the pasted value verbatim. It
+is valid only during an active `Login` for the calling handler; outside a
+login or in a non-interactive session (no terminal, piped stdin, MCP/CI) the
+host returns `Unavailable`, and hosts that predate the RPC return
+`Unimplemented` (plugins detect it with `IsUnimplemented` and fall back to
+another flow). The host writes the prompt text itself -- it displays the
+plugin-supplied `authorization_url` (shape-checked: https, or http on
+loopback), asks the user to paste the address they landed on, and validates
+the paste against the expected `redirect_uri` prefix. The pasted value (which
+carries an authorization code) is never logged at any verbosity, and a
+canceled RPC (the plugin's own localhost callback arrived first) stops the
+prompt without leaving a reader on the terminal. In scafctl the gate is the
+`AuthPromptBroker` window opened by the auth handler login wrapper; embedders
+wire it via `HostServiceDeps.PromptBroker` and the interactive prompt itself
+via `auth.WithPasteBack`.
 
 ### Diagnostics and Exit Codes
 

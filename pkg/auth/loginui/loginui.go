@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package loginui renders the interactive login experience shared by the
-// 'auth login' and 'kube login' commands. It runs an auth handler's login while
-// presenting progress: the kvx status-screen TUI when stdout is a terminal
-// (device-code and browser flows), or plain-text instructions otherwise.
+// 'auth login' and 'kube login' commands. The device-code flow runs the kvx
+// status-screen TUI when stdout is a terminal; every other flow renders
+// plain-text instructions, which lets browser flows offer the paste-back
+// prompt (auth.PasteBackFunc) when the redirect cannot reach this machine.
 //
 // RunLogin returns the login Result and never prints the final success line or
 // error text — callers render their own output. This lets both commands share
@@ -16,19 +17,17 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"time"
+	"strings"
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
 	skvx "github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
+	"golang.org/x/term"
 )
-
-// browserCallbackWait bounds how long the browser TUI waits for a device-code
-// callback before assuming a pure browser (auth-code) flow.
-const browserCallbackWait = 500 * time.Millisecond
 
 // deviceCodeData carries the verification URL and user code surfaced by a
 // handler's DeviceCodeCallback.
@@ -44,9 +43,9 @@ type loginOutcome struct {
 }
 
 // RunLogin executes an interactive login for the given handler, presenting
-// progress via the kvx status TUI when running on a terminal (device-code and
-// browser flows) and plain-text instructions otherwise. It installs a SIGINT
-// handler that cancels the login.
+// the device-code status TUI when running on a terminal (device-code flow
+// only) and plain-text instructions for every other flow. It installs a
+// SIGINT handler that cancels the login.
 //
 // It returns the login Result on success. Callers render their own success
 // output; RunLogin does not print the final "logged in" line. Errors are
@@ -78,28 +77,44 @@ func RunLogin(ctx context.Context, w *writer.Writer, binaryName string, handler 
 
 	ioStreams := w.IOStreams()
 
-	// Use the kvx status TUI for interactive flows when running on a terminal.
-	// Non-interactive flows (SP, WI, PAT, metadata, client-credentials) fall
-	// through to the plain-text login path below.
-	if skvx.IsTerminal(ioStreams.Out) {
-		switch opts.Flow {
-		case auth.FlowDeviceCode:
+	// Browser-capable flows (authorization code + PKCE and friends) render
+	// in plain text rather than a full-screen TUI: the paste-back prompt
+	// (auth.PasteBackFunc, bridged to HostService.PromptAuthResponse) needs
+	// direct access to stdin, which a running TUI would own exclusively.
+	// The device-code flow keeps its status TUI; it has no callback problem
+	// to paste back from.
+	var interactiveFlow bool
+	switch opts.Flow {
+	case auth.FlowInteractive, auth.FlowGcloudADC, auth.FlowGitHubApp, "":
+		interactiveFlow = true
+	case auth.FlowDeviceCode:
+		if skvx.IsTerminal(ioStreams.Out) {
 			return runStatusTUI(ctx, w, binaryName, handler, opts, ioStreams)
-		case auth.FlowInteractive, auth.FlowGcloudADC, auth.FlowGitHubApp, "":
-			return runBrowserTUI(ctx, w, binaryName, handler, opts, ioStreams)
-		case auth.FlowServicePrincipal, auth.FlowWorkloadIdentity, auth.FlowPAT,
-			auth.FlowMetadata, auth.FlowClientCredentials, auth.FlowOnBehalfOf:
-			// Non-interactive flows fall through to the plain-text path below.
 		}
+	case auth.FlowServicePrincipal, auth.FlowWorkloadIdentity, auth.FlowPAT,
+		auth.FlowMetadata, auth.FlowClientCredentials, auth.FlowOnBehalfOf:
+		// Non-interactive flows fall through to the plain-text path below.
 	}
 
-	// Plain-text login path (non-terminal, or non-device-code flows).
+	// Offer the paste-back prompt when this session can actually render it:
+	// an interactive terminal on a platform with cancellation-safe reads.
+	// Plugin-backed handlers bridge the installed function to
+	// HostService.PromptAuthResponse (see AuthPromptBroker).
+	if interactiveFlow && interactiveTerminal(ioStreams) && input.InteractiveLineSupported() {
+		ctx = auth.WithPasteBack(ctx, newPasteBackPrompt(w, ioStreams))
+	}
+
+	// Plain-text login path (non-terminal, or flows rendered as plain text).
 	opts.DeviceCodeCallback = func(userCode, verificationURI, _ string) {
 		w.Info("")
 		w.Info("To sign in, use a web browser to open the page:")
 		w.Infof("  %s", verificationURI)
-		w.Info("")
-		w.Infof("Enter the code: %s", userCode)
+		// Browser/interactive logins surface the authorization URL without
+		// a user code; only device-code logins carry one.
+		if userCode != "" {
+			w.Info("")
+			w.Infof("Enter the code: %s", userCode)
+		}
 		w.Info("")
 		w.Info("Waiting for authentication...")
 	}
@@ -241,185 +256,47 @@ func runStatusTUI(
 	return capturedOutcome.result, nil
 }
 
-// runBrowserTUI runs the auth-code (browser) login flow using the kvx status
-// screen TUI. It also sets a DeviceCodeCallback so that handlers which
-// internally use device code within a FlowInteractive (e.g., GitHub without
-// client_secret) get the rich device-code TUI instead.
-func runBrowserTUI(
-	ctx context.Context,
-	w *writer.Writer,
-	binaryName string,
-	handler auth.Handler,
-	opts auth.LoginOptions,
-	ioStreams *terminal.IOStreams,
-) (*auth.Result, error) {
-	deviceCodeChan := make(chan deviceCodeData, 1)
-	outcomeChan := make(chan loginOutcome, 1)
-	done := make(chan tui.StatusResult, 1)
+// pasteBackPromptText is the host-authored instruction shown when an
+// interactive login offers the paste-back path. By contract the prompt
+// wording is written by the host only -- plugins supply URLs, never text --
+// so a handler cannot use PromptAuthResponse to phish for input.
+const pasteBackPromptText = "If your browser shows a connection error after sign-in, paste the full address from its address bar:"
 
-	opts.DeviceCodeCallback = func(userCode, verificationURI, _ string) {
-		select {
-		case deviceCodeChan <- deviceCodeData{userCode: userCode, verificationURI: verificationURI}:
-		default:
-		}
+// interactiveTerminal reports whether both stdin and stdout are terminals,
+// i.e. the session can render prompts and read answers from a human.
+func interactiveTerminal(ioStreams *terminal.IOStreams) bool {
+	if !skvx.IsTerminal(ioStreams.Out) {
+		return false
 	}
-
-	go func() {
-		result, err := handler.Login(ctx, opts)
-		outcomeChan <- loginOutcome{result: result, err: err}
-	}()
-
-	// Wait briefly for a device code callback. If the handler internally
-	// uses device code (e.g., GitHub FlowInteractive without client_secret),
-	// we want to show the device-code TUI instead of the browser TUI.
-	w.Verbosef("Initiating authentication with %s...", handler.DisplayName())
-
-	var useDeviceCodeTUI bool
-	var dci deviceCodeData
-	select {
-	case dci = <-deviceCodeChan:
-		useDeviceCodeTUI = true
-	case outcome := <-outcomeChan:
-		// Login completed before any TUI was shown.
-		if outcome.err != nil {
-			return nil, loginError(ctx, outcome.err)
-		}
-		return outcome.result, nil
-	case <-time.After(browserCallbackWait):
-		// No device code within the wait window — assume browser flow.
-		useDeviceCodeTUI = false
-	case <-ctx.Done():
-		return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
-	}
-
-	// Forward the login outcome to the TUI done channel.
-	var capturedOutcome loginOutcome
-	outcomeReady := make(chan struct{})
-	go func() {
-		outcome := <-outcomeChan
-		capturedOutcome = outcome
-		if outcome.err != nil {
-			done <- tui.StatusResult{Err: outcome.err}
-		} else {
-			done <- tui.StatusResult{Message: "Authenticated as " + loginIdentity(outcome.result)}
-		}
-		close(outcomeReady)
-	}()
-
-	data, schema := browserTUISchema(handler.DisplayName(), useDeviceCodeTUI, dci)
-
-	cfg := tui.DefaultConfig()
-	cfg.AppName = binaryName
-	cfg.DisplaySchema = schema
-	cfg.Done = done
-
-	teaOpts := tui.WithIO(ioStreams.In, ioStreams.Out)
-	if runErr := tui.Run(data, cfg, teaOpts...); runErr != nil {
-		if ctx.Err() != nil {
-			return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
-		}
-		return nil, fmt.Errorf("authentication display failed: %w", runErr)
-	}
-
-	// TUI exited normally.
-	select {
-	case <-outcomeReady:
-		// Outcome is captured.
-	default:
-		return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
-	}
-
-	if capturedOutcome.err != nil {
-		return nil, loginError(ctx, capturedOutcome.err)
-	}
-	return capturedOutcome.result, nil
+	in, ok := ioStreams.In.(*os.File)
+	return ok && term.IsTerminal(int(in.Fd())) //nolint:gosec // Fd() fits in int on all supported platforms
 }
 
-// browserTUISchema builds the TUI data and display schema for the browser login
-// flow, adapting to whether a device code, a browser auth URL, or neither was
-// surfaced by the handler.
-func browserTUISchema(displayName string, useDeviceCodeTUI bool, dci deviceCodeData) (map[string]any, *tui.DisplaySchema) {
-	switch {
-	case useDeviceCodeTUI && dci.userCode != "":
-		// Real device code flow (e.g., GitHub without client_secret).
-		fields := map[string]any{
-			"title": fmt.Sprintf("Sign in to %s", displayName),
-			"url":   dci.verificationURI,
-			"code":  dci.userCode,
+// newPasteBackPrompt builds the PasteBackFunc installed into interactive
+// logins: it renders the host-authored paste instructions and reads the
+// pasted redirect URL with a cancellation-safe terminal read (the RPC
+// context cancels when the plugin's own localhost callback arrives first,
+// and the read leaves no reader behind to steal the next input). The pasted
+// value is never written to any log or debug output: typed characters are
+// echoed to stderr only, mirroring plain terminal input.
+func newPasteBackPrompt(w *writer.Writer, ioStreams *terminal.IOStreams) auth.PasteBackFunc {
+	return func(ctx context.Context, authorizationURL, _ string) (string, error) {
+		w.Info("")
+		w.Info("Open this URL in your browser:")
+		w.Infof("  %s", authorizationURL)
+		w.Info("")
+		w.Info(pasteBackPromptText)
+		line, err := input.ReadInteractiveLine(ctx, ioStreams.In, ioStreams.ErrOut)
+		if err != nil {
+			if ctx.Err() != nil {
+				// The callback arrived (or the login was canceled): the
+				// prompt goes away and the half-typed line is discarded.
+				w.PlainStderr("")
+				return "", ctx.Err()
+			}
+			return "", fmt.Errorf("reading pasted address: %w", err)
 		}
-		schema := &tui.DisplaySchema{
-			Version: "v1",
-			Status: &tui.StatusDisplayConfig{
-				TitleField:     "title",
-				WaitMessage:    "Waiting for authentication...",
-				SuccessMessage: "Authenticated successfully!",
-				DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
-				DoneDelay:      "2s",
-				DisplayFields: []tui.StatusFieldDisplay{
-					{Label: "URL", Field: "url"},
-					{Label: "Code", Field: "code"},
-				},
-				Actions: []tui.StatusActionConfig{
-					{
-						Label: "Copy code",
-						Type:  "copy-value",
-						Field: "code",
-						Keys:  tui.StatusKeyBindings{Vim: "c", Emacs: "alt+c", Function: "f2"},
-					},
-					{
-						Label: "Open URL",
-						Type:  "open-url",
-						Field: "url",
-						Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
-					},
-				},
-			},
-		}
-		return fields, schema
-	case useDeviceCodeTUI && dci.userCode == "" && dci.verificationURI != "":
-		// Browser auth code flow — handler reported the auth URL via callback.
-		fields := map[string]any{
-			"title": fmt.Sprintf("Sign in to %s", displayName),
-			"url":   dci.verificationURI,
-		}
-		schema := &tui.DisplaySchema{
-			Version: "v1",
-			Status: &tui.StatusDisplayConfig{
-				TitleField:     "title",
-				WaitMessage:    "Waiting for browser authentication...",
-				SuccessMessage: "Authenticated successfully!",
-				DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
-				DoneDelay:      "2s",
-				DisplayFields: []tui.StatusFieldDisplay{
-					{Label: "URL", Field: "url"},
-				},
-				Actions: []tui.StatusActionConfig{
-					{
-						Label: "Re-open in browser",
-						Type:  "open-url",
-						Field: "url",
-						Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
-					},
-				},
-			},
-		}
-		return fields, schema
-	default:
-		// No callback fired — show minimal browser waiting TUI.
-		fields := map[string]any{
-			"title": fmt.Sprintf("Sign in to %s", displayName),
-		}
-		schema := &tui.DisplaySchema{
-			Version: "v1",
-			Status: &tui.StatusDisplayConfig{
-				TitleField:     "title",
-				WaitMessage:    "Waiting for browser authentication...",
-				SuccessMessage: "Authenticated successfully!",
-				DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
-				DoneDelay:      "2s",
-			},
-		}
-		return fields, schema
+		return strings.TrimSpace(line), nil
 	}
 }
 

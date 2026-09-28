@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -16,6 +17,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // secretNameMaxLen is the maximum allowed length for a secret name.
@@ -77,6 +80,11 @@ type HostServiceDeps struct {
 	// providers that call back for auth tokens.
 	// May be nil — in which case no profile resolution is performed.
 	ProfileResolverFunc func(handlerName string) string `json:"-" yaml:"-" doc:"Profile resolver callback (not serialized)."`
+	// PromptBroker gates HostService.PromptAuthResponse callbacks to the
+	// Login currently in progress and carries the interactive prompt
+	// installed by the login UI. When nil, the RPC is Unimplemented.
+	// Populated by HostDepsFromAuthRegistry.
+	PromptBroker *AuthPromptBroker `json:"-" yaml:"-" doc:"Paste-back prompt broker (not serialized)."`
 }
 
 // isSecretAllowed checks whether the given secret name is within the allowed
@@ -393,6 +401,121 @@ func (h *HostServiceServer) GetAuthGroups(ctx context.Context, req *proto.GetAut
 	}, nil
 }
 
+// promptPasteMaxLen bounds the pasted redirect URL length; a real redirect
+// URL stays well under this, so the limit only stops runaway input.
+const promptPasteMaxLen = 8192
+
+// PromptAuthResponse implements HostService.PromptAuthResponse.
+//
+// It renders the host-authored paste-back prompt for an interactive
+// authorization-code login and returns the redirect URL the user pasted.
+// Guardrails:
+//   - Returns Unavailable (per the SDK v0.18.0 HostService contract) unless a
+//     Login for the calling handler is currently in progress -- the login
+//     wrapper marks that window on the broker.
+//   - The prompt text is host-written; the plugin only supplies URLs, and
+//     the authorization URL itself is shape-checked here too, so the call
+//     cannot phish for input with foreign wording or an attacker URL.
+//   - Returns Unavailable when the login is not interactive (no TTY) and
+//     Unimplemented when the host wires no broker.
+//   - The pasted value is never logged at any verbosity (it carries an
+//     authorization code), on success or on any error path.
+//   - ctx cancellation (the plugin's own localhost callback arrived first)
+//     stops the prompt and returns Canceled; the cancellable read leaves no
+//     reader behind to steal the next terminal input.
+func (h *HostServiceServer) PromptAuthResponse(ctx context.Context, req *proto.PromptAuthResponseRequest) (*proto.PromptAuthResponseResponse, error) {
+	if h.Deps.PromptBroker == nil {
+		return nil, status.Error(codes.Unimplemented, "host does not implement PromptAuthResponse")
+	}
+
+	prompt, active := h.Deps.PromptBroker.Prompt(req.HandlerName)
+	if !active {
+		return nil, status.Errorf(codes.Unavailable, "paste-back prompt is unavailable: no active login for auth handler %q", req.HandlerName)
+	}
+	if prompt == nil {
+		return nil, status.Error(codes.Unavailable, "paste-back prompt is unavailable: this session is not interactive")
+	}
+
+	if err := validateAuthorizationURL(req.AuthorizationUrl); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	value, err := prompt(ctx, req.AuthorizationUrl, req.RedirectUri)
+	if err != nil {
+		// Never include the value in any error path.
+		if ctx.Err() != nil {
+			return nil, status.Error(codes.Canceled, "paste-back prompt canceled")
+		}
+		return nil, status.Errorf(codes.Internal, "reading pasted redirect URL: %v", err)
+	}
+
+	if err := validatePastedRedirectURL(value, req.RedirectUri); err != nil {
+		// The value (which may embed an authorization code) is not included
+		// in the message.
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	return &proto.PromptAuthResponseResponse{Value: value}, nil
+}
+
+// validateAuthorizationURL shape-checks the plugin-supplied authorization URL
+// (the sign-in page the host displays) before any host-authored prompt text
+// renders it: an absolute https URL, or an http URL on a loopback host (local
+// dev login servers). This keeps a handler from laundering an attacker URL
+// through the host's trusted prompt banner.
+func validateAuthorizationURL(authURL string) error {
+	if authURL == "" {
+		return errors.New("authorization URL must not be empty")
+	}
+	parsed, err := url.Parse(authURL)
+	if err != nil || !parsed.IsAbs() {
+		return errors.New("authorization URL is not an absolute URL")
+	}
+	switch parsed.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := parsed.Hostname()
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			return nil
+		}
+		return errors.New("http authorization URL is only allowed on loopback hosts")
+	default:
+		return errors.New("authorization URL must use https (or http on loopback)")
+	}
+}
+
+// validatePastedRedirectURL checks that a pasted value looks like the
+// expected redirect URL. Errors never embed the value itself.
+func validatePastedRedirectURL(value, redirectURI string) error {
+	if value == "" {
+		return errors.New("empty redirect URL: paste the full address from the browser's address bar")
+	}
+	if len(value) > promptPasteMaxLen {
+		return fmt.Errorf("pasted redirect URL exceeds the maximum length of %d characters", promptPasteMaxLen)
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || !parsed.IsAbs() || parsed.Scheme == "" || parsed.Host == "" {
+		return errors.New("pasted value is not an absolute URL (e.g. http://localhost:8400/callback?code=...)")
+	}
+	if redirectURI == "" {
+		return nil
+	}
+	want, err := url.Parse(redirectURI)
+	if err != nil || want.Host == "" {
+		//nolint:nilerr // The plugin sent an unusable expected prefix; do not
+		// block the login on it, the URL-shape check above already ran.
+		return nil
+	}
+	if parsed.Scheme != want.Scheme || parsed.Host != want.Host {
+		return fmt.Errorf("pasted URL does not match the expected redirect address %s", redirectURI)
+	}
+	if !strings.HasPrefix(strings.TrimSuffix(parsed.Path, "/"), strings.TrimSuffix(want.Path, "/")) {
+		return fmt.Errorf("pasted URL does not match the expected redirect address %s", redirectURI)
+	}
+	return nil
+}
+
 // HostServiceClient wraps the HostService gRPC client (used by plugins).
 // Plugin code uses this to call back into the host process.
 type HostServiceClient struct {
@@ -517,6 +640,10 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 		return nil
 	}
 	return &HostServiceDeps{
+		// One broker per deps: the login wrapper and the HostServiceServer
+		// for the same plugin client share this instance (the pointer
+		// survives the struct copies WithSecretScope makes).
+		PromptBroker: &AuthPromptBroker{},
 		AuthTokenFunc: func(ctx context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) {
 			// Resolve empty handler name to the default (first registered) handler.
 			if handler == "" {

@@ -10,7 +10,7 @@ This guide explains how to create custom auth handlers for scafctl. Auth handler
 Auth handlers can be delivered in two ways:
 
 | | **Builtin** | **Plugin** |
-|---|---|---|
+| --- | --- | --- |
 | **Where it lives** | Compiled into the scafctl binary | Separate executable (any language with gRPC) |
 | **Registration** | `authRegistry.Register(...)` in `root.go` | Discovered at runtime from plugin cache or catalog |
 | **Credential storage** | Uses `pkg/secrets` (OS keychain) | Plugin manages its own credential storage |
@@ -87,7 +87,7 @@ type GroupsProvider interface {
 ### Key Differences from Providers
 
 | Aspect | Provider | Auth Handler |
-|--------|----------|-------------|
+| -------- | ---------- | ------------- |
 | **State** | Stateless | Stateful (cached tokens, refresh tokens) |
 | **Interface size** | 2 methods | 8+ methods |
 | **Registry** | Versioned (name + version) | Simple map (name only) |
@@ -99,7 +99,7 @@ type GroupsProvider interface {
 ### Flows
 
 | Flow | Constant | Description |
-|------|----------|-------------|
+| ------ | ---------- | ------------- |
 | `device_code` | `auth.FlowDeviceCode` | OAuth 2.0 device authorization — user opens URL, enters code |
 | `interactive` | `auth.FlowInteractive` | Browser-based OAuth redirect |
 | `service_principal` | `auth.FlowServicePrincipal` | Client ID + secret |
@@ -111,7 +111,7 @@ type GroupsProvider interface {
 ### Capabilities
 
 | Capability | Constant | Description |
-|------------|----------|-------------|
+| ------------ | ---------- | ------------- |
 | `scopes_on_login` | `auth.CapScopesOnLogin` | Handler accepts scopes during login |
 | `scopes_on_token_request` | `auth.CapScopesOnTokenRequest` | Handler accepts scopes on each token request |
 | `tenant_id` | `auth.CapTenantID` | Handler uses a tenant ID (multi-tenant IDPs) |
@@ -121,7 +121,7 @@ type GroupsProvider interface {
 ### Identity Types
 
 | Type | Constant | Description |
-|------|----------|-------------|
+| ------ | ---------- | ------------- |
 | `user` | `auth.IdentityTypeUser` | Human user (device code, interactive) |
 | `service-principal` | `auth.IdentityTypeServicePrincipal` | App/service identity |
 | `workload-identity` | `auth.IdentityTypeWorkloadIdentity` | Kubernetes workload |
@@ -129,7 +129,7 @@ type GroupsProvider interface {
 ### Core Types
 
 | Type | Fields | Purpose |
-|------|--------|---------|
+| ------ | -------- | --------- |
 | `LoginOptions` | `TenantID`, `Hostname`, `Scopes`, `Flow`, `Timeout`, `DeviceCodeCallback` | Input to `Login()` |
 | `TokenOptions` | `Scope`, `MinValidFor`, `ForceRefresh` | Input to `GetToken()` / `InjectAuth()` |
 | `Result` | `Claims`, `ExpiresAt` | Output from `Login()` |
@@ -143,7 +143,7 @@ type GroupsProvider interface {
 Use these in your implementations for consistent error handling:
 
 | Error | When to return |
-|-------|---------------|
+| ------- | --------------- |
 | `auth.ErrNotAuthenticated` | User is not logged in |
 | `auth.ErrAuthenticationFailed` | Login failed |
 | `auth.ErrTokenExpired` | Refresh token expired (re-login required) |
@@ -475,6 +475,7 @@ See `tests/integration/cli_test.go`. Auth-specific tests use the CLI:
 
 {{< tabs "auth-handler-development-cmd-1" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Login
 scafctl auth login --handler my-idp --flow device_code
@@ -488,8 +489,10 @@ scafctl auth token --handler my-idp
 # Logout
 scafctl auth logout --handler my-idp
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Login
 scafctl auth login --handler my-idp --flow device_code
@@ -503,6 +506,7 @@ scafctl auth token --handler my-idp
 # Logout
 scafctl auth logout --handler my-idp
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -779,6 +783,7 @@ func main() {
 
 {{< tabs "auth-handler-development-cmd-2" >}}
 {{% tab "Bash" %}}
+
 ```bash
 go build -o scafctl-auth-okta .
 
@@ -786,8 +791,10 @@ go build -o scafctl-auth-okta .
 mkdir -p "$(scafctl paths cache)/plugins"
 cp scafctl-auth-okta "$(scafctl paths cache)/plugins/"
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 go build -o scafctl-auth-okta .
 
@@ -796,6 +803,7 @@ $pluginDir = "$(scafctl paths cache)/plugins"
 New-Item -ItemType Directory -Force -Path $pluginDir
 Copy-Item scafctl-auth-okta $pluginDir
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -823,18 +831,49 @@ spec:
 ### gRPC Design Decisions
 
 | Challenge | Solution |
-|-----------|----------|
+| ----------- | ---------- |
 | `DeviceCodeCallback` is a Go function — not serializable | Login uses **server-side streaming**: plugin sends `DeviceCodePrompt` messages before the final `LoginResult` |
-| `InjectAuth` takes `*http.Request` — can't cross process boundary | Host calls `GetToken` over gRPC, then injects the returned token into the request locally |
-| Credential storage | Plugin manages its own credential storage (keychain, file, vault) — v1 does not share the host's secret store |
+| `InjectAuth` takes `*http.Request` -- can't cross process boundary | Host calls `GetToken` over gRPC, then injects the returned token into the request locally |
+| Credential storage | Plugin manages its own credential storage (keychain, file, vault) -- v1 does not share the host's secret store |
 | Multiple handlers per plugin | Each RPC includes `handler_name` parameter, allowing one plugin binary to expose multiple auth handlers |
+
+### Remote-Workspace Logins: PromptAuthResponse (Paste-Back)
+
+Authorization code + PKCE logins redirect the browser to
+`http://localhost:<port>` on the machine running scafctl. In remote workspaces
+(DevSpaces, Codespaces) that redirect cannot arrive, so the SDK v0.18.0 host
+offers `HostServiceClient.PromptAuthResponse(ctx, handler, authURL, redirectURI)`:
+the host renders its own paste-back prompt, the user pastes the full address
+from the browser's address bar, and the host returns the pasted URL verbatim
+(extract the `code` query parameter and continue the code exchange).
+
+Call it only during your `Login`, and shape the flow as:
+
+1. At configure time, check `cfg.SupportsPromptAuthResponse()` (the host
+   advertises `host_capabilities.prompt_auth_response`). If supported, rank
+   the interactive flow ahead of device code.
+2. During `Login`, open the browser and start your loopback listener, then
+   call `PromptAuthResponse` with the same context you gave the listener.
+   Whichever wins first -- the callback or the pasted URL -- completes the
+   login; on the paste path the loopback listener is never contacted by the
+   real redirect, so the pasted URL carries the code.
+3. Handle the errors by contract: `Unavailable` means no active login or a
+   non-interactive session (no terminal, CI, MCP) -- fall back to device code;
+   `Canceled` means the RPC context was canceled (your own callback arrived --
+   stop prompting); `Unimplemented` means an older host -- fall back to device
+   code via `plugin.IsUnimplemented(err)`.
+4. If the paste does not match your `redirect_uri` prefix the host rejects it
+   with `InvalidArgument` -- re-prompt or surface a clear error.
+
+The host never logs the pasted value, writes all prompt text itself (you
+supply only URLs), and requires an interactive terminal.
 
 ### gRPC Serialization
 
 Types preserved over the gRPC round-trip:
 
 | Type | Transmitted |
-|------|:----------:|
+| ------ | :----------: |
 | `AuthHandlerInfo` (name, display_name, flows, capabilities) | ✅ |
 | `LoginRequest` (tenant_id, scopes, flow, timeout) | ✅ |
 | `LoginResponse` (claims, expires_at) | ✅ |
@@ -855,7 +894,7 @@ Same as provider plugins:
 scafctl ships with three builtin auth handlers:
 
 | Handler | Name | Package | Flows | Key Config |
-|---------|------|---------|-------|------------|
+| --------- | ------ | --------- | ------- | ------------ |
 | **Entra ID** | `entra` | `pkg/auth/entra/` | device_code, service_principal, workload_identity | `ClientID`, `TenantID`, `Authority`, `DefaultScopes` |
 | **GitHub** | `github` | `pkg/auth/github/` | device_code, pat | `ClientID`, `Hostname`, `DefaultScopes` |
 | **GCP** | `gcp` | `pkg/auth/gcp/` | device_code, interactive, service_principal, metadata, workload_identity, gcloud_adc | `ClientID`, `ClientSecret`, `DefaultScopes`, `ImpersonateServiceAccount` |
@@ -905,7 +944,7 @@ The plugin-template solution generates a release workflow (`.github/workflows/re
 The `publish-catalog` job uses three key variables:
 
 | Variable | Description | Example |
-|----------|-------------|---------|
+| ---------- | ------------- | --------- |
 | `NAME` | Handler name (matches `Name()` return value) | `my-handler` |
 | `CATALOG` | OCI registry URL | `oci://ghcr.io/myorg` |
 | `IMAGE` | Full image reference for signing | `ghcr.io/myorg/auth-handlers/my-handler` |
@@ -952,7 +991,7 @@ plugins:
 ~~~
 
 | Mode | Behavior |
-|------|----------|
+| ------ | ---------- |
 | `off` (default) | No signature check; digest verification only |
 | `warn` | Verify signature; log a warning on failure but continue |
 | `enforce` | Verify signature; fail with an error on missing or invalid signature |

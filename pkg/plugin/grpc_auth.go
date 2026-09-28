@@ -64,9 +64,10 @@ func (p *AuthHandlerGRPCPlugin) GRPCClient(ctx context.Context, broker *plugin.G
 		}()
 	}
 	return &AuthHandlerGRPCClient{
-		client:        proto.NewAuthHandlerServiceClient(c),
-		broker:        broker,
-		hostServiceID: hostServiceID,
+		client:             proto.NewAuthHandlerServiceClient(c),
+		broker:             broker,
+		hostServiceID:      hostServiceID,
+		supportsPromptAuth: p.HostDeps != nil && p.HostDeps.PromptBroker != nil,
 	}, nil
 }
 
@@ -323,6 +324,10 @@ type AuthHandlerGRPCClient struct {
 	client        proto.AuthHandlerServiceClient
 	broker        *plugin.GRPCBroker
 	hostServiceID uint32
+	// supportsPromptAuth reports whether this client's HostService broker
+	// serves PromptAuthResponse (host deps with a prompt broker). It drives
+	// the HostCapabilities advertisement at configure time.
+	supportsPromptAuth bool
 }
 
 // GetAuthHandlers implements AuthHandlerPlugin.GetAuthHandlers.
@@ -473,7 +478,7 @@ func (c *AuthHandlerGRPCClient) ConfigureAuthHandler(ctx context.Context, handle
 		protoSettings[k] = []byte(v)
 	}
 
-	resp, err := c.client.ConfigureAuthHandler(ctx, &proto.ConfigureAuthHandlerRequest{
+	req := &proto.ConfigureAuthHandlerRequest{
 		HandlerName:     handlerName,
 		Quiet:           cfg.Quiet,
 		NoColor:         cfg.NoColor,
@@ -482,7 +487,13 @@ func (c *AuthHandlerGRPCClient) ConfigureAuthHandler(ctx context.Context, handle
 		HostServiceId:   c.hostServiceID,
 		Settings:        protoSettings,
 		ProtocolVersion: PluginProtocolVersion,
-	})
+	}
+	// Advertise the paste-back host capability so plugin handlers can rank
+	// interactive (authorization code + PKCE) flows for sessions where the
+	// browser redirect may not reach this machine (remote workspaces).
+	req.HostCapabilities = c.hostCapabilities()
+
+	resp, err := c.client.ConfigureAuthHandler(ctx, req)
 	if err != nil {
 		// Older plugins may not implement ConfigureAuthHandler.
 		if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
@@ -494,6 +505,13 @@ func (c *AuthHandlerGRPCClient) ConfigureAuthHandler(ctx context.Context, handle
 		return fmt.Errorf("configure auth handler failed: %s", resp.Error)
 	}
 	return nil
+}
+
+// hostCapabilities returns the host-side capability advertisement for
+// configure-time flow ranking, mirroring what this client's HostService
+// broker actually serves.
+func (c *AuthHandlerGRPCClient) hostCapabilities() *proto.HostCapabilities {
+	return &proto.HostCapabilities{PromptAuthResponse: c.supportsPromptAuth}
 }
 
 // DetectAvailableFlows implements AuthHandlerPlugin.DetectAvailableFlows.

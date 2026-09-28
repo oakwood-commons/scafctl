@@ -1163,6 +1163,34 @@ scafctl auth login github --callback-port 8400
 {{% /tab %}}
 {{< /tabs >}}
 
+### Remote Workspaces (DevSpaces, Codespaces): Pasting the Redirect URL
+
+Interactive (browser) logins redirect to `http://localhost:<port>` on the
+machine running scafctl. In a remote workspace -- OpenShift DevSpaces,
+Codespaces, and similar -- the browser runs on your laptop, so the redirect
+cannot reach the workspace. When the host supports it, scafctl offers a
+paste-back path during the login:
+
+```
+To sign in, use a web browser to open the page:
+  https://login.example.com/authorize?...
+
+Open this URL in your browser:
+  https://login.example.com/authorize?...
+
+If your browser shows a connection error after sign-in, paste the full address from its address bar:
+http://localhost:8400/callback?code=...
+```
+
+Copy the full address from the browser's address bar after sign-in and paste
+it at the prompt; scafctl completes the login from the pasted authorization
+code. The prompt only appears while a login is in progress, its wording is
+host-written (handlers cannot inject text), and it requires an interactive
+terminal -- in CI, MCP sessions, and other non-interactive contexts the
+handler is told the prompt is unavailable and falls back to another flow.
+When the local callback does arrive first (for example over a port-forward),
+the prompt disappears on its own and the pasted value is never logged.
+
 ---
 
 ## GitHub Device Code Flow

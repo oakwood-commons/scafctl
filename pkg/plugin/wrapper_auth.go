@@ -140,6 +140,14 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 		CallbackPort: opts.CallbackPort,
 	}
 
+	// Gate PromptAuthResponse callbacks to this Login: the broker window is
+	// open exactly while the plugin's Login RPC runs. The prompt function was
+	// installed into ctx by the login UI when the session is interactive; a
+	// nil prompt yields Unavailable on the RPC (non-interactive session).
+	if broker := w.client.authPromptBroker(); broker != nil {
+		defer broker.Begin(w.handlerName, auth.PasteBackFromContext(ctx))()
+	}
+
 	// Bridge the LoginOptions.DeviceCodeCallback to the plugin's streaming callback.
 	// Includes host-side verification URI validation to prevent phishing via
 	// malicious plugins sending fake device code URLs.

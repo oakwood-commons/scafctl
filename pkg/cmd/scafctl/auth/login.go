@@ -54,6 +54,13 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 		Long: strings.ReplaceAll(heredoc.Doc(`
 			Authenticate with an authentication handler.
 
+			Interactive (browser) logins also work from remote workspaces
+			(DevSpaces, Codespaces, and similar) where the browser redirect
+			cannot reach this machine: after opening the sign-in URL, scafctl
+			offers to paste the full address from the browser's address bar.
+			Paste it at the prompt and the login completes from the pasted
+			authorization code.
+
 			For the 'entra' handler, this supports multiple authentication flows:
 			- device-code: Device code flow via microsoft.com/devicelogin (default).
 			               Works in any browser because the login page inherits the

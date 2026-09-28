@@ -563,6 +563,7 @@ type AuthHandlerClient struct {
 	path            string
 	name            string
 	startupDuration time.Duration
+	hostDeps        *HostServiceDeps
 }
 
 // newAuthHandlerClientWithConnector creates an auth handler plugin client
@@ -575,6 +576,11 @@ func newAuthHandlerClientWithConnector(
 	opts ...ClientOption,
 ) (*AuthHandlerClient, error) {
 	startupStart := time.Now()
+	// Resolve once here (buildPluginClient resolves again internally; the
+	// operation is pure) so this client remembers the host deps it serves --
+	// the login wrapper uses the shared PromptBroker to gate
+	// PromptAuthResponse callbacks.
+	resolved := resolveClientOptions(opts)
 	authPlugin, client, err := buildPluginClient(
 		pluginPath,
 		opts,
@@ -608,6 +614,7 @@ func newAuthHandlerClientWithConnector(
 		path:            pluginPath,
 		name:            pluginNameFromPath(pluginPath),
 		startupDuration: time.Since(startupStart),
+		hostDeps:        resolved.hostDeps,
 	}, nil
 }
 
@@ -658,6 +665,15 @@ func (c *AuthHandlerClient) HostServiceID() uint32 {
 		return gc.hostServiceID
 	}
 	return 0
+}
+
+// authPromptBroker returns the shared PromptAuthResponse broker for this
+// client's HostService, or nil when no host deps are wired.
+func (c *AuthHandlerClient) authPromptBroker() *AuthPromptBroker {
+	if c.hostDeps == nil {
+		return nil
+	}
+	return c.hostDeps.PromptBroker
 }
 
 func (c *AuthHandlerClient) ActivateServerMode(ctx context.Context, settings []byte) error {

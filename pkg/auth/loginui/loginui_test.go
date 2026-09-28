@@ -152,39 +152,105 @@ func TestRunStatusTUI_EarlyCompletion(t *testing.T) {
 	})
 }
 
-// TestRunBrowserTUI_EarlyCompletion exercises the browser TUI path when the
-// login finishes before any TUI is shown.
-func TestRunBrowserTUI_EarlyCompletion(t *testing.T) {
+// TestRunLogin_PlainDeviceCodeCallback asserts the live behavior of the
+// plain renderer's device-code callback: the code line is printed only when
+// the handler actually surfaced a user code (browser/interactive logins send
+// an authorization URL with no code).
+func TestRunLogin_PlainDeviceCodeCallback(t *testing.T) {
 	t.Parallel()
 
-	t.Run("success", func(t *testing.T) {
-		t.Parallel()
+	run := func(t *testing.T, flow auth.Flow, userCode string) string {
+		t.Helper()
+		ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+		w := writer.New(ioStreams, settings.NewCliParams())
 		handler := &mockHandler{
-			name: "gcp",
-			loginFunc: func(_ context.Context, _ auth.LoginOptions) (*auth.Result, error) {
-				return &auth.Result{Claims: &auth.Claims{Username: "bob"}}, nil
+			name: "entra",
+			loginFunc: func(_ context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+				if opts.DeviceCodeCallback != nil {
+					opts.DeviceCodeCallback(userCode, "https://verify.example", "")
+				}
+				return &auth.Result{}, nil
 			},
 		}
-		w := newTestWriter(t)
-		result, err := runBrowserTUI(context.Background(), w, "scafctl", handler, auth.LoginOptions{}, w.IOStreams())
+		_, err := RunLogin(context.Background(), w, "scafctl", handler, auth.LoginOptions{Flow: flow})
 		require.NoError(t, err)
-		assert.Equal(t, "bob", result.Claims.DisplayIdentity())
+		return outBuf.String()
+	}
+
+	t.Run("device code with user code prints the code line", func(t *testing.T) {
+		t.Parallel()
+		out := run(t, auth.FlowDeviceCode, "CODE123")
+		assert.Contains(t, out, "Enter the code: CODE123")
+		assert.Contains(t, out, "https://verify.example")
 	})
 
-	t.Run("error", func(t *testing.T) {
+	t.Run("browser flow without user code omits the code line", func(t *testing.T) {
 		t.Parallel()
-		loginErr := errors.New("boom")
-		handler := &mockHandler{
-			name: "gcp",
-			loginFunc: func(_ context.Context, _ auth.LoginOptions) (*auth.Result, error) {
-				return nil, loginErr
-			},
-		}
-		w := newTestWriter(t)
-		_, err := runBrowserTUI(context.Background(), w, "scafctl", handler, auth.LoginOptions{}, w.IOStreams())
-		require.Error(t, err)
-		assert.ErrorIs(t, err, loginErr)
+		out := run(t, auth.FlowInteractive, "")
+		assert.NotContains(t, out, "Enter the code:")
+		assert.Contains(t, out, "https://verify.example")
+		assert.Contains(t, out, "Waiting for authentication...")
 	})
+}
+
+// TestRunLogin_InteractiveRendersPlain asserts interactive (browser) flows
+// take the plain-text path: the device-code callback prints instructions
+// and no paste-back prompt is offered on a non-interactive session.
+func TestRunLogin_InteractiveRendersPlain(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, settings.NewCliParams())
+
+	pasteBackSeen := false
+	handler := &mockHandler{
+		name: "entra",
+		loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+			// Non-interactive test streams: the login UI must not have
+			// installed a paste-back prompt.
+			if auth.PasteBackFromContext(ctx) != nil {
+				pasteBackSeen = true
+			}
+			if opts.DeviceCodeCallback != nil {
+				opts.DeviceCodeCallback("", "https://auth.example", "")
+			}
+			return &auth.Result{Claims: &auth.Claims{Username: "alice"}}, nil
+		},
+	}
+
+	result, err := RunLogin(context.Background(), w, "scafctl", handler, auth.LoginOptions{Flow: auth.FlowInteractive})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, pasteBackSeen, "no paste-back prompt on non-interactive sessions")
+	assert.Contains(t, outBuf.String(), "https://auth.example")
+}
+
+// TestNewPasteBackPrompt_Render asserts the host-authored prompt block: the
+// authorization URL, the paste-back instruction, and nothing else before the
+// read.
+func TestNewPasteBackPrompt_Render(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, settings.NewCliParams())
+
+	prompt := newPasteBackPrompt(w, ioStreams)
+	authURL := "https://login.example/authorize?client_id=abc"
+	_, err := prompt(context.Background(), authURL, "http://localhost:8400/callback")
+
+	// The test streams hold no TTY, so the read fails -- but only after the
+	// prompt text was rendered.
+	require.Error(t, err)
+	out := outBuf.String()
+	assert.Contains(t, out, "Open this URL in your browser:")
+	assert.Contains(t, out, authURL)
+	assert.Contains(t, out, pasteBackPromptText)
+
+	// Cancellation surfaces as the context error rather than a read error.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = prompt(ctx, authURL, "")
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestLoginIdentity(t *testing.T) {
@@ -207,37 +273,4 @@ func TestLoginError(t *testing.T) {
 	err := loginError(context.Background(), underlying)
 	assert.ErrorIs(t, err, underlying)
 	assert.NotErrorIs(t, err, auth.ErrUserCancelled)
-}
-
-func TestBrowserTUISchema(t *testing.T) {
-	t.Parallel()
-
-	t.Run("device code", func(t *testing.T) {
-		t.Parallel()
-		data, schema := browserTUISchema("GitHub", true, deviceCodeData{userCode: "ABC", verificationURI: "https://verify"})
-		assert.Equal(t, "ABC", data["code"])
-		assert.Equal(t, "https://verify", data["url"])
-		assert.Equal(t, "Waiting for authentication...", schema.Status.WaitMessage)
-		assert.Len(t, schema.Status.Actions, 2)
-	})
-
-	t.Run("browser auth url", func(t *testing.T) {
-		t.Parallel()
-		data, schema := browserTUISchema("GitHub", true, deviceCodeData{verificationURI: "https://auth"})
-		_, hasCode := data["code"]
-		assert.False(t, hasCode)
-		assert.Equal(t, "https://auth", data["url"])
-		assert.Equal(t, "Waiting for browser authentication...", schema.Status.WaitMessage)
-		assert.Len(t, schema.Status.Actions, 1)
-	})
-
-	t.Run("minimal browser", func(t *testing.T) {
-		t.Parallel()
-		data, schema := browserTUISchema("GitHub", false, deviceCodeData{})
-		assert.Equal(t, "Sign in to GitHub", data["title"])
-		_, hasURL := data["url"]
-		assert.False(t, hasURL)
-		assert.Empty(t, schema.Status.Actions)
-		assert.Empty(t, schema.Status.DisplayFields)
-	})
 }
