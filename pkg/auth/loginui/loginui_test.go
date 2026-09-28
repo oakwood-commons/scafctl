@@ -4,9 +4,11 @@
 package loginui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -273,4 +275,17 @@ func TestLoginError(t *testing.T) {
 	err := loginError(context.Background(), underlying)
 	assert.ErrorIs(t, err, underlying)
 	assert.NotErrorIs(t, err, auth.ErrUserCancelled)
+}
+
+func TestInteractiveTerminal_DevNullIsNotTTY(t *testing.T) {
+	t.Parallel()
+
+	devNull, err := os.Open(os.DevNull)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = devNull.Close() })
+
+	// /dev/null is a character device but not a terminal: paste-back must
+	// stay off so the prompt is never written somewhere invisible.
+	assert.False(t, interactiveTerminal(&terminal.IOStreams{In: devNull, Out: devNull, ErrOut: devNull}))
+	assert.False(t, isTTY(&bytes.Buffer{}))
 }

@@ -267,11 +267,14 @@ const pasteBackPromptText = "If your browser shows a connection error after sign
 // human. stderr must be a terminal too: the paste read echoes typed bytes
 // there, and a redirected stderr would capture the authorization code.
 func interactiveTerminal(ioStreams *terminal.IOStreams) bool {
-	if !skvx.IsTerminal(ioStreams.Out) || !skvx.IsTerminal(ioStreams.ErrOut) {
-		return false
-	}
-	in, ok := ioStreams.In.(*os.File)
-	return ok && term.IsTerminal(int(in.Fd())) //nolint:gosec // Fd() fits in int on all supported platforms
+	// A real TTY check (not os.ModeCharDevice): /dev/null is a char device,
+	// and a prompt written there would leave the login blocked invisibly.
+	return isTTY(ioStreams.In) && isTTY(ioStreams.Out) && isTTY(ioStreams.ErrOut)
+}
+
+func isTTY(s any) bool {
+	f, ok := s.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd())) //nolint:gosec // Fd() fits in int on all supported platforms
 }
 
 // newPasteBackPrompt builds the PasteBackFunc installed into interactive
