@@ -148,14 +148,22 @@ func RunLogin(ctx context.Context, w *writer.Writer, binaryName string, handler 
 	}
 
 	// Plain-text login path (non-terminal sessions, --quiet, and flows that
-	// never render a status screen). The authorize URL prints exactly once
-	// per run: a handler that re-fires the callback never duplicates the
-	// block.
-	var urlBlockOnce sync.Once
+	// never render a status screen). A handler that re-fires the callback
+	// with the same prompt never duplicates the block; a different prompt
+	// (e.g. an interactive login falling back to device code) still prints.
+	var (
+		lastMu     sync.Mutex
+		lastPrompt *deviceCodeData
+	)
 	opts.DeviceCodeCallback = func(userCode, verificationURI, _ string) {
-		urlBlockOnce.Do(func() {
-			printSignInBlock(w, verificationURI, userCode)
-		})
+		lastMu.Lock()
+		defer lastMu.Unlock()
+		cur := deviceCodeData{userCode: userCode, verificationURI: verificationURI}
+		if lastPrompt != nil && *lastPrompt == cur {
+			return
+		}
+		lastPrompt = &cur
+		printSignInBlock(w, verificationURI, userCode)
 	}
 
 	result, err := handler.Login(ctx, opts)
@@ -387,11 +395,11 @@ func (h *pasteHandoff) requestPaste() {
 // the status TUI early: the URL stays visible for the rest of the login and
 // the waiting line explains what happens next. It holds the handoff lock
 // while printing so a concurrent paste prompt cannot interleave.
-func (h *pasteHandoff) printURLBlockFallback(w *writer.Writer, verificationURI string) {
+func (h *pasteHandoff) printURLBlockFallback(w *writer.Writer, verificationURI, userCode string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.urlPrinted = true
-	printSignInBlock(w, verificationURI, "")
+	printSignInBlock(w, verificationURI, userCode)
 }
 
 // announcePaste renders the paste instructions right before the hidden read.
@@ -502,7 +510,7 @@ func runInteractiveTUI(
 	opts auth.LoginOptions,
 	ioStreams *terminal.IOStreams,
 ) (*auth.Result, error) {
-	urlChan := make(chan string, 1)
+	urlChan := make(chan deviceCodeData, 1)
 	outcomeChan := make(chan loginOutcome, 1)
 	// done has cap 2 because it has exactly two senders (the outcome
 	// forwarder and one paste request), which keeps both non-blocking
@@ -512,9 +520,12 @@ func runInteractiveTUI(
 
 	// Only the first URL drives the display: the URL prints exactly once
 	// per login run even if the handler re-fires the callback.
-	opts.DeviceCodeCallback = func(_, verificationURI, _ string) {
+	// A handler that resolves to device code internally (an empty or
+	// interactive flow without a client secret) supplies a user code; it is
+	// carried through so the box and the fallback block show it.
+	opts.DeviceCodeCallback = func(userCode, verificationURI, _ string) {
 		select {
-		case urlChan <- verificationURI:
+		case urlChan <- deviceCodeData{userCode: userCode, verificationURI: verificationURI}:
 		default:
 		}
 	}
@@ -531,9 +542,9 @@ func runInteractiveTUI(
 	// Wait for the sign-in URL, an early completion, or cancellation. A
 	// paste request alongside this wait cannot strand a prompt: with no
 	// TUI up it releases itself (requestPaste closes tuiDown).
-	var authURL string
+	var prompt deviceCodeData
 	select {
-	case authURL = <-urlChan:
+	case prompt = <-urlChan:
 	case outcome := <-outcomeChan:
 		// Login completed before a URL was shown (unusual).
 		if outcome.err != nil {
@@ -562,9 +573,23 @@ func runInteractiveTUI(
 		return oc.wait(ctx)
 	}
 
+	authURL := prompt.verificationURI
 	data := map[string]any{
 		"title": fmt.Sprintf("Sign in to %s", handler.DisplayName()),
 		"url":   authURL,
+	}
+	fields := []tui.StatusFieldDisplay{{Label: "URL", Field: "url"}}
+	copyAction := tui.StatusActionConfig{
+		Label: "Copy URL",
+		Type:  "copy-value",
+		Field: "url",
+		Keys:  tui.StatusKeyBindings{Vim: "c", Emacs: "alt+c", Function: "f2"},
+	}
+	if prompt.userCode != "" {
+		data["code"] = prompt.userCode
+		fields = append(fields, tui.StatusFieldDisplay{Label: "Code", Field: "code"})
+		copyAction.Label = "Copy code"
+		copyAction.Field = "code"
 	}
 
 	schema := &tui.DisplaySchema{
@@ -575,16 +600,9 @@ func runInteractiveTUI(
 			SuccessMessage: authenticatedMessage,
 			DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
 			DoneDelay:      interactiveDoneDelay,
-			DisplayFields: []tui.StatusFieldDisplay{
-				{Label: "URL", Field: "url"},
-			},
+			DisplayFields:  fields,
 			Actions: []tui.StatusActionConfig{
-				{
-					Label: "Copy URL",
-					Type:  "copy-value",
-					Field: "url",
-					Keys:  tui.StatusKeyBindings{Vim: "c", Emacs: "alt+c", Function: "f2"},
-				},
+				copyAction,
 				{
 					Label: "Open URL",
 					Type:  "open-url",
@@ -610,7 +628,7 @@ func runInteractiveTUI(
 		// unified plain block, where the paste prompt stays fully
 		// functional.
 		if !handoff.engaged() {
-			handoff.printURLBlockFallback(w, authURL)
+			handoff.printURLBlockFallback(w, authURL, prompt.userCode)
 		}
 		handoff.markTuiDown()
 		return oc.wait(ctx)
@@ -627,7 +645,7 @@ func runInteractiveTUI(
 	// and keep waiting in plain text. A cancelled login prints nothing
 	// more -- the cancellation notice already went to stderr.
 	if !handoff.engaged() && ctx.Err() == nil {
-		handoff.printURLBlockFallback(w, authURL)
+		handoff.printURLBlockFallback(w, authURL, prompt.userCode)
 	}
 	handoff.markTuiDown()
 

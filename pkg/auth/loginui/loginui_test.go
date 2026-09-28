@@ -240,6 +240,31 @@ func TestRunLogin_PlainURLOncePerRun(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(out, waitingMessage))
 }
 
+// TestRunLogin_PlainDeviceCodeFallbackPrints asserts a changed prompt (an
+// interactive login falling back to device code) is not suppressed by the
+// dedupe: only identical prompts collapse.
+func TestRunLogin_PlainDeviceCodeFallbackPrints(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, settings.NewCliParams())
+	handler := &mockHandler{
+		name: "entra",
+		loginFunc: func(_ context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+			opts.DeviceCodeCallback("", "https://auth.example/authorize", "")
+			opts.DeviceCodeCallback("WXYZ-1234", "https://verify.example/device", "")
+			return &auth.Result{}, nil
+		},
+	}
+
+	_, err := RunLogin(context.Background(), w, "scafctl", handler, auth.LoginOptions{Flow: auth.FlowInteractive})
+	require.NoError(t, err)
+	out := outBuf.String()
+	assert.Equal(t, 1, strings.Count(out, "https://auth.example/authorize"))
+	assert.Equal(t, 1, strings.Count(out, "https://verify.example/device"))
+	assert.Contains(t, out, "Enter the code: WXYZ-1234")
+}
+
 // TestRunLogin_InteractiveRendersPlain asserts interactive (browser) flows
 // take the plain-text path on a non-interactive session: the device-code
 // callback prints instructions and no paste-back prompt is offered.
@@ -552,6 +577,46 @@ func TestRunInteractiveTUI_UserQuitFallsBackToPlain(t *testing.T) {
 	assert.NotContains(t, outStr, "💡")
 }
 
+// TestRunInteractiveTUI_DeviceCodeResolvedByHandler pins that a handler
+// resolving an interactive/empty flow to device code keeps its user code:
+// the status box shows it with a copy-code action, and the quit fallback
+// block prints it.
+func TestRunInteractiveTUI_DeviceCodeResolvedByHandler(t *testing.T) {
+	outcomeGate := make(chan struct{})
+	handler := &mockHandler{
+		name: "github",
+		loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+			opts.DeviceCodeCallback("ABCD-EFGH", "https://verify.example/device", "")
+			select {
+			case <-outcomeGate:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &auth.Result{Claims: &auth.Claims{Username: "bob"}}, nil
+		},
+	}
+
+	stub := func(data any, cfg tui.Config, _ ...tea.ProgramOption) error {
+		m := data.(map[string]any)
+		assert.Equal(t, "ABCD-EFGH", m["code"])
+		st := cfg.DisplaySchema.Status
+		require.Len(t, st.DisplayFields, 2)
+		assert.Equal(t, "code", st.DisplayFields[1].Field)
+		assert.Equal(t, "code", st.Actions[0].Field)
+		return nil // user quit
+	}
+
+	wait, out := stubInteractiveRunner(t, handler, stub)
+	require.Eventually(t, func() bool {
+		return strings.Contains(out.String(), "Enter the code: ABCD-EFGH")
+	}, 5*time.Second, 5*time.Millisecond)
+	close(outcomeGate)
+
+	result, err := wait()
+	require.NoError(t, err)
+	assert.Equal(t, "bob", result.Claims.DisplayIdentity())
+}
+
 // TestRunInteractiveTUI_TUIStartErrorFallsBackToPlain pins the degradation
 // path: when the status screen cannot even start, the login continues with
 // the unified plain block instead of failing.
@@ -720,7 +785,7 @@ func TestNewPasteBackPrompt_Render(t *testing.T) {
 		h := newPasteHandoff()
 
 		// The user quit the TUI early: the runner reprinted the URL block.
-		h.printURLBlockFallback(w, authURL)
+		h.printURLBlockFallback(w, authURL, "")
 
 		prompt := newPasteBackPrompt(w, ioStreams, h)
 		_, err := prompt(context.Background(), authURL, "http://localhost:8400/callback")
