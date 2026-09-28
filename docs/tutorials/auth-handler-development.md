@@ -868,7 +868,10 @@ Call it only during your `Login`, and shape the flow as:
    `InvalidArgument` -- re-prompt or surface a clear error.
 
 The host never logs the pasted value, writes all prompt text itself (you
-supply only URLs), and requires an interactive terminal.
+supply only URLs), and requires an interactive terminal. On a terminal the
+login shows a status box with the authorization URL first; calling
+`PromptAuthResponse` makes that box exit and the host renders its plain
+paste prompt, so calling the RPC is also what switches the display.
 
 ### gRPC Serialization
 

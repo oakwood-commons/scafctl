@@ -153,8 +153,10 @@ scafctl auth login entra --flow device-code
 This displays a code and URL for you to enter manually:
 
 ```
-To sign in, use a web browser to open the page https://microsoft.com/devicelogin
-and enter the code ABCD1234 to authenticate.
+To sign in, use a web browser to open the page:
+  https://microsoft.com/devicelogin
+
+Enter the code: ABCD1234
 
 Waiting for authentication...
 
@@ -1168,18 +1170,24 @@ scafctl auth login github --callback-port 8400
 Interactive (browser) logins redirect to `http://localhost:<port>` on the
 machine running scafctl. In a remote workspace -- OpenShift DevSpaces,
 Codespaces, and similar -- the browser runs on your laptop, so the redirect
-cannot reach the workspace. When the host supports it, scafctl offers a
-paste-back path during the login:
+cannot reach the workspace.
+
+On a terminal, the login presents a status box with the sign-in URL (press
+`c` to copy it, `o` to open it). When the host supports it and the redirect
+cannot arrive, the box exits cleanly to a plain-text paste prompt the moment
+it becomes useful -- and quitting the box early (`q`) also drops to the
+plain flow, which is the manual way to reach the prompt:
 
 ```
 To sign in, use a web browser to open the page:
   https://login.example.com/authorize?...
 
-Open this URL in your browser:
-  https://login.example.com/authorize?...
-
 If your browser shows a connection error after sign-in, paste the full address from its address bar (input is hidden):
 ```
+
+Non-interactive sessions (CI, MCP, and other non-terminal contexts) get the
+same plain layout minus the paste line, since there is no terminal to read
+an answer from.
 
 Copy the full address from the browser's address bar after sign-in and paste
 it at the prompt (the pasted text is not echoed, since it carries an
