@@ -62,7 +62,14 @@ func BuildPluginBinaryForPlatform(outputPath, pluginDir, platform string) {
 		pluginBuildArg = "." + string(filepath.Separator) + filepath.Clean(relPath)
 	}
 
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", outputPath, pluginBuildArg)
+	// Inject a build-unique value via -ldflags so repeated builds of the same
+	// fixture source produce distinct binaries (and content digests) instead
+	// of relying on timestamp-granularity differences elsewhere in the catalog
+	// metadata. outputPath is always a fresh, unique temp path per call
+	// (from GinkgoT().TempDir()), never attacker- or user-controlled input.
+	cmd := exec.CommandContext(ctx, "go", "build", //nolint:gosec // test fixture build, outputPath is a generated temp path
+		"-ldflags", "-X main.buildVariant="+outputPath,
+		"-o", outputPath, pluginBuildArg)
 	cmd.Dir = cmdDir
 	cmd.Env = append(os.Environ(),
 		"CGO_ENABLED=0",

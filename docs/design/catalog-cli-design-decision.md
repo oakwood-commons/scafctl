@@ -234,11 +234,19 @@ Option B offers the lowest learning curve, least typing after initial setup, and
 
 ### Implementation Summary
 
+> **Amendment (push):** `catalog push` no longer falls back to the default
+> catalog. Pushing publishes to a shared registry, so the destination must be
+> explicit: `--catalog` is required and omitting it fails with exit code 3,
+> listing the configured OCI catalogs as a hint. A full remote reference
+> positional (e.g. `ghcr.io/myorg/solutions/deploy@1.0.0`) now selects the
+> *source* (a locally cached copy from that origin), never the destination.
+> The fallback described below still applies to `delete`.
+
 The `--catalog` flag on `push` and `delete` (remote mode) now:
 
 1. **Accepts a URL** (e.g., `ghcr.io/myorg`) — used directly
 2. **Accepts a catalog name** (e.g., `myregistry`) — looked up in config
-3. **Falls back to the default catalog** from config when omitted
+3. **Falls back to the default catalog** from config when omitted (`delete` only; see amendment)
 
 Resolution logic (in `resolveCatalogURL`):
 - If the value contains `.` or `:` → it's a URL, use directly
@@ -251,10 +259,7 @@ Resolution logic (in `resolveCatalogURL`):
 # One-time setup: configure a default catalog
 scafctl catalog remote add ghcr --type oci --url oci://ghcr.io/myorg --default
 
-# Push (uses default catalog, infers kind from local metadata)
-scafctl catalog push deploy@1.0.0
-
-# Push with explicit catalog name
+# Push with explicit catalog name (--catalog is required for push)
 scafctl catalog push deploy@1.0.0 --catalog ghcr
 
 # Push with ad-hoc URL (no config needed)

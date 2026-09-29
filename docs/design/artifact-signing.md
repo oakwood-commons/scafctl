@@ -256,13 +256,13 @@ This prevents an attacker from replacing a legitimate SBOM with one that hides m
 
 ~~~bash
 # Push with SBOM (default for solutions)
-scafctl catalog push my-solution@1.0.0
+scafctl catalog push my-solution@1.0.0 --catalog ghcr.io/myorg
 
 # Explicitly disable SBOM
-scafctl catalog push my-solution@1.0.0 --no-sbom
+scafctl catalog push my-solution@1.0.0 --catalog ghcr.io/myorg --no-sbom
 
 # Plugins skip SBOM automatically
-scafctl catalog push my-provider@2.0.0 --kind provider
+scafctl catalog push my-provider@2.0.0 --kind provider --catalog ghcr.io/myorg
 ~~~
 
 ---

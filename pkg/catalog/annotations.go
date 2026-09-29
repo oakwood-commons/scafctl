@@ -65,9 +65,9 @@ const (
 
 	// AnnotationOrigin records how a local artifact was obtained.
 	// Values: "built", "pulled from <catalog>", "auto-cached from <catalog>".
-	// This key carries provenance metadata only. Its exact storage location
-	// depends on the catalog implementation, so it must not be assumed to be
-	// descriptor-only or digest-stable.
+	// Descriptor-only local provenance for human-readable diagnostics: it is
+	// kept out of manifest/config blobs so it never reaches a remote on push.
+	// Manifests pulled from remotes built by older versions may still carry it.
 	AnnotationOrigin = "dev.scafctl.artifact.origin"
 
 	// AnnotationSourceCanonical is the stable, machine-readable canonical
@@ -77,6 +77,12 @@ const (
 	// artifacts. Use this for identity decisions; prefer AnnotationOrigin
 	// only for human-readable diagnostics.
 	AnnotationSourceCanonical = "dev.scafctl.source.canonical"
+
+	// AnnotationSourceName is the artifact name at the source catalog when it
+	// differs from the local name (e.g. pulled with --as). Descriptor-only,
+	// like AnnotationSourceCanonical. Together they form the remote identity
+	// used to match FQN push sources; when absent, the local name is used.
+	AnnotationSourceName = "dev.scafctl.source.name"
 
 	// AnnotationBuildCommit is the short git commit SHA at build time.
 	AnnotationBuildCommit = "dev.scafctl.build.commit"

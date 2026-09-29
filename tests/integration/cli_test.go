@@ -7710,9 +7710,10 @@ func TestIntegration_CatalogIndexShowHelp(t *testing.T) {
 func TestIntegration_CatalogPushHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, _ := runScafctl(t, "catalog", "push", "--help")
-	assert.Contains(t, stdout, "Push a catalog artifact to a remote OCI registry")
+	assert.Contains(t, stdout, "Push an artifact from the local catalog to a remote OCI registry")
 	assert.Contains(t, stdout, "--catalog")
 	assert.Contains(t, stdout, "--as")
+	assert.Contains(t, stdout, "--origin")
 	assert.Contains(t, stdout, "--force")
 	assert.Contains(t, stdout, "configured catalog name")
 }
@@ -7726,11 +7727,12 @@ func TestIntegration_CatalogPush_NoCatalog(t *testing.T) {
 		"XDG_CONFIG_HOME": tmpDir,
 	}
 
-	// Push without --catalog and no default configured should error.
-	// Since artifact also doesn't exist locally, kind inference fails first.
+	// Push never falls back to a default catalog: --catalog is required and
+	// is checked before the local artifact is looked up.
 	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "my-solution@1.0.0")
-	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "not found")
+	assert.Equal(t, exitcode.InvalidInput, exitCode)
+	assert.Contains(t, stderr, "--catalog")
+	assert.Contains(t, stderr, "catalog push <artifact> --catalog")
 }
 
 func TestIntegration_CatalogPush_ArtifactNotFound(t *testing.T) {
@@ -7743,7 +7745,7 @@ func TestIntegration_CatalogPush_ArtifactNotFound(t *testing.T) {
 
 	// Push a nonexistent artifact
 	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "nonexistent@1.0.0", "--catalog", "ghcr.io/test/scafctl")
-	assert.NotEqual(t, 0, exitCode)
+	assert.Equal(t, exitcode.FileNotFound, exitCode)
 	assert.Contains(t, stderr, "not found")
 }
 

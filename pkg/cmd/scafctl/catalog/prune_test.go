@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/adrg/xdg"
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -78,7 +77,7 @@ func TestCommandPrune_EmbedderBinaryName(t *testing.T) {
 }
 
 func TestCommandPrune_JSONOutput(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	useTempDataHome(t)
 
 	cliParams := settings.NewCliParams()
 	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
@@ -100,7 +99,7 @@ func TestCommandPrune_JSONOutput(t *testing.T) {
 }
 
 func TestCommandPrune_YAMLOutput(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	useTempDataHome(t)
 
 	cliParams := settings.NewCliParams()
 	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
@@ -119,7 +118,7 @@ func TestCommandPrune_YAMLOutput(t *testing.T) {
 }
 
 func TestCommandPrune_TableOutput(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	useTempDataHome(t)
 
 	cliParams := settings.NewCliParams()
 	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
@@ -139,7 +138,7 @@ func TestCommandPrune_TableOutput(t *testing.T) {
 }
 
 func TestCommandPrune_ListOutput(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	useTempDataHome(t)
 
 	cliParams := settings.NewCliParams()
 	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
@@ -159,7 +158,7 @@ func TestCommandPrune_ListOutput(t *testing.T) {
 }
 
 func TestCommandPrune_QuietOutput(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	useTempDataHome(t)
 
 	cliParams := settings.NewCliParams()
 	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
@@ -173,7 +172,7 @@ func TestCommandPrune_QuietOutput(t *testing.T) {
 }
 
 func TestCommandPrune_AutoOutput(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	useTempDataHome(t)
 
 	cliParams := settings.NewCliParams()
 	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
@@ -190,7 +189,7 @@ func TestCommandPrune_AutoOutput(t *testing.T) {
 }
 
 func TestCommandPrune_JSONIncludesReclaimedBytes(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	useTempDataHome(t)
 
 	cliParams := settings.NewCliParams()
 	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
@@ -245,10 +244,7 @@ func TestPruneColumnOrder(t *testing.T) {
 }
 
 func TestCommandPrune_DefaultOutputWithRemovedContent(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	xdg.Reload()
-	t.Cleanup(xdg.Reload)
+	tmpDir := useTempDataHome(t)
 
 	catalogPath := filepath.Join(tmpDir, "scafctl", "catalog")
 	cat, err := catalog.NewLocalCatalogAt(catalogPath, logr.Discard())
@@ -284,10 +280,7 @@ func TestCommandPrune_DefaultOutputWithRemovedContent(t *testing.T) {
 }
 
 func TestCommandPrune_DefaultOutputWithRemovedManifests(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	xdg.Reload()
-	t.Cleanup(xdg.Reload)
+	tmpDir := useTempDataHome(t)
 
 	catalogPath := filepath.Join(tmpDir, "scafctl", "catalog")
 	cat, err := catalog.NewLocalCatalogAt(catalogPath, logr.Discard())
@@ -328,7 +321,7 @@ func TestCommandPrune_DefaultOutputWithRemovedManifests(t *testing.T) {
 }
 
 func TestCommandPrune_InteractiveRequiresTTY(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	useTempDataHome(t)
 
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()

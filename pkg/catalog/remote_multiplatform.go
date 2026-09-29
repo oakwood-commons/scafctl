@@ -132,7 +132,7 @@ func (c *RemoteCatalog) extractLayerContent(
 		Size:        int64(len(contentData)),
 		Annotations: annotations,
 		Catalog:     c.name,
-		Canonical:   c.canonicalID(),
+		Canonical:   c.CanonicalID(),
 	}
 
 	return contentData, info, nil
@@ -295,7 +295,7 @@ func (c *RemoteCatalog) resolveContentDigestInternal(ctx context.Context, ref Re
 			Size:        layer.Size,
 			Annotations: manifest.Annotations,
 			Catalog:     c.name,
-			Canonical:   c.canonicalID(),
+			Canonical:   c.CanonicalID(),
 		},
 		ContentDigest: layer.Digest.String(),
 	}, nil

@@ -247,6 +247,11 @@ func (r *Registry) cacheArtifact(ctx context.Context, ref Reference, content, bu
 		Set(AnnotationOrigin, fmt.Sprintf("auto-cached from %s", sourceCatalog))
 	if sourceCanonical != "" {
 		builder.Set(AnnotationSourceCanonical, sourceCanonical)
+		// Origin-qualify the local tag so an auto-cached artifact never
+		// collides with a same-name/version artifact built locally or cached
+		// from a different registry (see RemoteCatalog.copyToInternal, which
+		// applies the same rule for explicit pulls).
+		ref.Origin = sourceCanonical
 	}
 	annotations := builder.Build()
 

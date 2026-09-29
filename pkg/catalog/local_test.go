@@ -1225,32 +1225,47 @@ func TestLocalCatalog_List_IncludesOrigin(t *testing.T) {
 	assert.Equal(t, "built", artifacts[0].Annotations[AnnotationOrigin])
 }
 
-func TestStore_ExcludesSourceCanonicalFromManifestBlob(t *testing.T) {
+func TestStore_ExcludesProvenanceFromManifestAndConfigBlobs(t *testing.T) {
 	ctx := context.Background()
 	cat := newTestCatalog(t)
 
 	ref := Reference{Kind: ArtifactKindSolution, Name: "canonical-test", Version: semver.MustParse("1.0.0")}
-	annotations := map[string]string{
+	provenance := map[string]string{
 		AnnotationSourceCanonical: "ghcr.io/org/plugins",
+		AnnotationSourceName:      "upstream-name",
+		AnnotationOrigin:          "auto-cached from upstream-catalog",
+	}
+	annotations := make(map[string]string, len(provenance))
+	for k, v := range provenance {
+		annotations[k] = v
 	}
 
 	info, err := cat.Store(ctx, ref, []byte("name: canonical-test"), nil, annotations, false)
 	require.NoError(t, err)
 
-	// The annotation should be accessible via the descriptor (index-level).
-	assert.Equal(t, "ghcr.io/org/plugins", info.Annotations[AnnotationSourceCanonical])
+	// Provenance stays readable locally via the index.json descriptor.
+	resolved, err := cat.Resolve(ctx, ref)
+	require.NoError(t, err)
+	for k, v := range provenance {
+		assert.Equal(t, v, resolved.Annotations[k])
+	}
 
-	// Fetch the manifest blob directly and verify AnnotationSourceCanonical is NOT inside it.
+	// Neither the manifest nor the config blob may carry it: both are what a
+	// push publishes.
 	d, err := digest.Parse(info.Digest)
 	require.NoError(t, err)
-
-	desc := ocispec.Descriptor{Digest: d, MediaType: ocispec.MediaTypeImageManifest}
-	blob, err := cat.fetchBlob(ctx, desc)
+	manifestBlob, err := cat.fetchBlob(ctx, ocispec.Descriptor{Digest: d, MediaType: ocispec.MediaTypeImageManifest})
 	require.NoError(t, err)
 
 	var manifest ocispec.Manifest
-	require.NoError(t, json.Unmarshal(blob, &manifest))
+	require.NoError(t, json.Unmarshal(manifestBlob, &manifest))
+	configBlob, err := cat.fetchBlob(ctx, manifest.Config)
+	require.NoError(t, err)
 
-	_, found := manifest.Annotations[AnnotationSourceCanonical]
-	assert.False(t, found, "AnnotationSourceCanonical must not appear in the manifest blob")
+	for name, blob := range map[string][]byte{"manifest": manifestBlob, "config": configBlob} {
+		for k, v := range provenance {
+			assert.NotContains(t, string(blob), k, "%s blob must not contain %s", name, k)
+			assert.NotContains(t, string(blob), v, "%s blob must not contain provenance value", name)
+		}
+	}
 }

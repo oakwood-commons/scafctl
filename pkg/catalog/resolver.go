@@ -404,6 +404,10 @@ func (r *SolutionResolver) storeLocally(ctx context.Context, ref Reference, info
 	}
 	if info.Canonical != "" {
 		annotations[AnnotationSourceCanonical] = info.Canonical
+		// Origin-qualify the local tag so this copy can coexist with
+		// equal name/version artifacts auto-cached from other remotes or
+		// built locally, mirroring Registry.cacheArtifact.
+		storeRef.Origin = info.Canonical
 	}
 	if storeRef.Version != nil {
 		annotations[AnnotationVersion] = storeRef.Version.String()
