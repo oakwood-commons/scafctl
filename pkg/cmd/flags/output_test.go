@@ -52,6 +52,33 @@ func TestAddKvxOutputFlagsToStruct(t *testing.T) {
 	assert.Equal(t, "_.name", flags.Expression)
 }
 
+func TestAddKvxOutputFlagsToStructWithDefault(t *testing.T) {
+	flags := &KvxOutputFlags{}
+
+	cmd := &cobra.Command{Use: "test"}
+	AddKvxOutputFlagsToStructWithDefault(cmd, flags, "json")
+
+	outputFlag := cmd.Flags().Lookup("output")
+	require.NotNil(t, outputFlag)
+	assert.Equal(t, "json", outputFlag.DefValue,
+		"DefValue must reflect the pinned default so --help shows it")
+	assert.Equal(t, "json", outputFlag.Value.String(),
+		"the pinned default must be the initial value")
+	assert.False(t, cmd.Flags().Changed("output"),
+		"pinning the default must NOT mark the flag as Changed; that flag is reserved for user-supplied -o")
+
+	require.NoError(t, cmd.ParseFlags([]string{}))
+	assert.Equal(t, "json", flags.Output,
+		"parsing without -o must yield the pinned default")
+	assert.False(t, cmd.Flags().Changed("output"),
+		"parsing without -o must leave Changed=false so FormatExplicit stays false")
+
+	// User-supplied -o overrides the default and flips Changed to true.
+	require.NoError(t, cmd.ParseFlags([]string{"-o", "yaml"}))
+	assert.Equal(t, "yaml", flags.Output)
+	assert.True(t, cmd.Flags().Changed("output"))
+}
+
 func TestValidateKvxOutputFormat(t *testing.T) {
 	tests := []struct {
 		format  string

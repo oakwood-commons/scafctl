@@ -4917,6 +4917,81 @@ func TestIntegration_ConfigShowRemoved(t *testing.T) {
 	assert.Contains(t, strings.ToLower(stderr), "unknown command")
 }
 
+func TestIntegration_ConfigSchema_DefaultJSON(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, exitCode := runScafctl(t, "config", "schema")
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &out),
+		"default stdout must be valid JSON so `config schema > file.json` works")
+	assert.Equal(t, "scafctl Configuration", out["title"])
+	assert.Contains(t, stdout, "\n  ", "default JSON must be pretty-printed")
+}
+
+func TestIntegration_ConfigSchema_YAML(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, exitCode := runScafctl(t, "config", "schema", "-o", "yaml")
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	assert.Contains(t, stdout, "title: scafctl Configuration")
+	assert.Contains(t, stdout, "properties:")
+}
+
+func TestIntegration_ConfigSchema_Compact(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, exitCode := runScafctl(t, "config", "schema", "--compact")
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	trimmed := strings.TrimRight(stdout, "\n")
+	assert.NotContains(t, trimmed, "\n", "--compact must strip newlines")
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(trimmed), &out),
+		"--compact output must still be valid JSON")
+	assert.Equal(t, "scafctl Configuration", out["title"])
+}
+
+func TestIntegration_ConfigSchema_Expression(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, exitCode := runScafctl(t, "config", "schema", "-e", "_.title")
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	assert.Equal(t, `"scafctl Configuration"`, strings.TrimRight(stdout, "\n"))
+}
+
+// TestIntegration_ConfigSchema_WhereOnObjectIsNoOp guards the applyWhereFilter
+// non-list no-op: -w on a map/object command must not fail even though kvx's
+// EvaluateWhere itself rejects non-list data; see
+// https://github.com/oakwood-commons/kvx/issues/102.
+func TestIntegration_ConfigSchema_WhereOnObjectIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, exitCode := runScafctl(t, "config", "schema", "-w", "_.enabled")
+	require.Equal(t, 0, exitCode,
+		"-w on object output must no-op, not error; stderr: %s", stderr)
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &out),
+		"stdout must still be the untouched schema JSON")
+	assert.Equal(t, "scafctl Configuration", out["title"])
+}
+
+// TestIntegration_ConfigView_WhereOnObjectIsNoOp mirrors the schema test on
+// the other broadly-used single-object command; this pins the systemic fix,
+// not just the schema-specific one.
+func TestIntegration_ConfigView_WhereOnObjectIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	_, stderr, exitCode := runScafctl(t, "config", "view", "-o", "json", "-w", "_.enabled")
+	require.Equal(t, 0, exitCode,
+		"-w on config view (object output) must no-op; stderr: %s", stderr)
+}
+
 // scafctlEnvKeys returns every SCAFCTL_-prefixed env var currently in the
 // process environment. Used to fully scrub the subprocess env in tests that
 // assert on the presence/absence of env-sourced values.

@@ -39,22 +39,6 @@ func TestGenerateConfigSchema(t *testing.T) {
 	assert.Contains(t, props, "httpClient")
 }
 
-func TestGenerateConfigSchemaCompact(t *testing.T) {
-	t.Parallel()
-
-	schemaBytes, err := GenerateConfigSchemaCompact()
-	require.NoError(t, err)
-	require.NotEmpty(t, schemaBytes)
-
-	// Verify it's valid JSON
-	var schema map[string]any
-	err = json.Unmarshal(schemaBytes, &schema)
-	require.NoError(t, err)
-
-	// Compact should not have newlines (it's a single line)
-	assert.NotContains(t, string(schemaBytes), "\n")
-}
-
 func TestGenerateConfigSchema_HTTPClientProperties(t *testing.T) {
 	t.Parallel()
 

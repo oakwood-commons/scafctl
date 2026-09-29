@@ -6,8 +6,10 @@ package config
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
@@ -869,4 +871,213 @@ func TestInitOptions_Run_FullTemplateDocumentsSecuritySettings(t *testing.T) {
 	// The generated file must actually work: it has to load back cleanly.
 	_, loadErr := appconfig.NewManager(outputPath).Load()
 	require.NoError(t, loadErr, "the generated full configuration must pass validation")
+}
+
+// TestCommandSchema_DefaultOutputIsJSON documents the deliberate deviation
+// from the repo-wide "auto" convention (see TestCommandView_DefaultOutputIsAuto).
+// `config schema > file.json` is the canonical usage, and `auto` on a piped
+// redirect falls back to an ASCII key/value table -- that would silently break
+// existing scripts.
+func TestCommandSchema_DefaultOutputIsJSON(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, &bytes.Buffer{}, &bytes.Buffer{}, false)
+
+	cmd := CommandSchema(cliParams, ioStreams, "scafctl")
+
+	flag := cmd.Flag("output")
+	require.NotNil(t, flag, "config schema must expose an -o/--output flag")
+	assert.Equal(t, "json", flag.Value.String(),
+		"default -o should be 'json' so redirection to a schema file keeps working")
+	assert.Equal(t, "json", flag.DefValue,
+		"cobra's DefValue must also report json so --help shows the correct default")
+}
+
+func TestCommandSchema_HasKvxFlags(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, &bytes.Buffer{}, &bytes.Buffer{}, false)
+
+	cmd := CommandSchema(cliParams, ioStreams, "scafctl")
+
+	for _, name := range []string{"output", "interactive", "expression", "where", "compact"} {
+		assert.NotNilf(t, cmd.Flag(name), "config schema must expose --%s", name)
+	}
+}
+
+func TestSchemaOptions_Run_DefaultJSON(t *testing.T) {
+	t.Parallel()
+
+	stdout, _ := runSchema(t, func(o *SchemaOptions) {
+		o.Output = "json"
+	})
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &out),
+		"default output must be valid JSON")
+
+	assert.Equal(t, "scafctl Configuration", out["title"])
+	assert.Contains(t, out, "properties")
+	assert.Contains(t, stdout, "\n  ",
+		"default JSON output must be pretty-printed")
+}
+
+func TestSchemaOptions_Run_YAML(t *testing.T) {
+	t.Parallel()
+
+	stdout, _ := runSchema(t, func(o *SchemaOptions) {
+		o.Output = "yaml"
+	})
+
+	assert.Contains(t, stdout, "title: scafctl Configuration")
+	assert.Contains(t, stdout, "properties:")
+	assert.NotContains(t, stdout, `"$id"`,
+		"YAML output must not contain JSON-quoted keys")
+}
+
+func TestSchemaOptions_Run_Compact(t *testing.T) {
+	t.Parallel()
+
+	stdout, _ := runSchema(t, func(o *SchemaOptions) {
+		o.Output = "json"
+		o.Compact = true
+	})
+
+	trimmed := strings.TrimRight(stdout, "\n")
+	assert.NotContains(t, trimmed, "\n",
+		"--compact must strip all indentation newlines")
+	assert.NotContains(t, trimmed, "  ",
+		"--compact must strip indentation whitespace")
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(trimmed), &out),
+		"--compact output must still be valid JSON")
+	assert.Equal(t, "scafctl Configuration", out["title"])
+}
+
+func TestSchemaOptions_Run_CompactIgnoredForYAML(t *testing.T) {
+	t.Parallel()
+
+	// --compact only affects JSON; passing it with -o yaml must not corrupt
+	// the YAML output and must emit a stderr warning so the user notices.
+	stdout, stderr := runSchema(t, func(o *SchemaOptions) {
+		o.Output = "yaml"
+		o.Compact = true
+	})
+
+	assert.Contains(t, stdout, "title: scafctl Configuration")
+	assert.Contains(t, stderr, "--compact only affects -o json",
+		"passing --compact with a non-JSON format must warn on stderr")
+}
+
+// TestSchemaOptions_Run_CompactIgnoredForInteractive pins that -i takes
+// precedence over -o json for the --compact warning: the TUI never
+// serializes JSON, so --compact is meaningless there regardless of format.
+// The TUI itself cannot start in a non-TTY test, but the warning must still
+// be emitted before Write() returns.
+func TestSchemaOptions_Run_CompactIgnoredForInteractive(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &SchemaOptions{
+		IOStreams: ioStreams,
+		CliParams: cliParams,
+	}
+	opts.AppName = "scafctl config schema"
+	opts.Output = "json"
+	opts.Interactive = true
+	opts.Compact = true
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	// -i on a non-TTY surfaces a kvx error; the warning is emitted before
+	// Write runs, so we assert on stderr regardless of the Run outcome.
+	_ = opts.Run(ctx)
+
+	assert.Contains(t, stderr.String(), "--compact only affects -o json",
+		"-i must trigger the --compact-ignored warning even when -o is json")
+	assert.Contains(t, stderr.String(), "ignored with -i",
+		"the warning must specifically call out -i, not the format")
+}
+
+func TestSchemaOptions_Run_Expression(t *testing.T) {
+	t.Parallel()
+
+	stdout, _ := runSchema(t, func(o *SchemaOptions) {
+		o.Output = "json"
+		o.Expression = "_.title"
+	})
+
+	// Scalars round-trip through kvx as JSON-encoded strings.
+	trimmed := strings.TrimRight(stdout, "\n")
+	assert.Equal(t, `"scafctl Configuration"`, trimmed)
+}
+
+// TestCommandSchema_RunE_Executes exercises the cobra RunE wiring end-to-end:
+// context propagation, writer bootstrap when none is in context, and the
+// AppName derivation from the embedder's binary name. The other Schema tests
+// bypass RunE and call SchemaOptions.Run directly.
+func TestCommandSchema_RunE_Executes(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+
+	cmd := CommandSchema(cliParams, ioStreams, "mycli")
+	cmd.SetArgs([]string{"-o", "json", "-e", "_.title"})
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	require.NoError(t, cmd.Execute(), "stderr: %s", stderr.String())
+
+	assert.Equal(t, `"scafctl Configuration"`,
+		strings.TrimRight(stdout.String(), "\n"),
+		"RunE must route through SchemaOptions.Run and emit CEL-filtered output")
+	assert.Equal(t, filepath.Join("mycli", "schema"), cliParams.EntryPointSettings.Path,
+		"RunE must record the entrypoint path for telemetry")
+}
+
+func TestSchemaOptions_Run_MissingWriter(t *testing.T) {
+	t.Parallel()
+
+	// Bare context has no writer -- Run must fail closed rather than nil-panic.
+	opts := &SchemaOptions{
+		IOStreams: terminal.NewIOStreams(nil, &bytes.Buffer{}, &bytes.Buffer{}, false),
+		CliParams: settings.NewCliParams(),
+	}
+	err := opts.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "writer not initialized")
+}
+
+// runSchema executes SchemaOptions.Run against a fresh in-memory IOStreams
+// and returns captured stdout and stderr. Kept local to this file so each
+// test stays self-contained.
+func runSchema(t *testing.T, mutate func(*SchemaOptions)) (stdout, stderr string) {
+	t.Helper()
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdoutBuf, &stderrBuf, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &SchemaOptions{
+		IOStreams: ioStreams,
+		CliParams: cliParams,
+	}
+	opts.AppName = "scafctl config schema"
+	mutate(opts)
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx), "stderr: %s", stderrBuf.String())
+
+	return stdoutBuf.String(), stderrBuf.String()
 }
