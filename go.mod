@@ -33,7 +33,7 @@ require (
 	github.com/mark3labs/mcp-go v1.1.1
 	github.com/oakwood-commons/celexp v0.1.0
 	github.com/oakwood-commons/httpc v0.3.0
-	github.com/oakwood-commons/kvx v0.16.1
+	github.com/oakwood-commons/kvx v0.17.0
 	github.com/oakwood-commons/oauth-helpers v0.2.0
 	github.com/oakwood-commons/scafctl-plugin-sdk v0.18.0
 	github.com/opencontainers/go-digest v1.0.0
@@ -81,8 +81,8 @@ require (
 
 require (
 	cel.dev/expr v0.25.2 // indirect
-	charm.land/bubbles/v2 v2.1.0 // indirect
-	charm.land/lipgloss/v2 v2.0.3 // indirect
+	charm.land/bubbles/v2 v2.2.1 // indirect
+	charm.land/lipgloss/v2 v2.0.5 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/AliyunContainerService/ack-ram-tool/pkg/credentials/provider v0.14.0 // indirect
@@ -142,7 +142,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260703014108-f5a850f9c2b7 // indirect
-	github.com/charmbracelet/x/ansi v0.11.7 // indirect
+	github.com/charmbracelet/x/ansi v0.11.8 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
