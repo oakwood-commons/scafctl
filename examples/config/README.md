@@ -137,4 +137,4 @@ export SCAFCTL_DEBUG=1               # Shortcut: enable debug logging
 - `scafctl config view --source=default` - Show only built-in default values
 - `scafctl config view --source=dropin` - Show only values coming from `config.d/*.yaml`
 - `scafctl config validate` - Validate a config file
-- `scafctl config schema` - Show JSON schema for config
+- `scafctl config schema` - Show JSON Schema for config (supports kvx output options)

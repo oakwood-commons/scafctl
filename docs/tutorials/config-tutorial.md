@@ -319,23 +319,51 @@ scafctl config validate path/to/config.yaml
 
 ### View Config Schema
 
+Default output is pretty JSON so `scafctl config schema > file.json` feeds
+editor/IDE tooling directly. All standard kvx flags are supported so you can
+render as YAML, filter with CEL, or explore interactively.
+
 {{< tabs "config-tutorial-cmd-11" >}}
 {{% tab "Bash" %}}
 ```bash
-# Pretty-printed JSON Schema
+# Pretty-printed JSON Schema (default)
 scafctl config schema
 
-# Minified (for piping)
+# Save schema for editor autocompletion
+scafctl config schema > ~/.config/scafctl/config-schema.json
+
+# Compact JSON (single line)
 scafctl config schema --compact
+
+# YAML view
+scafctl config schema -o yaml
+
+# Extract a subtree with CEL
+scafctl config schema -e '_.properties.catalogs'
+
+# Explore the schema interactively
+scafctl config schema -i
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-# Pretty-printed JSON Schema
+# Pretty-printed JSON Schema (default)
 scafctl config schema
 
-# Minified (for piping)
+# Save schema for editor autocompletion
+scafctl config schema > $HOME\.config\scafctl\config-schema.json
+
+# Compact JSON (single line)
 scafctl config schema --compact
+
+# YAML view
+scafctl config schema -o yaml
+
+# Extract a subtree with CEL
+scafctl config schema -e '_.properties.catalogs'
+
+# Explore the schema interactively
+scafctl config schema -i
 ```
 {{% /tab %}}
 {{< /tabs >}}

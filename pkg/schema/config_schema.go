@@ -28,18 +28,3 @@ func GenerateConfigSchema() ([]byte, error) {
 
 	return json.MarshalIndent(schema, "", "  ")
 }
-
-// GenerateConfigSchemaCompact generates a JSON Schema without indentation.
-func GenerateConfigSchemaCompact() ([]byte, error) {
-	schema, err := jsonschema.For[config.Config](nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add metadata
-	schema.ID = ConfigSchemaID
-	schema.Title = "scafctl Configuration"
-	schema.Description = "Configuration file for scafctl CLI (version 1)"
-
-	return json.Marshal(schema)
-}

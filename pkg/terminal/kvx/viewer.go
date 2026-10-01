@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"slices"
 
 	tea "charm.land/bubbletea/v2"
@@ -21,9 +22,16 @@ import (
 )
 
 // applyWhereFilter applies a per-item CEL boolean filter to data.
-// Returns the original data unchanged if where is empty.
+// Returns the original data unchanged if where is empty OR if data is not
+// list-shaped: kvx's EvaluateWhere hard-errors on non-list input, but every
+// scafctl kvx-driven command exposes -w uniformly, so single-object commands
+// (config schema, config view, auth token, ...) must not fail on -w. Track
+// upstream fix at https://github.com/oakwood-commons/kvx/issues/102.
 func applyWhereFilter(where string, data any) (any, error) {
 	if where == "" {
+		return data, nil
+	}
+	if !isListShaped(data) {
 		return data, nil
 	}
 	engine, err := core.New()
@@ -35,6 +43,15 @@ func applyWhereFilter(where string, data any) (any, error) {
 		return nil, fmt.Errorf("where filter failed: %w", err)
 	}
 	return filtered, nil
+}
+
+// isListShaped reports whether data is a slice/array kvx.EvaluateWhere accepts.
+func isListShaped(data any) bool {
+	if data == nil {
+		return false
+	}
+	k := reflect.TypeOf(data).Kind()
+	return k == reflect.Slice || k == reflect.Array
 }
 
 // ViewerOptions configures the kvx viewer

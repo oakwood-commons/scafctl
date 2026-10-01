@@ -64,7 +64,7 @@ func AddKvxOutputFlagsWithWhere(cmd *cobra.Command, outputFormat *string, intera
 
 	if where != nil {
 		cmd.Flags().StringVarP(where, "where", "w", "",
-			"Per-item CEL boolean filter for list data (e.g., '_.enabled')")
+			"Per-item CEL boolean filter for list data (no-op on objects/scalars; e.g., '_.enabled')")
 	}
 
 	// Chain a PreRunE that validates the output format flag.
@@ -102,6 +102,24 @@ func AddKvxOutputFlagsToStruct(cmd *cobra.Command, flags *KvxOutputFlags) {
 		}
 		return nil
 	}
+}
+
+// AddKvxOutputFlagsToStructWithDefault behaves like AddKvxOutputFlagsToStruct
+// but pins the -o default to a specific non-"auto" format. Use for commands
+// whose canonical usage is machine-consumed (e.g. `scafctl config schema >
+// file.json`) where the auto/TTY fallback would silently break piped output.
+//
+// This intentionally uses `Flag.Value.Set` -- NOT `FlagSet.Set` -- because the
+// former does not mark the flag as `Changed`, so `FormatExplicit` still reflects
+// whether the user explicitly passed -o on the command line.
+func AddKvxOutputFlagsToStructWithDefault(cmd *cobra.Command, flags *KvxOutputFlags, defaultFormat string) {
+	AddKvxOutputFlagsToStruct(cmd, flags)
+	f := cmd.Flags().Lookup("output")
+	if f == nil {
+		return
+	}
+	f.DefValue = defaultFormat
+	_ = f.Value.Set(defaultFormat)
 }
 
 // ValidateKvxOutputFormat validates the output format string.
