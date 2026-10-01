@@ -328,3 +328,209 @@ func TestToKvxOutputOptionsFromCmd_DefaultFormat(t *testing.T) {
 	assert.False(t, opts.FormatExplicit, "should not be explicit when -o was not passed")
 	assert.Equal(t, kvx.OutputFormatAuto, opts.Format)
 }
+
+func TestAddKvxOutputFormatFlagToStruct_OnlyRegistersOutput(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	cmd := &cobra.Command{Use: "test"}
+	AddKvxOutputFormatFlagToStruct(cmd, f)
+
+	outputFlag := cmd.Flags().Lookup("output")
+	require.NotNil(t, outputFlag, "output flag must be registered")
+	assert.Equal(t, "o", outputFlag.Shorthand)
+	assert.Equal(t, "auto", outputFlag.DefValue)
+
+	assert.Nil(t, cmd.Flags().Lookup("interactive"),
+		"interactive flag must NOT be registered by the data-only helper")
+	assert.Nil(t, cmd.Flags().Lookup("expression"),
+		"expression flag must NOT be registered by the data-only helper")
+	assert.Nil(t, cmd.Flags().Lookup("where"),
+		"where flag must NOT be registered by the data-only helper")
+}
+
+func TestAddKvxOutputFormatFlagToStruct_PreRunE_RejectsInvalid(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	cmd := &cobra.Command{Use: "test", RunE: func(_ *cobra.Command, _ []string) error { return nil }}
+	AddKvxOutputFormatFlagToStruct(cmd, f)
+
+	cmd.SetArgs([]string{"-o", "bogus"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid output format")
+}
+
+func TestAddKvxOutputFormatFlagToStruct_PreRunE_AcceptsValid(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	ran := false
+	cmd := &cobra.Command{Use: "test", RunE: func(_ *cobra.Command, _ []string) error {
+		ran = true
+		return nil
+	}}
+	AddKvxOutputFormatFlagToStruct(cmd, f)
+
+	cmd.SetArgs([]string{"-o", "json"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, ran)
+	assert.Equal(t, "json", f.Output)
+	assert.True(t, f.FormatExplicit)
+}
+
+func TestAddKvxOutputFormatFlagToStruct_PreRunE_DefaultFormat(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	cmd := &cobra.Command{Use: "test", RunE: func(_ *cobra.Command, _ []string) error { return nil }}
+	AddKvxOutputFormatFlagToStruct(cmd, f)
+
+	cmd.SetArgs([]string{})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Equal(t, "auto", f.Output)
+	assert.False(t, f.FormatExplicit,
+		"FormatExplicit must be false when the user did not pass -o")
+}
+
+func TestAddKvxOutputFormatFlagToStruct_PreRunE_ChainsExisting(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	preRan := false
+	cmd := &cobra.Command{
+		Use:     "test",
+		PreRunE: func(_ *cobra.Command, _ []string) error { preRan = true; return nil },
+		RunE:    func(_ *cobra.Command, _ []string) error { return nil },
+	}
+	AddKvxOutputFormatFlagToStruct(cmd, f)
+
+	cmd.SetArgs([]string{"-o", "yaml"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, preRan, "existing PreRunE should have been called")
+}
+
+func TestAddKvxOutputFormatFlagToStruct_PreRunE_ChainsExistingPreRun(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	preRan := false
+	cmd := &cobra.Command{
+		Use:    "test",
+		PreRun: func(_ *cobra.Command, _ []string) { preRan = true },
+		RunE:   func(_ *cobra.Command, _ []string) error { return nil },
+	}
+	AddKvxOutputFormatFlagToStruct(cmd, f)
+
+	cmd.SetArgs([]string{"-o", "json"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, preRan, "existing PreRun should have been called via chained PreRunE")
+}
+
+func TestAddKvxOutputFormatFlagToStruct_ToKvxOutputOptions(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	cmd := &cobra.Command{Use: "test", RunE: func(_ *cobra.Command, _ []string) error { return nil }}
+	AddKvxOutputFormatFlagToStruct(cmd, f)
+
+	cmd.SetArgs([]string{"-o", "json"})
+	require.NoError(t, cmd.Execute())
+
+	opts := ToKvxOutputOptions(f)
+	assert.Equal(t, kvx.OutputFormatJSON, opts.Format)
+	assert.True(t, opts.FormatExplicit)
+	assert.False(t, opts.Interactive, "Interactive stays zero when the flag is not registered")
+	assert.Empty(t, opts.Expression, "Expression stays zero when the flag is not registered")
+	assert.Empty(t, opts.Where, "Where stays zero when the flag is not registered")
+}
+
+func TestValidateKvxOutputFormatIn(t *testing.T) {
+	t.Parallel()
+	allowed := []string{"auto", "json", "yaml"}
+
+	tests := []struct {
+		name    string
+		format  string
+		allowed []string
+		wantErr bool
+	}{
+		{"empty passes", "", allowed, false},
+		{"allowed value passes", "json", allowed, false},
+		{"disallowed value fails", "mermaid", allowed, true},
+		{"invalid-anywhere fails", "bogus", allowed, true},
+		{"nil allowed falls back to base set", "mermaid", nil, false},
+		{"empty allowed falls back to base set", "mermaid", []string{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateKvxOutputFormatIn(tt.format, tt.allowed)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid output format")
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestAddKvxOutputFormatFlagToStructWithFormats_HelpListsOnlyAllowed(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	cmd := &cobra.Command{Use: "test"}
+	AddKvxOutputFormatFlagToStructWithFormats(cmd, f, []string{"auto", "json", "yaml"})
+
+	outputFlag := cmd.Flags().Lookup("output")
+	require.NotNil(t, outputFlag)
+	assert.Contains(t, outputFlag.Usage, "auto")
+	assert.Contains(t, outputFlag.Usage, "json")
+	assert.Contains(t, outputFlag.Usage, "yaml")
+	assert.NotContains(t, outputFlag.Usage, "mermaid",
+		"restricted help text must not advertise excluded formats")
+	assert.NotContains(t, outputFlag.Usage, "test",
+		"restricted help text must not advertise excluded formats")
+}
+
+func TestAddKvxOutputFormatFlagToStructWithFormats_RejectsExcluded(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	cmd := &cobra.Command{Use: "test", RunE: func(_ *cobra.Command, _ []string) error { return nil }}
+	AddKvxOutputFormatFlagToStructWithFormats(cmd, f, []string{"auto", "json", "yaml"})
+
+	// "mermaid" is a valid kvx format but excluded here, so it must be rejected.
+	cmd.SetArgs([]string{"-o", "mermaid"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid output format: mermaid")
+	assert.Contains(t, err.Error(), "auto, json, yaml",
+		"error must list the allowed subset so the user sees what IS accepted")
+}
+
+func TestAddKvxOutputFormatFlagToStructWithFormats_AcceptsAllowed(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	ran := false
+	cmd := &cobra.Command{Use: "test", RunE: func(_ *cobra.Command, _ []string) error {
+		ran = true
+		return nil
+	}}
+	AddKvxOutputFormatFlagToStructWithFormats(cmd, f, []string{"auto", "json", "yaml"})
+
+	cmd.SetArgs([]string{"-o", "json"})
+	require.NoError(t, cmd.Execute())
+	assert.True(t, ran)
+	assert.Equal(t, "json", f.Output)
+	assert.True(t, f.FormatExplicit)
+}
+
+func TestAddKvxOutputFormatFlagToStructWithFormats_EmptyAllowedFallsBackToBase(t *testing.T) {
+	t.Parallel()
+	f := &KvxOutputFlags{}
+	cmd := &cobra.Command{Use: "test", RunE: func(_ *cobra.Command, _ []string) error { return nil }}
+	AddKvxOutputFormatFlagToStructWithFormats(cmd, f, nil)
+
+	// With nil allowed, every base format must still pass -- including mermaid.
+	cmd.SetArgs([]string{"-o", "mermaid"})
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, "mermaid", f.Output)
+}

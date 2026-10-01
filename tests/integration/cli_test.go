@@ -6,6 +6,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -4027,6 +4028,166 @@ func TestIntegration_ValidateSchema_MissingSchemaFile(t *testing.T) {
 
 	// A missing schema file -> FileNotFound (4).
 	assert.Equal(t, exitcode.FileNotFound, exitCode)
+}
+
+// --- config validate ---
+
+// writeConfigValidateFixture writes a minimal, valid scafctl config file in a
+// temp dir and returns its path. Catalogs/settings are kept intentionally
+// small so the structured output is easy to assert against.
+func writeConfigValidateFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `version: 1
+catalogs:
+  - name: test
+    type: filesystem
+    path: ./test
+settings:
+  defaultCatalog: test
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
+}
+
+func TestIntegration_ConfigValidate_Help_HasOnlyOutputFlag(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "config", "validate", "--help")
+
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--output",
+		"config validate must expose --output for structured results")
+	// Data-only validators must not advertise interactive / expression / where.
+	assert.NotContains(t, stdout, "--interactive",
+		"config validate must not expose --interactive")
+	assert.NotContains(t, stdout, "--expression",
+		"config validate must not expose --expression")
+	assert.NotContains(t, stdout, "--where",
+		"config validate must not expose --where")
+
+	// --output help lists only the subset of formats that produce meaningful
+	// output for a scalar validator result.
+	for _, allowed := range []string{"auto", "json", "yaml", "csv", "toml", "text", "quiet"} {
+		assert.Contains(t, stdout, allowed,
+			"--output help must advertise %q", allowed)
+	}
+	for _, excluded := range []string{"mermaid"} {
+		assert.NotContains(t, stdout, excluded,
+			"--output help must not advertise %q, which is not meaningful for a scalar validator",
+			excluded)
+	}
+}
+
+func TestIntegration_ConfigValidate_RejectsExcludedFormat(t *testing.T) {
+	t.Parallel()
+	path := writeConfigValidateFixture(t)
+
+	_, stderr, exitCode := runScafctl(t, "config", "validate", path, "-o", "mermaid")
+
+	assert.NotEqual(t, 0, exitCode,
+		"a format outside the allowed subset must fail at parse time")
+	assert.Contains(t, stderr, "invalid output format: mermaid",
+		"error must surface the rejected format name")
+}
+
+func TestIntegration_ConfigValidate_ValidFile_Human(t *testing.T) {
+	t.Parallel()
+	path := writeConfigValidateFixture(t)
+
+	stdout, _, exitCode := runScafctl(t, "config", "validate", path)
+
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Valid: "+path)
+	assert.Contains(t, stdout, "Default catalog: test")
+}
+
+func TestIntegration_ConfigValidate_JSON(t *testing.T) {
+	t.Parallel()
+	path := writeConfigValidateFixture(t)
+
+	stdout, _, exitCode := runScafctl(t, "config", "validate", path, "-o", "json")
+
+	require.Equal(t, 0, exitCode)
+
+	var got struct {
+		File           string `json:"file"`
+		Valid          bool   `json:"valid"`
+		Version        int    `json:"version"`
+		Catalogs       int    `json:"catalogs"`
+		DefaultCatalog string `json:"defaultCatalog"`
+		Error          string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got),
+		"stdout must be parseable JSON when -o json is used")
+	assert.True(t, got.Valid)
+	assert.Equal(t, path, got.File)
+	assert.Equal(t, "test", got.DefaultCatalog)
+	assert.Empty(t, got.Error)
+}
+
+func TestIntegration_ConfigValidate_Quiet(t *testing.T) {
+	t.Parallel()
+	path := writeConfigValidateFixture(t)
+
+	stdout, _, exitCode := runScafctl(t, "config", "validate", path, "-o", "quiet")
+
+	require.Equal(t, 0, exitCode)
+	assert.Empty(t, strings.TrimSpace(stdout),
+		"-o quiet must suppress all stdout on success")
+}
+
+func TestIntegration_ConfigValidate_CSV(t *testing.T) {
+	t.Parallel()
+	path := writeConfigValidateFixture(t)
+
+	stdout, _, exitCode := runScafctl(t, "config", "validate", path, "-o", "csv")
+
+	require.Equal(t, 0, exitCode)
+
+	records, err := csv.NewReader(strings.NewReader(stdout)).ReadAll()
+	require.NoError(t, err,
+		"stdout must be parseable CSV (not a single %%v cell) when -o csv is used")
+	require.Len(t, records, 2,
+		"CSV output must be header + one data row")
+	assert.Equal(t,
+		[]string{"file", "valid", "version", "catalogs", "defaultCatalog", "error"},
+		records[0],
+		"CSV header order must be stable for scripting")
+
+	row := records[1]
+	require.Len(t, row, 6)
+	assert.Equal(t, path, row[0])
+	assert.Equal(t, "true", row[1])
+	assert.Equal(t, "test", row[4])
+	assert.Empty(t, row[5])
+}
+
+func TestIntegration_ConfigValidate_MissingFile(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+
+	_, _, exitCode := runScafctl(t, "config", "validate", missing)
+
+	assert.Equal(t, exitcode.FileNotFound, exitCode)
+}
+
+func TestIntegration_ConfigValidate_MissingFile_JSON(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+
+	stdout, _, exitCode := runScafctl(t, "config", "validate", missing, "-o", "json")
+
+	assert.Equal(t, exitcode.FileNotFound, exitCode,
+		"-o json must still surface a non-zero exit code so CI pipelines can gate on it")
+
+	var got struct {
+		Valid bool   `json:"valid"`
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got))
+	assert.False(t, got.Valid)
+	assert.NotEmpty(t, got.Error)
 }
 
 // --- validate solution ---

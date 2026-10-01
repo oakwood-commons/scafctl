@@ -122,6 +122,57 @@ func AddKvxOutputFlagsToStructWithDefault(cmd *cobra.Command, flags *KvxOutputFl
 	_ = f.Value.Set(defaultFormat)
 }
 
+// AddKvxOutputFormatFlagToStruct is like AddKvxOutputFlagsToStruct but exposes
+// ONLY -o/--output. It skips -i/--interactive, -e/--expression, and
+// -w/--where, which make no sense for commands whose result is a single
+// object or scalar (e.g. pass/fail validators). The Output field is still
+// parsed, FormatExplicit is still populated, and format validation still runs
+// via the same PreRunE chain as the full-flag helper.
+func AddKvxOutputFormatFlagToStruct(cmd *cobra.Command, flags *KvxOutputFlags) {
+	addKvxOutputFormatFlag(cmd, flags, kvx.BaseOutputFormats())
+}
+
+// AddKvxOutputFormatFlagToStructWithFormats is like AddKvxOutputFormatFlagToStruct
+// but restricts both the help text and PreRunE validation to the given subset
+// of kvx format names. Use when a command only produces meaningful output for
+// a few of the twelve kvx formats (for example, a scalar validator that only
+// renders usefully as auto/json/yaml/csv/toml/text/quiet).
+//
+// If allowed is empty the full BaseOutputFormats() set is used, matching the
+// non-restricted helper. Format names outside allowed are rejected at parse
+// time with the same "invalid output format" error as the generic validator.
+func AddKvxOutputFormatFlagToStructWithFormats(cmd *cobra.Command, flags *KvxOutputFlags, allowed []string) {
+	if len(allowed) == 0 {
+		allowed = kvx.BaseOutputFormats()
+	}
+	addKvxOutputFormatFlag(cmd, flags, allowed)
+}
+
+// addKvxOutputFormatFlag is the shared implementation for the data-only
+// helpers; it builds the -o flag with the given allowed-format list and
+// chains a PreRunE that validates against the same list and populates
+// FormatExplicit.
+func addKvxOutputFormatFlag(cmd *cobra.Command, flags *KvxOutputFlags, allowed []string) {
+	cmd.Flags().StringVarP(&flags.Output, "output", "o", "auto",
+		fmt.Sprintf("Output format: %s", strings.Join(allowed, ", ")))
+
+	existingE := cmd.PreRunE
+	existingPre := cmd.PreRun
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		if err := ValidateKvxOutputFormatIn(flags.Output, allowed); err != nil {
+			return err
+		}
+		flags.FormatExplicit = cmd.Flags().Changed("output")
+		if existingE != nil {
+			return existingE(cmd, args)
+		}
+		if existingPre != nil {
+			existingPre(cmd, args)
+		}
+		return nil
+	}
+}
+
 // ValidateKvxOutputFormat validates the output format string.
 // Returns an error if the format is not a valid output format.
 func ValidateKvxOutputFormat(format string) error {
@@ -137,6 +188,25 @@ func ValidateKvxOutputFormat(format string) error {
 	}
 
 	return fmt.Errorf("invalid output format: %s (valid: %s)", format, strings.Join(validFormats, ", "))
+}
+
+// ValidateKvxOutputFormatIn validates the output format against an explicit
+// allow-list. An empty format is treated as auto and passes. An empty allowed
+// list falls back to the full BaseOutputFormats() set so callers can safely
+// pass a nil slice to opt out of restriction.
+func ValidateKvxOutputFormatIn(format string, allowed []string) error {
+	if format == "" {
+		return nil
+	}
+	if len(allowed) == 0 {
+		allowed = kvx.BaseOutputFormats()
+	}
+	for _, valid := range allowed {
+		if format == valid {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid output format: %s (valid: %s)", format, strings.Join(allowed, ", "))
 }
 
 // ToKvxOutputOptions converts flag values to OutputOptions for writing output.
