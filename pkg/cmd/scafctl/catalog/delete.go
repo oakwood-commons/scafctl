@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -27,6 +28,7 @@ type DeleteOptions struct {
 	DryRun    bool   // Show what would be deleted without deleting (--dry-run)
 	Catalog   string // Target catalog for remote delete (URL or config name, --catalog)
 	Kind      string // Artifact kind override (--kind)
+	Origin    string // Select the local copy by where it came from (--origin)
 	Insecure  bool
 	CliParams *settings.Run
 	IOStreams *terminal.IOStreams
@@ -52,11 +54,23 @@ func CommandDelete(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			For local artifacts, use the simple name@version format.
 			For remote artifacts, use the full registry path or specify --catalog.
 
+			The local catalog can hold several copies with the same name and
+			version (built locally, pulled from different catalogs). Delete
+			never picks one silently: when the reference matches more than
+			one, it fails and prints a command for each copy. Select one with
+			--origin, --kind, or a digest.
+
 			Use --all to delete all artifacts from the local catalog.
 
 			Examples:
 			  # Delete from local catalog
 			  scafctl catalog delete my-solution@1.0.0
+
+			  # Delete the locally built copy when a pulled copy also exists
+			  scafctl catalog delete my-solution@1.0.0 --origin built
+
+			  # Delete the copy pulled from a specific registry
+			  scafctl catalog delete my-solution@1.0.0 --origin ghcr.io/myorg
 
 			  # Delete all local artifacts
 			  scafctl catalog delete --all
@@ -79,6 +93,9 @@ func CommandDelete(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				if options.Catalog != "" {
 					return exitcode.Errorf("--all only applies to the local catalog; cannot be combined with --catalog")
 				}
+				if options.Origin != "" {
+					return exitcode.Errorf("--origin only applies to a single local delete; cannot be combined with --all")
+				}
 				return runDeleteAll(cmd.Context(), options)
 			}
 			if len(args) != 1 {
@@ -94,6 +111,7 @@ func CommandDelete(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be deleted without actually deleting")
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
+	cmd.Flags().StringVar(&options.Origin, "origin", "", pushOriginFlagUsage)
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 
 	return cmd
@@ -105,11 +123,15 @@ func runDelete(ctx context.Context, opts *DeleteOptions) error {
 
 	// Check if this is a remote delete: explicit --catalog flag or remote-looking reference
 	if opts.Catalog != "" || looksLikeRemoteReference(opts.Reference) {
+		if opts.Origin != "" {
+			w.Error("--origin only applies to local deletes; it has no effect on a remote delete")
+			return exitcode.Errorf("--origin not supported for remote delete")
+		}
 		return runDeleteRemote(ctx, opts)
 	}
 
 	// Parse reference to get name and version
-	name, version := catalog.ParseNameVersion(opts.Reference)
+	_, version := catalog.ParseNameVersion(opts.Reference)
 	if version == "" {
 		w.Error("version required: use format 'name@version' (e.g., 'my-solution@1.0.0')")
 		return exitcode.Errorf("version required")
@@ -122,50 +144,33 @@ func runDelete(ctx context.Context, opts *DeleteOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	// Determine artifact kind - first try --kind flag, then infer from local catalog
-	var artifactKind catalog.ArtifactKind
-	if opts.Kind != "" {
-		kind, ok := catalog.ParseArtifactKind(opts.Kind)
-		if !ok {
-			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
-			return exitcode.Errorf("invalid kind")
-		}
-		artifactKind = kind
-	} else {
-		// Infer kind from local catalog by trying each kind
-		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
-		if err != nil {
-			w.Errorf("failed to infer artifact kind: %v", err)
-			w.Infof("Hint: use --kind to specify the artifact kind explicitly")
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-	}
-
-	// Build reference
-	ref, err := catalog.ParseReference(artifactKind, opts.Reference)
+	sel, err := catalog.ParseExactSelector(opts.Reference, opts.Kind, opts.Origin)
 	if err != nil {
 		w.Errorf("invalid reference %q: %v", opts.Reference, err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
+	// The local catalog can hold several copies with the same name and
+	// version (built locally, pulled from different catalogs). Resolve
+	// selects exactly one, failing with a disambiguation hint rather than
+	// picking one silently when the reference is ambiguous.
+	info, err := localCatalog.ResolveExact(ctx, sel)
+	if err != nil {
+		return deleteResolveError(w, opts.CliParams.BinaryName, err)
+	}
+	ref := info.Reference
+
 	// Dry-run mode: show what would be deleted and return
 	if opts.DryRun {
-		// Verify the artifact exists before reporting
-		exists, getErr := localCatalog.Exists(ctx, ref)
-		if getErr != nil {
-			w.Errorf("failed to check artifact: %v", getErr)
-			return exitcode.WithCode(getErr, exitcode.CatalogError)
-		}
-		if !exists {
-			w.Errorf("artifact %q not found in catalog", opts.Reference)
-			return exitcode.WithCode(fmt.Errorf("artifact %q not found in catalog", opts.Reference), exitcode.FileNotFound)
-		}
-		w.Infof("Would delete %s from local catalog", ref.String())
+		w.Infof("Would delete %s and any aliases of it from local catalog", ref.String())
 		return nil
 	}
 
-	// Delete artifact
-	if err := localCatalog.Delete(ctx, ref); err != nil {
+	// Delete the resolved identity -- its version tag and every alias of it --
+	// never a tag re-derived from the reference (which could belong to a
+	// different digest or origin).
+	removed, err := localCatalog.DeleteResolved(ctx, info)
+	if err != nil {
 		if catalog.IsNotFound(err) {
 			w.Errorf("artifact %q not found in catalog", opts.Reference)
 			return exitcode.WithCode(err, exitcode.FileNotFound)
@@ -174,9 +179,36 @@ func runDelete(ctx context.Context, opts *DeleteOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	w.Successf("Deleted %s", ref.String())
+	if aliases := removedAliases(removed, ref); len(aliases) > 0 {
+		w.Successf("Deleted %s (and aliases: %s)", ref.String(), strings.Join(aliases, ", "))
+	} else {
+		w.Successf("Deleted %s", ref.String())
+	}
+
+	// A different copy (e.g. one left behind under an alias by an earlier
+	// same-version rebuild) can still match the reference; say so rather than
+	// letting the user assume the version is gone.
+	if remaining, err := localCatalog.ResolveExact(ctx, sel); err == nil {
+		w.Warningf("%s still resolves to another local copy (digest %s); run delete again to remove it",
+			opts.Reference, remaining.Digest)
+	}
 
 	return nil
+}
+
+// removedAliases returns the removed tag labels other than ref's version tag.
+func removedAliases(removed []string, ref catalog.Reference) []string {
+	version := ""
+	if ref.Version != nil {
+		version = ref.Version.String()
+	}
+	aliases := make([]string, 0, len(removed))
+	for _, label := range removed {
+		if label != version {
+			aliases = append(aliases, label)
+		}
+	}
+	return aliases
 }
 
 // runDeleteAll deletes all artifacts from the local catalog.
@@ -217,6 +249,9 @@ func runDeleteAll(ctx context.Context, opts *DeleteOptions) error {
 	}
 
 	var deleted, failed int
+	// Several listed entries (a version tag and its aliases) can share one
+	// identity; DeleteResolved removes them together, so count each once.
+	seen := make(map[string]bool)
 	for _, kind := range allKinds {
 		artifacts, listErr := localCatalog.List(ctx, kind, "")
 		if listErr != nil {
@@ -225,12 +260,17 @@ func runDeleteAll(ctx context.Context, opts *DeleteOptions) error {
 			continue
 		}
 		for _, info := range artifacts {
+			key := strings.Join([]string{info.Reference.Kind.String(), info.Reference.Name, info.Canonical, info.Digest}, "\x00")
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 			if opts.DryRun {
 				w.Infof("Would delete %s", info.Reference.String())
 				deleted++
 				continue
 			}
-			if delErr := localCatalog.Delete(ctx, info.Reference); delErr != nil {
+			if _, delErr := localCatalog.DeleteResolved(ctx, info); delErr != nil {
 				lgr.V(1).Info("failed to delete artifact", "ref", info.Reference.String(), "error", delErr)
 				failed++
 				continue
@@ -447,6 +487,43 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 	w.Successf("Deleted %s@%s from %s", ref.Name, ref.VersionOrDigest(), repoPath)
 
 	return nil
+}
+
+// deleteResolveError reports a ResolveExact failure for delete with its exit
+// code. Ambiguity errors are followed by one copy-pasteable command per
+// candidate.
+func deleteResolveError(w *writer.Writer, binaryName string, err error) error {
+	var ambArtifact *catalog.AmbiguousArtifactError
+	var ambKind *catalog.AmbiguousKindError
+	var hints []string
+	switch {
+	case errors.As(err, &ambArtifact):
+		hints = ambArtifact.DeleteHints(binaryName)
+	case errors.As(err, &ambKind):
+		hints = ambKind.DeleteHints(binaryName)
+	}
+	return exactResolveError(w, err, hints)
+}
+
+// exactResolveError reports a ResolveExact failure with its exit code,
+// followed by the given disambiguation hints (if any).
+func exactResolveError(w *writer.Writer, err error, hints []string) error {
+	w.Errorf("%v", err)
+	if len(hints) > 0 {
+		w.Infof("Select one with:")
+		for _, h := range hints {
+			w.Infof("  %s", h)
+		}
+	}
+
+	switch {
+	case catalog.IsAmbiguous(err), catalog.IsInvalidReference(err):
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	case catalog.IsNotFound(err):
+		return exitcode.WithCode(err, exitcode.FileNotFound)
+	default:
+		return exitcode.WithCode(fmt.Errorf("failed to resolve artifact: %w", err), exitcode.CatalogError)
+	}
 }
 
 // looksLikeRemoteReference returns true if the reference appears to be a remote registry URL.

@@ -97,6 +97,19 @@ func (p *MyPlugin) StopProvider(_ context.Context, _ string) error {
 	return nil
 }
 
+// buildVariant is embedded via "-ldflags -X" by the e2e build harness
+// (BuildPluginBinaryForPlatform) so that otherwise-identical builds of this
+// fixture produce distinct binaries -- and therefore distinct content
+// digests -- across separate invocations. This lets e2e specs simulate
+// genuinely different artifacts (e.g. pushed to two different catalog
+// origins) without depending on timestamp-granularity differences between
+// builds. It has no runtime effect.
+var buildVariant string
+
+func init() {
+	_ = buildVariant
+}
+
 func main() {
 	sdkplugin.Serve(&MyPlugin{})
 }

@@ -190,7 +190,7 @@ func TestRemoteCatalog_canonicalID(t *testing.T) {
 			})
 			require.NoError(t, err)
 			// canonicalID is independent of the (mutable) config alias.
-			assert.Equal(t, tt.expected, cat.canonicalID())
+			assert.Equal(t, tt.expected, cat.CanonicalID())
 		})
 	}
 }

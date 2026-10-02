@@ -632,6 +632,8 @@ Expected output:
 
 You must specify both the name and version. The `--kind solution` flag tells scafctl which artifact kind to delete.
 
+Delete removes the selected local copy together with every alias (see `catalog tag`) pointing at it, and lists the removed aliases, e.g. `Deleted greeting@1.0.1 (and aliases: stable)`. If the same version still resolves to another local copy (for example a pulled copy, or a stale alias left by a `--force` rebuild), delete warns and prints its digest so you can run delete again.
+
 ### Step 2: Verify It's Gone
 
 {{< tabs "catalog-tutorial-cmd-18" >}}
@@ -1008,6 +1010,7 @@ You can create as many tags as needed. Tags are freeform strings -- they cannot 
 
 - `scafctl catalog tag NAME@VERSION ALIAS` creates a named alias pointing to a specific version
 - Tags are useful for marking releases as stable, production, etc.
+- Aliases are scoped to one local copy: if both a built copy and a pulled copy of `NAME@VERSION` exist, the command fails with copy-pasteable hints; select a copy with `--origin built` or `--origin <registry/repository>`
 - Tags can also be created in remote registries with `--catalog`
 
 ---
@@ -1235,7 +1238,7 @@ scafctl catalog pull ghcr.io/myorg/scafctl/solutions/greeting@1.0.0 --as my-gree
 {{% /tab %}}
 {{< /tabs >}}
 
-This stores the artifact locally under the name `my-greeting`.
+This stores the artifact locally under the name `my-greeting`. The renamed copy still records where it came from, so it is listed with its source origin and never collides with a locally built `my-greeting`.
 
 ### Step 6: Delete from a Remote Registry
 

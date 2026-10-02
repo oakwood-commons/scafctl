@@ -4,8 +4,11 @@
 package catalog
 
 import (
+	"context"
+	"strings"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
 	catalogpkg "github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -51,6 +54,7 @@ func TestCommandTag_Flags(t *testing.T) {
 	}{
 		{"catalog", ""},
 		{"kind", ""},
+		{"origin", ""},
 		{"insecure", "false"},
 	}
 
@@ -200,6 +204,85 @@ func TestCommandTag_InvalidCharAlias(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid character")
+}
+
+func TestCommandTag_RemoteWithOrigin(t *testing.T) {
+	t.Parallel()
+
+	cmd := CommandTag(settings.NewCliParams(), nil, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0", "stable", "--catalog", "my-registry", "--origin", "ghcr.io/myorg"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--origin not supported for remote tag")
+}
+
+func TestCommandTag_AmbiguousLocalCopiesPrintHints(t *testing.T) {
+	newSeededLocalCatalog(t)
+
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ctx, out := newBufferedCatalogTestCtx(t)
+	cmd := CommandTag(cliParams, nil, "mycli/catalog")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"app@1.0.0", "stable"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.True(t, catalogpkg.IsAmbiguous(err))
+	assert.Contains(t, out.String(), "mycli catalog tag app@1.0.0 stable --kind solution --origin "+catalogpkg.OriginBuilt)
+	assert.Contains(t, out.String(), "mycli catalog tag app@1.0.0 stable --kind solution --origin "+testPulledOrigin)
+}
+
+func TestCommandTag_LocalByOrigin(t *testing.T) {
+	newSeededLocalCatalog(t)
+
+	for _, origin := range []string{testPulledOrigin, catalogpkg.OriginBuilt} {
+		cmd := CommandTag(settings.NewCliParams(), nil, "scafctl/catalog")
+		cmd.SetContext(newCatalogTestCtx(t))
+		cmd.SetArgs([]string{"app@1.0.0", "stable", "--origin", origin})
+		require.NoError(t, cmd.Execute(), "origin %s", origin)
+	}
+
+	infos, err := reopenLocalCatalog(t).List(context.Background(), catalogpkg.ArtifactKindSolution, "app")
+	require.NoError(t, err)
+	var aliasOrigins []string
+	for _, info := range infos {
+		if info.Tag == "stable" {
+			aliasOrigins = append(aliasOrigins, info.Canonical)
+		}
+	}
+	assert.ElementsMatch(t, []string{testPulledOrigin, ""}, aliasOrigins, "each copy gets its own alias")
+}
+
+func TestCommandTag_LocalByDigest(t *testing.T) {
+	cat := newSeededLocalCatalog(t)
+	ctx := context.Background()
+	ref := catalogpkg.Reference{Kind: catalogpkg.ArtifactKindSolution, Name: "app", Version: semver.MustParse("1.0.0")}
+	pulled := ref
+	pulled.Origin = testPulledOrigin
+	info, err := cat.Resolve(ctx, pulled)
+	require.NoError(t, err)
+
+	cmdCtx, out := newBufferedCatalogTestCtx(t)
+	cmd := CommandTag(settings.NewCliParams(), nil, "scafctl/catalog")
+	cmd.SetContext(cmdCtx)
+	cmd.SetArgs([]string{"app@" + info.Digest, "stable", "--origin", testPulledOrigin})
+	require.NoError(t, cmd.Execute(), "a digest hint printed by tag must be runnable")
+	assert.Contains(t, out.String(), `Tagged app@1.0.0 as "stable"`)
+}
+
+func TestCommandTag_RemoteRejectsDigest(t *testing.T) {
+	t.Parallel()
+
+	cmd := CommandTag(settings.NewCliParams(), nil, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"app@sha256:" + strings.Repeat("a", 64), "stable", "--catalog", "my-registry"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "digest not supported for remote tagging")
 }
 
 func BenchmarkCommandTag(b *testing.B) {

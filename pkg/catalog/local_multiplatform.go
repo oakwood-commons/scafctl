@@ -32,7 +32,10 @@ func (c *LocalCatalog) StoreMultiPlatform(ctx context.Context, ref Reference, pl
 	}
 
 	// Check existence (unless force)
-	if !force && c.existsLocked(ctx, ref) {
+	if err := c.migrateLegacyPullLocked(ctx, ref); err != nil {
+		return ArtifactInfo{}, err
+	}
+	if !force && c.identityExistsLocked(ctx, ref) {
 		return ArtifactInfo{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
 	}
 
@@ -82,7 +85,7 @@ func (c *LocalCatalog) StoreMultiPlatform(ctx context.Context, ref Reference, pl
 		}
 
 		// Build per-platform manifest
-		platAnnotations := copyAnnotations(annotations)
+		platAnnotations := manifestAnnotations(annotations)
 		platAnnotations[AnnotationPlatform] = pb.Platform
 
 		manifest := ocispec.Manifest{
@@ -113,7 +116,7 @@ func (c *LocalCatalog) StoreMultiPlatform(ctx context.Context, ref Reference, pl
 		Versioned:   specs.Versioned{SchemaVersion: 2},
 		MediaType:   ocispec.MediaTypeImageIndex,
 		Manifests:   manifestDescs,
-		Annotations: annotations,
+		Annotations: manifestAnnotations(annotations),
 	}
 
 	indexData, err := json.Marshal(index)
@@ -161,10 +164,9 @@ func (c *LocalCatalog) FetchByPlatform(ctx context.Context, ref Reference, platf
 		return nil, ArtifactInfo{}, err
 	}
 
-	tag := c.tagForRef(info.Reference)
-	desc, err := c.store.Resolve(ctx, tag)
+	desc, err := c.resolveManifestDesc(ctx, info)
 	if err != nil {
-		return nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+		return nil, ArtifactInfo{}, err
 	}
 
 	// If it's an image index, resolve the platform-specific manifest.
@@ -248,10 +250,9 @@ func (c *LocalCatalog) ListPlatforms(ctx context.Context, ref Reference) ([]stri
 		return nil, err
 	}
 
-	tag := c.tagForRef(info.Reference)
-	desc, err := c.store.Resolve(ctx, tag)
+	desc, err := c.resolveManifestDesc(ctx, info)
 	if err != nil {
-		return nil, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+		return nil, err
 	}
 
 	if !IsImageIndex(desc) {
@@ -291,13 +292,4 @@ func (c *LocalCatalog) pushBlobLocked(ctx context.Context, mediaType string, con
 // isAlreadyExists checks if the error is an "already exists" error from the oras store.
 func isAlreadyExists(err error) bool {
 	return err != nil && errors.Is(err, errdef.ErrAlreadyExists)
-}
-
-// copyAnnotations creates a shallow copy of an annotations map.
-func copyAnnotations(src map[string]string) map[string]string {
-	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }

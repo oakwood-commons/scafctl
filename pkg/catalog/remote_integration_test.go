@@ -340,6 +340,14 @@ func (r *fakeOCIRegistry) handleBlobs(w http.ResponseWriter, req *http.Request, 
 // The caller must call ts.Close() when done (or defer it).
 func newTestRemoteCatalog(t *testing.T) (*RemoteCatalog, *httptest.Server) {
 	t.Helper()
+	cat, _, ts := newTestRemoteCatalogWithRegistry(t)
+	return cat, ts
+}
+
+// newTestRemoteCatalogWithRegistry is newTestRemoteCatalog that also returns
+// the backing fake registry, for assertions on the raw stored bytes.
+func newTestRemoteCatalogWithRegistry(t *testing.T) (*RemoteCatalog, *fakeOCIRegistry, *httptest.Server) {
+	t.Helper()
 
 	reg := newFakeOCIRegistry()
 	ts := httptest.NewTLSServer(reg.handler())
@@ -357,7 +365,7 @@ func newTestRemoteCatalog(t *testing.T) (*RemoteCatalog, *httptest.Server) {
 	// Override the auth client's HTTP transport to trust the test server's TLS cert
 	cat.client.Client = ts.Client()
 
-	return cat, ts
+	return cat, reg, ts
 }
 
 func TestRemoteCatalog_StoreAndFetch(t *testing.T) {
@@ -1207,8 +1215,9 @@ func TestRemoteCatalog_CopyTo_SingleTag(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, artifacts, 1, "CopyTo should produce exactly one local entry, not duplicate tags")
 
-	// Delete should remove it in a single call.
-	err = localCat.Delete(ctx, ref)
+	// Delete should remove it in a single call. A pulled copy is addressed by
+	// its origin-qualified reference; a bare one means the built copy.
+	err = localCat.Delete(ctx, info.Reference)
 	require.NoError(t, err)
 
 	artifacts, err = localCat.List(ctx, ArtifactKindSolution, "copy-test")
@@ -1340,10 +1349,354 @@ func TestRemoteCatalog_CopyTo_SetsOriginAnnotation(t *testing.T) {
 	assert.Contains(t, resolved.Annotations[AnnotationOrigin], "myorg/artifacts")
 
 	// Verify the machine-readable canonical source annotation was persisted.
-	wantCanonical := remoteCat.canonicalID()
+	wantCanonical := remoteCat.CanonicalID()
 	assert.Equal(t, wantCanonical, resolved.Annotations[AnnotationSourceCanonical])
 	assert.Equal(t, wantCanonical, resolved.Canonical)
 	_ = info // ensure CopyTo returned successfully
+}
+
+func TestRemoteCatalog_CopyTo_RejectsInvalidTargetName(t *testing.T) {
+	t.Parallel()
+
+	remoteCat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "copy-as", Version: semver.MustParse("1.0.0")}
+	_, err := remoteCat.CopyTo(t.Context(), ref, newTestLocalCatalog(t), CopyOptions{TargetName: "a/b"})
+
+	var invalid *InvalidReferenceError
+	require.ErrorAs(t, err, &invalid)
+}
+
+func TestRemoteCatalog_CopyTo_TargetNameIsOriginQualified(t *testing.T) {
+	t.Parallel()
+
+	remoteCat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+	ref := Reference{Kind: ArtifactKindSolution, Name: "copy-src", Version: semver.MustParse("1.0.0")}
+	_, err := remoteCat.Store(ctx, ref, []byte("name: copy-src"), nil, nil, false)
+	require.NoError(t, err)
+
+	localCat := newTestLocalCatalog(t)
+	info, err := remoteCat.CopyTo(ctx, ref, localCat, CopyOptions{TargetName: "copy-local"})
+	require.NoError(t, err)
+
+	canonical := remoteCat.CanonicalID()
+	assert.Equal(t, "copy-local", info.Reference.Name)
+	assert.Equal(t, canonical, info.Reference.Origin)
+
+	bare := Reference{Kind: ArtifactKindSolution, Name: "copy-local", Version: ref.Version}
+	_, err = localCat.store.Resolve(ctx, bare.LocalTag())
+	require.Error(t, err, "a renamed pull must not occupy the built (bare) namespace")
+
+	desc, err := localCat.store.Resolve(ctx, info.Reference.LocalTag())
+	require.NoError(t, err)
+	assert.Equal(t, "copy-local", desc.Annotations[AnnotationArtifactName])
+	assert.Equal(t, "copy-src", desc.Annotations[AnnotationSourceName])
+	assert.Equal(t, canonical, desc.Annotations[AnnotationSourceCanonical])
+
+	// Selectable by its remote identity (the FQN push form).
+	pushInfo, err := localCat.ResolveForPush(ctx, PushSelector{
+		Kind: ArtifactKindSolution, Name: "copy-src", Version: ref.Version, Origin: canonical, MatchRemoteName: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, info.Digest, pushInfo.Digest)
+
+	// A locally built artifact under the alias name can coexist.
+	_, err = localCat.Store(ctx, bare, []byte("built"), nil, nil, false)
+	require.NoError(t, err)
+}
+
+func TestRemoteCatalog_CopyTo_RefusesOverwriteWithoutForce(t *testing.T) {
+	t.Parallel()
+
+	remoteCat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+	greeting := Reference{Kind: ArtifactKindSolution, Name: "greeting", Version: semver.MustParse("1.0.0")}
+	mine := Reference{Kind: ArtifactKindSolution, Name: "my-greeting", Version: semver.MustParse("1.0.0")}
+	_, err := remoteCat.Store(ctx, greeting, []byte("name: greeting"), nil, nil, false)
+	require.NoError(t, err)
+	_, err = remoteCat.Store(ctx, mine, []byte("name: my-greeting"), nil, nil, false)
+	require.NoError(t, err)
+
+	localCat := newTestLocalCatalog(t)
+	aliased, err := remoteCat.CopyTo(ctx, greeting, localCat, CopyOptions{TargetName: "my-greeting"})
+	require.NoError(t, err)
+
+	_, err = remoteCat.CopyTo(ctx, greeting, localCat, CopyOptions{TargetName: "my-greeting"})
+	require.NoError(t, err, "re-pulling the same source is idempotent")
+
+	_, err = remoteCat.CopyTo(ctx, mine, localCat, CopyOptions{})
+	var exists *ArtifactExistsError
+	require.ErrorAs(t, err, &exists, "a copy from another source name must not be replaced silently")
+	got, err := localCat.Resolve(ctx, aliased.Reference)
+	require.NoError(t, err)
+	assert.Equal(t, aliased.Digest, got.Digest)
+
+	forced, err := remoteCat.CopyTo(ctx, mine, localCat, CopyOptions{Force: true})
+	require.NoError(t, err)
+	got, err = localCat.Resolve(ctx, forced.Reference)
+	require.NoError(t, err)
+	assert.Equal(t, forced.Digest, got.Digest)
+	assert.NotEqual(t, aliased.Digest, got.Digest)
+}
+
+func TestRemoteCatalog_CopyTo_RefusesChangedContentWithoutForce(t *testing.T) {
+	t.Parallel()
+
+	remoteCat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+	ref := Reference{Kind: ArtifactKindSolution, Name: "republished", Version: semver.MustParse("1.0.0")}
+	_, err := remoteCat.Store(ctx, ref, []byte("v1"), nil, nil, false)
+	require.NoError(t, err)
+
+	localCat := newTestLocalCatalog(t)
+	first, err := remoteCat.CopyTo(ctx, ref, localCat, CopyOptions{})
+	require.NoError(t, err)
+
+	_, err = remoteCat.Store(ctx, ref, []byte("v1 republished"), nil, nil, true)
+	require.NoError(t, err)
+
+	_, err = remoteCat.CopyTo(ctx, ref, localCat, CopyOptions{})
+	require.True(t, IsExists(err), "different content at the same tag needs --force: %v", err)
+
+	second, err := remoteCat.CopyTo(ctx, ref, localCat, CopyOptions{Force: true})
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Digest, second.Digest)
+}
+
+// --- CopyFrom tests ---
+
+func TestRemoteCatalog_CopyFrom(t *testing.T) {
+	t.Parallel()
+
+	const (
+		name      = "copy-from"
+		version   = "1.0.0"
+		srcOrigin = "src.example.com/org"
+	)
+	ref := Reference{Kind: ArtifactKindSolution, Name: name, Version: semver.MustParse(version)}
+	renamed := Reference{Kind: ArtifactKindSolution, Name: "renamed", Version: ref.Version}
+
+	tests := []struct {
+		name         string
+		origin       string // selects the source copy by canonical: srcOrigin
+		built        bool   // selects the locally built copy (origin "")
+		opts         CopyOptions
+		preseed      bool // store an existing artifact at the destination first
+		mutate       func(ArtifactInfo) ArtifactInfo
+		wantErrAs    any
+		wantExists   bool
+		wantAt       Reference
+		wantAbsentAt Reference
+	}{
+		{name: "publishes the selected built copy", built: true, wantAt: ref},
+		{name: "publishes the selected pulled copy", origin: srcOrigin, wantAt: ref},
+		{
+			name: "relocates under TargetName", built: true,
+			opts: CopyOptions{TargetName: renamed.Name}, wantAt: renamed, wantAbsentAt: ref,
+		},
+		{
+			name: "rejects invalid TargetName", built: true,
+			opts: CopyOptions{TargetName: "a/b"}, wantErrAs: new(*InvalidReferenceError), wantAbsentAt: ref,
+		},
+		{name: "refuses to overwrite without force", built: true, preseed: true, wantExists: true},
+		{name: "overwrites with force", built: true, preseed: true, opts: CopyOptions{Force: true}, wantAt: ref},
+		{
+			name: "requires a digest", built: true,
+			mutate:    func(a ArtifactInfo) ArtifactInfo { a.Digest = ""; return a },
+			wantErrAs: new(*InvalidReferenceError), wantAbsentAt: ref,
+		},
+		{
+			name: "requires a version", built: true,
+			mutate:    func(a ArtifactInfo) ArtifactInfo { a.Reference.Version = nil; return a },
+			wantErrAs: new(*InvalidReferenceError), wantAbsentAt: ref,
+		},
+		{
+			name: "fails when the digest is not in the source", built: true,
+			mutate: func(a ArtifactInfo) ArtifactInfo {
+				a.Digest = "sha256:" + strings.Repeat("0", 64)
+				return a
+			},
+			wantErrAs: new(*ArtifactNotFoundError), wantAbsentAt: ref,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+
+			remoteCat, ts := newTestRemoteCatalog(t)
+			defer ts.Close()
+
+			local := newTestLocalCatalog(t)
+			storeForPush(t, local, ArtifactKindSolution, name, version, "", nil)
+			storeForPush(t, local, ArtifactKindSolution, name, version, srcOrigin, nil)
+
+			info, err := local.ResolveForPush(ctx, PushSelector{Kind: ArtifactKindSolution, Name: name, Version: ref.Version, Origin: tt.origin, Built: tt.built})
+			require.NoError(t, err)
+			if tt.mutate != nil {
+				info = tt.mutate(info)
+			}
+
+			if tt.preseed {
+				_, err := remoteCat.Store(ctx, ref, []byte("already-there"), nil, nil, false)
+				require.NoError(t, err)
+			}
+
+			got, err := remoteCat.CopyFrom(ctx, local, info, tt.opts)
+
+			switch {
+			case tt.wantErrAs != nil:
+				require.ErrorAs(t, err, tt.wantErrAs)
+			case tt.wantExists:
+				require.True(t, IsExists(err), "want exists error, got %v", err)
+			default:
+				require.NoError(t, err)
+				assert.Equal(t, info.Digest, got.Digest)
+				assert.Equal(t, tt.wantAt, got.Reference)
+				assert.Equal(t, remoteCat.CanonicalID(), got.Canonical)
+
+				remoteInfo, err := remoteCat.Resolve(ctx, tt.wantAt)
+				require.NoError(t, err)
+				assert.Equal(t, info.Digest, remoteInfo.Digest, "the resolved copy must be the one published")
+			}
+
+			if tt.wantAbsentAt.Name != "" {
+				_, err := remoteCat.Resolve(ctx, tt.wantAbsentAt)
+				assert.True(t, IsNotFound(err), "%s should not be published, got %v", tt.wantAbsentAt, err)
+			}
+		})
+	}
+}
+
+// TestRemoteCatalog_CopyFrom_PublishesNoLocalProvenance locks in that pushing
+// a copy obtained from one remote to another publishes nothing about where the
+// local copy came from: the tag is the bare version, and no manifest or blob
+// at the destination mentions the source catalog or how it was obtained.
+func TestRemoteCatalog_CopyFrom_PublishesNoLocalProvenance(t *testing.T) {
+	t.Parallel()
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "mirrored", Version: semver.MustParse("1.0.0")}
+
+	tests := []struct {
+		name string
+		// seed puts a copy of ref obtained from src into local and returns
+		// the strings that identify src and must not reach the destination.
+		seed func(t *testing.T, local *LocalCatalog) []string
+	}{
+		{
+			name: "pulled copy",
+			seed: func(t *testing.T, local *LocalCatalog) []string {
+				src, _, ts := newTestRemoteCatalogWithRegistry(t)
+				t.Cleanup(ts.Close)
+				_, err := src.Store(t.Context(), ref, []byte("name: mirrored\n"), nil, nil, false)
+				require.NoError(t, err)
+				_, err = src.CopyTo(t.Context(), ref, local, CopyOptions{})
+				require.NoError(t, err)
+				return []string{src.CanonicalID(), "pulled from"}
+			},
+		},
+		{
+			name: "auto-cached copy",
+			seed: func(t *testing.T, local *LocalCatalog) []string {
+				const srcCanonical = "cache-src.example.com/org"
+				_, err := local.Store(t.Context(), ref, []byte("name: mirrored\n"), nil, map[string]string{
+					AnnotationSourceCanonical: srcCanonical,
+					AnnotationOrigin:          "auto-cached from upstream-catalog",
+				}, false)
+				require.NoError(t, err)
+				return []string{srcCanonical, "auto-cached", "upstream-catalog"}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+
+			local := newTestLocalCatalog(t)
+			forbidden := tt.seed(t, local)
+
+			info, err := local.ResolveForPush(ctx, PushSelector{Kind: ref.Kind, Name: ref.Name, Version: ref.Version})
+			require.NoError(t, err)
+			require.NotEmpty(t, info.Canonical, "fixture must be a copy from a remote")
+
+			dest, destReg, ts := newTestRemoteCatalogWithRegistry(t)
+			defer ts.Close()
+
+			_, err = dest.CopyFrom(ctx, local, info, CopyOptions{})
+			require.NoError(t, err)
+
+			tags, err := dest.ListTags(ctx, ref)
+			require.NoError(t, err)
+			require.Len(t, tags, 1)
+			assert.Equal(t, "1.0.0", tags[0].Tag, "the remote tag must be the bare version")
+
+			_, remoteInfo, err := dest.Fetch(ctx, ref)
+			require.NoError(t, err)
+			assert.Equal(t, info.Digest, remoteInfo.Digest)
+			for _, k := range []string{AnnotationSourceCanonical, AnnotationSourceName, AnnotationOrigin} {
+				assert.NotContains(t, remoteInfo.Annotations, k)
+			}
+
+			destReg.mu.RLock()
+			defer destReg.mu.RUnlock()
+			for _, s := range forbidden {
+				for key, data := range destReg.manifests {
+					assert.NotContains(t, string(data), s, "manifest %s leaks source provenance", key)
+				}
+				for dgst, data := range destReg.blobs {
+					assert.NotContains(t, string(data), s, "blob %s leaks source provenance", dgst)
+				}
+			}
+		})
+	}
+}
+
+func TestPushTarget(t *testing.T) {
+	t.Parallel()
+
+	v := semver.MustParse("1.2.3")
+	info := ArtifactInfo{
+		Reference: Reference{Kind: ArtifactKindProvider, Name: "exec", Version: v, Origin: "ghcr.io/org", Digest: "sha256:abc"},
+		Digest:    "sha256:abc",
+	}
+
+	tests := []struct {
+		name       string
+		info       ArtifactInfo
+		targetName string
+		want       Reference
+		wantErr    bool
+	}{
+		{name: "clears origin and digest", info: info, want: Reference{Kind: ArtifactKindProvider, Name: "exec", Version: v}},
+		{name: "applies target name", info: info, targetName: "exec2", want: Reference{Kind: ArtifactKindProvider, Name: "exec2", Version: v}},
+		{name: "rejects invalid target name", info: info, targetName: "Bad_Name", wantErr: true},
+		{name: "rejects slash target name", info: info, targetName: "a/b", wantErr: true},
+		{name: "rejects missing version", info: ArtifactInfo{Reference: Reference{Kind: ArtifactKindSolution, Name: "x"}}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := PushTarget(tt.info, tt.targetName)
+			if tt.wantErr {
+				var invalid *InvalidReferenceError
+				require.ErrorAs(t, err, &invalid)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 // detectManifestMediaType inspects stored manifest JSON to return the correct

@@ -267,3 +267,33 @@ func TestRegistry_CacheArtifact_OmitsEmptyCanonical(t *testing.T) {
 	_, hasCanonical := info.Annotations[AnnotationSourceCanonical]
 	assert.False(t, hasCanonical, "empty canonical should not be written as an annotation")
 }
+
+func TestRegistry_CacheArtifact_OriginQualifiesLocalTag(t *testing.T) {
+	ctx := context.Background()
+	reg, local := newTestRegistry(t)
+	reg.SetCacheRemoteArtifacts(true)
+
+	name := "shared-name"
+	version := "1.0.0"
+	ref := Reference{Kind: ArtifactKindSolution, Name: name, Version: semver.MustParse(version)}
+
+	// A locally built artifact with the same kind/name/version already occupies
+	// the bare tag.
+	builtDigest := storeForPush(t, local, ArtifactKindSolution, name, version, "", nil)
+
+	// Caching a remote fetch for the same kind/name/version from a registry
+	// must not collide with (overwrite) the locally built copy: it should be
+	// origin-qualified, just like an explicit `pull`.
+	reg.cacheArtifact(ctx, ref, []byte("name: "+name+" from registry"), nil, "my-remote", "ghcr.io/org/repo")
+
+	builtInfo, err := local.Resolve(ctx, ref)
+	require.NoError(t, err)
+	assert.Equal(t, builtDigest, builtInfo.Digest, "the locally built copy must survive the auto-cache")
+
+	cachedRef := ref
+	cachedRef.Origin = "ghcr.io/org/repo"
+	cachedInfo, err := local.Resolve(ctx, cachedRef)
+	require.NoError(t, err)
+	assert.Equal(t, "ghcr.io/org/repo", cachedInfo.Canonical)
+	assert.NotEqual(t, builtDigest, cachedInfo.Digest)
+}

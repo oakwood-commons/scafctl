@@ -31,7 +31,7 @@ func ParseReference(kind ArtifactKind, input string) (Reference, error) {
 	atIdx := strings.LastIndex(input, "@")
 	if atIdx == -1 {
 		// No version specified
-		if err := validateName(input); err != nil {
+		if err := ValidateName(input); err != nil {
 			return Reference{}, err
 		}
 		ref.Name = input
@@ -42,7 +42,7 @@ func ParseReference(kind ArtifactKind, input string) (Reference, error) {
 	name := input[:atIdx]
 	versionOrDigest := input[atIdx+1:]
 
-	if err := validateName(name); err != nil {
+	if err := ValidateName(name); err != nil {
 		return Reference{}, err
 	}
 	ref.Name = name
@@ -85,8 +85,8 @@ func ParseReference(kind ArtifactKind, input string) (Reference, error) {
 	return ref, nil
 }
 
-// validateName checks if an artifact name is valid.
-func validateName(name string) error {
+// ValidateName checks if an artifact name is valid.
+func ValidateName(name string) error {
 	if name == "" {
 		return &InvalidReferenceError{
 			Input:   name,
@@ -243,9 +243,13 @@ func ParseRemoteReference(input string) (*RemoteReference, error) {
 		Tag:      tag,
 	}
 
-	// Detect artifact kind from path
+	// Detect artifact kind from path.
 	// Format: registry/[repo/...]/solutions/name or registry/[repo/...]/providers/name
-	for i := 1; i < len(parts)-1; i++ {
+	// Scan from the end so the *last* kinds segment wins: a repository path may
+	// legitimately contain a kind word earlier (e.g.
+	// "registry/org/solutions/team/solutions/app"), and the name always
+	// follows the final kinds marker closest to it.
+	for i := len(parts) - 2; i >= 1; i-- {
 		if kind, ok := ParseArtifactKindFromPlural(parts[i]); ok {
 			ref.Kind = kind
 			ref.Repository = strings.Join(parts[1:i], "/")
@@ -263,9 +267,14 @@ func ParseRemoteReference(input string) (*RemoteReference, error) {
 
 // ToReference converts a RemoteReference to a Reference.
 func (r *RemoteReference) ToReference() (Reference, error) {
+	origin := r.Registry
+	if r.Repository != "" {
+		origin += "/" + r.Repository
+	}
 	ref := Reference{
-		Kind: r.Kind,
-		Name: r.Name,
+		Kind:   r.Kind,
+		Name:   r.Name,
+		Origin: origin,
 	}
 
 	if r.Tag == "" || strings.EqualFold(r.Tag, "latest") {

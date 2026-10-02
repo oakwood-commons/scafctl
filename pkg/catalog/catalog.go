@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -146,6 +147,46 @@ type Reference struct {
 	// Digest is the content digest for pinning (e.g., "sha256:abc123...").
 	// If set, takes precedence over Version for resolution.
 	Digest string `json:"digest,omitempty" yaml:"digest,omitempty" doc:"Content digest for pinning"`
+
+	Origin string `json:"origin,omitempty" yaml:"origin,omitempty" doc:"Origin of the artifact (e.g., local, remote catalog)"`
+}
+
+const unresolvedTag = "__unresolved__"
+
+// RemoteTag returns the OCI tag used to address this artifact inside a remote
+// repository. A remote repository already encodes registry, repository, kind,
+// and name in its URL path, so the tag is just the version or digest — never
+// origin-qualified. This is the ONLY tag form valid for a remote repository,
+// which structurally prevents local origin metadata from leaking into a push.
+func (r Reference) RemoteTag() string {
+	if r.HasDigest() {
+		return r.Digest
+	}
+	if r.HasVersion() {
+		return r.Version.String()
+	}
+	return unresolvedTag
+}
+
+func (r Reference) LocalTag() string {
+	if r.Origin == "" {
+		if r.HasDigest() {
+			return fmt.Sprintf("%s/%s@%s", r.Kind, r.Name, r.Digest)
+		}
+		if r.HasVersion() {
+			return fmt.Sprintf("%s/%s:%s", r.Kind, r.Name, r.Version.String())
+		}
+		return fmt.Sprintf("%s/%s", r.Kind, r.Name)
+	}
+
+	path := fmt.Sprintf("%s/%s/%s", r.Origin, r.Kind.Plural(), r.Name)
+	if r.HasDigest() {
+		return fmt.Sprintf("%s@%s", path, r.Digest)
+	}
+	if r.HasVersion() {
+		return fmt.Sprintf("%s:%s", path, r.Version.String())
+	}
+	return path
 }
 
 // String returns the canonical reference string (e.g., "my-solution@1.2.3").

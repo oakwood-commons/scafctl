@@ -187,6 +187,111 @@ func TestLocalCatalog_StoreWithAnnotations(t *testing.T) {
 	assert.Equal(t, "annotated", info.Annotations[AnnotationArtifactName])
 }
 
+// TestLocalCatalog_DescriptorNameOverride_HonoredByListAndResolve reproduces
+// the local rename path used by RemoteCatalog.copyToInternal for `catalog
+// pull --as`: the manifest blob keeps its original AnnotationArtifactName,
+// but the destination OCI tag carries a descriptor-level (index.json)
+// annotation override with the new name. List and Resolve must honor that
+// override instead of filtering/parsing identity from the stale manifest
+// annotation.
+func TestLocalCatalog_DescriptorNameOverride_HonoredByListAndResolve(t *testing.T) {
+	cat := newTestCatalog(t)
+	ctx := context.Background()
+
+	original := testRef("original-solution", "1.0.0")
+	original.Kind = ArtifactKindSolution
+	content := []byte("name: original-solution\nversion: 1.0.0\n")
+
+	_, err := cat.Store(ctx, original, content, nil, nil, false)
+	require.NoError(t, err)
+
+	// Resolve the descriptor for the original tag, then re-tag it under the
+	// renamed reference with a descriptor annotation override -- mirroring
+	// exactly what RemoteCatalog.copyToInternal does for --as.
+	origTag := cat.tagForRef(original)
+	desc, err := cat.store.Resolve(ctx, origTag)
+	require.NoError(t, err)
+
+	renamed := original
+	renamed.Name = "renamed-solution"
+	// Clone the annotations map before mutating: store.Resolve returns the
+	// descriptor's Annotations map by reference (shared with the original
+	// tag's index entry), so mutating it in place would corrupt that entry
+	// too. oras.Copy (the real production path) always returns a fresh
+	// descriptor for a new destination, so this clone faithfully simulates
+	// that -- without it, this test would corrupt the original tag instead
+	// of validating anything.
+	overriddenAnnotations := make(map[string]string, len(desc.Annotations)+1)
+	for k, v := range desc.Annotations {
+		overriddenAnnotations[k] = v
+	}
+	overriddenAnnotations[AnnotationArtifactName] = renamed.Name
+	desc.Annotations = overriddenAnnotations
+
+	renamedTag := cat.tagForRef(renamed)
+	require.NoError(t, cat.store.Tag(ctx, desc, renamedTag))
+
+	// Remove the original tag: a real `catalog pull --as` copies directly to
+	// a single origin-qualified destination tag and never leaves a
+	// separately tagged "original name" entry behind. Untagging it here
+	// keeps this test faithful to that flow instead of asserting about a
+	// dual-tag setup that copyToInternal never produces.
+	require.NoError(t, cat.store.Untag(ctx, origTag))
+
+	// List by the new name must find the artifact.
+	infos, err := cat.List(ctx, ArtifactKindSolution, renamed.Name)
+	require.NoError(t, err)
+	require.Len(t, infos, 1, "renamed artifact should be discoverable by its new name")
+	assert.Equal(t, renamed.Name, infos[0].Reference.Name)
+
+	// List by the old name must NOT return the renamed artifact.
+	infos, err = cat.List(ctx, ArtifactKindSolution, original.Name)
+	require.NoError(t, err)
+	assert.Empty(t, infos, "renamed artifact should no longer be listed under its original name")
+
+	// Resolve by the new name (exact tag path) must succeed.
+	info, err := cat.Resolve(ctx, renamed)
+	require.NoError(t, err)
+	assert.Equal(t, renamed.Name, info.Reference.Name)
+
+	// Fetch by the new name should return the original content unchanged.
+	fetched, _, err := cat.Fetch(ctx, renamed)
+	require.NoError(t, err)
+	assert.Equal(t, content, fetched)
+}
+
+// TestLocalCatalog_ResolvedAnnotations_DescriptorOverridesManifest verifies
+// the merge precedence directly: descriptor-level annotations must win over
+// manifest-blob annotations for the same key.
+func TestLocalCatalog_ResolvedAnnotations_DescriptorOverridesManifest(t *testing.T) {
+	cat := newTestCatalog(t)
+	ctx := context.Background()
+
+	ref := testRef("merge-check", "1.0.0")
+	ref.Kind = ArtifactKindSolution
+	_, err := cat.Store(ctx, ref, []byte("content"), nil, nil, false)
+	require.NoError(t, err)
+
+	tag := cat.tagForRef(ref)
+	desc, err := cat.store.Resolve(ctx, tag)
+	require.NoError(t, err)
+
+	// No descriptor annotations yet: resolvedAnnotations should equal the
+	// manifest annotations.
+	merged, err := cat.resolvedAnnotations(ctx, desc)
+	require.NoError(t, err)
+	assert.Equal(t, "merge-check", merged[AnnotationArtifactName])
+
+	// Add a descriptor-level override and confirm it wins.
+	desc.Annotations = map[string]string{AnnotationArtifactName: "overridden-name"}
+	merged, err = cat.resolvedAnnotations(ctx, desc)
+	require.NoError(t, err)
+	assert.Equal(t, "overridden-name", merged[AnnotationArtifactName],
+		"descriptor annotation must take precedence over the manifest-blob annotation")
+	// Untouched keys still come from the manifest.
+	assert.Equal(t, ArtifactKindSolution.String(), merged[AnnotationArtifactType])
+}
+
 func TestLocalCatalog_ConcurrentAccess(t *testing.T) {
 	cat := newTestCatalog(t)
 	ctx := context.Background()

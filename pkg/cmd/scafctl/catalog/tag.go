@@ -5,7 +5,9 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -23,6 +25,7 @@ type TagOptions struct {
 	Alias     string // Alias tag to create (e.g., "stable", "latest")
 	Catalog   string // Target catalog for remote tagging (URL or config name, --catalog)
 	Kind      string // Artifact kind override (--kind)
+	Origin    string // Select the local copy by where it came from (--origin)
 	Insecure  bool   // Allow HTTP (--insecure)
 	CliParams *settings.Run
 	IOStreams *terminal.IOStreams
@@ -38,7 +41,7 @@ func CommandTag(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 	cmd := &cobra.Command{
 		Use:   "tag <name@version> <alias>",
 		Short: "Create an alias tag for an artifact",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Create an alias tag for an existing catalog artifact.
 
 			Tags are freeform aliases that point to a specific version of an artifact.
@@ -47,11 +50,18 @@ func CommandTag(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 			Note: "latest" is reserved and auto-resolves to the highest semver version.
 			It cannot be used as a manual alias.
 
-			The source artifact must exist and have a version specified.
+			The source artifact must exist and have a version (or, for the
+			local catalog, a digest) specified.
 			The alias must not be a valid semver version (use 'scafctl build' for that).
 
 			By default, tags the artifact in the local catalog. Use --catalog to
 			tag an artifact in a remote registry.
+
+			The local catalog can hold several copies with the same name and
+			version (built locally, pulled from different catalogs). Tag never
+			picks one silently: when the reference matches more than one, it
+			fails and prints a command for each copy. Select one with --origin,
+			--kind, or a digest. The alias is scoped to the selected copy's origin.
 
 			Examples:
 			  # Tag a solution as stable
@@ -60,12 +70,18 @@ func CommandTag(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 			  # Tag for production
 			  scafctl catalog tag my-solution@1.0.0 production
 
+			  # Tag the copy pulled from a specific registry
+			  scafctl catalog tag my-solution@1.0.0 stable --origin ghcr.io/myorg
+
+			  # Tag the locally built copy when a pulled copy also exists
+			  scafctl catalog tag my-solution@1.0.0 stable --origin built
+
 			  # Tag in a remote registry
 			  scafctl catalog tag my-solution@1.0.0 production --catalog ghcr.io/myorg
 
 			  # Tag with explicit kind
 			  scafctl catalog tag echo@1.0.0 stable --kind provider
-		`),
+		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args:         cobra.ExactArgs(2),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -77,6 +93,7 @@ func CommandTag(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
+	cmd.Flags().StringVar(&options.Origin, "origin", "", pushOriginFlagUsage)
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 
 	return cmd
@@ -93,42 +110,46 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 	}
 
 	// Parse reference - require version
-	name, version := catalog.ParseNameVersion(opts.Reference)
+	_, version := catalog.ParseNameVersion(opts.Reference)
 	if version == "" {
 		w.Error("version required: use format 'name@version' (e.g., 'my-solution@1.0.0')")
 		return exitcode.Errorf("version required")
 	}
 
-	// Reject digest references — tagging requires a semver source version.
-	if catalog.IsValidDigest(version) {
-		w.Error("digest references cannot be tagged; use a semver version (e.g., 'my-solution@1.0.0')")
-		return exitcode.Errorf("digest not supported for tagging")
-	}
-
-	// Determine artifact kind from --kind flag if provided.
-	var artifactKind catalog.ArtifactKind
-	if opts.Kind != "" {
-		kind, ok := catalog.ParseArtifactKind(opts.Kind)
-		if !ok {
-			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
-			return exitcode.Errorf("invalid kind")
+	// Remote tag operation — no local catalog needed.
+	if opts.Catalog != "" {
+		// A remote tag needs a semver source version to read the manifest by.
+		if catalog.IsValidDigest(version) {
+			w.Error("digest references cannot be tagged remotely; use a semver version (e.g., 'my-solution@1.0.0')")
+			return exitcode.Errorf("digest not supported for remote tagging")
 		}
-		artifactKind = kind
+		if opts.Origin != "" {
+			w.Error("--origin only applies to local tagging; it has no effect with --catalog")
+			return exitcode.Errorf("--origin not supported for remote tag")
+		}
+		var artifactKind catalog.ArtifactKind
+		if opts.Kind != "" {
+			kind, ok := catalog.ParseArtifactKind(opts.Kind)
+			if !ok {
+				w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
+				return exitcode.Errorf("invalid kind")
+			}
+			artifactKind = kind
+		}
+		ref, err := catalog.ParseReference(artifactKind, opts.Reference)
+		if err != nil {
+			w.Errorf("invalid reference %q: %v", opts.Reference, err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		return runTagRemote(ctx, opts, ref)
 	}
 
-	// Build reference
-	ref, err := catalog.ParseReference(artifactKind, opts.Reference)
+	sel, err := catalog.ParseExactSelector(opts.Reference, opts.Kind, opts.Origin)
 	if err != nil {
 		w.Errorf("invalid reference %q: %v", opts.Reference, err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Remote tag operation — no local catalog needed.
-	if opts.Catalog != "" {
-		return runTagRemote(ctx, opts, ref)
-	}
-
-	// Local tagging: create local catalog and infer kind if not specified.
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err != nil {
 		err = fmt.Errorf("failed to open local catalog: %w", err)
@@ -136,23 +157,16 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	if artifactKind == "" {
-		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
-		if err != nil {
-			w.Errorf("failed to infer artifact kind: %v", err)
-			w.Infof("Hint: use --kind to specify the artifact kind explicitly")
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-		// Re-parse reference with the inferred kind.
-		ref, err = catalog.ParseReference(artifactKind, opts.Reference)
-		if err != nil {
-			w.Errorf("invalid reference %q: %v", opts.Reference, err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
+	// The local catalog can hold several copies with the same name and
+	// version (built locally, pulled from different catalogs). Select exactly
+	// one, failing with a disambiguation hint rather than picking silently.
+	info, err := localCatalog.ResolveExact(ctx, sel)
+	if err != nil {
+		return tagResolveError(w, opts.CliParams.BinaryName, opts.Alias, err)
 	}
+	ref := info.Reference
 
-	// Tag locally
-	oldVersion, err := localCatalog.Tag(ctx, ref, opts.Alias)
+	oldVersion, err := localCatalog.TagResolved(ctx, info, opts.Alias)
 	if err != nil {
 		if catalog.IsNotFound(err) {
 			w.Errorf("artifact %q not found in local catalog", opts.Reference)
@@ -163,11 +177,26 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 	}
 
 	if oldVersion != "" {
-		w.Warningf("Moved %q from %s → %s", opts.Alias, oldVersion, ref.Version.String())
+		w.Warningf("Moved %q from %s → %s", opts.Alias, oldVersion, ref.VersionOrDigest())
 	}
-	w.Successf("Tagged %s@%s as %q", ref.Name, ref.Version.String(), opts.Alias)
+	w.Successf("Tagged %s@%s as %q", ref.Name, ref.VersionOrDigest(), opts.Alias)
 
 	return nil
+}
+
+// tagResolveError reports a ResolveExact failure for tag with its exit code.
+// Ambiguity errors are followed by one copy-pasteable command per candidate.
+func tagResolveError(w *writer.Writer, binaryName, alias string, err error) error {
+	var ambArtifact *catalog.AmbiguousArtifactError
+	var ambKind *catalog.AmbiguousKindError
+	var hints []string
+	switch {
+	case errors.As(err, &ambArtifact):
+		hints = ambArtifact.TagHints(binaryName, alias)
+	case errors.As(err, &ambKind):
+		hints = ambKind.TagHints(binaryName, alias)
+	}
+	return exactResolveError(w, err, hints)
 }
 
 // runTagRemote tags an artifact in a remote registry.

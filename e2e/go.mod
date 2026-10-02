@@ -9,6 +9,7 @@ require (
 	github.com/oakwood-commons/scafctl v0.46.0
 	github.com/onsi/ginkgo/v2 v2.32.2
 	github.com/onsi/gomega v1.43.0
+	github.com/opencontainers/image-spec v1.1.1
 )
 
 replace github.com/oakwood-commons/scafctl => ../
@@ -86,10 +87,9 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/oakwood-commons/celexp v0.1.0 // indirect
 	github.com/oakwood-commons/kvx v0.16.1 // indirect
-	github.com/oakwood-commons/scafctl-plugin-sdk v0.17.0 // indirect
+	github.com/oakwood-commons/scafctl-plugin-sdk v0.18.0 // indirect
 	github.com/oklog/run v1.2.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
-	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/prometheus/client_golang v1.24.1 // indirect
@@ -144,7 +144,7 @@ require (
 	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
-	google.golang.org/grpc v1.83.1 // indirect
+	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apimachinery v0.37.0 // indirect
