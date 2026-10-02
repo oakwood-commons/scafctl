@@ -23,6 +23,14 @@ const (
 	// testSettle is a generous wait used to confirm that NO notification is
 	// delivered. It must comfortably exceed testDebounce.
 	testSettle = 300 * time.Millisecond
+	// testBurstDebounce is a deliberately generous debounce used only by the
+	// burst-collapse test. A rapid write burst collapses into a single
+	// notification only when every fsnotify event is processed within the
+	// debounce window; a tight window is fragile under CI scheduling jitter,
+	// where the gap between processing the first event and the rest can exceed
+	// it and let an early timer fire mid-burst. A wide window absorbs that
+	// jitter and makes the collapse deterministic.
+	testBurstDebounce = 750 * time.Millisecond
 )
 
 // notifyCall records a single notification delivered to the fake notifier.
@@ -62,10 +70,17 @@ func (f *fakeNotifier) count() int {
 
 // newTestManager creates a manager whose resolver maps the given URIs to files.
 func newTestManager(notifier resourceNotifier, uriToFile map[string]string) *subscriptionManager {
+	return newTestManagerWithDebounce(notifier, uriToFile, testDebounce)
+}
+
+// newTestManagerWithDebounce is like newTestManager but with a caller-chosen
+// debounce window, letting timing-sensitive tests pick a value robust to CI
+// scheduling jitter.
+func newTestManagerWithDebounce(notifier resourceNotifier, uriToFile map[string]string, debounce time.Duration) *subscriptionManager {
 	resolve := func(uri string) string {
 		return uriToFile[uri]
 	}
-	return newSubscriptionManager(notifier, resolve, testDebounce, logr.Discard())
+	return newSubscriptionManager(notifier, resolve, debounce, logr.Discard())
 }
 
 // writeFile writes content to path, failing the test on error.
@@ -194,7 +209,7 @@ func TestSubscriptionManager_DebounceCollapsesBurst(t *testing.T) {
 
 	uri := "solution://" + file + "/graph"
 	notifier := &fakeNotifier{}
-	mgr := newTestManager(notifier, map[string]string{uri: file})
+	mgr := newTestManagerWithDebounce(notifier, map[string]string{uri: file}, testBurstDebounce)
 	defer mgr.Close()
 
 	mgr.Subscribe("session-1", uri)

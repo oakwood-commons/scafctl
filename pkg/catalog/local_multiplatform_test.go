@@ -98,6 +98,55 @@ func TestLocalCatalog_StoreMultiPlatform_AlreadyExists(t *testing.T) {
 	assert.True(t, IsExists(err))
 }
 
+// TestLocalCatalog_StoreMultiPlatform_CoexistsWithPulledCopy verifies the
+// origin-exact duplicate guard: packaging a locally-built multi-platform
+// provider must succeed even when a pulled copy of the same name+version from a
+// remote origin already exists. The two live under distinct tags (the local
+// build under the canonical local tag, the pulled copy under its
+// origin-qualified tag), so the guard must not reject the build as a duplicate.
+func TestLocalCatalog_StoreMultiPlatform_CoexistsWithPulledCopy(t *testing.T) {
+	cat := newTestLocalCatalog(t)
+	ctx := context.Background()
+
+	// A pulled copy from a remote origin occupies an origin-qualified tag.
+	pulledRef := Reference{
+		Kind:    ArtifactKindProvider,
+		Name:    "multi-provider",
+		Version: semver.MustParse("1.0.0"),
+		Origin:  "ghcr.io/source",
+	}
+	annotations := map[string]string{
+		AnnotationOrigin:          "pulled from ghcr.io/source",
+		AnnotationSourceCanonical: "ghcr.io/source",
+	}
+	_, err := cat.Store(ctx, pulledRef, []byte("binary"), nil, annotations, false)
+	require.NoError(t, err)
+
+	// A local multi-platform build of the same name+version (Origin unset).
+	localRef := testPluginRef("multi-provider", "1.0.0")
+	binaries := []PlatformBinary{
+		{Platform: "linux/amd64", Data: []byte("linux-amd64-binary")},
+		{Platform: "darwin/arm64", Data: []byte("darwin-arm64-binary")},
+	}
+	_, err = cat.StoreMultiPlatform(ctx, localRef, binaries, nil, false)
+	require.NoError(t, err, "local multi-platform build must coexist with a pulled copy of the same coordinates")
+
+	// Both copies are present.
+	infos, err := cat.List(ctx, ArtifactKindProvider, "multi-provider")
+	require.NoError(t, err)
+	assert.Len(t, infos, 2, "the local build and the pulled copy must both be stored")
+
+	// The local build resolves the packaged platform binaries.
+	data, _, err := cat.FetchByPlatform(ctx, localRef, "linux/amd64")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("linux-amd64-binary"), data)
+
+	// The pulled copy still resolves via its origin-qualified reference.
+	pulled, err := cat.Resolve(ctx, pulledRef)
+	require.NoError(t, err)
+	assert.Equal(t, "ghcr.io/source", pulled.Reference.Origin)
+}
+
 func TestLocalCatalog_StoreMultiPlatform_Force(t *testing.T) {
 	cat := newTestLocalCatalog(t)
 	ctx := context.Background()

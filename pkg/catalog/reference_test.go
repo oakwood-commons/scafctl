@@ -421,6 +421,7 @@ func TestRemoteReference_ToReference(t *testing.T) {
 		wantName   string
 		wantVer    string
 		wantDigest string
+		wantOrigin string
 		wantErr    bool
 	}{
 		{
@@ -433,6 +434,33 @@ func TestRemoteReference_ToReference(t *testing.T) {
 			wantKind: ArtifactKindSolution,
 			wantName: "my-solution",
 			wantVer:  "1.0.0",
+		},
+		{
+			name: "origin from registry and repository",
+			remote: RemoteReference{
+				Registry:   "ghcr.io",
+				Repository: "myorg/scafctl",
+				Kind:       ArtifactKindSolution,
+				Name:       "my-solution",
+				Tag:        "1.0.0",
+			},
+			wantKind:   ArtifactKindSolution,
+			wantName:   "my-solution",
+			wantVer:    "1.0.0",
+			wantOrigin: "ghcr.io/myorg/scafctl",
+		},
+		{
+			name: "origin from registry only",
+			remote: RemoteReference{
+				Registry: "ghcr.io",
+				Kind:     ArtifactKindSolution,
+				Name:     "my-solution",
+				Tag:      "1.0.0",
+			},
+			wantKind:   ArtifactKindSolution,
+			wantName:   "my-solution",
+			wantVer:    "1.0.0",
+			wantOrigin: "ghcr.io",
 		},
 		{
 			name: "without tag",
@@ -506,6 +534,7 @@ func TestRemoteReference_ToReference(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantKind, ref.Kind)
 			assert.Equal(t, tt.wantName, ref.Name)
+			assert.Equal(t, tt.wantOrigin, ref.Origin)
 			if tt.wantVer != "" {
 				assert.Equal(t, tt.wantVer, ref.Version.String())
 			}
@@ -721,5 +750,58 @@ func BenchmarkReference_VersionOrDigest(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		ref.VersionOrDigest()
+	}
+}
+
+func TestReference_LocalTag(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		ref      Reference
+		expected string
+	}{
+		{
+			name:     "empty origin yields canonical built tag",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol", Version: semver.MustParse("1.2.3")},
+			expected: "solution/sol:1.2.3",
+		},
+		{
+			name:     "LocalOrigin is treated like empty (canonical built tag)",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol", Version: semver.MustParse("1.2.3"), Origin: LocalOrigin},
+			expected: "solution/sol:1.2.3",
+		},
+		{
+			name:     "canonical built tag with digest",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol", Digest: "sha256:abc123", Origin: LocalOrigin},
+			expected: "solution/sol@sha256:abc123",
+		},
+		{
+			name:     "canonical built tag without version or digest",
+			ref:      Reference{Kind: ArtifactKindProvider, Name: "echo"},
+			expected: "provider/echo",
+		},
+		{
+			name:     "remote origin is origin-qualified with plural kind",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol", Version: semver.MustParse("1.2.3"), Origin: "ghcr.io/myorg/scafctl"},
+			expected: "ghcr.io/myorg/scafctl/solutions/sol:1.2.3",
+		},
+		{
+			name:     "remote origin with digest",
+			ref:      Reference{Kind: ArtifactKindSolution, Name: "sol", Digest: "sha256:abc123", Origin: "ghcr.io/myorg/scafctl"},
+			expected: "ghcr.io/myorg/scafctl/solutions/sol@sha256:abc123",
+		},
+		{
+			name:     "remote origin without version or digest",
+			ref:      Reference{Kind: ArtifactKindProvider, Name: "echo", Origin: "ghcr.io/myorg"},
+			expected: "ghcr.io/myorg/providers/echo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.ref.LocalTag())
+		})
 	}
 }

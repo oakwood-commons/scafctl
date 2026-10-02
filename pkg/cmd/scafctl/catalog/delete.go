@@ -26,6 +26,7 @@ type DeleteOptions struct {
 	Force     bool   // Skip confirmation prompt (--force)
 	DryRun    bool   // Show what would be deleted without deleting (--dry-run)
 	Catalog   string // Target catalog for remote delete (URL or config name, --catalog)
+	Local     bool   // Force deletion from the local catalog even for a remote reference (--local)
 	Kind      string // Artifact kind override (--kind)
 	Insecure  bool
 	CliParams *settings.Run
@@ -69,6 +70,9 @@ func CommandDelete(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 
 			  # Delete from a configured catalog
 			  scafctl catalog delete my-solution@1.0.0 --catalog myregistry
+
+			  # Delete the locally-cached copy of a remote artifact (registry untouched)
+			  scafctl catalog delete ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0 --local
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -93,6 +97,7 @@ func CommandDelete(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	cmd.Flags().BoolVarP(&options.Force, "force", "f", false, "Skip confirmation prompt")
 	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be deleted without actually deleting")
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
+	cmd.Flags().BoolVar(&options.Local, "local", false, "Delete the locally-cached copy instead of deleting from the remote registry")
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 
@@ -100,83 +105,185 @@ func CommandDelete(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 }
 
 func runDelete(ctx context.Context, opts *DeleteOptions) error {
-	lgr := logger.FromContext(ctx)
-	w := writer.FromContext(ctx)
+	// --local forces local deletion even for a remote-looking reference or an
+	// explicit --catalog: this evicts the locally-cached copy of a specific
+	// remote origin rather than deleting the artifact from the registry.
+	if opts.Local {
+		return runDeleteLocal(ctx, opts)
+	}
 
-	// Check if this is a remote delete: explicit --catalog flag or remote-looking reference
+	// Otherwise a remote-looking reference or an explicit --catalog targets the
+	// registry; a plain name@version targets the local catalog.
 	if opts.Catalog != "" || looksLikeRemoteReference(opts.Reference) {
 		return runDeleteRemote(ctx, opts)
 	}
 
-	// Parse reference to get name and version
-	name, version := catalog.ParseNameVersion(opts.Reference)
-	if version == "" {
-		w.Error("version required: use format 'name@version' (e.g., 'my-solution@1.0.0')")
-		return exitcode.Errorf("version required")
-	}
+	return runDeleteLocal(ctx, opts)
+}
 
-	// Create local catalog
+// runDeleteLocal deletes an artifact from the local catalog. With a plain
+// name@version it removes a locally-built (or unambiguous) copy; with a full
+// remote reference or --catalog it removes the locally-cached copy of that
+// specific remote origin (origin-qualified), which lets you evict a pulled
+// artifact from the local store without touching the registry.
+func runDeleteLocal(ctx context.Context, opts *DeleteOptions) error {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err != nil {
 		w.Errorf("failed to open catalog: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	// Determine artifact kind - first try --kind flag, then infer from local catalog
-	var artifactKind catalog.ArtifactKind
-	if opts.Kind != "" {
-		kind, ok := catalog.ParseArtifactKind(opts.Kind)
-		if !ok {
-			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
-			return exitcode.Errorf("invalid kind")
-		}
-		artifactKind = kind
-	} else {
-		// Infer kind from local catalog by trying each kind
-		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
-		if err != nil {
-			w.Errorf("failed to infer artifact kind: %v", err)
-			w.Infof("Hint: use --kind to specify the artifact kind explicitly")
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-	}
-
-	// Build reference
-	ref, err := catalog.ParseReference(artifactKind, opts.Reference)
+	ref, err := resolveLocalDeleteRef(ctx, opts, localCatalog)
 	if err != nil {
-		w.Errorf("invalid reference %q: %v", opts.Reference, err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
+		return err
 	}
 
-	// Dry-run mode: show what would be deleted and return
+	// Dry-run mode: show what would be deleted and return. Resolve (not the
+	// origin-agnostic Exists) so the preview validates and displays the same
+	// artifact the real Delete would target -- a short reference matching
+	// copies from multiple origins is surfaced as ambiguous here rather than
+	// falsely reporting that deletion would succeed.
 	if opts.DryRun {
-		// Verify the artifact exists before reporting
-		exists, getErr := localCatalog.Exists(ctx, ref)
+		info, getErr := localCatalog.Resolve(ctx, ref)
 		if getErr != nil {
+			if catalog.IsAmbiguousReference(getErr) {
+				w.Errorf("%v", getErr)
+				return exitcode.WithCode(getErr, exitcode.InvalidInput)
+			}
+			if catalog.IsNotFound(getErr) {
+				w.Errorf("artifact %q not found in local catalog", opts.Reference)
+				return exitcode.WithCode(getErr, exitcode.FileNotFound)
+			}
 			w.Errorf("failed to check artifact: %v", getErr)
 			return exitcode.WithCode(getErr, exitcode.CatalogError)
 		}
-		if !exists {
-			w.Errorf("artifact %q not found in catalog", opts.Reference)
-			return exitcode.WithCode(fmt.Errorf("artifact %q not found in catalog", opts.Reference), exitcode.FileNotFound)
-		}
-		w.Infof("Would delete %s from local catalog", ref.String())
+		w.Infof("Would delete %s from local catalog", localDeleteDisplay(info.Reference))
 		return nil
 	}
 
-	// Delete artifact
 	if err := localCatalog.Delete(ctx, ref); err != nil {
+		if catalog.IsAmbiguousReference(err) {
+			// A short reference matched copies from multiple origins; the error
+			// lists the origin-qualified alternatives to disambiguate.
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
 		if catalog.IsNotFound(err) {
-			w.Errorf("artifact %q not found in catalog", opts.Reference)
+			w.Errorf("artifact %q not found in local catalog", opts.Reference)
 			return exitcode.WithCode(err, exitcode.FileNotFound)
 		}
 		w.Errorf("failed to delete artifact: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	w.Successf("Deleted %s", ref.String())
+	w.Successf("Deleted %s from local catalog", localDeleteDisplay(ref))
 
 	return nil
+}
+
+// resolveLocalDeleteRef builds the local Reference to delete, qualifying it by
+// origin when the input identifies a specific remote (a full remote reference
+// or --catalog) so the correct locally-cached copy is targeted.
+func resolveLocalDeleteRef(ctx context.Context, opts *DeleteOptions, localCatalog *catalog.LocalCatalog) (catalog.Reference, error) {
+	w := writer.FromContext(ctx)
+
+	// Case A: full remote reference -> origin-qualified local identity. The
+	// kind lives in the path, so no local inference is needed.
+	if looksLikeRemoteReference(opts.Reference) {
+		remoteRef, err := catalog.ParseRemoteReference(opts.Reference)
+		if err != nil {
+			w.Errorf("invalid remote reference: %v", err)
+			return catalog.Reference{}, exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		if opts.Kind != "" {
+			kind, ok := catalog.ParseArtifactKind(opts.Kind)
+			if !ok {
+				w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
+				return catalog.Reference{}, exitcode.Errorf("invalid kind")
+			}
+			remoteRef.Kind = kind
+		}
+		// ToReference sets Origin to the remote's canonical identity
+		// (registry[/repository]), matching the origin recorded when the
+		// artifact was pulled into the local store.
+		ref, err := remoteRef.ToReference()
+		if err != nil {
+			w.Errorf("invalid reference: %v", err)
+			return catalog.Reference{}, exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		// A concrete version is required: an empty, "latest", or digest tag all
+		// yield a reference with no Version, which the delete would resolve to an
+		// arbitrary version and then panic on when logging ref.Version.
+		if ref.Version == nil {
+			w.Error("version required: use format 'registry/repo/kind/name@version'")
+			return catalog.Reference{}, exitcode.Errorf("version required")
+		}
+		return ref, nil
+	}
+
+	// Cases B/C: short reference. Version is required.
+	name, version := catalog.ParseNameVersion(opts.Reference)
+	if version == "" {
+		w.Error("version required: use format 'name@version' (e.g., 'my-solution@1.0.0')")
+		return catalog.Reference{}, exitcode.Errorf("version required")
+	}
+
+	// Case B: --catalog qualifies the local copy to that catalog's canonical
+	// identity so the pulled copy from that specific origin is targeted.
+	var origin string
+	if opts.Catalog != "" {
+		catalogURL, err := catalog.ResolveCatalogURL(ctx, opts.Catalog)
+		if err != nil {
+			w.Errorf("%v", err)
+			return catalog.Reference{}, exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		registry, repository := catalog.ParseCatalogURL(catalogURL)
+		origin = registry
+		if repository != "" {
+			origin = registry + "/" + repository
+		}
+	}
+
+	// Determine artifact kind - first try --kind flag, then infer from local catalog.
+	var artifactKind catalog.ArtifactKind
+	if opts.Kind != "" {
+		kind, ok := catalog.ParseArtifactKind(opts.Kind)
+		if !ok {
+			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
+			return catalog.Reference{}, exitcode.Errorf("invalid kind")
+		}
+		artifactKind = kind
+	} else {
+		kind, err := catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version, origin)
+		if err != nil {
+			w.Errorf("failed to infer artifact kind: %v", err)
+			w.Infof("Hint: use --kind to specify the artifact kind explicitly")
+			return catalog.Reference{}, exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		artifactKind = kind
+	}
+
+	ref, err := catalog.ParseReference(artifactKind, opts.Reference)
+	if err != nil {
+		w.Errorf("invalid reference %q: %v", opts.Reference, err)
+		return catalog.Reference{}, exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+	// "" for a plain short ref (Case C), preserving the origin-unqualified
+	// behavior; the remote canonical for the --catalog path (Case B).
+	ref.Origin = origin
+	return ref, nil
+}
+
+// localDeleteDisplay renders the origin-qualified local tag when the reference
+// targets a specific remote origin, and the plain name@version otherwise.
+func localDeleteDisplay(ref catalog.Reference) string {
+	if ref.Origin != "" && ref.Origin != catalog.LocalOrigin {
+		return ref.LocalTag()
+	}
+	return ref.String()
 }
 
 // runDeleteAll deletes all artifacts from the local catalog.
@@ -339,7 +446,7 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 			// Try to infer from local catalog first, then fall back to remote
 			localCatalog, localErr := catalog.NewLocalCatalog(*lgr)
 			if localErr == nil {
-				artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
+				artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version, "")
 			}
 			if artifactKind == "" {
 				// Local inference failed or unavailable; defer to remote inference

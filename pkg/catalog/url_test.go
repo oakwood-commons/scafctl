@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
@@ -212,7 +213,7 @@ metadata:
 `), nil, nil, false)
 	require.NoError(t, err)
 
-	kind, err := InferKindFromLocalCatalog(ctx, cat, "my-sol", "1.0.0")
+	kind, err := InferKindFromLocalCatalog(ctx, cat, "my-sol", "1.0.0", "")
 	require.NoError(t, err)
 	assert.Equal(t, ArtifactKindSolution, kind)
 }
@@ -222,9 +223,52 @@ func TestInferKindFromLocalCatalog_NotFound(t *testing.T) {
 	cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
 	require.NoError(t, err)
 
-	_, err = InferKindFromLocalCatalog(context.Background(), cat, "nonexistent", "")
+	_, err = InferKindFromLocalCatalog(context.Background(), cat, "nonexistent", "", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+}
+
+// TestInferKindFromLocalCatalog_OriginScoped verifies that a non-empty origin
+// scopes inference to that origin's copy. Two origins hold the same name+version
+// under different kinds; an origin-qualified inference must return the kind of
+// the copy actually stored for that origin, not whichever kind another origin
+// happens to hold.
+func TestInferKindFromLocalCatalog_OriginScoped(t *testing.T) {
+	tmpDir := t.TempDir()
+	cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// Origin A: a provider named "thing".
+	provRef := Reference{
+		Kind:    ArtifactKindProvider,
+		Name:    "thing",
+		Version: semver.MustParse("1.0.0"),
+		Origin:  "ghcr.io/a",
+	}
+	_, err = cat.Store(ctx, provRef, []byte("provider"), nil,
+		map[string]string{AnnotationSourceCanonical: "ghcr.io/a"}, false)
+	require.NoError(t, err)
+
+	// Origin B: a solution named "thing".
+	solRef := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "thing",
+		Version: semver.MustParse("1.0.0"),
+		Origin:  "ghcr.io/b",
+	}
+	_, err = cat.Store(ctx, solRef, []byte("name: thing"), nil,
+		map[string]string{AnnotationSourceCanonical: "ghcr.io/b"}, false)
+	require.NoError(t, err)
+
+	// Scoped to origin A -> provider; scoped to origin B -> solution.
+	kindA, err := InferKindFromLocalCatalog(ctx, cat, "thing", "1.0.0", "ghcr.io/a")
+	require.NoError(t, err)
+	assert.Equal(t, ArtifactKindProvider, kindA)
+
+	kindB, err := InferKindFromLocalCatalog(ctx, cat, "thing", "1.0.0", "ghcr.io/b")
+	require.NoError(t, err)
+	assert.Equal(t, ArtifactKindSolution, kindB)
 }
 
 func TestLooksLikeRemoteReference(t *testing.T) {

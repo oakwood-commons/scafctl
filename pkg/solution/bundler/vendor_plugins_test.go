@@ -382,13 +382,20 @@ type fakePlatformDigestCatalog struct {
 	platformsErr error
 	digestByPlat map[string]string
 	fetchErr     map[string]error
+
+	// gotRef records the last reference passed to ListPlatforms/FetchByPlatform
+	// so tests can assert which artifact (including its Origin) digest pinning
+	// was performed against.
+	gotRef catalog.Reference
 }
 
-func (f *fakePlatformDigestCatalog) ListPlatforms(_ context.Context, _ catalog.Reference) ([]string, error) {
+func (f *fakePlatformDigestCatalog) ListPlatforms(_ context.Context, ref catalog.Reference) ([]string, error) {
+	f.gotRef = ref
 	return f.platforms, f.platformsErr
 }
 
-func (f *fakePlatformDigestCatalog) FetchByPlatform(_ context.Context, _ catalog.Reference, platform string) ([]byte, catalog.ArtifactInfo, error) {
+func (f *fakePlatformDigestCatalog) FetchByPlatform(_ context.Context, ref catalog.Reference, platform string) ([]byte, catalog.ArtifactInfo, error) {
+	f.gotRef = ref
 	if err := f.fetchErr[platform]; err != nil {
 		return nil, catalog.ArtifactInfo{}, err
 	}
@@ -505,6 +512,64 @@ func TestVendorPlugins_ResolvesPerPlatformDigests(t *testing.T) {
 		"darwin/arm64": "sha256:bbb",
 		"linux/arm64":  "sha256:ccc",
 	}, lp.Digests)
+}
+
+// TestVendorPlugins_PinsDigestsAgainstResolvedOrigin proves that digest pinning
+// runs against the reference the resolver returned -- including the Origin it
+// recovered from catalog annotations -- rather than a re-derived bare
+// name@version reference. Threading the origin through is what lets digest
+// pinning target the exact origin-qualified copy chosen for the lock entry and
+// avoids a spurious ambiguity error when the local store holds same-version
+// copies from more than one origin.
+func TestVendorPlugins_PinsDigestsAgainstResolvedOrigin(t *testing.T) {
+	ctx := testContext()
+
+	resolver := &mockPluginResolver{
+		plugins: map[string]catalog.ArtifactInfo{
+			"pulled-plugin:provider": {
+				Reference: catalog.Reference{
+					Kind:    catalog.ArtifactKindProvider,
+					Name:    "pulled-plugin",
+					Version: semver.MustParse("1.0.0"),
+					// Origin as the local catalog recovers it from a pulled
+					// artifact's AnnotationSourceCanonical.
+					Origin: "ghcr.io/source",
+				},
+				Digest:    "sha256:manifest-digest",
+				Catalog:   "local",
+				Canonical: "ghcr.io/source",
+			},
+		},
+	}
+
+	// Single-platform artifact: ListPlatforms returns empty and the sole digest
+	// is read via FetchByPlatform. The fake records the reference it received.
+	fakeCat := &fakePlatformDigestCatalog{
+		platforms:    nil,
+		digestByPlat: map[string]string{"linux/amd64": "sha256:content"},
+	}
+
+	plugins := []solution.PluginDependency{
+		{Name: "pulled-plugin", Kind: solution.PluginKindProvider, Version: "^1.0.0"},
+	}
+
+	result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
+		PluginResolver:  resolver,
+		PlatformCatalog: fakeCat,
+		Platform:        "linux/amd64",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.ResolvedPlugins, 1)
+	assert.Equal(t, "sha256:content", result.ResolvedPlugins[0].Digest)
+
+	// The digest lookup must target the resolved origin-qualified reference,
+	// not a bare name@version reference with an empty Origin.
+	assert.Equal(t, "ghcr.io/source", fakeCat.gotRef.Origin,
+		"digest pinning must reuse the resolved reference's Origin")
+	assert.Equal(t, "pulled-plugin", fakeCat.gotRef.Name)
+	require.NotNil(t, fakeCat.gotRef.Version)
+	assert.Equal(t, "1.0.0", fakeCat.gotRef.Version.String())
+	assert.Equal(t, catalog.ArtifactKindProvider, fakeCat.gotRef.Kind)
 }
 
 func TestVendorPlugins_SinglePlatformDigests(t *testing.T) {

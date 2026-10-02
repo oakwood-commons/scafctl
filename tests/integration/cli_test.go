@@ -7254,6 +7254,39 @@ func TestIntegration_CatalogDelete_Success(t *testing.T) {
 	assert.Contains(t, stderr, "not found")
 }
 
+func TestIntegration_CatalogDelete_LocalFlagInHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "delete", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--local")
+	assert.Contains(t, stdout, "locally-cached copy")
+}
+
+func TestIntegration_CatalogDelete_LocalFlag_Success(t *testing.T) {
+	t.Parallel()
+	// Create a temp directory for the catalog
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+
+	// Build a local artifact first
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Delete it via the local catalog using --local
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "resolver-demo@1.0.0", "--local")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Deleted")
+
+	// Verify it's gone from the local catalog
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "inspect", "resolver-demo@1.0.0")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
 // ============================================================================
 // Catalog Prune Command Tests
 // ============================================================================

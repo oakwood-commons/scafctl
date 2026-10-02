@@ -66,8 +66,11 @@ func LooksLikeRemoteReference(ref string) bool {
 }
 
 // InferKindFromLocalCatalog searches the local catalog to determine an artifact's kind.
-// It tries each known artifact kind in order and returns the first match.
-func InferKindFromLocalCatalog(ctx context.Context, localCatalog *LocalCatalog, name, version string) (ArtifactKind, error) {
+// It tries each known artifact kind in order and returns the first match. When
+// origin is non-empty the presence check is origin-qualified, so the kind is
+// inferred from the copy stored for that specific origin -- important when two
+// origins hold same-name/version artifacts of different kinds.
+func InferKindFromLocalCatalog(ctx context.Context, localCatalog *LocalCatalog, name, version, origin string) (ArtifactKind, error) {
 	kinds := []ArtifactKind{
 		ArtifactKindSolution,
 		ArtifactKindProvider,
@@ -88,6 +91,7 @@ func InferKindFromLocalCatalog(ctx context.Context, localCatalog *LocalCatalog, 
 			}
 			ref = parsedRef
 		}
+		ref.Origin = origin
 
 		// Check if artifact exists with this kind
 		exists, err := localCatalog.Exists(ctx, ref)

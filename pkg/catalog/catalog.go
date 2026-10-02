@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -146,7 +147,28 @@ type Reference struct {
 	// Digest is the content digest for pinning (e.g., "sha256:abc123...").
 	// If set, takes precedence over Version for resolution.
 	Digest string `json:"digest,omitempty" yaml:"digest,omitempty" doc:"Content digest for pinning"`
+
+	// Origin is the canonical source identity of the artifact:
+	//   - "registry[/repository]" for an artifact pulled from a remote catalog
+	//     (e.g. "ghcr.io/myorg/scafctl"),
+	//   - LocalOrigin ("local") for a locally-authored artifact,
+	//   - "" for an unqualified reference whose origin has not yet been
+	//     resolved (user input shorthand).
+	//
+	// Origin is part of the addressable identity: within the single shared
+	// local OCI store it is what makes the same logical kind/name/version
+	// pulled from two registries distinct rather than colliding.
+	Origin string `json:"origin,omitempty" yaml:"origin,omitempty" doc:"Canonical source identity (registry[/repository] or 'local')"`
 }
+
+// LocalOrigin is the reserved Origin value for locally-authored artifacts. It
+// mirrors Podman's "localhost/" namespace: locally built artifacts live under
+// their own origin so every stored artifact has a well-defined source identity.
+// It is reserved -- a remote catalog whose canonical identity is exactly this
+// value is rejected (see NewRemoteCatalog) so it can never collide with a real
+// registry. Real registries always have a dot, a port, or the "localhost:PORT"
+// form, so the bare token "local" is safe to reserve.
+const LocalOrigin = "local"
 
 // String returns the canonical reference string (e.g., "my-solution@1.2.3").
 func (r Reference) String() string {
@@ -179,6 +201,67 @@ func (r Reference) VersionOrDigest() string {
 		return r.Digest
 	}
 	return "unknown"
+}
+
+// unresolvedTag is the sentinel returned when a tag is derived from a
+// reference that has neither a version nor a digest. It is intentionally not a
+// valid OCI tag so that resolution fails loudly instead of silently defaulting
+// to "latest"; callers must resolve the version/digest first.
+const unresolvedTag = "__unresolved__"
+
+// RemoteTag returns the OCI tag used to address this artifact inside a remote
+// repository. A remote repository already encodes registry, repository, kind,
+// and name in its URL path, so the tag is just the version or digest — never
+// origin-qualified. This is the ONLY tag form valid for a remote repository,
+// which structurally prevents local origin metadata from leaking into a push.
+func (r Reference) RemoteTag() string {
+	if r.HasDigest() {
+		return r.Digest
+	}
+	if r.HasVersion() {
+		return r.Version.String()
+	}
+	return unresolvedTag
+}
+
+// SourcedReference is a deprecated alias for Reference, kept only so any
+// remaining external references still compile. Origin is now a field on
+// Reference itself; construct a Reference with Origin set instead.
+//
+// Deprecated: use Reference (with its Origin field) directly.
+type SourcedReference = Reference
+
+// LocalTag returns the tag used to address this artifact inside the shared
+// local OCI store. It consolidates both local tag formats in one place:
+//
+//   - Origin unset or LocalOrigin (locally authored): kind/name:version
+//     (or kind/name@digest). The canonical local tag schema.
+//   - Origin set to a remote canonical identity (pulled from a remote):
+//     origin/kind-plural/name:version, matching the remote repository path so
+//     the local tag is globally unique across origins.
+//
+// Note: locally-authored artifacts carry Origin == LocalOrigin as their
+// identity but still tag under the canonical kind/name:version form; unifying
+// the on-disk tag schema across built and pulled artifacts is deferred.
+func (r Reference) LocalTag() string {
+	if r.Origin == "" || r.Origin == LocalOrigin {
+		if r.HasDigest() {
+			return fmt.Sprintf("%s/%s@%s", r.Kind, r.Name, r.Digest)
+		}
+		if r.HasVersion() {
+			return fmt.Sprintf("%s/%s:%s", r.Kind, r.Name, r.Version.String())
+		}
+		return fmt.Sprintf("%s/%s", r.Kind, r.Name)
+	}
+
+	path := fmt.Sprintf("%s/%s/%s", r.Origin, r.Kind.Plural(), r.Name)
+	if r.HasDigest() {
+		return fmt.Sprintf("%s@%s", path, r.Digest)
+	}
+	if r.HasVersion() {
+		return fmt.Sprintf("%s:%s", path, r.Version.String())
+	}
+	return path
 }
 
 // ArtifactInfo contains metadata about a stored artifact.

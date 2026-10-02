@@ -59,6 +59,28 @@ func TestNewRemoteCatalog(t *testing.T) {
 		assert.Equal(t, "company-registry", cat.Name())
 	})
 
+	t.Run("rejects reserved local origin", func(t *testing.T) {
+		t.Parallel()
+		cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+			Registry: LocalOrigin,
+			Logger:   logr.Discard(),
+		})
+		require.Error(t, err)
+		assert.Nil(t, cat)
+		assert.Contains(t, err.Error(), "reserved origin")
+	})
+
+	t.Run("allows registry that merely contains local as a segment", func(t *testing.T) {
+		t.Parallel()
+		cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+			Registry:   LocalOrigin,
+			Repository: "myorg",
+			Logger:     logr.Discard(),
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, cat)
+	})
+
 	t.Run("insecure flag configures transport", func(t *testing.T) {
 		t.Parallel()
 		cat, err := NewRemoteCatalog(RemoteCatalogConfig{

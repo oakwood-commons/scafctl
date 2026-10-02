@@ -135,27 +135,32 @@ func VendorPlugins(ctx context.Context, plugins []solution.PluginDependency, exi
 		digest := info.Digest
 
 		if opts.PlatformCatalog != nil && opts.Platform != "" {
-			ref, refErr := catalog.ParseReference(kind, fmt.Sprintf("%s@%s", p.ArtifactName(), resolvedVersion))
-			if refErr == nil {
-				// platDigests is nil for a single-platform plugin (the invariant
-				// marker); primary is the build-platform content digest.
-				platDigests, primary, pdErr := resolvePlatformDigests(ctx, opts.PlatformCatalog, ref, opts.Platform)
-				if pdErr == nil {
-					digests = platDigests
-					// Primary digest = build platform's content digest. Empty
-					// when a multi-platform artifact omits the build platform;
-					// keep the manifest digest in that case.
-					if primary != "" {
-						digest = primary
-					}
-					lgr.V(1).Info("resolved per-platform digests",
-						"name", p.DisplayName(),
-						"platforms", len(platDigests))
-				} else {
-					lgr.V(1).Info("platform digest resolution failed, using manifest digest",
-						"name", p.DisplayName(),
-						"error", pdErr)
+			// Pin digests against the resolved reference, which already carries
+			// the origin recovered from the catalog's annotations. Reusing it
+			// (instead of re-deriving a bare name@version reference) keeps
+			// digest pinning on the exact artifact chosen for the lock entry:
+			// it resolves the origin-qualified tag directly and avoids a
+			// spurious ambiguity error when the local store holds same-version
+			// copies from more than one origin.
+			//
+			// platDigests is nil for a single-platform plugin (the invariant
+			// marker); primary is the build-platform content digest.
+			platDigests, primary, pdErr := resolvePlatformDigests(ctx, opts.PlatformCatalog, info.Reference, opts.Platform)
+			if pdErr == nil {
+				digests = platDigests
+				// Primary digest = build platform's content digest. Empty
+				// when a multi-platform artifact omits the build platform;
+				// keep the manifest digest in that case.
+				if primary != "" {
+					digest = primary
 				}
+				lgr.V(1).Info("resolved per-platform digests",
+					"name", p.DisplayName(),
+					"platforms", len(platDigests))
+			} else {
+				lgr.V(1).Info("platform digest resolution failed, using manifest digest",
+					"name", p.DisplayName(),
+					"error", pdErr)
 			}
 		}
 

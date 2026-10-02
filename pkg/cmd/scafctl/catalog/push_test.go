@@ -204,6 +204,24 @@ func TestCommandPush_LatestFlag(t *testing.T) {
 	assert.Equal(t, "false", f.DefValue)
 }
 
+func TestResolvePushTargetCatalog(t *testing.T) {
+	t.Parallel()
+
+	t.Run("parses direct catalog URL", func(t *testing.T) {
+		t.Parallel()
+		registry, repository, err := resolvePushTargetCatalog(newCatalogTestCtx(t), "target.example.com/target-repo")
+		require.NoError(t, err)
+		assert.Equal(t, "target.example.com", registry)
+		assert.Equal(t, "target-repo", repository)
+	})
+
+	t.Run("errors on missing catalog", func(t *testing.T) {
+		t.Parallel()
+		_, _, err := resolvePushTargetCatalog(newCatalogTestCtx(t), "")
+		require.Error(t, err)
+	})
+}
+
 func BenchmarkCommandPush(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
