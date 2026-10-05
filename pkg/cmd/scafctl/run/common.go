@@ -17,11 +17,10 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
-	"github.com/oakwood-commons/scafctl/pkg/catalog"
-	catversion "github.com/oakwood-commons/scafctl/pkg/catalog/version"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	pkgfilepath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	inputflags "github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -31,9 +30,10 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -180,6 +180,10 @@ type sharedResolverOptions struct {
 	// fetching the solution. Mutually exclusive with @version in the name.
 	VersionConstraint string
 
+	// Catalog is the --catalog flag value: the catalog to resolve a solution
+	// name from.
+	Catalog string
+
 	// OutputDir is the target directory for action file operations.
 	// When set, actions resolve relative paths against this directory instead of CWD.
 	// Resolvers are unaffected and always use CWD.
@@ -283,7 +287,6 @@ type sharedResolverOptions struct {
 	LockMode string
 
 	// For dependency injection in tests
-	getter   get.Interface
 	registry *provider.Registry
 
 	// discoveryMode controls which file names auto-discovery searches for.
@@ -476,9 +479,11 @@ func (o *sharedResolverOptions) writeResolverOutput(ctx context.Context, results
 //
 // command is the subcommand path (e.g. ["run", "resolver"]).
 // extraArgs are positional args specific to the subcommand (e.g. resolver names).
+// solutionFile is the local solution file whose testdata/ directory receives the
+// snapshot; empty uses ./testdata.
 // results is the full output map; __execution is excluded from assertion derivation
 // but included in the snapshot for normalization purposes.
-func (o *sharedResolverOptions) generateTestOutput(ctx context.Context, command, extraArgs []string, results map[string]any) error {
+func (o *sharedResolverOptions) generateTestOutput(ctx context.Context, command, extraArgs []string, solutionFile string, results map[string]any) error {
 	// For assertion derivation, exclude __execution metadata because it contains
 	// volatile timing data that would create brittle assertions.
 	assertionData := make(map[string]any, len(results))
@@ -503,8 +508,8 @@ func (o *sharedResolverOptions) generateTestOutput(ctx context.Context, command,
 
 	// Determine testdata/ directory relative to the solution file.
 	snapshotDir := "testdata"
-	if o.File != "" && o.File != "-" {
-		snapshotDir = filepath.Join(filepath.Dir(o.File), "testdata")
+	if solutionFile != "" {
+		snapshotDir = filepath.Join(filepath.Dir(solutionFile), "testdata")
 	}
 
 	result, err := soltesting.Generate(&soltesting.GenerateInput{
@@ -784,137 +789,74 @@ func deferredValidationFailures(resolverCtx *resolver.Context) map[string]bool {
 	return failed
 }
 
-// prepareSolutionForExecution loads a solution, sets up the provider registry,
-// and registers the solution provider. It handles bundle extraction, plugin merging,
-// and working directory changes. Returns cleanup function that must be deferred.
-//
-// solutionDir is the directory containing the solution file (empty for stdin/catalog).
-// Callers should use it with provider.WithSolutionDirectory when --base-dir is not set.
-//
-// This method delegates to the standalone prepare.PrepareSolution function,
-// passing CLI-specific options (getter, registry, stdin, metrics).
-func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context) (*solution.Solution, providerLookup, string, func(), func(context.Context) context.Context, error) {
-	w := writer.FromContext(ctx)
+// sourceOptions scopes a solution source by --catalog and --version.
+func (o *sharedResolverOptions) sourceOptions() []source.Option {
+	return []source.Option{
+		source.WithCatalog(o.Catalog),
+		source.WithVersion(o.VersionConstraint),
+	}
+}
 
-	// Assemble prepare options via the shared CLI wiring builder so run and
-	// render prepare solutions identically.
+// splitNamesAndParams splits positional args into names and resolver
+// parameters. Args containing '=' or starting with '@' are parameters, except
+// URLs, which may contain '=' in their query; the rest are names.
+func splitNamesAndParams(args []string) (names, params []string) {
+	for _, arg := range args {
+		if !pkgfilepath.IsURL(arg) && (strings.Contains(arg, "=") || strings.HasPrefix(arg, "@")) {
+			params = append(params, arg)
+		} else {
+			names = append(names, arg)
+		}
+	}
+	return names, params
+}
+
+// newSolutionLoader builds a load.Router wired from ctx with stdin, --no-cache,
+// and the discovery mode.
+func (o *sharedResolverOptions) newSolutionLoader(ctx context.Context) *load.Router {
+	return load.NewRouterFromContext(ctx, *logger.FromContext(ctx),
+		load.CLIRouterOptions(o.stdin(), o.NoCache, o.discoveryMode)...)
+}
+
+// stdin returns the command's stdin reader, or nil when there is none.
+func (o *sharedResolverOptions) stdin() io.Reader {
+	if o.IOStreams == nil || o.IOStreams.In == nil {
+		return nil
+	}
+	return o.IOStreams.In
+}
+
+// prepareSolutionFromSource loads c with loader and prepares it for execution
+// (registry, bundle extraction, provider context).
+func (o *sharedResolverOptions) prepareSolutionFromSource(ctx context.Context, loader load.Loader, c source.Classification) (*solution.Solution, providerLookup, string, func(), func(context.Context) context.Context, error) {
 	opts, err := prepare.OptionsFromContext(ctx, o.cliWiring())
 	if err != nil {
 		return nil, nil, "", func() {}, nil, err
 	}
 
-	// Resolve binary name once for verbose output and user-facing messages.
-	binaryName := settings.CliBinaryName
-	if o.CliParams != nil && o.CliParams.BinaryName != "" {
-		binaryName = o.CliParams.BinaryName
-	}
-
-	// Unified resolution chain for auto-discovery with ambiguity handling.
-	// Only applies when -f is not specified and no positional arg was given.
-	if o.File == "" {
-		getter := get.NewGetterFromContext(ctx)
-		if o.discoveryMode != settings.DiscoveryModeDefault {
-			getter.SetDiscoveryMode(o.discoveryMode)
-		}
-		resolvedPath, resolveErr := get.Resolve(ctx, getter, "", "", get.ResolveOptions{
-			Risk: get.DiscoveryRiskLow,
-		})
-		if resolveErr != nil {
-			return nil, nil, "", func() {}, nil, resolveErr
-		}
-		o.File = resolvedPath
-	}
-
-	// Emit verbose discovery information before loading
-	if w != nil && w.VerboseEnabled() {
-		switch o.File {
-		case "-":
-			w.Verbose("Loading solution from stdin")
-		default:
-			w.Verbosef("Loading solution from: %s", o.File)
-		}
-	}
-
-	result, err := prepare.Solution(ctx, o.File, opts...)
+	result, err := prepare.SolutionFromLoader(ctx, loader, c, opts...)
 	if err != nil {
 		return nil, nil, "", func() {}, nil, err
 	}
-
-	if w != nil {
-		sol := result.Solution
-		name := sol.Metadata.Name
-		var ver string
-		if sol.Metadata.Version != nil {
-			ver = sol.Metadata.Version.String()
-		}
-		source := sol.GetPath()
-
-		if w.VerboseEnabled() {
-			w.Verbosef("Solution loaded: %s (version=%s, dir=%s)",
-				name, ver, result.SolutionDir)
-		}
-
-		// Show a concise summary when verbose is enabled.
-		switch {
-		case name != "" && ver != "" && source != "":
-			w.Verbosef("Solution: %s@%s (%s)", name, ver, source)
-		case name != "" && ver != "":
-			w.Verbosef("Solution: %s@%s", name, ver)
-		case name != "" && source != "":
-			w.Verbosef("Solution: %s (%s)", name, source)
-		case name != "":
-			w.Verbosef("Solution: %s", name)
-		case source != "":
-			w.Verbosef("Solution: %s", source)
-		}
-
-		// Emit discovery-specific informational messages.
-		disc := result.DiscoveredFrom
-		if disc.AlternatePath != "" {
-			if disc.IsActionFile {
-				w.Verbosef("  (solution.yaml also found at %s)", disc.AlternatePath)
-			} else {
-				w.Verbosef("  (actions.yaml also found at %s; use '%s run action' to execute actions)", disc.AlternatePath, binaryName)
-			}
-		}
-	}
-
 	return result.Solution, result.Registry, result.SolutionDir, result.Cleanup, result.ProviderCtx, nil
 }
 
 // cliWiring maps the run command's options onto the neutral prepare.CLIWiring
-// consumed by prepare.OptionsFromContext, deriving the plugin config, metrics
-// sink, stdin, and debug-logging flag from CLI settings.
+// consumed by prepare.OptionsFromContext.
 func (o *sharedResolverOptions) cliWiring() prepare.CLIWiring {
-	w := prepare.CLIWiring{
-		File:          o.File,
-		Getter:        o.getter,
-		Registry:      o.registry,
-		NoCache:       o.NoCache,
-		Strict:        o.Strict,
-		DiscoveryMode: o.discoveryMode,
-		LockMode:      o.LockMode,
-	}
-	if o.IOStreams != nil && o.IOStreams.In != nil {
-		w.Stdin = o.IOStreams.In
-	}
+	w := prepare.NewCLIWiring(o.CliParams)
+	w.Registry = o.registry
+	w.Strict = o.Strict
+	w.LockMode = o.LockMode
 	if o.ShowMetrics && o.IOStreams != nil {
 		w.MetricsOut = o.IOStreams.ErrOut
-	}
-	if o.CliParams != nil {
-		w.PluginConfig = &plugin.ProviderConfig{
-			Quiet:      o.CliParams.IsQuiet,
-			NoColor:    o.CliParams.NoColor,
-			BinaryName: o.CliParams.BinaryName,
-		}
-		w.DebugLogging = logger.IsDebugLevel(o.CliParams.MinLogLevel)
 	}
 	return w
 }
 
 // validateLockMode checks the raw --lock-mode flag value early so an invalid
 // value fails fast with a clear InvalidInput error instead of surfacing deep
-// inside prepareSolutionForExecution (where it would be mislabeled as a
+// inside prepareSolutionFromSource (where it would be mislabeled as a
 // FileNotFound). An empty value is valid and selects the source-based default.
 // Mirrors the early validation done by 'render solution'.
 func (o *sharedResolverOptions) validateLockMode() error {
@@ -923,72 +865,6 @@ func (o *sharedResolverOptions) validateLockMode() error {
 	}
 	_, err := prepare.ParseLockMode(o.LockMode)
 	return err
-}
-
-// resolveVersionConstraintForFile resolves a --version constraint against the
-// catalog and updates o.File to include the best matching version. This must be
-// called before prepareSolutionForExecution when VersionConstraint is non-empty.
-//
-// Only applies when File is a bare catalog name (no path separators or file
-// extensions). For file paths and OCI references, --version is an error.
-func (o *sharedResolverOptions) resolveVersionConstraintForFile(ctx context.Context) error {
-	if o.VersionConstraint == "" {
-		return nil
-	}
-
-	// Check for @version in the name
-	if o.File != "" {
-		if idx := strings.LastIndex(o.File, "@"); idx > 0 {
-			return fmt.Errorf("cannot use --version with an explicit version in reference %q; use one or the other", o.File)
-		}
-	}
-
-	name := o.File
-	if name == "" {
-		return fmt.Errorf("--version requires a catalog name (positional argument or -f flag)")
-	}
-
-	// Only applicable to bare catalog names
-	if !get.IsCatalogReference(name) || strings.Contains(name, "/") {
-		return fmt.Errorf("--version can only be used with catalog names, not file paths or OCI references")
-	}
-
-	// Validate constraint syntax early to fail fast before catalog I/O
-	if err := catversion.ValidateConstraint(o.VersionConstraint); err != nil {
-		return err
-	}
-
-	lgr := logger.FromContext(ctx)
-	localCatalog, err := catalog.NewLocalCatalog(*lgr)
-	if err != nil {
-		return fmt.Errorf("--version requires catalog access: %w", err)
-	}
-
-	remotes := catalog.RemoteCatalogsFromContext(ctx, *lgr)
-	catalogs := make([]catalog.Catalog, 0, 1+len(remotes))
-	catalogs = append(catalogs, localCatalog)
-	catalogs = append(catalogs, remotes...)
-
-	versions, err := catversion.ListCatalogVersions(ctx, catalogs, catalog.ArtifactKindSolution, name)
-	if err != nil {
-		return err
-	}
-
-	bestVersion, err := catversion.BestMatch(versions, o.VersionConstraint)
-	if err != nil {
-		return err
-	}
-
-	if bestVersion == "" {
-		return fmt.Errorf("no versions of %q match constraint %q", name, o.VersionConstraint)
-	}
-
-	if w := writer.FromContext(ctx); w != nil {
-		w.Verbosef("Version constraint %q resolved to %s", o.VersionConstraint, bestVersion)
-	}
-
-	o.File = name + "@" + bestVersion
-	return nil
 }
 
 // addSharedResolverFlags adds common resolver flags to a cobra command.
@@ -1009,6 +885,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().DurationVar(&o.ResolverTimeout, "resolver-timeout", settings.DefaultResolverTimeout, "Timeout per resolver")
 	cCmd.Flags().DurationVar(&o.PhaseTimeout, "phase-timeout", settings.DefaultPhaseTimeout, "Timeout per resolver phase")
 	cCmd.Flags().StringVar(&o.VersionConstraint, "version", "", "Semver version constraint for catalog resolution (e.g., ^1.0.0, ~2.1, >=1.0 <3.0)")
+	flags.AddCatalogFlag(cCmd, &o.Catalog)
 	cCmd.Flags().StringVar(&o.TestName, "test-name", "", "Test name for -o test output (derived from command and args when not set)")
 	cCmd.Flags().StringVar(&o.OutputDir, "output-dir", "", "Target directory for action file operations (actions resolve relative paths here instead of CWD)")
 	cCmd.Flags().StringVar(&o.BaseDir, "base-dir", "", "Override base directory for resolver path resolution (when unset, paths resolve from the solution file's directory when known, otherwise the current directory; use '.' for CWD)")
@@ -1359,17 +1236,6 @@ func buildParamFlagHint(params []string) string {
 		parts = append(parts, fmt.Sprintf("-r %s=<value>", p))
 	}
 	return strings.Join(parts, " ")
-}
-
-// prepareErrorCode maps a solution-preparation failure to its exit code. A
-// solution that still uses removed state configuration keys was found and
-// parsed, so it is invalid input rather than the FileNotFound every other
-// preparation failure reports.
-func prepareErrorCode(err error) int {
-	if errors.Is(err, state.ErrLegacyStateConfig) {
-		return exitcode.InvalidInput
-	}
-	return exitcode.FileNotFound
 }
 
 // handleStateLoadError checks whether a state load error is caused by missing

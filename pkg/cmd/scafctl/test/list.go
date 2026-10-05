@@ -11,8 +11,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -30,6 +31,9 @@ type ListOptions struct {
 	Tag             []string
 	Solution        []string
 
+	// selector overrides the solution source router; tests inject a fake.
+	selector load.Selector
+
 	// kvx output integration
 	flags.KvxOutputFlags
 }
@@ -42,37 +46,41 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 		Use:     "list [name[@version]]",
 		Aliases: []string{"ls", "l"},
 		Short:   "List available tests without executing them",
-		Long: `List all functional tests defined in solution files.
+		Long: fmt.Sprintf(`List all functional tests defined in solution files.
 
 Shows test names, commands, tags, and skip status without running any tests.
 Useful for discovering available tests and verifying test configuration.
 
 Examples:
   # Auto-discover solution in current directory
-  scafctl test list
+  %[1]s test list
 
   # List all tests in a solution
-  scafctl test list -f ./solution.yaml
+  %[1]s test list -f ./solution.yaml
+
+  # List tests from a catalog solution
+  %[1]s test list my-solution@1.0.0
 
   # List tests from a directory
-  scafctl test list --tests-path ./solutions/
+  %[1]s test list --tests-path ./solutions/
 
   # Include builtin tests
-  scafctl test list -f ./solution.yaml --include-builtins
+  %[1]s test list -f ./solution.yaml --include-builtins
 
   # Filter by tag
-  scafctl test list -f ./solution.yaml --tag smoke
+  %[1]s test list -f ./solution.yaml --tag smoke
 
   # Output as JSON
-  scafctl test list -f ./solution.yaml -o json`,
+  %[1]s test list -f ./solution.yaml -o json`, cliParams.BinaryName),
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		PreRunE: func(_ *cobra.Command, args []string) error {
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test list"); err != nil {
+				c, err := source.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test list")
+				if err != nil {
 					return err
 				}
-				if !get.IsUnambiguousCatalogReference(args[0]) {
+				if c.IsUnversionedName() {
 					return fmt.Errorf("bare names are not supported as positional args for test list; use -f to specify a solution file or a versioned catalog ref (name@version)")
 				}
 				opts.File = args[0]
@@ -110,27 +118,15 @@ func runList(ctx context.Context, opts *ListOptions) error {
 		w = writer.New(opts.IOStreams, opts.CliParams)
 	}
 
-	// Determine the path to discover solutions from.
-	// Priority: --tests-path > -f > auto-discover
-	testsPath := opts.TestsPath
-	if testsPath == "" {
-		testsPath = opts.File
+	// Priority: --tests-path > -f/positional arg > auto-discover. A URL,
+	// registry, or catalog reference is fetched to a temp directory.
+	local, err := localSolution(ctx, w, opts.selector, opts.TestsPath, opts.File, testsPathHint)
+	if err != nil {
+		return err
 	}
-	if testsPath == "" {
-		getter := get.NewGetterFromContext(ctx)
-		resolvedPath, resolveErr := get.Resolve(ctx, getter, "", "", get.ResolveOptions{
-			Risk: get.DiscoveryRiskLow,
-		})
-		if resolveErr != nil {
-			if w != nil {
-				w.Errorf("%s", resolveErr)
-			}
-			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
-		}
-		testsPath = resolvedPath
-	}
+	defer func() { _ = local.Close() }()
 
-	solutions, err := soltesting.DiscoverSolutions(testsPath)
+	solutions, err := soltesting.DiscoverSolutions(local.Path)
 	if err != nil {
 		if w != nil {
 			w.Errorf("discovery failed: %s", err)

@@ -368,8 +368,8 @@ func (o *Options) printProviderDetail(ctx context.Context, desc *provider.Descri
 	// Capabilities
 	w.Plainf("%s ", keyStyle("Capabilities:"))
 	caps := make([]string, 0, len(desc.Capabilities))
-	for _, cap := range desc.Capabilities {
-		caps = append(caps, capStyle(string(cap)))
+	for _, cp := range desc.Capabilities {
+		caps = append(caps, capStyle(string(cp)))
 	}
 	w.Plainln(strings.Join(caps, " "))
 
@@ -429,8 +429,8 @@ func (o *Options) printProviderDetail(ctx context.Context, desc *provider.Descri
 	if len(desc.OutputSchemas) > 0 {
 		w.Plainln("")
 		w.Plainln(keyStyle("Output Schemas:"))
-		for cap, schema := range desc.OutputSchemas {
-			w.Plainlnf("  %s", capStyle(string(cap)))
+		for cp, schema := range desc.OutputSchemas {
+			w.Plainlnf("  %s", capStyle(string(cp)))
 			if schema != nil {
 				for name, prop := range schema.Properties {
 					typeStr := prop.Type
@@ -510,8 +510,8 @@ func (o *Options) filterProviders(providers []provider.Provider) []provider.Prov
 		// Check capability filter
 		if o.Capability != "" {
 			hasCapability := false
-			for _, cap := range desc.Capabilities {
-				if strings.EqualFold(string(cap), o.Capability) {
+			for _, cp := range desc.Capabilities {
+				if strings.EqualFold(string(cp), o.Capability) {
 					hasCapability = true
 					break
 				}

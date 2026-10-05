@@ -536,6 +536,7 @@ func TestRemoteCatalog_Resolve_WithVersion(t *testing.T) {
 
 	ctx := t.Context()
 	ref := testRef("resolve-sol", "1.0.0")
+	wantCanonical := cat.canonicalID()
 
 	_, err := cat.Store(ctx, ref, []byte("data"), nil, nil, false)
 	require.NoError(t, err)
@@ -544,6 +545,8 @@ func TestRemoteCatalog_Resolve_WithVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "resolve-sol", info.Reference.Name)
 	assert.NotEmpty(t, info.Digest)
+	assert.Equal(t, wantCanonical, info.Reference.Remote)
+	assert.False(t, info.Reference.Built)
 }
 
 func TestRemoteCatalog_Resolve_Latest(t *testing.T) {
@@ -552,6 +555,7 @@ func TestRemoteCatalog_Resolve_Latest(t *testing.T) {
 	defer ts.Close()
 
 	ctx := t.Context()
+	wantCanonical := cat.canonicalID()
 
 	// Store multiple versions
 	for _, v := range []string{"1.0.0", "2.0.0", "1.5.0"} {
@@ -565,6 +569,7 @@ func TestRemoteCatalog_Resolve_Latest(t *testing.T) {
 	info, err := cat.Resolve(ctx, ref)
 	require.NoError(t, err)
 	assert.Equal(t, "2.0.0", info.Reference.Version.String())
+	assert.Equal(t, wantCanonical, info.Reference.Remote)
 }
 
 func TestRemoteCatalog_Resolve_NotFound(t *testing.T) {
@@ -587,6 +592,7 @@ func TestRemoteCatalog_Resolve_KindlessProbing(t *testing.T) {
 	defer ts.Close()
 
 	ctx := t.Context()
+	wantCanonical := cat.canonicalID()
 
 	// Store a solution with explicit kind
 	ref := Reference{
@@ -607,6 +613,7 @@ func TestRemoteCatalog_Resolve_KindlessProbing(t *testing.T) {
 	assert.Equal(t, "probe-sol", info.Reference.Name)
 	assert.Equal(t, ArtifactKindSolution, info.Reference.Kind)
 	assert.Equal(t, "1.0.0", info.Reference.Version.String())
+	assert.Equal(t, wantCanonical, info.Reference.Remote)
 }
 
 // TestRemoteCatalog_Resolve_KindlessLatest verifies kindless resolve finds
@@ -617,6 +624,7 @@ func TestRemoteCatalog_Resolve_KindlessLatest(t *testing.T) {
 	defer ts.Close()
 
 	ctx := t.Context()
+	wantCanonical := cat.canonicalID()
 
 	// Store multiple versions under provider kind
 	for _, v := range []string{"1.0.0", "3.0.0", "2.0.0"} {
@@ -636,6 +644,7 @@ func TestRemoteCatalog_Resolve_KindlessLatest(t *testing.T) {
 	assert.Equal(t, "probe-prov", info.Reference.Name)
 	assert.Equal(t, ArtifactKindProvider, info.Reference.Kind)
 	assert.Equal(t, "3.0.0", info.Reference.Version.String())
+	assert.Equal(t, wantCanonical, info.Reference.Remote)
 }
 
 func TestRemoteCatalog_ListTags(t *testing.T) {

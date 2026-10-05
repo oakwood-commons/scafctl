@@ -16,7 +16,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
-	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 )
 
 // registerRunTools registers solution execution MCP tools.
@@ -112,7 +111,7 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 		}
 	}
 
-	// Capture caller's CWD before prepare.Solution may os.Chdir to a bundle temp dir.
+	// Capture caller's CWD before preparation may os.Chdir to a bundle temp dir.
 	originalCwd, err := provider.GetWorkingDirectory(ctx)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to get working directory: %v", err),
@@ -121,7 +120,7 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 	}
 
 	// Load solution.
-	prepResult, err := prepare.Solution(ctx, path, s.prepareOptions(ctx)...)
+	prepResult, err := s.prepareSolution(ctx, path)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
 			WithField("path"),

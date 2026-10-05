@@ -121,13 +121,10 @@ func TestParseActionArgs(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		args         []string
-		fileExplicit bool
-		initialFile  string
-		wantNames    []string
-		wantDynamic  []string
-		wantFile     string
+		name        string
+		args        []string
+		wantNames   []string
+		wantDynamic []string
 	}{
 		{
 			name:      "bare words are action names not catalog refs",
@@ -147,23 +144,14 @@ func TestParseActionArgs(t *testing.T) {
 			wantDynamic: []string{"@params.yaml"},
 		},
 		{
-			name:      "URL detected as file when no -f",
+			name:      "URL stays a name",
 			args:      []string{"https://example.com/solution.yaml", "lint"},
-			wantFile:  "https://example.com/solution.yaml",
-			wantNames: []string{"lint"},
+			wantNames: []string{"https://example.com/solution.yaml", "lint"},
 		},
 		{
-			name:         "catalog ref ignored when -f is set",
-			args:         []string{"https://example.com/solution.yaml"},
-			fileExplicit: true,
-			initialFile:  "other.yaml",
-			wantNames:    []string{"https://example.com/solution.yaml"},
-		},
-		{
-			name:      "versioned ref detected as catalog ref",
+			name:      "versioned ref stays a name",
 			args:      []string{"my-app@1.0.0", "test"},
-			wantFile:  "my-app@1.0.0",
-			wantNames: []string{"test"},
+			wantNames: []string{"my-app@1.0.0", "test"},
 		},
 		{
 			name:        "mixed args with bare words",
@@ -182,17 +170,11 @@ func TestParseActionArgs(t *testing.T) {
 			t.Parallel()
 
 			opts := &ActionOptions{}
-			if tc.initialFile != "" {
-				opts.File = tc.initialFile
-			}
-
-			parseActionArgs(tc.args, opts, tc.fileExplicit)
+			parseActionArgs(tc.args, opts)
 
 			assert.Equal(t, tc.wantNames, opts.Names)
 			assert.Equal(t, tc.wantDynamic, opts.DynamicArgs)
-			if tc.wantFile != "" {
-				assert.Equal(t, tc.wantFile, opts.File)
-			}
+			assert.Empty(t, opts.File)
 		})
 	}
 }

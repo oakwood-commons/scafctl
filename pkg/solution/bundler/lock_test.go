@@ -23,6 +23,14 @@ func sourced_plugin(name, kind, registry string) solution.PluginDependency {
 	}
 }
 
+func built_plugin(name string) solution.PluginDependency {
+	return solution.PluginDependency{
+		Name:   name,
+		Kind:   solution.PluginKindProvider,
+		Source: &solution.PluginSource{Built: true},
+	}
+}
+
 func TestLockFile_FindDependency(t *testing.T) {
 	lf := &LockFile{
 		Version: 1,
@@ -135,8 +143,13 @@ func TestLockFile_FindPluginByDep(t *testing.T) {
 	lf := &LockFile{
 		Version: 1,
 		Plugins: []LockPlugin{
+			// Built entry listed first, sharing name+kind with the unsourced
+			// entry below -- neither lookup may return the other.
+			{Name: "echo", Kind: "provider", Version: "9.0.0", Source: &LockPluginSource{Built: true}},
 			// Unsourced (local-catalog) entry: Source is nil.
 			{Name: "echo", Kind: "provider", Version: "1.0.0"},
+			// Unsourced entry with no built counterpart.
+			{Name: "short-only", Kind: "provider", Version: "1.1.0"},
 			// Sourced entries sharing a leaf name across distinct registries --
 			// must be disambiguated by Source.Registry, not collapsed.
 			{Name: "github", Kind: "provider", Version: "1.5.0", Source: &LockPluginSource{Registry: "ghcr.io/orgA"}},
@@ -200,6 +213,22 @@ func TestLockFile_FindPluginByDep(t *testing.T) {
 			dep:  sourced_plugin("github", "auth-handler", "ghcr.io/orgA"),
 		},
 		{
+			name:        "built dep matches the built entry, not the unsourced one",
+			lf:          lf,
+			dep:         built_plugin("echo"),
+			wantVersion: "9.0.0",
+		},
+		{
+			name: "built dep does not match an unsourced entry",
+			lf:   lf,
+			dep:  built_plugin("short-only"),
+		},
+		{
+			name: "built dep does not match a registry entry",
+			lf:   lf,
+			dep:  built_plugin("github"),
+		},
+		{
 			name: "nil lock file",
 			lf:   nil,
 			dep:  solution.PluginDependency{Name: "echo", Kind: solution.PluginKindProvider},
@@ -223,6 +252,9 @@ func TestLockFile_FindPluginByVersionConstraint(t *testing.T) {
 	lf := &LockFile{
 		Version: 1,
 		Plugins: []LockPlugin{
+			// Built entry listed first with the same name, kind, and constraint
+			// as the unsourced entry below -- neither lookup may return the other.
+			{Name: "echo", Kind: "provider", Version: "9.0.0", Constraint: "^1.0.0", Source: &LockPluginSource{Built: true}},
 			// Unsourced entry with explicit constraint.
 			{Name: "echo", Kind: "provider", Version: "1.0.0", Constraint: "^1.0.0"},
 			// Unsourced entry with empty constraint.
@@ -269,6 +301,22 @@ func TestLockFile_FindPluginByVersionConstraint(t *testing.T) {
 			dep:  pluginDepWithConstraint{dep: sourced_plugin("github", "provider", "ghcr.io/orgA"), constraint: "^2.0.0"},
 		},
 		{
+			name:        "built dep matches the built entry by leaf kind and exact constraint",
+			lf:          lf,
+			dep:         pluginDepWithConstraint{dep: built_plugin("echo"), constraint: "^1.0.0"},
+			wantVersion: "9.0.0",
+		},
+		{
+			name: "built dep does not match when constraint differs",
+			lf:   lf,
+			dep:  pluginDepWithConstraint{dep: built_plugin("echo"), constraint: "^2.0.0"},
+		},
+		{
+			name: "built dep does not match a registry entry",
+			lf:   lf,
+			dep:  pluginDepWithConstraint{dep: built_plugin("github"), constraint: "^2.0.0"},
+		},
+		{
 			name: "nil lock file",
 			lf:   nil,
 			dep:  pluginDepWithConstraint{dep: solution.PluginDependency{Name: "echo", Kind: solution.PluginKindProvider}, constraint: "^1.0.0"},
@@ -295,6 +343,10 @@ type pluginDepWithConstraint struct {
 
 func (d pluginDepWithConstraint) HasRegistry() bool {
 	return d.dep.HasRegistry()
+}
+
+func (d pluginDepWithConstraint) HasBuilt() bool {
+	return d.dep.HasBuilt()
 }
 
 func (d pluginDepWithConstraint) Registry() string {
@@ -642,4 +694,30 @@ func TestParseLockJSON_InvalidJSON(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, lf)
 	assert.Contains(t, err.Error(), "parsing lock file")
+}
+
+func TestParseLockYAML(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		wantErr string
+	}{
+		{name: "valid", data: "version: 1\nplugins:\n  - name: p\n    kind: provider\n    version: 1.0.0\n"},
+		{name: "unsupported version", data: "version: 99\n", wantErr: "unsupported lock file version"},
+		{name: "invalid yaml", data: "version: [", wantErr: "parsing lock file"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lf, err := ParseLockYAML([]byte(tt.data))
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Nil(t, lf)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, lf.Plugins, 1)
+			assert.Equal(t, "p", lf.Plugins[0].Name)
+		})
+	}
 }

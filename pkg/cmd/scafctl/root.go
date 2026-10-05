@@ -297,11 +297,6 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 		cliParams.EmbedderVersion = opts.VersionExtra.BuildVersion
 	}
 
-	// Update package-level solution discovery lists so any code reading them
-	// directly (e.g., PossibleSolutionPaths, MCP capabilities) reflects the
-	// embedder's binary name rather than the hardcoded default.
-	settings.SetSolutionDiscovery(settings.SolutionFoldersFor(binaryName), settings.SolutionFileNamesFor(binaryName))
-
 	// Wire embedder-supplied action discovery file names into cliParams
 	// so they are available via settings.FromContext during command execution.
 	if len(opts.ActionDiscoveryFileNames) > 0 {

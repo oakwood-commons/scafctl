@@ -561,7 +561,9 @@ func resolverTypeToJSONSchemaType(t resolver.Type) string {
 		return "string" // ISO 8601 format
 	case "duration":
 		return "string" // Go duration format
+	case resolver.TypeAny:
+		return "" // any — omit type constraint
 	default:
-		return "" // Unknown/any — omit type constraint
+		return "" // Unknown — omit type constraint
 	}
 }

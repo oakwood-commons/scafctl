@@ -185,6 +185,35 @@ func TestFetcher_FetchPlugins_Empty(t *testing.T) {
 	assert.Nil(t, results)
 }
 
+func TestFetcher_BuiltDependency_FailsClosed(t *testing.T) {
+	t.Parallel()
+
+	// A pulled copy of the same name@version must not be served for a
+	// source.built dependency.
+	cat := newMockCatalog()
+	cat.addArtifact(testRef("my-plugin", "1.0.0"), []byte("pulled-binary"))
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    NewCache(t.TempDir()),
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+	dep := solution.PluginDependency{
+		Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0",
+		Source: &solution.PluginSource{Built: true},
+	}
+	ctx := context.Background()
+
+	_, err := f.FetchPlugins(ctx, []solution.PluginDependency{dep}, nil)
+	require.ErrorIs(t, err, ErrBuiltPluginUnsupported)
+
+	_, err = f.FetchPlugin(ctx, dep, nil)
+	require.ErrorIs(t, err, ErrBuiltPluginUnsupported)
+
+	_, err = f.ResolvePlugins(ctx, []solution.PluginDependency{dep})
+	require.ErrorIs(t, err, ErrBuiltPluginUnsupported)
+}
+
 func TestFetcher_FetchPlugins_CacheMiss_FetchFromCatalog(t *testing.T) {
 	cat := newMockCatalog()
 	ref := testRef("my-plugin", "1.0.0")

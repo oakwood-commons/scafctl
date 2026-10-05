@@ -242,8 +242,8 @@ func (m *Manager) execute(ctx context.Context, op string, inputs map[string]any)
 // assertKubeconfigCapability verifies the resolved provider advertises
 // CapabilityKubeconfig.
 func assertKubeconfigCapability(prov provider.Provider) error {
-	for _, cap := range prov.Descriptor().Capabilities {
-		if cap == provider.CapabilityKubeconfig {
+	for _, cp := range prov.Descriptor().Capabilities {
+		if cp == provider.CapabilityKubeconfig {
 			return nil
 		}
 	}

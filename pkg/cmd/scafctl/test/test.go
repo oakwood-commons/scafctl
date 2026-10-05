@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -49,7 +49,7 @@ under a tests/ directory.`, path),
 			opts.AppName = cliParams.BinaryName
 
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test"); err != nil {
+				if _, err := source.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test"); err != nil {
 					opts.positionalPathErr = err
 				} else {
 					opts.File = args[0]

@@ -558,20 +558,6 @@ scafctl catalog inspect example@1.7.0
 scafctl catalog inspect example -o json
 ~~~
 
-### Tagging Artifacts
-
-> **Status**: 📋 Planned
-
-Create version aliases:
-
-~~~bash
-# Tag a solution
-scafctl tag solution my-solution@1.2.3 my-solution:latest
-
-# Tag a plugin
-scafctl tag plugin aws-provider@1.5.0 aws-provider:stable
-~~~
-
 ### Offline Distribution
 
 > **Status**: ✅ Implemented
@@ -602,7 +588,7 @@ Remove an artifact from the local catalog:
 
 ~~~bash
 # Delete specific version (version required)
-scafctl catalog delete example@1.7.0
+scafctl catalog delete solution example@1.7.0
 
 # Prune orphaned blobs after deletion
 scafctl catalog prune

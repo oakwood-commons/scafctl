@@ -98,8 +98,7 @@ var _ = Describe("solution build with external provider", func() {
 
 		pushCmd := utils.Scafctl(
 			"catalog", "push",
-			"test-provider@1.0.0",
-			"--catalog", registryAddr+"/scafctl",
+			registryAddr+"/scafctl/providers/test-provider@1.0.0",
 			"--insecure",
 		).WithEnv(isolatedEnv.Env)
 		pushSession := pushCmd.Exec()
@@ -157,8 +156,7 @@ bundle:
 
 		pushSolutionCmd := utils.Scafctl(
 			"catalog", "push",
-			"external-provider@1.0.0",
-			"--catalog", registryAddr+"/scafctl",
+			registryAddr+"/scafctl/solutions/external-provider@1.0.0",
 			"--insecure",
 		).WithEnv(isolatedEnv.Env)
 		pushSolutionSession := pushSolutionCmd.Exec()

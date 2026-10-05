@@ -5,6 +5,12 @@ weight: 100
 
 # MCP Server for scafctl Solutions
 
+> **Note:** This is the original design evaluation. References to
+> `pkg/solution/get` (`get.Getter`, `get.Interface`, `WithGetter`) and
+> `prepare.Solution()` are historical. Solutions are now loaded through
+> `pkg/solution/load` (`load.Router`, `load.Loader`) and prepared with
+> `prepare.SolutionFromLoader()`.
+
 ## Overview
 
 This document evaluates building a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for scafctl solutions. An MCP server exposes **tools**, **resources**, and **prompts** over JSON-RPC 2.0 (typically via stdio or SSE) so that AI agents (Claude, Copilot, etc.) can discover and invoke them programmatically.

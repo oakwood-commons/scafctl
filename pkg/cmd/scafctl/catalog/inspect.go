@@ -230,7 +230,7 @@ func runInspectRemote(ctx context.Context, opts *InspectOptions, outputOpts *kvx
 	}
 
 	authHandler := resolveAuthHandler(ctx, registry, "")
-	authScope := resolveAuthScopeForRegistry(ctx, registry)
+	authScope := catalog.AuthScopeForRegistry(ctx, registry)
 
 	verboseRemoteInfo(ctx, w, registry, repository, authHandlerName(authHandler), authScope)
 
@@ -312,7 +312,7 @@ func runInspectFromCatalog(ctx context.Context, opts *InspectOptions, outputOpts
 	}
 
 	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
-	authScope := resolveAuthScope(ctx, opts.Catalog)
+	authScope := resolveAuthScope(ctx, registry, opts.Catalog)
 
 	verboseRemoteInfo(ctx, w, registry, repository, authHandlerName(authHandler), authScope)
 
@@ -419,7 +419,7 @@ func runInspectReferrers(ctx context.Context, opts *InspectOptions, outputOpts *
 	}
 
 	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
-	authScope := resolveAuthScope(ctx, opts.Catalog)
+	authScope := resolveAuthScope(ctx, registry, opts.Catalog)
 
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
 		Name:            registry,

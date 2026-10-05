@@ -5,7 +5,7 @@ package mediatypes
 
 // Package mediatypes holds the canonical OCI media-type strings for scafctl
 // solution artifacts that are shared across packages which must not depend on
-// one another (catalog, cache, solution/get).
+// one another (catalog, cache).
 //
 // It deliberately imports nothing, so it can sit at the bottom of the
 // dependency graph and be referenced from anywhere without an import cycle.

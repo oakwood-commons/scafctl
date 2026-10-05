@@ -11,8 +11,10 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	pkgrefactor "github.com/oakwood-commons/scafctl/pkg/refactor"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
@@ -131,6 +133,57 @@ func TestRunRenameResolver_FileNotFound(t *testing.T) {
 	err := runRename(ctx, &renameOptions{File: "/no/such/solution.yaml", CliParams: testCliParams()}, "resolver", pkgrefactor.RenameResolver, "a", "b")
 	require.Error(t, err)
 	assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+}
+
+func TestRunRenameResolver_AutoDiscover(t *testing.T) {
+	t.Parallel()
+
+	path := writeFixture(t, cmdFixture)
+	ctx, bufs := testContext(t)
+	ctx = provider.WithWorkingDirectory(ctx, filepath.Dir(path))
+
+	err := runRename(ctx, &renameOptions{CliParams: testCliParams()}, "resolver", pkgrefactor.RenameResolver, "environment", "env")
+	require.NoError(t, err)
+
+	got, readErr := os.ReadFile(path) //nolint:gosec // test-controlled path
+	require.NoError(t, readErr)
+	assert.Contains(t, string(got), "env:")
+	assert.Contains(t, bufs.out.String(), "Renamed resolver")
+}
+
+func TestRunRenameResolver_AutoDiscoverErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		files   []string
+		wantErr error
+	}{
+		{name: "nothing found", wantErr: load.ErrNoSolutionFound},
+		{name: "ambiguous", files: []string{"solution.yaml", "scafctl.yaml"}, wantErr: load.ErrAmbiguousSolution},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			for _, name := range tt.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(cmdFixture), 0o600))
+			}
+			ctx, bufs := testContext(t)
+			ctx = provider.WithWorkingDirectory(ctx, dir)
+
+			err := runRename(ctx, &renameOptions{CliParams: testCliParams()}, "resolver", pkgrefactor.RenameResolver, "environment", "env")
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+			assert.Contains(t, bufs.errOut.String(), "failed to resolve solution")
+
+			// An ambiguous match must not rewrite any of the candidates.
+			for _, name := range tt.files {
+				got, _ := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // test-controlled path
+				assert.Equal(t, cmdFixture, string(got))
+			}
+		})
+	}
 }
 
 func TestCommandRefactor_Tree(t *testing.T) {

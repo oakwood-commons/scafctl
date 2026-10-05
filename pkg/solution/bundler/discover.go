@@ -114,6 +114,25 @@ func DiscoverFiles(sol *solution.Solution, bundleRoot string, opts ...DiscoverOp
 	return discoverFilesRecursive(sol, bundleRoot, bundleRoot, nil, opts...)
 }
 
+// LocalFileDependencies returns the paths, relative to the directory of
+// solutionPath, of the local files sol depends on (see DiscoverFiles). It is
+// best-effort: a nil solution or a discovery failure returns nil.
+func LocalFileDependencies(sol *solution.Solution, solutionPath string) []string {
+	if sol == nil {
+		return nil
+	}
+	result, err := DiscoverFiles(sol, filepath.Dir(solutionPath))
+	if err != nil || result == nil {
+		return nil
+	}
+
+	deps := make([]string, 0, len(result.LocalFiles))
+	for _, f := range result.LocalFiles {
+		deps = append(deps, f.RelPath)
+	}
+	return deps
+}
+
 // discoverFilesRecursive is the internal recursive implementation of DiscoverFiles.
 // parentBundleRoot is the top-level bundle root used for path normalization.
 // currentRoot is the directory containing the current solution being analyzed.
@@ -492,6 +511,46 @@ func extractLiteralString(inputs map[string]*spec.ValueRef, key string) string {
 }
 
 // classifySource determines whether a source string is a local path or catalog reference.
+//
+// TODO: isLocalPath is checked first and returns true for any value without
+// "@", "://" or a leading "/", so a bare name like "deploy-to-k8s" is
+// classified as a local file and the bare-name branch of isCatalogRef is
+// unreachable from here. These rules also differ from the runtime solution
+// loader's classification, so build and run can disagree on the same source.
+// Consider declaring dependencies explicitly instead of inferring them from
+// literal `source` values.
+//
+// Suggestion: make dependencies declarative and demote static analysis to a
+// check rather than the source of truth (Go modules / Helm / Terraform model):
+//
+//		spec:
+//		  dependencies:
+//		    solutions:
+//		      k8s:                    # alias
+//		        name: deploy-to-k8s
+//		        version: ^2.0.0
+//		        catalog: company      # optional origin pin; required if ambiguous
+//		  resolvers:
+//		    deploy:
+//		      resolve:
+//		        with:
+//		          - provider: solution
+//		            inputs:
+//		              dependency: k8s # alias, not a guessed string
+//
+//	  - No classifier heuristics (isLocalPath/isCatalogRef go away).
+//	  - Origin is explicit, removing cross-origin ambiguity.
+//	  - The lock maps alias -> version + digest + vendored path; the runtime
+//	    resolves the alias through the lock, so `source` is never rewritten
+//	    and build and run share one resolution path.
+//	  - expr: may select among declared aliases (dynamic but safe).
+//	  - bundle.include becomes the sole declaration of bundled files.
+//	  - Static analysis moves to lint ("file provider reads ./x, not in
+//	    bundle.include") and a tidy-style command that writes the declarations,
+//	    mirroring `go mod tidy`.
+//
+// Costs: more YAML (offset by tidy) and a breaking change to `source` catalog
+// refs, with migration of examples/docs/tests.
 func classifySource(source string, localFiles *[]string, catalogRefs *[]CatalogRefEntry) {
 	if isLocalPath(source) {
 		*localFiles = append(*localFiles, source)

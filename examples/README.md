@@ -73,7 +73,7 @@ scafctl get examples -o json
 > ```bash
 > # Package and push a provider to the catalog
 > scafctl package plugin --name my-provider --kind provider --version 1.0.0 --platform linux/amd64=./my-provider
-> scafctl catalog push my-provider@1.0.0 --catalog ghcr.io/myorg
+> scafctl catalog push provider my-provider@1.0.0 --catalog ghcr.io/myorg
 > 
 > # The artifact is stored at: ghcr.io/myorg/providers/my-provider:1.0.0
 > ```
@@ -392,7 +392,7 @@ scafctl package solution -f examples/resolver-demo.yaml --version 2.0.0
 scafctl catalog save resolver-demo@1.0.0 -o resolver-demo-v1.tar
 
 # Delete old versions
-scafctl catalog delete resolver-demo@1.0.0
+scafctl catalog delete solution resolver-demo@1.0.0
 
 # Clean up orphaned blobs
 scafctl catalog prune

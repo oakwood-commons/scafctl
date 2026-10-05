@@ -87,7 +87,7 @@ scafctl plugins install -f my-solution.yaml
 scafctl plugins list
 
 # Push to a remote registry
-scafctl catalog push my-plugin@1.0.0 --catalog ghcr.io/myorg
+scafctl catalog push provider my-plugin@1.0.0 --catalog ghcr.io/myorg
 ```
 
 {{% /tab %}}
@@ -101,7 +101,7 @@ scafctl plugins install -f my-solution.yaml
 scafctl plugins list
 
 # Push to a remote registry
-scafctl catalog push my-plugin@1.0.0 --catalog ghcr.io/myorg
+scafctl catalog push provider my-plugin@1.0.0 --catalog ghcr.io/myorg
 ```
 
 {{% /tab %}}

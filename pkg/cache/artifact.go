@@ -37,6 +37,12 @@ const bundleFileName = "bundle.tar.gz"
 //     media type (e.g. the lock layer); absent when there are none
 //   - meta.json      - creation timestamp, content digest, and the list of
 //     stored layer media types
+//
+// TODO: remove the artifact cache now that solutions are cached in the local
+// catalog. Nothing writes to it anymore; the only callers are no-op
+// invalidations (builder invalidateArtifactCache, catalog/pull.go) and the
+// `cache info` / `cache clear` entries. Also drop paths.ArtifactCacheDir and
+// settings.DefaultArtifactCacheTTL.
 type ArtifactCache struct {
 	dir string
 	ttl time.Duration

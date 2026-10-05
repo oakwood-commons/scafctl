@@ -14,7 +14,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	pkgfilepath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -24,7 +23,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -164,8 +164,7 @@ Examples:
 			cCmd.Flags().Visit(func(f *pflag.Flag) {
 				options.flagsChanged[f.Name] = true
 			})
-			fileExplicit := options.flagsChanged["file"]
-			parseActionArgs(args, options, fileExplicit)
+			parseActionArgs(args, options)
 		},
 		RunE:         makeRunEFunc(cfg, "action"),
 		SilenceUsage: true,
@@ -195,23 +194,12 @@ Examples:
 	return cCmd
 }
 
-// parseActionArgs splits positional args into action names and dynamic parameters.
-// The first positional arg is treated as a catalog/registry reference only if it is
-// unambiguous (versioned ref, registry ref, or URL). Bare names like "deploy" are
-// always treated as action names. Args containing '=' or starting with '@' are
-// always dynamic parameters.
-func parseActionArgs(args []string, options *ActionOptions, fileExplicit bool) {
-	for _, arg := range args {
-		switch {
-		case !fileExplicit && options.File == "" && (pkgfilepath.IsURL(arg) || get.IsUnambiguousCatalogReference(arg)):
-			options.File = arg
-			fileExplicit = true
-		case strings.Contains(arg, "=") || strings.HasPrefix(arg, "@"):
-			options.DynamicArgs = append(options.DynamicArgs, arg)
-		default:
-			options.Names = append(options.Names, arg)
-		}
-	}
+// parseActionArgs splits positional args into names and dynamic parameters.
+// Args containing '=' or starting with '@' are parameters, except URLs; the
+// rest are names. Run decides whether the first name is a solution source
+// (see load.Router.Select); bare names like "deploy" are always action names.
+func parseActionArgs(args []string, options *ActionOptions) {
+	options.Names, options.DynamicArgs = splitNamesAndParams(args)
 }
 
 // getEffectiveActionConfig returns action config values, using app config
@@ -269,7 +257,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	}
 
 	// Validate --lock-mode early so an invalid value fails with InvalidInput
-	// instead of a misleading FileNotFound from prepareSolutionForExecution.
+	// instead of a misleading FileNotFound from prepareSolutionFromSource.
 	if err := o.validateLockMode(); err != nil {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
@@ -320,9 +308,19 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
 	}
 
-	sol, reg, solutionDir, cleanup, providerCtx, err := o.prepareSolutionForExecution(ctx)
+	// Decide where the solution comes from: -f, a solution reference in the
+	// first positional arg, or a discovered file. The remaining args are
+	// action names.
+	loader := o.newSolutionLoader(ctx)
+	sel, err := loader.Select(ctx, o.File, o.Names, load.ArgsAreNames, o.sourceOptions()...)
 	if err != nil {
-		return o.exitWithCode(ctx, err, prepareErrorCode(err))
+		return o.exitWithCode(ctx, err, prepare.ErrorExitCode(err))
+	}
+	names := sel.Args
+
+	sol, reg, solutionDir, cleanup, providerCtx, err := o.prepareSolutionFromSource(ctx, loader.SelectionLoader(sel), sel.Source)
+	if err != nil {
+		return o.exitWithCode(ctx, err, prepare.ErrorExitCode(err))
 	}
 	defer cleanup()
 	if providerCtx != nil {
@@ -368,13 +366,13 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	// Apply action filter
 	workflow := sol.Spec.Workflow
 	{
-		filtered, filterErr := action.FilterWorkflowActions(workflow, o.Names)
+		filtered, filterErr := action.FilterWorkflowActions(workflow, names)
 		if filterErr != nil {
 			return o.exitWithCode(ctx, filterErr, exitcode.InvalidInput)
 		}
 		workflow = filtered
-		if len(o.Names) > 0 {
-			lgr.V(1).Info("action filter applied", "targets", o.Names, "remaining", len(workflow.Actions))
+		if len(names) > 0 {
+			lgr.V(1).Info("action filter applied", "targets", names, "remaining", len(workflow.Actions))
 		}
 	}
 

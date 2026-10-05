@@ -6,20 +6,13 @@ package catalog
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
-	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/logger"
-	"github.com/oakwood-commons/scafctl/pkg/sbom"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
-	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/spf13/cobra"
 )
 
@@ -27,10 +20,10 @@ const catalogFlagUsage = `Target catalog (registry URL or configured catalog nam
 
 // PushOptions holds options for the push command.
 type PushOptions struct {
-	Reference  string // Artifact reference (name@version)
-	Catalog    string // Target catalog (URL or configured catalog name)
-	TargetName string // Optional target name (--as)
-	Kind       string // Artifact kind override (--kind)
+	Reference  string // Artifact reference (full remote reference, or short name for kind subcommands)
+	Catalog    string // Target catalog (URL or configured catalog name, kind subcommands only)
+	TargetName string // Optional name@version the artifact is published as in the remote (--as)
+	Kind       string // Artifact kind (set by the kind subcommands)
 	Force      bool   // Overwrite existing (--force)
 	DryRun     bool   // Show what would be pushed without pushing (--dry-run)
 	Insecure   bool   // Allow HTTP (--insecure)
@@ -42,319 +35,132 @@ type PushOptions struct {
 
 // CommandPush creates the push command.
 func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
-	options := &PushOptions{
-		CliParams: cliParams,
-		IOStreams: ioStreams,
+	options := &pushKindOptions{
+		PushOptions: PushOptions{
+			CliParams: cliParams,
+			IOStreams: ioStreams,
+		},
 	}
 
 	cmd := &cobra.Command{
 		Use:   "push <reference>",
 		Short: "Push an artifact to a remote registry",
-		Long: strings.ReplaceAll(heredoc.Doc(`
-			Push a catalog artifact to a remote OCI registry.
+		Long: heredoc.Docf(`
+			Push a catalog artifact from the local catalog to a remote OCI registry.
 
-			The artifact must exist in the local catalog. Use 'scafctl build'
-			to create artifacts from solution files.
+			The artifact must exist in the local catalog. Use '%[1]s build' to
+			create artifacts from solution files.
 
-			References can be:
-			  - Local name:    my-solution@1.0.0  (requires --catalog or default catalog)
-			  - Full remote:   ghcr.io/myorg/solutions/my-solution@1.0.0
+			The root push command only accepts full remote OCI references. The
+			reference names both the artifact (kind, name and version) and the
+			destination (registry and repository). Use kind subcommands for short
+			references with a --catalog destination:
+			  - %[1]s catalog push solution <name[@version]>
+			  - %[1]s catalog push provider <name[@version]>
+			  - %[1]s catalog push auth-handler <name[@version]>
 
-			If no version is specified, the latest version is pushed.
+			If no version is specified, the latest local version is pushed.
 
-			When using a local name, the target registry is resolved in this order:
-			  1. --catalog flag (URL or configured catalog name)
-			  2. Default catalog from config (set via 'scafctl config use-catalog')
+			When the same name and version exists in the local catalog under several
+			origins (built locally, or pulled from different registries), use --origin
+			to choose which copy to push.
 
-			To configure a default catalog:
-			  scafctl config add-catalog myregistry --type oci --url ghcr.io/myorg --default
+			When using --as, the target must be a concrete name@version, which is
+			the name the artifact is published under in the remote. Bare names, the
+			latest alias, and digest pins are rejected.
 
 			Examples:
 			  # Push using a full remote reference
-			  scafctl catalog push ghcr.io/myorg/solutions/my-solution@1.0.0
+			  %[1]s catalog push ghcr.io/myorg/solutions/my-solution@1.0.0
 
-			  # Push using the configured default catalog
-			  scafctl catalog push my-solution@1.0.0
+			  # Push the locally built copy when several origins hold this version
+			  %[1]s catalog push ghcr.io/myorg/solutions/my-solution@1.0.0 --origin built
 
-			  # Push to a specific registry URL
-			  scafctl catalog push my-solution@1.0.0 --catalog ghcr.io/myorg
-
-			  # Push to a named catalog from config
-			  scafctl catalog push my-solution@1.0.0 --catalog myregistry
-
-			  # Push with a different name
-			  scafctl catalog push my-solution@1.0.0 --as production-solution
+			  # Publish under a different name and version
+			  %[1]s catalog push ghcr.io/myorg/solutions/my-solution@1.0.0 --as production-solution@1.0.0
 
 			  # Force overwrite existing
-			  scafctl catalog push my-solution@1.0.0 --force
-		`), settings.CliBinaryName, cliParams.BinaryName),
+			  %[1]s catalog push ghcr.io/myorg/solutions/my-solution@1.0.0 --force
+		`, cliParams.BinaryName),
 
-		Args:         flags.RequireArg("name@version", cliParams.BinaryName+" catalog push my-solution@1.0.0"),
+		Args:         rootArgs("push", cliParams.BinaryName, flags.RequireArg("reference", cliParams.BinaryName+" catalog push ghcr.io/myorg/solutions/my-solution@1.0.0")),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := reportUnknownKind(cmd, "push", cliParams.BinaryName, args); err != nil {
+				return err
+			}
 			options.Reference = args[0]
 			return runPush(cmd.Context(), options)
 		},
 	}
 
-	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
-	cmd.Flags().StringVar(&options.TargetName, "as", "", "Push with a different artifact name")
-	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
-	cmd.Flags().BoolVarP(&options.Force, "force", "f", false, "Overwrite existing artifact in remote")
-	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be pushed without actually pushing")
-	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
+	cmd.PersistentFlags().StringVar(&options.Origin, "origin", "", pushOriginFlagUsage)
+	cmd.PersistentFlags().StringVar(&options.TargetName, "as", "", "Publish under a different name and version, as name@version (e.g. my-solution@2.0.0)")
+	cmd.PersistentFlags().BoolVarP(&options.Force, "force", "f", false, "Overwrite existing artifact in remote")
+	cmd.PersistentFlags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be pushed without actually pushing")
+	cmd.PersistentFlags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
+	cmd.PersistentFlags().BoolVar(&options.Latest, "latest", false, "Tag the pushed version as 'latest' in the remote registry")
 	cmd.Flags().BoolVar(&options.NoSBOM, "no-sbom", false, "Disable automatic SBOM generation (solutions generate SBOMs by default)")
-	cmd.Flags().BoolVar(&options.Latest, "latest", false, "Tag the pushed version as 'latest' in the remote registry")
+	addPushKindCommands(cmd, cliParams, ioStreams, options)
 
 	return cmd
 }
 
-func runPush(ctx context.Context, opts *PushOptions) error {
-	lgr := logger.FromContext(ctx)
+// runPush pushes the local artifact named by a full remote reference to the
+// registry the reference points at.
+func runPush(ctx context.Context, opts *pushKindOptions) error {
+	return runKind(ctx, "push", opts.Reference, opts,
+		validatePushRoot,
+		buildPushRemoteReference,
+		runPushResolvedBuiltReference)
+}
+
+func buildPushRemoteReference(ctx context.Context, opts *pushKindOptions) (pushReferenceBuild, error) {
 	w := writer.FromContext(ctx)
+	w.Verbose("Pushing to full OCI reference")
 
-	// Create local catalog
-	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	build, err := newPushReferenceBuilder(ctx, opts).
+		parseRemoteReference().
+		rejectDigest().
+		parseOrigin().
+		parseTarget().
+		Build()
 	if err != nil {
-		err = fmt.Errorf("failed to open local catalog: %w", err)
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
+		return pushReferenceBuild{}, err
 	}
 
-	// Determine if this is a remote reference (contains /) or a local name
-	var ref catalog.Reference
-	var registry, repository string
+	verboseRefInfo(w, build.Reference.Name, string(build.Reference.Kind), build.Reference.VersionOrDigest())
 
-	if looksLikeRemoteReference(opts.Reference) {
-		// Remote reference: ghcr.io/myorg/solutions/hello-world@0.1.0
-		w.Verbose("Pushing to full OCI reference")
+	return build, nil
+}
 
-		remoteRef, parseErr := catalog.ParseRemoteReference(opts.Reference)
-		if parseErr != nil {
-			w.Errorf("invalid reference: %v", parseErr)
-			return exitcode.WithCode(parseErr, exitcode.InvalidInput)
-		}
-
-		// Override kind if specified
-		if opts.Kind != "" {
-			kind, ok := catalog.ParseArtifactKind(opts.Kind)
-			if !ok {
-				w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
-				return exitcode.Errorf("invalid kind")
-			}
-			remoteRef.Kind = kind
-		}
-
-		// Convert to local reference for catalog lookup
-		ref, err = remoteRef.ToReference()
-		if err != nil {
-			w.Errorf("invalid reference: %v", err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-
-		// If kind wasn't in the remote ref path, infer from local catalog
-		if ref.Kind == "" {
-			version := ""
-			if ref.Version != nil {
-				version = ref.Version.String()
-			}
-
-			ref.Kind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, ref.Name, version)
-			if err != nil {
-				w.Errorf("failed to infer artifact kind: %v", err)
-				w.Infof("Hint: use --kind to specify the artifact kind explicitly")
-				return exitcode.WithCode(err, exitcode.InvalidInput)
-			}
-		}
-
-		// Extract registry/repository from the remote reference
-		registry = remoteRef.Registry
-		repository = remoteRef.Repository
-
-		verboseRefInfo(w, remoteRef.Name, string(remoteRef.Kind), remoteRef.Tag)
-
-		// --catalog flag conflicts with a full remote reference
-		if opts.Catalog != "" {
-			w.Errorf("cannot use --catalog with a full remote reference")
-			return exitcode.Errorf("conflicting options")
-		}
-	} else {
-		// Local name: hello-world@0.1.0
-		w.Verbosef("Pushing to catalog %q", opts.Catalog)
-
-		name, version := catalog.ParseNameVersion(opts.Reference)
-
-		// Determine artifact kind
-		var artifactKind catalog.ArtifactKind
-		if opts.Kind != "" {
-			kind, ok := catalog.ParseArtifactKind(opts.Kind)
-			if !ok {
-				w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
-				return exitcode.Errorf("invalid kind")
-			}
-			artifactKind = kind
-		} else {
-			artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
-			if err != nil {
-				w.Errorf("failed to infer artifact kind: %v", err)
-				w.Infof("Hint: use --kind to specify the artifact kind explicitly")
-				return exitcode.WithCode(err, exitcode.InvalidInput)
-			}
-		}
-
-		// Build reference
-		ref = catalog.Reference{
-			Kind: artifactKind,
-			Name: name,
-		}
-
-		if version != "" {
-			ref, err = catalog.ParseReference(ref.Kind, opts.Reference)
-			if err != nil {
-				w.Errorf("invalid reference: %v", err)
-				return exitcode.WithCode(err, exitcode.InvalidInput)
-			}
-		}
-
-		// Resolve catalog URL from flag, config name, or default
-		catalogURL, resolveErr := catalog.ResolveCatalogURL(ctx, opts.Catalog)
-		if resolveErr != nil {
-			w.Errorf("%v", resolveErr)
-			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
-		}
-
-		// Parse target catalog URL
-		registry, repository = catalog.ParseCatalogURL(catalogURL)
-		if registry == "" {
-			resolveErr = fmt.Errorf("invalid catalog URL: %s", catalogURL)
-			w.Errorf("%v", resolveErr)
-			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
-		}
+// validatePushRoot performs pure option checks for the root push command: the
+// reference must be a full remote reference that names its artifact kind. It
+// returns plain errors; runKind assigns the exit code.
+func validatePushRoot(opts *pushKindOptions) error {
+	if !looksLikeRemoteReference(opts.Reference) {
+		return fmt.Errorf("%w; use '%s catalog push <kind> <name[@version]> --catalog <catalog>' for short references",
+			ErrRemoteReferenceRequired, cliBinaryName(opts.CliParams))
 	}
 
-	// Resolve to get actual version if not specified
-	info, err := localCatalog.Resolve(ctx, ref)
+	remoteRef, err := catalog.ParseRemoteReference(opts.Reference)
 	if err != nil {
-		if catalog.IsNotFound(err) {
-			w.Errorf("artifact %q not found in local catalog", ref.Name)
-			return exitcode.WithCode(err, exitcode.FileNotFound)
-		}
-		err = fmt.Errorf("failed to resolve artifact: %w", err)
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
-	}
-	ref = info.Reference
-
-	// Dry-run mode: show what would be pushed and return
-	if opts.DryRun {
-		dest := fmt.Sprintf("%s/%s/%s", registry, repository, ref.Kind.Plural())
-		w.Infof("Would push %s@%s to %s/%s", ref.Name, ref.VersionOrDigest(), dest, ref.Name)
-		if opts.TargetName != "" {
-			w.Infof("  --as: would tag as %q in the remote repository", opts.TargetName)
-		}
-		if opts.Force {
-			w.Infof("  --force: would overwrite if exists")
-		}
-		if opts.Latest {
-			w.Infof("  --latest: would tag as \"latest\"")
-		}
-		return nil
+		return fmt.Errorf("invalid reference: %w", err)
 	}
 
-	// Create credential store
-	credStore, err := catalog.NewCredentialStore(*lgr)
+	ref, err := remoteRef.ToReference()
 	if err != nil {
-		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
+		return fmt.Errorf("invalid reference: %w", err)
 	}
 
-	// Resolve auth provider for automatic token bridging
-	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
-	authScope := resolveAuthScope(ctx, opts.Catalog)
-
-	verboseRemoteInfo(ctx, w, registry, repository, authHandlerName(authHandler), authScope)
-
-	// Create remote catalog
-	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
-		Name:            registry,
-		Registry:        registry,
-		Repository:      repository,
-		CredentialStore: credStore,
-		AuthHandler:     authHandler,
-		AuthScope:       authScope,
-		Insecure:        opts.Insecure,
-		Logger:          *lgr,
-	})
-	if err != nil {
-		err = fmt.Errorf("failed to create remote catalog: %w", err)
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
-	}
-
-	// Prepare copy options
-	copyOpts := catalog.CopyOptions{
-		TargetName: opts.TargetName,
-		Force:      opts.Force,
-		OnProgress: func(desc ocispec.Descriptor) {
-			lgr.V(1).Info("copying blob",
-				"digest", desc.Digest.String(),
-				"size", desc.Size)
-		},
-	}
-
-	// Push to remote
-	repoPath := remoteCatalog.RepositoryPath(ref)
-	w.Infof("Pushing %s@%s to %s...", ref.Name, ref.Version.String(), repoPath)
-
-	result, err := remoteCatalog.CopyFrom(ctx, localCatalog, ref, copyOpts)
-	if err != nil {
-		if catalog.IsExists(err) {
-			w.Errorf("artifact already exists in remote (use --force to overwrite)")
-			return exitcode.WithCode(err, exitcode.CatalogError)
-		}
-		err = fmt.Errorf("failed to push artifact: %w", err)
-		w.Errorf("%v", err)
-		hintOnAuthError(ctx, w, registry, err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
-	}
-
-	// Build display name
-	displayName := ref.Name
-	if opts.TargetName != "" {
-		displayName = opts.TargetName
-	}
-
-	w.Successf("Pushed %s@%s (%s)",
-		displayName,
-		ref.Version.String(),
-		format.Bytes(result.Size))
-
-	// Auto-generate and attach SBOM for solutions (unless --no-sbom)
-	if shouldAttachSBOM(ref.Kind, opts.NoSBOM) {
-		if err := attachSBOM(ctx, opts, localCatalog, remoteCatalog, ref); err != nil {
-			w.Warningf("SBOM attachment failed: %v", err)
-			// Non-fatal: the push itself succeeded
+	if ref.Kind == "" {
+		return &catalog.InvalidReferenceError{
+			Input:   opts.Reference,
+			Message: "reference must include the artifact kind, e.g. ghcr.io/myorg/solutions/my-solution@1.0.0",
 		}
 	}
 
-	// Tag as "latest" in the remote registry if requested.
-	// This intentionally bypasses catalog.ValidateAlias (which rejects "latest")
-	// because push --latest is a publish-time concern, not a manual alias operation.
-	if opts.Latest {
-		tagRef := ref
-		if opts.TargetName != "" {
-			tagRef.Name = opts.TargetName
-		}
-		w.Infof("Tagging %s@%s as \"latest\"...", displayName, tagRef.Version.String())
-		_, tagErr := remoteCatalog.Tag(ctx, tagRef, "latest")
-		if tagErr != nil {
-			w.Warningf("failed to tag as latest: %v", tagErr)
-			// Non-fatal: the push itself succeeded
-		} else {
-			w.Successf("Tagged %s@%s as \"latest\"", displayName, ref.Version.String())
-		}
-	}
-
-	return nil
+	return validateTargetName(ref, opts.TargetName)
 }
 
 // shouldAttachSBOM reports whether an SBOM should be generated and attached
@@ -365,43 +171,4 @@ func shouldAttachSBOM(kind catalog.ArtifactKind, noSBOM bool) bool {
 		return false
 	}
 	return kind == catalog.ArtifactKindSolution || kind == ""
-}
-
-// attachSBOM generates an SPDX SBOM from the local solution content and
-// attaches it as a referrer to the pushed remote artifact.
-func attachSBOM(ctx context.Context, opts *PushOptions, localCatalog *catalog.LocalCatalog, remoteCatalog *catalog.RemoteCatalog, ref catalog.Reference) error {
-	w := writer.FromContext(ctx)
-
-	// Fetch the solution content from local catalog
-	contentData, _, err := localCatalog.Fetch(ctx, ref)
-	if err != nil {
-		return fmt.Errorf("failed to fetch local content for SBOM: %w", err)
-	}
-
-	// Parse solution
-	var sol solution.Solution
-	if err := sol.UnmarshalFromBytes(contentData); err != nil {
-		return fmt.Errorf("failed to parse solution for SBOM: %w", err)
-	}
-
-	// Generate SBOM
-	sbomData, err := sbom.Generate(&sol, sbom.GenerateOptions{
-		BinaryName: opts.CliParams.BinaryName,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to generate SBOM: %w", err)
-	}
-
-	// Attach to remote
-	w.Infof("Attaching SBOM to %s@%s...", ref.Name, ref.Version.String())
-
-	desc, err := remoteCatalog.Attach(ctx, ref, sbom.MediaType, sbomData, map[string]string{
-		"org.opencontainers.image.title": fmt.Sprintf("%s-%s.spdx.json", ref.Name, ref.Version.String()),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to attach SBOM: %w", err)
-	}
-
-	w.Successf("SBOM attached (%s)", desc.Digest.String())
-	return nil
 }

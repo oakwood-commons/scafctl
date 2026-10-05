@@ -376,7 +376,7 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 	}
 
 	authHandler := resolveAuthHandler(ctx, registry, "")
-	authScope := resolveAuthScopeForRegistry(ctx, registry)
+	authScope := catalog.AuthScopeForRegistry(ctx, registry)
 
 	verboseRemoteInfo(ctx, w, registry, repository, authHandlerName(authHandler), authScope)
 
@@ -523,7 +523,7 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kinds []catalog
 	}
 
 	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
-	authScope := resolveAuthScope(ctx, opts.Catalog)
+	authScope := resolveAuthScope(ctx, registry, opts.Catalog)
 	discoveryStrategy := resolveDiscoveryStrategy(ctx, opts.Catalog)
 
 	verboseRemoteInfo(ctx, w, registry, repository, authHandlerName(authHandler), authScope)

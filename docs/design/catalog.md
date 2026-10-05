@@ -101,7 +101,7 @@ See [catalog-build-bundling.md](catalog-build-bundling.md) for the full design.
 
 ### Publishing Artifacts
 
-**Command**: `scafctl catalog push <name>@<version> --catalog <registry>` (analogous to `docker push`)
+**Command**: `scafctl catalog push solution <name>@<version> --catalog <registry>` or `scafctl catalog push <registry>/<repository>/solutions/<name>@<version>` (analogous to `docker push`)
 
 Publishes artifacts from the local catalog to a remote catalog, making them discoverable and accessible to other users. The artifact kind is automatically inferred from the local catalog. Use `--kind` to override if needed.
 
@@ -118,12 +118,6 @@ Downloads artifacts from a remote catalog to the local catalog. Pulled artifacts
 **Command**: `scafctl inspect <name>@<version>`
 
 Displays artifact metadata, dependencies, structure, and platform requirements without downloading or building the artifact. For providers, shows available provider names. For auth handlers, shows available handler names.
-
-### Tagging Artifacts
-
-**Command**: `scafctl tag <source> <target>`
-
-Creates aliases for artifact versions (e.g., `artifact@1.2.3` → `artifact:latest` or `artifact:stable`), enabling flexible versioning strategies.
 
 ### Offline Distribution
 
@@ -148,7 +142,7 @@ scafctl load -i aws-provider.tar
 
 ## Versioning
 
-All artifacts follow semantic versioning (e.g., `artifact@1.2.3`). Version tags like `latest` and `stable` can be created using the `scafctl tag` command.
+All artifacts follow semantic versioning (e.g., `artifact@1.2.3`). There are no user-defined alias tags; `latest` resolves to the highest semver version, and `catalog push --latest` also tags the pushed version as `latest` in the remote registry.
 
 ---
 

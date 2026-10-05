@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -36,11 +38,15 @@ type BuildCacheEntry struct {
 }
 
 // ComputeBuildFingerprint computes a SHA-256 fingerprint from the solution content,
-// discovered file contents, plugin versions, and lock file digest.
+// the snapshot's file paths and digests, plugin versions, lock file digest, and
+// the OCI annotations recorded on the artifact.
 //
 // The fingerprint changes when any input to the build changes, enabling
 // incremental builds by skipping the entire pipeline when inputs are unchanged.
-func ComputeBuildFingerprint(solutionContent []byte, bundleRoot string, discoveredFiles []FileEntry, plugins []BundlePluginEntry, lockDigest string) (string, error) {
+// Annotations are included because build provenance (git commit, dirty flag)
+// is stamped onto the artifact without necessarily changing the stored
+// document, so a provenance-only change must still miss the cache.
+func ComputeBuildFingerprint(solutionContent []byte, files *FileSnapshot, plugins []BundlePluginEntry, lockDigest string, annotations map[string]string) string {
 	h := sha256.New()
 
 	// Include solution content
@@ -48,25 +54,14 @@ func ComputeBuildFingerprint(solutionContent []byte, bundleRoot string, discover
 	h.Write(solutionContent)
 	h.Write([]byte{0})
 
-	// Include discovered file contents (sorted for determinism)
-	sortedFiles := make([]FileEntry, len(discoveredFiles))
-	copy(sortedFiles, discoveredFiles)
+	// Include file paths and digests (sorted for determinism)
+	sortedFiles := slices.Clone(files.entries())
 	sort.Slice(sortedFiles, func(i, j int) bool {
 		return sortedFiles[i].RelPath < sortedFiles[j].RelPath
 	})
 
 	for _, f := range sortedFiles {
-		absPath := filepath.Join(bundleRoot, f.RelPath)
-		content, err := os.ReadFile(absPath)
-		if err != nil {
-			// File might not exist yet (e.g., vendored files not yet created)
-			// Include the path name to ensure fingerprint changes if the file appears later
-			h.Write([]byte("missing:" + f.RelPath))
-			h.Write([]byte{0})
-			continue
-		}
-		h.Write([]byte("file:" + f.RelPath + ":"))
-		h.Write(content)
+		h.Write([]byte("file:" + f.RelPath + ":" + f.Digest))
 		h.Write([]byte{0})
 	}
 
@@ -94,7 +89,15 @@ func ComputeBuildFingerprint(solutionContent []byte, bundleRoot string, discover
 		h.Write([]byte{0})
 	}
 
-	return fmt.Sprintf("sha256:%x", h.Sum(nil)), nil
+	// Include artifact annotations (sorted for determinism)
+	for _, k := range slices.Sorted(maps.Keys(annotations)) {
+		h.Write([]byte("annotation:" + k))
+		h.Write([]byte{0})
+		h.Write([]byte(annotations[k]))
+		h.Write([]byte{0})
+	}
+
+	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }
 
 // CheckBuildCache checks if a build cache entry exists for the given fingerprint.

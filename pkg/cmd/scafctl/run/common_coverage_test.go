@@ -490,7 +490,7 @@ func TestSharedResolverOptions_GenerateTestOutput_Basic(t *testing.T) {
 		},
 	}
 
-	err := opts.generateTestOutput(ctx, []string{"run", "resolver"}, []string{}, results)
+	err := opts.generateTestOutput(ctx, []string{"run", "resolver"}, []string{}, opts.File, results)
 	require.NoError(t, err)
 
 	// Output should contain generated test YAML
@@ -520,7 +520,7 @@ func TestSharedResolverOptions_GenerateTestOutput_NoFile(t *testing.T) {
 		"key": "value",
 	}
 
-	err := opts.generateTestOutput(ctx, []string{"run", "resolver"}, nil, results)
+	err := opts.generateTestOutput(ctx, []string{"run", "resolver"}, nil, opts.File, results)
 	require.NoError(t, err)
 	assert.NotEmpty(t, buf.String())
 }
@@ -603,78 +603,34 @@ func TestResolverParametersHelp_ContainsStdinConventions(t *testing.T) {
 	}
 }
 
-// ── resolveVersionConstraintForFile tests ─────────────────────────────────────
+// ── splitNamesAndParams tests ─────────────────────────────────────────────────
 
-func TestResolveVersionConstraintForFile_EmptyConstraint(t *testing.T) {
-	t.Parallel()
-
-	opts := &sharedResolverOptions{
-		File:              "my-app",
-		VersionConstraint: "",
-	}
-	err := opts.resolveVersionConstraintForFile(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, "my-app", opts.File, "should not modify File when constraint is empty")
-}
-
-func TestResolveVersionConstraintForFile_InvalidConstraint(t *testing.T) {
-	t.Parallel()
-
-	opts := &sharedResolverOptions{
-		File:              "my-app",
-		VersionConstraint: "not-valid!!",
-	}
-	err := opts.resolveVersionConstraintForFile(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid version constraint")
-}
-
-func TestResolveVersionConstraintForFile_ConflictWithAtVersion(t *testing.T) {
-	t.Parallel()
-
-	opts := &sharedResolverOptions{
-		File:              "my-app@1.0.0",
-		VersionConstraint: "^1.0.0",
-	}
-	err := opts.resolveVersionConstraintForFile(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot use --version with an explicit version")
-}
-
-func TestResolveVersionConstraintForFile_RequiresCatalogName(t *testing.T) {
-	t.Parallel()
-
-	opts := &sharedResolverOptions{
-		File:              "",
-		VersionConstraint: "^1.0.0",
-	}
-	err := opts.resolveVersionConstraintForFile(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--version requires a catalog name")
-}
-
-func TestResolveVersionConstraintForFile_RejectsFilePaths(t *testing.T) {
+func TestSplitNamesAndParams(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		file string
+		name       string
+		args       []string
+		wantNames  []string
+		wantParams []string
 	}{
-		{"relative path", "./solution.yaml"},
-		{"absolute path", "/tmp/solution.yaml"},
-		{"OCI reference", "ghcr.io/org/app"},
+		{name: "empty"},
+		{name: "names only", args: []string{"a", "b"}, wantNames: []string{"a", "b"}},
+		{name: "params only", args: []string{"k=v", "@f.yaml"}, wantParams: []string{"k=v", "@f.yaml"}},
+		{
+			name:       "mixed keeps order",
+			args:       []string{"my-app@1.0.0", "k=v", "greeting"},
+			wantNames:  []string{"my-app@1.0.0", "greeting"},
+			wantParams: []string{"k=v"},
+		},
+		{name: "URL with = is a name", args: []string{"https://x.test/s.yaml?a=b"}, wantNames: []string{"https://x.test/s.yaml?a=b"}},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			opts := &sharedResolverOptions{
-				File:              tc.file,
-				VersionConstraint: "^1.0.0",
-			}
-			err := opts.resolveVersionConstraintForFile(context.Background())
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "--version can only be used with catalog names")
+			names, params := splitNamesAndParams(tc.args)
+			assert.Equal(t, tc.wantNames, names)
+			assert.Equal(t, tc.wantParams, params)
 		})
 	}
 }

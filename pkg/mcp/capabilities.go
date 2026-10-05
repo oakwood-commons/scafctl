@@ -5,15 +5,15 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	pathlib "path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/oakwood-commons/scafctl/pkg/filepath"
-	"github.com/oakwood-commons/scafctl/pkg/settings"
-	solutionget "github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 )
 
 // discoverWorkspaceRoots asks the MCP client for its workspace root directories
@@ -38,64 +38,46 @@ func (s *Server) discoverWorkspaceRoots(ctx context.Context) []string {
 	return paths
 }
 
-// discoverSolutionFiles searches for solution files using the unified resolution
-// chain (FindAllSolutions) which respects taskfile.yaml/yml and returns matches
-// in priority order. It also searches MCP workspace roots if provided by the
-// client. Returns all discovered file paths, or nil if none found.
+// discoverSolutionFiles finds solution files in ctx's working directory and in
+// the MCP client's workspace roots. Returns the absolute paths, or nil if none
+// are found.
 func (s *Server) discoverSolutionFiles(ctx context.Context) []string {
-	var files []string
-
-	// 1. Use the unified discovery logic (searches CWD-relative paths)
-	solutionFolders := settings.SolutionFoldersFor(s.name)
-	solutionFileNames := settings.SolutionFileNamesFor(s.name)
-	getter := solutionget.NewGetter(
-		solutionget.WithLogger(s.logger),
-		solutionget.WithSolutionDiscovery(solutionFolders, solutionFileNames),
-	)
-	for _, result := range getter.FindAllSolutions() {
-		files = append(files, result.Path)
-	}
-
-	// 2. Also search MCP workspace roots using the same file name patterns
-	roots := s.discoverWorkspaceRoots(ctx)
-	for _, root := range roots {
-		for _, folder := range solutionFolders {
-			for _, filename := range solutionFileNames {
-				fullPath := filepath.Join(root, folder, filename)
-				if filepath.PathExists(fullPath, nil) {
-					// Deduplicate against already-found files
-					if !containsPath(files, fullPath) {
-						files = append(files, fullPath)
-					}
-				}
-			}
-		}
-	}
-
-	if len(files) == 0 {
-		return nil
-	}
-	return files
+	return findSolutionFiles(ctx, s.name, s.discoverWorkspaceRoots(ctx))
 }
 
-// containsPath checks if a path is already in the slice using absolute path
-// comparison to handle cases where CWD-relative and workspace-root-relative
-// paths resolve to the same file.
-func containsPath(paths []string, target string) bool {
-	absTarget := target
-	if abs, err := pathlib.Abs(target); err == nil {
-		absTarget = abs
-	}
-	for _, p := range paths {
-		absP := p
-		if abs, err := pathlib.Abs(p); err == nil {
-			absP = abs
+// findSolutionFiles runs auto-discovery (load.DiscoverLoader) in ctx's working
+// directory and then in each of roots, and returns the absolute paths of every
+// solution file found, in priority order and without duplicates. Taskfiles that
+// are not solutions (such as go-task files) are skipped. Returns nil when
+// nothing is found.
+func findSolutionFiles(ctx context.Context, binaryName string, roots []string) []string {
+	discoverer := load.NewDiscoverLoader(nil, binaryName)
+	lgr := logger.FromContext(ctx)
+
+	var files []string
+	seen := make(map[string]struct{})
+	search := func(ctx context.Context) {
+		found, err := discoverer.Discover(ctx)
+		if err != nil {
+			if !errors.Is(err, load.ErrNoSolutionFound) {
+				lgr.V(1).Info("solution discovery failed", "error", err)
+			}
+			return
 		}
-		if absP == absTarget {
-			return true
+		for _, d := range found {
+			if _, dup := seen[d.Path]; dup {
+				continue
+			}
+			seen[d.Path] = struct{}{}
+			files = append(files, d.Path)
 		}
 	}
-	return false
+
+	search(ctx)
+	for _, root := range roots {
+		search(provider.WithWorkingDirectory(ctx, root))
+	}
+	return files
 }
 
 // elicitMissingParams uses the MCP elicitation capability to prompt the user

@@ -6,8 +6,6 @@ package prepare
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,8 +14,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
-	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 )
 
 // applyOptions applies the given options to a fresh prepareConfig for
@@ -63,45 +59,6 @@ func TestParseLockMode(t *testing.T) {
 	}
 }
 
-func TestLoadAdjacentLockFile(t *testing.T) {
-	t.Parallel()
-
-	t.Run("returns nil when no lock file exists", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		solutionPath := filepath.Join(dir, "solution.yaml")
-		require.NoError(t, os.WriteFile(solutionPath, []byte("kind: Solution\n"), 0o600))
-
-		lf, err := loadAdjacentLockFile(solutionPath)
-		require.NoError(t, err)
-		assert.Nil(t, lf)
-	})
-
-	t.Run("returns an error for a malformed lock file", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		solutionPath := filepath.Join(dir, "solution.yaml")
-		lockPath := filepath.Join(dir, bundler.DefaultLockFileName)
-		require.NoError(t, os.WriteFile(lockPath, []byte("::: not valid yaml :::"), 0o600))
-
-		lf, err := loadAdjacentLockFile(solutionPath)
-		require.Error(t, err)
-		assert.Nil(t, lf)
-	})
-
-	t.Run("loads an adjacent lock file", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		solutionPath := filepath.Join(dir, "solution.yaml")
-		lockPath := filepath.Join(dir, bundler.DefaultLockFileName)
-		require.NoError(t, os.WriteFile(lockPath, []byte("version: 1\nplugins: []\n"), 0o600))
-
-		lf, err := loadAdjacentLockFile(solutionPath)
-		require.NoError(t, err)
-		require.NotNil(t, lf)
-	})
-}
-
 func TestOptionsFromContext_Defaults(t *testing.T) {
 	t.Parallel()
 
@@ -109,10 +66,7 @@ func TestOptionsFromContext_Defaults(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := applyOptions(t, opts)
-	assert.Nil(t, cfg.getter)
 	assert.Nil(t, cfg.registry)
-	assert.Nil(t, cfg.stdin)
-	assert.False(t, cfg.noCache)
 	assert.False(t, cfg.strict)
 	assert.Nil(t, cfg.pluginCfg)
 	assert.Equal(t, LockMode(0), cfg.lockMode, "no --lock-mode leaves the mode unset for source-based default")
@@ -122,27 +76,20 @@ func TestOptionsFromContext_ScalarFields(t *testing.T) {
 	t.Parallel()
 
 	reg := provider.NewRegistry()
-	var stdin bytes.Buffer
 	var metrics bytes.Buffer
 	pluginCfg := &plugin.ProviderConfig{Quiet: true, NoColor: true, BinaryName: "mycli"}
 
 	opts, err := OptionsFromContext(context.Background(), CLIWiring{
-		Registry:      reg,
-		Stdin:         &stdin,
-		NoCache:       true,
-		Strict:        true,
-		DiscoveryMode: settings.DiscoveryModeAction,
-		MetricsOut:    &metrics,
-		PluginConfig:  pluginCfg,
+		Registry:     reg,
+		Strict:       true,
+		MetricsOut:   &metrics,
+		PluginConfig: pluginCfg,
 	})
 	require.NoError(t, err)
 
 	cfg := applyOptions(t, opts)
 	assert.Same(t, reg, cfg.registry)
-	assert.Same(t, &stdin, cfg.stdin)
-	assert.True(t, cfg.noCache)
 	assert.True(t, cfg.strict)
-	assert.Equal(t, settings.DiscoveryModeAction, cfg.discoveryMode)
 	assert.True(t, cfg.showMetrics)
 	assert.Same(t, &metrics, cfg.metricsOut)
 	assert.Same(t, pluginCfg, cfg.pluginCfg)
@@ -201,25 +148,4 @@ func TestOptionsFromContext_DebugLogging(t *testing.T) {
 	optsOn, err := OptionsFromContext(context.Background(), CLIWiring{DebugLogging: true})
 	require.NoError(t, err)
 	assert.NotEmpty(t, applyOptions(t, optsOn).clientOpts)
-}
-
-func TestOptionsFromContext_AdjacentLockFile(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	solutionPath := filepath.Join(dir, "solution.yaml")
-	lockPath := filepath.Join(dir, bundler.DefaultLockFileName)
-	require.NoError(t, os.WriteFile(lockPath, []byte("version: 1\nplugins: []\n"), 0o600))
-
-	opts, err := OptionsFromContext(context.Background(), CLIWiring{File: solutionPath})
-	require.NoError(t, err)
-	cfg := applyOptions(t, opts)
-	assert.NotNil(t, cfg.lockFile, "an adjacent lock file should be wired via WithLockFile")
-
-	t.Run("stdin does not load a lock file", func(t *testing.T) {
-		t.Parallel()
-		stdinOpts, err := OptionsFromContext(context.Background(), CLIWiring{File: "-"})
-		require.NoError(t, err)
-		assert.Nil(t, applyOptions(t, stdinOpts).lockFile)
-	})
 }

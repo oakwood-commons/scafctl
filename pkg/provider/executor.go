@@ -68,8 +68,8 @@ func validateExecutionMode(ctx context.Context, desc *Descriptor) error {
 	}
 
 	// Check if the execution mode matches declared capabilities
-	for _, cap := range desc.Capabilities {
-		if cap == execMode {
+	for _, cp := range desc.Capabilities {
+		if cp == execMode {
 			return nil
 		}
 	}
@@ -85,6 +85,8 @@ func isReadOnlyResolverMode(mode Capability) bool {
 	switch mode {
 	case CapabilityFrom, CapabilityTransform, CapabilityValidation:
 		return true
+	case CapabilityAuthentication, CapabilityAction, CapabilityState, CapabilityKubeconfig:
+		return false
 	default:
 		return false
 	}

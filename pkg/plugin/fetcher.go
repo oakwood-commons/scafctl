@@ -33,6 +33,13 @@ var ErrDedupTimeout = errors.New("operation timed out while waiting for concurre
 // catalog.
 var ErrBuiltinProvider = errors.New("built-in provider cannot be fetched from a catalog")
 
+// ErrBuiltPluginUnsupported is returned when a source.built plugin dependency
+// reaches the runtime fetcher. Built deps can be locked and vendored at build
+// time, but the fetcher cannot yet select the locally built copy, so it fails
+// closed rather than serving a pulled or cached copy of the same name@version.
+// See TODO(built-plugins) in doFetchOne.
+var ErrBuiltPluginUnsupported = errors.New("source.built plugin dependencies are not supported at runtime yet; use source.registry or a short name")
+
 type resolver interface {
 	resolvePlugin(ctx context.Context, kind catalog.ArtifactKind, name, version, catalogName string) (catalog.ArtifactInfo, error)
 }
@@ -57,6 +64,7 @@ type localNamer interface {
 }
 type registryInfo interface {
 	HasRegistry() bool
+	HasBuilt() bool
 	Registry() string
 }
 type pluginArtifact interface {
@@ -72,6 +80,27 @@ var _ pluginArtifact = solution.PluginDependency{}
 
 // Fetcher resolves, downloads, caches, and loads plugin binaries at runtime.
 // It checks a local cache first, then falls back to fetching from catalogs.
+//
+// TODO(plugin-fetcher-origin): this fetcher predates origin-aware local
+// catalog storage (built vs. pulled copies keyed by Reference.Built /
+// Reference.Remote) and has not been migrated. Known breakage:
+//   - Lookups: catalog.PluginFetcher builds origin-less name@version refs, so
+//     against the local catalog they are annotation searches that fail with
+//     AmbiguousArtifactError when a built copy and a pulled copy (or copies
+//     from several remotes) coexist. dep.Registry()/HasBuilt() are never
+//     passed down as a catalog.SourceSelector.
+//   - Binary cache: entries are keyed by the registry hash of the catalog
+//     alias that served the fetch (resolvedFrom / fetchInfo.Catalog, e.g. the
+//     local catalog), not by the artifact's origin. A built plugin and a
+//     pulled copy of the same name@version share one cache slot and can serve
+//     each other, while a pulled copy served from the local catalog is cached
+//     under a different hash than the same artifact fetched from its remote,
+//     so tryCachedAcrossCatalogs misses it.
+//
+// Needed: thread the dep's origin through resolve/fetch as a SourceSelector,
+// and key the binary cache (and lock ResolvedFrom) on the served artifact's
+// origin (Reference.Remote, or a dedicated "built" key) instead of the
+// serving catalog alias.
 type Fetcher struct {
 	binaryName     string
 	catalogFetcher *catalog.PluginFetcher
@@ -216,6 +245,9 @@ func (s *Fetcher) ResolvePlugins(ctx context.Context, deps []solution.PluginDepe
 func resolvePlugins[T pluginArtifact](ctx context.Context, s resolver, deps []T) ([]catalog.ArtifactInfo, error) {
 	infos, err := mapConcurrent(ctx, settings.DefaultResolveConcurrency, deps,
 		func(ctx context.Context, dep T) (catalog.ArtifactInfo, error) {
+			if dep.HasBuilt() {
+				return catalog.ArtifactInfo{}, fmt.Errorf("plugin %s (%s): %w", dep.DisplayName(), dep.PluginKind(), ErrBuiltPluginUnsupported)
+			}
 			return s.resolvePlugin(ctx, catalog.ArtifactKind(dep.PluginKind()),
 				dep.ArtifactName(), dep.VersionConstraint(), dep.CatalogName())
 		})
@@ -564,6 +596,19 @@ type resolvedPlugin struct {
 // locked is the dependency's pre-resolved lock entry (nil when the dependency is
 // not pinned), so this path never re-derives it from the raw dep.
 func (f *Fetcher) doFetchOne(ctx context.Context, dep pluginArtifact, locked *bundler.LockPlugin) (FetchResult, error) {
+	// TODO(built-plugins): there is no fetch path for source.built deps yet.
+	// The lock lookup now returns built entries (Source.Built), but
+	// resolveFromLock/resolveFromCatalog/fetchAndVerify only know remote and
+	// short-name catalogs, and a built entry has no ResolvedCanonical to map
+	// back to a catalog. Needed: resolve built deps against the local catalog
+	// (catalog.SourceBuilt selector) and verify against the lock digest; and
+	// decide what happens when the bundle runs on a machine without that local
+	// build (embed the binary in the bundle, or fail with a clear error).
+	// Until then built deps fail closed here, before the origin-less cache and
+	// catalog lookups could serve a pulled copy of the same name@version.
+	if dep.HasBuilt() {
+		return FetchResult{}, ErrBuiltPluginUnsupported
+	}
 	kind := pluginKindToArtifactKind(dep.PluginKind())
 
 	// Determine whether the lock entry is usable for this dep's current

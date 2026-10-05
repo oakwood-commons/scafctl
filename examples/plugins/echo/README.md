@@ -17,7 +17,7 @@ go build -o echo-plugin main.go
 scafctl package plugin --name echo --kind provider --version 1.0.0 --platform linux/amd64=./echo
 
 # Push to remote registry
-scafctl catalog push echo@1.0.0 --catalog ghcr.io/myorg
+scafctl catalog push provider echo@1.0.0 --catalog ghcr.io/myorg
 # Result: ghcr.io/myorg/providers/echo:1.0.0
 ```
 

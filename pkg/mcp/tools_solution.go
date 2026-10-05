@@ -28,7 +28,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/effective"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
-	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -199,7 +198,7 @@ func (s *Server) registerSolutionTools() {
 		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Path to solution YAML file or directory containing solution files with tests"),
+			mcp.Description("Solution YAML file or directory containing solution files with tests, or a URL or catalog reference (name[@version])"),
 		),
 		mcp.WithString("filter",
 			mcp.Description("Glob pattern to filter test names (e.g., 'render-*', 'validation-*')"),
@@ -429,8 +428,8 @@ func (s *Server) handleLintSolution(_ context.Context, request mcp.CallToolReque
 		), nil
 	}
 
-	// Use prepare.Solution which handles catalog resolution and registry setup
-	prepResult, err := prepare.Solution(ctx, file, s.prepareOptions(ctx)...)
+	// Load and prepare the solution (catalog resolution and registry setup).
+	prepResult, err := s.prepareSolution(ctx, file)
 	if err != nil {
 		errMsg := err.Error()
 
@@ -516,7 +515,7 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 		}
 	}
 
-	// Capture caller's CWD before prepare.Solution may os.Chdir to a bundle temp dir
+	// Capture caller's CWD before preparation may os.Chdir to a bundle temp dir
 	originalCwd, err := provider.GetWorkingDirectory(ctx)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to get working directory: %v", err),
@@ -524,8 +523,8 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 		), nil
 	}
 
-	// Load solution via prepare.Solution
-	prepResult, err := prepare.Solution(ctx, path, s.prepareOptions(ctx)...)
+	// Load and prepare the solution
+	prepResult, err := s.prepareSolution(ctx, path)
 	if err != nil {
 		errMsg := err.Error()
 
@@ -793,7 +792,7 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	}
 
 	// Load solution
-	prepResult, err := prepare.Solution(ctx, path, s.prepareOptions(ctx)...)
+	prepResult, err := s.prepareSolution(ctx, path)
 	if err != nil {
 		errMsg := err.Error()
 
@@ -1136,24 +1135,16 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 		), nil
 	}
 
-	// Resolve relative path against the working directory
-	path, err = provider.AbsFromContext(ctx, path)
-	if err != nil {
-		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("failed to resolve path: %v", err),
-			WithField("path"),
-		), nil
+	// Resolve a local path against the working directory, or fetch a
+	// URL, registry, or catalog reference.
+	local, errResult := localSolution(ctx, path)
+	if errResult != nil {
+		return errResult, nil
 	}
-
-	// Verify the path exists
-	if _, err := os.Stat(path); err != nil {
-		return newStructuredError(ErrCodeNotFound, fmt.Sprintf("path not found: %v", err),
-			WithField("path"),
-			WithSuggestion("Check the path exists and is accessible"),
-		), nil
-	}
+	defer func() { _ = local.Close() }()
 
 	// Discover solutions with tests
-	solutions, err := soltesting.DiscoverSolutions(path)
+	solutions, err := soltesting.DiscoverSolutions(local.Path)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("test discovery failed: %v", err),
 			WithField("path"),
@@ -1190,6 +1181,9 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 	}
 
 	// Build runner
+	// TODO: drop IOStreams (pre-existing since #88). Runner never reads it --
+	// each test captures its output in a buffer -- so os.Stdout here does not
+	// reach the stdio MCP stream today, but it would if Runner started using it.
 	runner := &soltesting.Runner{
 		BinaryPath:  binaryPath,
 		Concurrency: 1, // Sequential for MCP to keep output clean

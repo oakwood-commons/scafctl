@@ -59,6 +59,44 @@ spec:
 	assert.Equal(t, StaticAnalysis, result.LocalFiles[0].Source)
 }
 
+func TestLocalFileDependencies(t *testing.T) {
+	sol := &solution.Solution{}
+	require.NoError(t, sol.UnmarshalFromBytes([]byte(`
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test
+  version: 1.0.0
+spec:
+  resolvers:
+    myFile:
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              path: "templates/main.tmpl"
+              operation: read
+`)))
+
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "templates"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "templates", "main.tmpl"), []byte("hello"), 0o644))
+
+	t.Run("relative to the solution directory", func(t *testing.T) {
+		deps := LocalFileDependencies(sol, filepath.Join(tmpDir, "solution.yaml"))
+		assert.Equal(t, []string{"templates/main.tmpl"}, deps)
+	})
+
+	t.Run("missing file is not a dependency", func(t *testing.T) {
+		deps := LocalFileDependencies(sol, filepath.Join(t.TempDir(), "solution.yaml"))
+		assert.Empty(t, deps)
+	})
+
+	t.Run("nil solution", func(t *testing.T) {
+		assert.Nil(t, LocalFileDependencies(nil, filepath.Join(tmpDir, "solution.yaml")))
+	})
+}
+
 func TestDiscoverFiles_SolutionProviderLocal(t *testing.T) {
 	sol := &solution.Solution{}
 	err := sol.UnmarshalFromBytes([]byte(`

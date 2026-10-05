@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,18 +23,22 @@ import (
 const (
 	// VendorDirName is the directory name within the bundle for vendored artifacts.
 	VendorDirName = ".scafctl/vendor"
+
+	vendorDirPerm  = 0o755
+	vendorFilePerm = 0o600
 )
 
-// VendorOptions configures the vendoring process.
+// VendorOptions configures dependency resolution.
 type VendorOptions struct {
-	// BundleRoot is the root directory of the solution bundle.
+	// BundleRoot is the root directory of the solution bundle. Previously
+	// vendored files are read from it to replay ExistingLock entries.
 	BundleRoot string
-	// VendorDir is the directory to store vendored artifacts.
-	VendorDir string
-	// LockPath is the path to the lock file.
-	LockPath string
+	// ExistingLock is the lock file from a previous build. Entries whose
+	// vendored file is still present and unchanged are replayed instead of
+	// re-fetched. Nil resolves every dependency from the catalog.
+	ExistingLock *LockFile
 	// CatalogFetcher fetches artifacts from catalogs by name[@version].
-	// If nil, vendoring will fail when catalog refs are discovered.
+	// If nil, resolution fails when a dependency cannot be replayed.
 	CatalogFetcher CatalogFetcher
 }
 
@@ -48,41 +53,44 @@ type CatalogFetcher interface {
 	ListSolutions(ctx context.Context, name string) ([]catalog.ArtifactInfo, error)
 }
 
-// VendorResult describes the outcome of a vendoring operation.
+// VendorResult describes the outcome of dependency resolution.
 type VendorResult struct {
-	// VendoredFiles contains relative paths (from bundle root) to vendored files.
+	// VendoredFiles contains relative paths (from bundle root) to vendored
+	// files, both replayed and newly fetched.
 	VendoredFiles []string
-	// Lock is the updated lock file content.
+	// Fetched maps the relative path of each dependency fetched in this run
+	// to its content. Replayed dependencies are already on disk and absent.
+	Fetched map[string][]byte
+	// Replayed maps the relative path of each dependency replayed from the
+	// lock to its content, as read and digest-checked during replay.
+	Replayed map[string][]byte
+	// Lock records every resolved dependency.
 	Lock *LockFile
 }
 
-// VendorDependencies fetches catalog dependencies, stores them locally,
-// rewrites source references in the solution, and writes a lock file.
-func VendorDependencies(ctx context.Context, sol *solution.Solution, refs []CatalogRefEntry, opts VendorOptions) (*VendorResult, error) {
+// Contents returns the content of every vendored file, fetched or
+// replayed, keyed by its slash-separated path relative to the bundle root.
+func (r *VendorResult) Contents() map[string][]byte {
+	out := make(map[string][]byte, len(r.Fetched)+len(r.Replayed))
+	maps.Copy(out, r.Replayed)
+	maps.Copy(out, r.Fetched)
+	return out
+}
+
+// ResolveDependencies resolves catalog dependencies, rewrites their source
+// references in sol to vendored paths, and records them in a lock. It writes
+// nothing to disk: persist the fetched content with WriteFiles and the lock
+// with WriteLockFile once the caller decides to commit the result.
+func ResolveDependencies(ctx context.Context, sol *solution.Solution, refs []CatalogRefEntry, opts VendorOptions) (*VendorResult, error) {
 	if sol == nil {
 		return nil, fmt.Errorf("solution is nil")
 	}
 
-	lgr := logger.FromContext(ctx)
-
-	// Load existing lock file for replay
-	var existingLock *LockFile
-	if opts.LockPath != "" {
-		lf, err := LoadLockFile(opts.LockPath)
-		if err == nil && lf != nil {
-			existingLock = lf
-			lgr.V(1).Info("loaded existing lock file", "path", opts.LockPath, "deps", len(lf.Dependencies))
-		}
-	}
-
-	// Ensure vendor directory exists
-	if err := os.MkdirAll(opts.VendorDir, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create vendor directory: %w", err)
-	}
-
 	result := &VendorResult{
+		Fetched:  make(map[string][]byte),
+		Replayed: make(map[string][]byte),
 		Lock: &LockFile{
-			Version:      1,
+			Version:      LockFileVersion,
 			Dependencies: make([]LockDependency, 0, len(refs)),
 		},
 	}
@@ -92,20 +100,26 @@ func VendorDependencies(ctx context.Context, sol *solution.Solution, refs []Cata
 	visited := make(map[string]string)
 
 	for _, ref := range refs {
-		if err := vendorRef(ctx, sol, ref, opts, result, visited, existingLock); err != nil {
+		if err := vendorRef(ctx, sol, ref, opts, result, visited); err != nil {
 			return nil, fmt.Errorf("failed to vendor %s: %w", ref.Ref, err)
 		}
 	}
-
-	// Write the lock file
-	if opts.LockPath != "" && len(result.Lock.Dependencies) > 0 {
-		if err := WriteLockFile(opts.LockPath, result.Lock); err != nil {
-			return nil, fmt.Errorf("failed to write lock file: %w", err)
-		}
-		lgr.V(1).Info("wrote lock file", "path", opts.LockPath, "deps", len(result.Lock.Dependencies))
-	}
-
 	return result, nil
+}
+
+// WriteFiles writes the content fetched by ResolveDependencies under
+// bundleRoot at its vendored path.
+func (r *VendorResult) WriteFiles(bundleRoot string) error {
+	for relPath, content := range r.Fetched {
+		absPath := filepath.Join(bundleRoot, filepath.FromSlash(relPath))
+		if err := os.MkdirAll(filepath.Dir(absPath), vendorDirPerm); err != nil {
+			return fmt.Errorf("failed to create vendor directory for %s: %w", relPath, err)
+		}
+		if err := os.WriteFile(absPath, content, vendorFilePerm); err != nil {
+			return fmt.Errorf("failed to write vendored file %s: %w", relPath, err)
+		}
+	}
+	return nil
 }
 
 // resolvedRef holds the result of parsing and resolving a catalog reference.
@@ -223,8 +237,9 @@ func formatAvailableVersions(artifacts []catalog.ArtifactInfo) string {
 }
 
 // vendorRef fetches a single catalog reference, stores it, and rewrites the solution.
-func vendorRef(ctx context.Context, sol *solution.Solution, ref CatalogRefEntry, opts VendorOptions, result *VendorResult, visited map[string]string, existingLock *LockFile) error {
+func vendorRef(ctx context.Context, sol *solution.Solution, ref CatalogRefEntry, opts VendorOptions, result *VendorResult, visited map[string]string) error {
 	lgr := logger.FromContext(ctx)
+	existingLock := opts.ExistingLock
 
 	// Pre-resolution lock check: if the ref looks like a constraint and we have a lock
 	// file, try to replay from lock before requiring a catalog fetcher for resolution.
@@ -334,15 +349,7 @@ func vendorRef(ctx context.Context, sol *solution.Solution, ref CatalogRefEntry,
 	// Determine vendor path using the resolved exact version
 	vendoredName := vendorFileName(fetchRef, info)
 	vendorRelPath := filepath.ToSlash(filepath.Join(VendorDirName, vendoredName))
-	absVendorPath := filepath.Join(opts.BundleRoot, vendorRelPath)
-
-	// Write vendored content
-	if err := os.MkdirAll(filepath.Dir(absVendorPath), 0o755); err != nil {
-		return fmt.Errorf("failed to create vendor directory for %s: %w", ref.Ref, err)
-	}
-	if err := os.WriteFile(absVendorPath, content, 0o600); err != nil {
-		return fmt.Errorf("failed to write vendored file for %s: %w", ref.Ref, err)
-	}
+	result.Fetched[vendorRelPath] = content
 
 	// Compute digest
 	contentDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(content))
@@ -387,14 +394,9 @@ func vendorRef(ctx context.Context, sol *solution.Solution, ref CatalogRefEntry,
 		return nil
 	}
 
-	subDiscovery, err := DiscoverFiles(&vendoredSol, filepath.Dir(absVendorPath))
-	if err != nil {
-		lgr.V(1).Info("failed to discover sub-dependencies, skipping", "ref", ref.Ref, "error", err)
-		return nil
-	}
-
-	for _, subRef := range subDiscovery.CatalogRefs {
-		if err := vendorRef(ctx, sol, subRef, opts, result, visited, existingLock); err != nil {
+	_, subRefs := analyzeProviderInputs(&vendoredSol)
+	for _, subRef := range subRefs {
+		if err := vendorRef(ctx, sol, subRef, opts, result, visited); err != nil {
 			return fmt.Errorf("recursive vendoring of %s (from %s): %w", subRef.Ref, ref.Ref, err)
 		}
 	}
@@ -425,6 +427,7 @@ func tryReplayLock(ctx context.Context, sol *solution.Solution, originalRef stri
 
 	// Replay: rewrite sources and add to result
 	rewriteSolutionSources(sol, originalRef, vendorPath)
+	result.Replayed[vendorPath] = content
 	result.VendoredFiles = append(result.VendoredFiles, vendorPath)
 	result.Lock.Dependencies = append(result.Lock.Dependencies, *dep)
 	return true

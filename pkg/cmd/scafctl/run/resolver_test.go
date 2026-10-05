@@ -15,10 +15,13 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
@@ -1979,6 +1982,23 @@ func TestExtractSolutionPath_EmptyFlag(t *testing.T) {
 	assert.Empty(t, path)
 }
 
+func TestExtractSolutionPath_AutoDiscover(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	solPath := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solPath, []byte("apiVersion: scafctl.io/v1\n"), 0o600))
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandResolver(settings.NewCliParams(), streams, "")
+	cmd.SetContext(provider.WithWorkingDirectory(t.Context(), dir))
+
+	assert.Equal(t, solPath, extractSolutionPath(cmd))
+
+	cmd.SetContext(provider.WithWorkingDirectory(t.Context(), t.TempDir()))
+	assert.Empty(t, extractSolutionPath(cmd), "nothing discovered")
+}
+
 func TestResolverArgs_AllBareWordsAreNames(t *testing.T) {
 	t.Parallel()
 
@@ -2081,23 +2101,6 @@ func TestResolverArgs_PreRun_BareWordsAreResolverNames(t *testing.T) {
 	assert.Empty(t, path)
 }
 
-func TestResolverArgs_PreRun_VersionedRefIsCatalogRef(t *testing.T) {
-	t.Parallel()
-
-	streams, _, _ := terminal.NewTestIOStreams()
-	cliParams := settings.NewCliParams()
-
-	cmd := CommandResolver(cliParams, streams, "")
-
-	// Simulate: scafctl run resolver my-app@1.0.0 db
-	// Versioned ref is a catalog ref, "db" is a resolver name
-	args := []string{"my-app@1.0.0", "db"}
-	cmd.PreRun(cmd, args)
-
-	path := extractSolutionPath(cmd)
-	assert.Equal(t, "my-app@1.0.0", path)
-}
-
 func TestResolverArgs_PreRun_AtPrefixIsDynamicArg(t *testing.T) {
 	t.Parallel()
 
@@ -2136,38 +2139,6 @@ func TestResolverArgs_PreRun_FileFlagTakesPrecedence(t *testing.T) {
 	assert.Equal(t, "./my-solution.yaml", path)
 }
 
-func TestResolverArgs_PreRun_URLWithQueryParams(t *testing.T) {
-	t.Parallel()
-
-	streams, _, _ := terminal.NewTestIOStreams()
-	cliParams := settings.NewCliParams()
-
-	cmd := CommandResolver(cliParams, streams, "")
-
-	// URL with '=' in query string should be treated as solution reference, not key=value
-	args := []string{"https://example.com/solution.yaml?token=abc123", "db"}
-	cmd.PreRun(cmd, args)
-
-	path := extractSolutionPath(cmd)
-	assert.Equal(t, "https://example.com/solution.yaml?token=abc123", path)
-}
-
-func TestResolverArgs_PreRun_URLWithMultipleQueryParams(t *testing.T) {
-	t.Parallel()
-
-	streams, _, _ := terminal.NewTestIOStreams()
-	cliParams := settings.NewCliParams()
-
-	cmd := CommandResolver(cliParams, streams, "")
-
-	// Signed URL with multiple query params
-	args := []string{"https://storage.example.com/sol.yaml?sig=abc&exp=123", "env=prod"}
-	cmd.PreRun(cmd, args)
-
-	path := extractSolutionPath(cmd)
-	assert.Equal(t, "https://storage.example.com/sol.yaml?sig=abc&exp=123", path)
-}
-
 // splitResolverArgs mirrors the new PreRun logic: all bare words are resolver
 // names, args with '=' or '@' prefix are dynamic params.
 func splitResolverArgs(args []string, _ bool) (names, dynamicArgs []string) {
@@ -2199,13 +2170,10 @@ func TestParseResolverArgs(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		args         []string
-		fileExplicit bool
-		initialFile  string
-		wantNames    []string
-		wantDynamic  []string
-		wantFile     string
+		name        string
+		args        []string
+		wantNames   []string
+		wantDynamic []string
 	}{
 		{
 			name:      "bare name treated as resolver name not catalog ref",
@@ -2218,23 +2186,19 @@ func TestParseResolverArgs(t *testing.T) {
 			wantNames: []string{"hello-world", "greeting", "farewell"},
 		},
 		{
-			name:      "versioned catalog ref",
+			name:      "versioned catalog ref stays a name",
 			args:      []string{"my-app@1.2.3", "greeting"},
-			wantFile:  "my-app@1.2.3",
-			wantNames: []string{"greeting"},
+			wantNames: []string{"my-app@1.2.3", "greeting"},
 		},
 		{
-			name:      "URL detected as file",
+			name:      "URL stays a name",
 			args:      []string{"https://example.com/solution.yaml", "greeting"},
-			wantFile:  "https://example.com/solution.yaml",
-			wantNames: []string{"greeting"},
+			wantNames: []string{"https://example.com/solution.yaml", "greeting"},
 		},
 		{
-			name:         "catalog ref ignored when -f is set",
-			args:         []string{"hello-world"},
-			fileExplicit: true,
-			initialFile:  "other.yaml",
-			wantNames:    []string{"hello-world"},
+			name:      "URL with query string is not a param",
+			args:      []string{"https://example.com/s.yaml?ref=main"},
+			wantNames: []string{"https://example.com/s.yaml?ref=main"},
 		},
 		{
 			name:        "key=value are dynamic args",
@@ -2249,10 +2213,9 @@ func TestParseResolverArgs(t *testing.T) {
 			wantDynamic: []string{"@params.yaml"},
 		},
 		{
-			name:      "registry ref detected as file",
+			name:      "registry ref stays a name",
 			args:      []string{"ghcr.io/myorg/solutions/app:2.0", "greeting"},
-			wantFile:  "ghcr.io/myorg/solutions/app:2.0",
-			wantNames: []string{"greeting"},
+			wantNames: []string{"ghcr.io/myorg/solutions/app:2.0", "greeting"},
 		},
 		{
 			name: "no args",
@@ -2265,17 +2228,11 @@ func TestParseResolverArgs(t *testing.T) {
 			t.Parallel()
 
 			opts := &ResolverOptions{}
-			if tc.initialFile != "" {
-				opts.File = tc.initialFile
-			}
-
-			parseResolverArgs(tc.args, opts, tc.fileExplicit)
+			parseResolverArgs(tc.args, opts)
 
 			assert.Equal(t, tc.wantNames, opts.Names)
 			assert.Equal(t, tc.wantDynamic, opts.DynamicArgs)
-			if tc.wantFile != "" {
-				assert.Equal(t, tc.wantFile, opts.File)
-			}
+			assert.Empty(t, opts.File)
 		})
 	}
 }
@@ -2283,11 +2240,10 @@ func TestParseResolverArgs(t *testing.T) {
 func TestResolverOptions_Run_CatalogFallback(t *testing.T) {
 	t.Parallel()
 
-	// When File is empty and the first positional arg is a catalog-style name,
-	// Run() should retry using that arg as the solution source after
-	// auto-discovery fails. The retry will also fail (no catalog configured),
-	// but we verify the fallback path is taken by checking that File is set
-	// and the arg is removed from Names.
+	// When File is empty and no solution file is discovered, Run() selects the
+	// first positional arg as a catalog reference. Loading it fails (no such
+	// catalog entry), and the error names the selected ref. Options are not
+	// mutated.
 	var stdout, stderr bytes.Buffer
 	streams := &terminal.IOStreams{
 		In:     nil,
@@ -2308,21 +2264,21 @@ func TestResolverOptions_Run_CatalogFallback(t *testing.T) {
 
 	lgr := logger.Get(0)
 	ctx := logger.WithLogger(context.Background(), lgr)
+	ctx = provider.WithWorkingDirectory(ctx, t.TempDir())
 
-	// Run will fail because no catalog is configured, but the fallback
-	// should move Names[0] to File.
 	err := opts.Run(ctx)
-	assert.Error(t, err)
-	assert.Equal(t, "my-solution", opts.File, "fallback should set File to the first positional arg")
-	assert.Empty(t, opts.Names, "fallback should remove the arg from Names")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, load.ErrNoSolutionFound)
+	assert.Contains(t, err.Error(), `"my-solution"`)
+	assert.Empty(t, opts.File, "selection should not mutate File")
+	assert.Equal(t, []string{"my-solution"}, opts.Names, "selection should not mutate Names")
 }
 
 func TestResolverOptions_Run_CatalogFallbackAfterAutoDiscoveryFailure(t *testing.T) {
 	// NOTE: no t.Parallel() — os.Chdir mutates process-global state.
 
-	// When auto-discovery finds a non-solution file (e.g. taskfile.yaml) and
-	// loading fails, the fallback should still fire if positional arg looks
-	// like a catalog reference. This tests the #501 fix.
+	// A go-task taskfile.yaml is not a solution, so discovery skips it and
+	// the first positional arg is selected as a catalog reference.
 	tmpDir := t.TempDir()
 
 	// Create a non-solution YAML file that will be auto-discovered
@@ -2359,11 +2315,12 @@ func TestResolverOptions_Run_CatalogFallbackAfterAutoDiscoveryFailure(t *testing
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	err = opts.Run(ctx)
-	// The run will fail (no catalog configured), but we should see the
-	// fallback path was taken: File should be set to the catalog ref.
-	assert.Error(t, err)
-	assert.Equal(t, "my-proxy", opts.File, "fallback should set File to catalog ref after auto-discovery load failure")
-	assert.Empty(t, opts.Names, "fallback should consume the positional arg")
+	// Loading the catalog ref fails (no such entry); the error names it.
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, load.ErrNoSolutionFound)
+	assert.Contains(t, err.Error(), `"my-proxy"`)
+	assert.Empty(t, opts.File, "selection should not mutate File")
+	assert.Equal(t, []string{"my-proxy"}, opts.Names, "selection should not mutate Names")
 }
 
 func TestResolverOptions_Run_ActionFlag(t *testing.T) {
@@ -3203,8 +3160,51 @@ func TestResolverOptions_Run_CatalogFallbackNotFiredForMalformedSolution(t *test
 	err = opts.Run(ctx)
 	assert.Error(t, err)
 	// Should get the validation error, NOT a catalog lookup error.
-	// The fallback should NOT have consumed the first name as a catalog ref.
-	assert.NotEqual(t, "my-proxy", opts.File, "fallback should NOT fire for a malformed solution.yaml")
+	assert.NotContains(t, err.Error(), `"my-proxy"`, "fallback should NOT fire for a malformed solution.yaml")
+	assert.Empty(t, opts.File)
+}
+
+func TestLocalSolutionFile(t *testing.T) {
+	t.Parallel()
+
+	cwd := filepath.Join(t.TempDir(), "work")
+	discovered := func(p string) []load.Discovery { return []load.Discovery{{Path: p}} }
+	tests := []struct {
+		name string
+		sel  load.Selection
+		want string
+	}{
+		{
+			name: "explicit file as given",
+			sel:  load.Selection{Source: source.Classification{Kind: source.KindLocalFile, Ref: "./sub/app.yaml"}},
+			want: "./sub/app.yaml",
+		},
+		{
+			name: "discovered file relative to cwd",
+			sel: load.Selection{
+				Source:     source.Classification{Kind: source.KindAutoDiscover},
+				Discovered: discovered(filepath.Join(cwd, "scafctl", "solution.yaml")),
+			},
+			want: filepath.Join("scafctl", "solution.yaml"),
+		},
+		{
+			name: "discovered path that cannot be made relative is unchanged",
+			sel: load.Selection{
+				Source:     source.Classification{Kind: source.KindAutoDiscover},
+				Discovered: discovered("relative.yaml"),
+			},
+			want: "relative.yaml",
+		},
+		{name: "stdin", sel: load.Selection{Source: source.Classification{Kind: source.KindStdin, Ref: "-"}}},
+		{name: "url", sel: load.Selection{Source: source.Classification{Kind: source.KindURL, Ref: "https://example.com/s.yaml"}}},
+		{name: "catalog", sel: load.Selection{Source: source.Classification{Kind: source.KindBareName, Ref: "my-app"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, localSolutionFile(tt.sel, cwd))
+		})
+	}
 }
 
 func TestResolverOptions_renderResolverDiagnostics_NilCliParamsNoPanic(t *testing.T) {

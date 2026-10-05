@@ -141,6 +141,54 @@ func TestDisplayLoginResult(t *testing.T) {
 	}
 }
 
+func TestDisplayLoginResult_VerboseFlowLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		flow  auth.Flow
+		label string
+	}{
+		{flow: auth.FlowServicePrincipal, label: "Service Principal"},
+		{flow: auth.FlowWorkloadIdentity, label: "Workload Identity"},
+		{flow: auth.FlowPAT, label: "Personal Access Token"},
+		{flow: auth.FlowMetadata, label: "Metadata Server"},
+		{flow: auth.FlowInteractive, label: "Interactive (Browser OAuth)"},
+		{flow: auth.FlowDeviceCode, label: "Device Code"},
+		{flow: auth.FlowGcloudADC, label: "gcloud Application Default Credentials"},
+		{flow: auth.FlowGitHubApp, label: "GitHub App"},
+		{flow: auth.FlowClientCredentials, label: "Client Credentials"},
+		{flow: auth.FlowOnBehalfOf, label: "On-Behalf-Of"},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.flow), func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			streams := terminal.NewIOStreams(nil, &buf, &buf, false)
+			params := settings.NewCliParams()
+			params.Verbose = true
+			w := writer.New(streams, params)
+
+			err := displayLoginResult(w, &auth.Result{Claims: &auth.Claims{}}, tc.flow, "Test", "")
+			require.NoError(t, err)
+			assert.Contains(t, buf.String(), "Flow:     "+tc.label)
+		})
+	}
+
+	t.Run("unknown flow omits label", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		streams := terminal.NewIOStreams(nil, &buf, &buf, false)
+		params := settings.NewCliParams()
+		params.Verbose = true
+		w := writer.New(streams, params)
+
+		err := displayLoginResult(w, &auth.Result{Claims: &auth.Claims{}}, auth.Flow("unknown"), "Test", "")
+		require.NoError(t, err)
+		assert.NotContains(t, buf.String(), "Flow:")
+	})
+}
+
 func TestParseFlow(t *testing.T) {
 	t.Parallel()
 

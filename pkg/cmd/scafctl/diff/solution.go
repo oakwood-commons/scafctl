@@ -16,7 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/soldiff"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -105,7 +105,7 @@ func CommandDiffSolution(cliParams *settings.Run, ioStreams terminal.IOStreams, 
 
 			// Validate positional args are catalog references
 			for _, arg := range args {
-				if err := get.ValidatePositionalRef(arg, "", binaryName+" diff solution"); err != nil {
+				if _, err := source.ValidatePositionalRef(arg, "", binaryName+" diff solution"); err != nil {
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}

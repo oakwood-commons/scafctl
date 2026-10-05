@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -31,14 +31,6 @@ spec: {}
 type failWriter struct{}
 
 func (failWriter) Write([]byte) (int, error) { return 0, assert.AnError }
-
-// solutionFromMinimal parses the minimal solution fixture into a Solution.
-func solutionFromMinimal(t *testing.T) *solution.Solution {
-	t.Helper()
-	var sol solution.Solution
-	require.NoError(t, sol.LoadFromBytes([]byte(minimalSolution)))
-	return &sol
-}
 
 // writeSolutionFile writes the minimal solution to a temp dir and returns its path.
 func writeSolutionFile(t *testing.T) string {
@@ -238,18 +230,18 @@ func TestEmitPackageReport_WriteError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestWriteComposedSolution_WriteError(t *testing.T) {
+func TestRunPackageSolution_ComposedOutWriteError(t *testing.T) {
 	t.Parallel()
 
-	// A path inside a nonexistent directory makes os.WriteFile fail.
+	// A path inside a nonexistent directory makes the write fail.
 	badPath := filepath.Join(t.TempDir(), "nope", "composed.yaml")
+	opts, _, errBuf := dryRunOpts(t, writeSolutionFile(t), "")
+	opts.ComposedOut = badPath
+	ctx := writer.WithWriter(t.Context(), writer.New(opts.IOStreams, opts.CliParams))
 
-	errBuf := &bytes.Buffer{}
-	ioStreams := terminal.NewIOStreams(nil, errBuf, errBuf, false)
-	w := writer.New(ioStreams, settings.NewCliParams())
+	err := runPackageSolution(ctx, opts)
 
-	sol := solutionFromMinimal(t)
-	err := writeComposedSolution(badPath, sol, w)
 	require.Error(t, err)
-	assert.Contains(t, errBuf.String(), "failed to write composed solution")
+	assert.Equal(t, exitcode.GeneralError, exitcode.GetCode(err))
+	assert.Contains(t, errBuf.String(), "writing composed solution")
 }

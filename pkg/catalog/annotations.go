@@ -124,6 +124,13 @@ func (b *AnnotationBuilder) SetMap(m map[string]string) *AnnotationBuilder {
 	return b
 }
 
+// Unset removes an annotation. It is the counterpart to Set for keys that an
+// inherited annotation map must not carry forward.
+func (b *AnnotationBuilder) Unset(key string) *AnnotationBuilder {
+	delete(b.annotations, key)
+	return b
+}
+
 // Build returns the annotation map.
 func (b *AnnotationBuilder) Build() map[string]string {
 	return b.annotations

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -62,80 +63,21 @@ type BundlePluginEntry struct {
 	Registry string `json:"registry,omitempty"`
 }
 
-// TarOption configures tar creation behavior.
-type TarOption func(*tarConfig)
-
-type tarConfig struct {
-	maxSize  int64
-	readFile func(string) ([]byte, error)
-}
-
-// WithMaxBundleSize sets the maximum total size for the bundle.
-func WithMaxBundleSize(size int64) TarOption {
-	return func(c *tarConfig) {
-		c.maxSize = size
-	}
-}
-
-// WithTarReadFileFunc overrides the file reading function for testing.
-func WithTarReadFileFunc(fn func(string) ([]byte, error)) TarOption {
-	return func(c *tarConfig) {
-		c.readFile = fn
-	}
-}
-
-// CreateBundleTar creates a tar archive containing the discovered files
+// CreateBundleTar creates a tar archive containing the snapshot's files
 // and a bundle manifest. Returns the tar bytes and the manifest.
-func CreateBundleTar(bundleRoot string, files []FileEntry, plugins []BundlePluginEntry, opts ...TarOption) ([]byte, *BundleManifest, error) {
-	cfg := &tarConfig{
-		maxSize:  DefaultMaxBundleSize,
-		readFile: os.ReadFile,
-	}
-	for _, opt := range opts {
-		opt(cfg)
-	}
-
+func CreateBundleTar(files *FileSnapshot, plugins []BundlePluginEntry) ([]byte, *BundleManifest, error) {
+	entries := files.entries()
 	manifest := &BundleManifest{
 		Version: 1,
 		Root:    ".",
-		Files:   make([]BundleFileEntry, 0, len(files)),
+		Files:   make([]BundleFileEntry, 0, len(entries)),
 		Plugins: plugins,
 	}
-
-	// First pass: read all files, compute digests, check total size
-	type fileData struct {
-		relPath string
-		content []byte
-		digest  string
-	}
-
-	var totalSize int64
-	fileContents := make([]fileData, 0, len(files))
-
-	for _, f := range files {
-		absPath := filepath.Join(bundleRoot, f.RelPath)
-		content, err := cfg.readFile(absPath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to read %s: %w", f.RelPath, err)
-		}
-
-		totalSize += int64(len(content))
-		if totalSize > cfg.maxSize {
-			return nil, nil, fmt.Errorf("bundle exceeds maximum size limit (%d bytes, limit %d bytes)", totalSize, cfg.maxSize)
-		}
-
-		digest := fmt.Sprintf("sha256:%x", sha256.Sum256(content))
-
+	for _, f := range entries {
 		manifest.Files = append(manifest.Files, BundleFileEntry{
-			Path:   filepath.ToSlash(f.RelPath),
-			Size:   int64(len(content)),
-			Digest: digest,
-		})
-
-		fileContents = append(fileContents, fileData{
-			relPath: f.RelPath,
-			content: content,
-			digest:  digest,
+			Path:   f.RelPath,
+			Size:   int64(len(f.Content)),
+			Digest: f.Digest,
 		})
 	}
 
@@ -154,10 +96,9 @@ func CreateBundleTar(bundleRoot string, files []FileEntry, plugins []BundlePlugi
 	}
 
 	// Write all files
-	for _, fd := range fileContents {
-		entryPath := filepath.ToSlash(fd.relPath)
-		if err := writeToTar(tw, entryPath, fd.content); err != nil {
-			return nil, nil, fmt.Errorf("failed to write %s to tar: %w", fd.relPath, err)
+	for _, f := range entries {
+		if err := writeToTar(tw, f.RelPath, f.Content); err != nil {
+			return nil, nil, fmt.Errorf("failed to write %s to tar: %w", f.RelPath, err)
 		}
 	}
 
@@ -201,6 +142,18 @@ func ExtractBundleTar(tarData []byte, destDir string) (*BundleManifest, error) {
 	return extractBundleTarRecursive(tarData, destDir, nil)
 }
 
+// safeExtractPath is the zip-slip guard for archive extraction. It accepts a
+// slash-separated entry name from an untrusted archive or manifest and returns
+// its destination path within destDir. The name must satisfy filepath.IsLocal:
+// relative, no ".." escape, and (on Windows) no volume or reserved name.
+func safeExtractPath(destDir, name string) (string, error) {
+	localName := filepath.FromSlash(name)
+	if !filepath.IsLocal(localName) {
+		return "", fmt.Errorf("unsafe archive entry %q: path traversal or non-local path", name)
+	}
+	return filepath.Join(destDir, localName), nil
+}
+
 // extractBundleTarRecursive extracts a bundle tar archive, detecting and recursively
 // extracting nested tar archives from sub-solution bundles.
 // visitedDigests tracks tar content digests to detect circular nested bundles.
@@ -228,24 +181,17 @@ func extractBundleTarRecursive(tarData []byte, destDir string, visitedDigests ma
 
 	for {
 		header, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to read tar entry: %w", err)
 		}
 
-		// Security: validate path
 		cleanName := filepath.Clean(header.Name)
-		if filepath.IsAbs(cleanName) || strings.HasPrefix(cleanName, "..") {
-			return nil, fmt.Errorf("tar contains path traversal: %s", header.Name)
-		}
-
-		destPath := filepath.Join(destDir, cleanName)
-
-		// Security: verify the resolved path stays within destDir (zip-slip protection).
-		if !strings.HasPrefix(destPath, filepath.Clean(destDir)+string(os.PathSeparator)) && destPath != filepath.Clean(destDir) {
-			return nil, fmt.Errorf("tar entry %q resolves outside destination directory", header.Name)
+		destPath, err := safeExtractPath(destDir, header.Name)
+		if err != nil {
+			return nil, err
 		}
 
 		switch header.Typeflag {

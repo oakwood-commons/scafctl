@@ -467,7 +467,7 @@ func TestExtractBundleTar_NoNestedTar(t *testing.T) {
 
 // --- Nested Vendoring Tests ---
 
-func TestVendorDependencies_LocalSubSolutionCatalogRefs(t *testing.T) {
+func TestResolveDependencies_LocalSubSolutionCatalogRefs(t *testing.T) {
 	// Parent references a local sub-solution, sub-solution has catalog deps.
 	// DiscoverFiles should find catalog refs from sub-solution, which are then vendored.
 	ctx := logger.WithLogger(context.Background(), logger.Get(-1))
@@ -546,9 +546,8 @@ spec:
 		},
 	}
 
-	vendorResult, err := VendorDependencies(ctx, &sol, result.CatalogRefs, VendorOptions{
+	vendorResult, err := resolveAndPersist(ctx, &sol, result.CatalogRefs, persistOptions{
 		BundleRoot:     tmpDir,
-		VendorDir:      filepath.Join(tmpDir, ".scafctl", "vendor"),
 		CatalogFetcher: fetcher,
 	})
 	require.NoError(t, err)
@@ -623,7 +622,7 @@ spec:
 	assert.True(t, paths["sub/child-template.tmpl"])
 
 	// Step 2: Create bundle tar
-	tarData, manifest, err := CreateBundleTar(tmpDir, discovery.LocalFiles, nil)
+	tarData, manifest, err := CreateBundleTar(snapshotOf(t, tmpDir, discovery.LocalFiles), nil)
 	require.NoError(t, err)
 	require.NotNil(t, manifest)
 	assert.Len(t, manifest.Files, 3) // parent-template, child.yaml, child-template

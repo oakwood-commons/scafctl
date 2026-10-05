@@ -44,8 +44,7 @@ var _ = ginkgo.Describe("plugin registry flow", func() {
 
 		pushCmd := utils.Scafctl(
 			"catalog", "push",
-			"test-provider@1.0.0",
-			"--catalog", registryAddr+"/scafctl",
+			registryAddr+"/scafctl/providers/test-provider@1.0.0",
 			"--insecure",
 		).WithEnv(isolatedEnv.Env)
 		pushSession := pushCmd.Exec()

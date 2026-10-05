@@ -67,6 +67,34 @@ func IsPreRelease(v *semver.Version) bool {
 	return v != nil && v.Prerelease() != ""
 }
 
+// latestVersionAlias is the version string that selects the newest version.
+const latestVersionAlias = "latest"
+
+// wantsLatest reports whether q leaves the version open ("" or "latest") and
+// has no digest, so "latest" must be chosen among the matches. Exact versions,
+// digests and constraints state their own intent and are never filtered.
+func wantsLatest(q ArtifactQuery) bool {
+	return q.Digest == "" && (q.Version == "" || q.Version == latestVersionAlias)
+}
+
+// latestCandidates drops pre-releases unless the context includes them,
+// falling back to the original set when nothing stable remains.
+func latestCandidates(ctx context.Context, in []ArtifactInfo) []ArtifactInfo {
+	if IncludePreReleaseFromContext(ctx) {
+		return in
+	}
+	stable := make([]ArtifactInfo, 0, len(in))
+	for _, a := range in {
+		if !IsPreRelease(a.Reference.Version) {
+			stable = append(stable, a)
+		}
+	}
+	if len(stable) == 0 {
+		return in
+	}
+	return stable
+}
+
 // ArtifactKind represents the type of artifact stored in the catalog.
 type ArtifactKind string
 
@@ -146,6 +174,10 @@ type Reference struct {
 	// Digest is the content digest for pinning (e.g., "sha256:abc123...").
 	// If set, takes precedence over Version for resolution.
 	Digest string `json:"digest,omitempty" yaml:"digest,omitempty" doc:"Content digest for pinning"`
+
+	Remote string `json:"remote,omitempty" yaml:"remote,omitempty" doc:"Remote registry URL (if applicable)"`
+
+	Built bool `json:"built,omitempty" yaml:"built,omitempty" doc:"True if the artifact was built locally"`
 }
 
 // String returns the canonical reference string (e.g., "my-solution@1.2.3").

@@ -20,7 +20,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
-	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -34,25 +33,22 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 )
 
-// Option configures the PrepareSolution function.
+// Option configures SolutionFromLoader.
 type Option func(*prepareConfig)
 
 type prepareConfig struct {
-	getter               get.Interface
 	registry             *provider.Registry
 	authRegistry         *auth.Registry
-	stdin                io.Reader
 	showMetrics          bool
 	metricsOut           io.Writer
 	pluginFetcher        *plugin.Fetcher
 	lockPlugins          []bundler.LockPlugin
-	noCache              bool
 	pluginCfg            *plugin.ProviderConfig
 	clientOpts           []plugin.ClientOption
-	discoveryMode        settings.DiscoveryMode
 	officialProviders    *official.Registry
 	officialAuthHandlers *authofficial.Registry
 	strict               bool
@@ -61,26 +57,11 @@ type prepareConfig struct {
 	lockMode             LockMode
 }
 
-// WithGetter provides a custom solution getter. If not set, one is created
-// from context (with catalog resolution support).
-func WithGetter(g get.Interface) Option {
-	return func(c *prepareConfig) {
-		c.getter = g
-	}
-}
-
 // WithRegistry provides a custom provider registry. If not set,
 // builtin.DefaultRegistry is used.
 func WithRegistry(r *provider.Registry) Option {
 	return func(c *prepareConfig) {
 		c.registry = r
-	}
-}
-
-// WithStdin provides a reader for stdin-based solution loading (path == "-").
-func WithStdin(r io.Reader) Option {
-	return func(c *prepareConfig) {
-		c.stdin = r
 	}
 }
 
@@ -118,14 +99,6 @@ func WithLockPlugins(plugins []bundler.LockPlugin) Option {
 	}
 }
 
-// WithNoCache disables artifact caching when loading solutions from the catalog.
-// When set, the catalog is always queried directly, bypassing the filesystem cache.
-func WithNoCache() Option {
-	return func(c *prepareConfig) {
-		c.noCache = true
-	}
-}
-
 // WithPluginConfig provides configuration that is sent to plugin providers
 // after registration via ConfigureProvider. If not set, plugins use defaults.
 func WithPluginConfig(cfg *plugin.ProviderConfig) Option {
@@ -139,14 +112,6 @@ func WithPluginConfig(cfg *plugin.ProviderConfig) Option {
 func WithClientOptions(opts ...plugin.ClientOption) Option {
 	return func(c *prepareConfig) {
 		c.clientOpts = append(c.clientOpts, opts...)
-	}
-}
-
-// WithDiscoveryMode sets the discovery mode used when auto-discovering
-// solution files. See settings.DiscoveryMode for available modes.
-func WithDiscoveryMode(mode settings.DiscoveryMode) Option {
-	return func(c *prepareConfig) {
-		c.discoveryMode = mode
 	}
 }
 
@@ -221,7 +186,7 @@ type providerLookup interface {
 	Has(name string) bool
 }
 
-// Result holds the output of PrepareSolution.
+// Result holds the output of SolutionFromLoader.
 type Result struct {
 	// Solution is the loaded and prepared solution.
 	Solution *solution.Solution `json:"solution" yaml:"solution" doc:"The loaded solution"`
@@ -243,7 +208,7 @@ type Result struct {
 	Cleanup func() `json:"-" yaml:"-"`
 	// DiscoveredFrom holds metadata about how the solution file was discovered.
 	// Only populated when auto-discovery is used (path was empty).
-	DiscoveredFrom get.DiscoveryResult `json:"-" yaml:"-"`
+	DiscoveredFrom load.Discovery `json:"-" yaml:"-"`
 	// ProviderCtx enriches a context with per-execution provider settings and
 	// solution provider dependencies (loader, registry, plugin deps, client
 	// tracker). Callers must apply this to the execution context before running
@@ -253,99 +218,21 @@ type Result struct {
 	ProviderCtx func(ctx context.Context) context.Context `json:"-" yaml:"-"`
 }
 
-// Solution loads a solution from the given path, extracts any bundle,
-// merges plugin defaults, sets up the provider registry, and registers the
-// solution provider. The returned Result.Cleanup function must be deferred.
-//
-// This function is the standalone equivalent of the CLI's
-// sharedResolverOptions.prepareSolutionForExecution method, decoupled from
-// CLI-specific types so it can be used by the MCP server and other callers.
-func Solution(ctx context.Context, path string, opts ...Option) (*Result, error) {
-	cfg := &prepareConfig{}
-	for _, opt := range opts {
-		opt(cfg)
-	}
-
+// finishPrepare is the source-independent half of SolutionFromLoader: it
+// switches into the bundle directory (when one was extracted), merges plugin
+// defaults, sets up the provider registry and plugins, and builds the Result.
+// The solution provider loads sub-solutions through subLoader. cleanup must
+// already remove bundleDir; on error it is invoked before returning.
+func finishPrepare(
+	ctx context.Context,
+	cfg *prepareConfig,
+	subLoader solutionprovider.Loader,
+	sol *solution.Solution,
+	solutionDir, bundleDir string,
+	cleanup func(),
+	discoveredFrom load.Discovery,
+) (*Result, error) {
 	lgr := logger.FromContext(ctx)
-
-	// Enable metrics collection if requested
-	if cfg.showMetrics {
-		provider.GlobalMetrics.Enable()
-	}
-
-	// Get or create the solution getter
-	getter := cfg.getter
-	if getter == nil {
-		getter = NewDefaultGetter(ctx, cfg.noCache)
-	}
-
-	// When discovery mode is set and no explicit path is provided,
-	// perform discovery up front so we can capture the result metadata.
-	var discoveredFrom get.DiscoveryResult
-	if path == "" && cfg.discoveryMode != settings.DiscoveryModeDefault {
-		if g, ok := getter.(*get.Getter); ok {
-			g.SetDiscoveryMode(cfg.discoveryMode)
-			path = g.FindSolution()
-			discoveredFrom = g.LastDiscoveryResult()
-		}
-	}
-
-	// Load the solution (with bundle and lock if available)
-	sol, bundleDir, lockData, err := loadSolutionWithBundleAndLock(ctx, getter, path, cfg.stdin)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse the OCI lock layer (when present) and apply the appropriate lock
-	// mode default based on the solution source.
-	isCatalogOrRemote := path != "" && path != "-" && get.IsCatalogReference(path)
-	if err := applyOCILockLayer(cfg, lockData); err != nil {
-		return nil, err
-	}
-	applyDefaultLockMode(cfg, path, isCatalogOrRemote, lgr)
-
-	// Determine the solution directory for relative path resolution.
-	// For file-based loading: use the file's parent directory.
-	// For bundles (including catalog bundles): use the bundle extraction directory.
-	// For stdin or unbundled catalog references: leave empty (falls back to CWD).
-	//
-	// Prefer sol.GetPath() over the original `path` argument because when
-	// auto-discovery is performed inside GetWithBundle (path == ""), the
-	// original path stays empty while the solution object carries the resolved
-	// file path set by FromLocalFileSystem. Fall back to `path` for callers
-	// that use custom getters (e.g. test mocks) that don't call SetPath.
-	var solutionDir string
-	resolvedPath := sol.GetPath()
-	if resolvedPath == "" {
-		resolvedPath = path
-	}
-	isCatalogRef := strings.HasPrefix(resolvedPath, "catalog:")
-	switch {
-	case bundleDir != "":
-		solutionDir = bundleDir
-	case resolvedPath != "" && resolvedPath != "-" && !isCatalogRef:
-		absPath, absErr := provider.AbsFromContext(ctx, resolvedPath)
-		if absErr == nil {
-			solutionDir = filepath.Dir(absPath)
-		}
-	case isCatalogRef:
-		// Unbundled catalog solutions have no local directory tree.
-		// Providers that reference relative paths (e.g. directory provider)
-		// will resolve against CWD, which is likely not the intended base.
-		lgr.V(1).Info("solution loaded from catalog without bundle; relative paths in providers will resolve against CWD. "+
-			"If this is unintended, run 'catalog pull' first to extract files locally.",
-			"path", sol.GetPath())
-	}
-
-	// Build cleanup function
-	cleanup := func() {
-		if cfg.showMetrics && cfg.metricsOut != nil {
-			writeMetrics(cfg.metricsOut)
-		}
-		if bundleDir != "" {
-			os.RemoveAll(bundleDir)
-		}
-	}
 
 	// Change to bundle directory if needed
 	if bundleDir != "" {
@@ -536,7 +423,7 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 			ctx = provider.WithExecutionSettings(ctx, execSettings)
 		}
 		if hasSolutionProvider {
-			ctx = solutionprovider.WithLoaderCtx(ctx, getter)
+			ctx = solutionprovider.WithLoaderCtx(ctx, subLoader)
 			ctx = solutionprovider.WithProviderRegistry(ctx, reg)
 			ctx = solutionprovider.WithChildClientTracker(ctx, tracker)
 			if cfg.officialProviders != nil {
@@ -574,231 +461,176 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	}, nil
 }
 
-// NewDefaultGetter creates a default solution getter with catalog and remote resolution support.
-// When noCache is true, the artifact cache is disabled so the catalog is always queried directly.
-func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
+// SolutionFromLoader prepares the solution that loader loads for c. The
+// returned Result.Cleanup function must be deferred. loader also loads
+// sub-solutions for the solution provider. Verbose output (the source, the
+// discovered path, and the loaded solution) goes to the writer in ctx.
+func SolutionFromLoader(ctx context.Context, loader load.Loader, c source.Classification, opts ...Option) (*Result, error) {
+	cfg := &prepareConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
 	lgr := logger.FromContext(ctx)
 
-	var getterOpts []get.Option
+	if cfg.showMetrics {
+		provider.GlobalMetrics.Enable()
+	}
+
+	load.ReportSource(ctx, c)
+	ms, err := loader.Load(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	load.ReportDiscovery(ctx, ms)
+	sol := ms.Solution
+
+	// Parse the lock before extracting the bundle so an invalid lock layer
+	// fails without leaving a temp directory behind.
+	if err := applyOCILockLayer(cfg, ms.Lock); err != nil {
+		return nil, err
+	}
+	applyDefaultLockMode(cfg, c.Ref, isCatalogSource(ms.Source.Kind), lgr)
+
+	bundleDir, removeBundle, err := extractBundle(ctx, sol, ms.Bundle)
+	if err != nil {
+		return nil, err
+	}
+
+	solutionDir := resolveSolutionDir(ctx, sol, c.Ref, bundleDir)
+
+	var discoveredFrom load.Discovery
+	if ms.Discovery != nil {
+		discoveredFrom = *ms.Discovery
+	}
+
+	cleanup := func() {
+		if cfg.showMetrics && cfg.metricsOut != nil {
+			writeMetrics(cfg.metricsOut)
+		}
+		removeBundle()
+	}
+
+	result, err := finishPrepare(ctx, cfg, subSolutionLoader{loader: loader}, sol, solutionDir, bundleDir, cleanup, discoveredFrom)
+	if err != nil {
+		return nil, err
+	}
+	reportLoaded(ctx, result)
+	return result, nil
+}
+
+// subSolutionLoader adapts a load.Loader to solutionprovider.Loader so the
+// solution provider can load sub-solutions through the load package. It
+// returns only the solution: the sub-solution's bundle and lock are not used.
+// Stdin is rejected because the parent solution owns it.
+type subSolutionLoader struct {
+	loader load.Loader
+}
+
+var _ solutionprovider.Loader = subSolutionLoader{}
+
+// Get classifies path and loads it with the wrapped loader.
+func (s subSolutionLoader) Get(ctx context.Context, path string) (*solution.Solution, error) {
+	c, err := source.Classify(path)
+	if err != nil {
+		return nil, fmt.Errorf("classifying sub-solution %q: %w", path, err)
+	}
+	if c.Kind == source.KindStdin {
+		return nil, fmt.Errorf("sub-solution %q: %w: stdin is reserved for the parent solution", path, load.ErrSourceNotEnabled)
+	}
+	ms, err := s.loader.Load(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	return ms.Solution, nil
+}
+
+// resolveSolutionDir determines the directory used for relative path
+// resolution: the bundle extraction directory when present, the parent
+// directory of a file-based solution, or empty for stdin and unbundled catalog
+// solutions (which fall back to CWD). It prefers sol.GetPath() over path.
+func resolveSolutionDir(ctx context.Context, sol *solution.Solution, path, bundleDir string) string {
+	resolvedPath := sol.GetPath()
+	if resolvedPath == "" {
+		resolvedPath = path
+	}
+	isCatalogRef := strings.HasPrefix(resolvedPath, "catalog:")
+	switch {
+	case bundleDir != "":
+		return bundleDir
+	case resolvedPath != "" && resolvedPath != "-" && !isCatalogRef:
+		absPath, absErr := provider.AbsFromContext(ctx, resolvedPath)
+		if absErr == nil {
+			return filepath.Dir(absPath)
+		}
+	case isCatalogRef:
+		// Unbundled catalog solutions have no local directory tree.
+		// Providers that reference relative paths (e.g. directory provider)
+		// will resolve against CWD, which is likely not the intended base.
+		if lgr := logger.FromContext(ctx); lgr != nil {
+			lgr.V(1).Info("solution loaded from catalog without bundle; relative paths in providers will resolve against CWD. "+
+				"If this is unintended, run 'catalog pull' first to extract files locally.",
+				"path", sol.GetPath())
+		}
+	}
+	return ""
+}
+
+// isCatalogSource reports whether kind is served from a catalog or registry.
+func isCatalogSource(kind source.Kind) bool {
+	switch kind {
+	case source.KindRemoteRef, source.KindCatalogQualified, source.KindBareName:
+		return true
+	case source.KindUnknown, source.KindAutoDiscover, source.KindStdin, source.KindURL, source.KindLocalFile:
+	}
+	return false
+}
+
+// bundleSolutionFileName is the file the parsed solution is written to inside
+// an extracted bundle directory so bundle-relative paths resolve against it.
+const bundleSolutionFileName = "solution.yaml"
+
+// extractBundle extracts a solution bundle tar into a new temp directory and
+// writes the solution YAML alongside it. It returns the directory and a func
+// that removes it. When bundle is empty it returns ("", noop, nil). On error,
+// any partially-created directory is removed before returning.
+func extractBundle(ctx context.Context, sol *solution.Solution, bundle []byte) (string, func(), error) {
+	noop := func() {}
+	if len(bundle) == 0 {
+		return "", noop, nil
+	}
+
+	lgr := logger.FromContext(ctx)
 	if lgr != nil {
-		getterOpts = append(getterOpts, get.WithLogger(*lgr))
-
-		// Create shared artifact cache for both catalog and remote resolvers.
-		var artifactCache catalog.ArtifactCacher
-		if !noCache {
-			artifactCache = cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)
-		}
-
-		localCatalog, err := catalog.NewLocalCatalog(*lgr)
-		if err == nil {
-			// Build SolutionResolverOptions with optional artifact cache
-			resolverOpts := []catalog.SolutionResolverOption{
-				catalog.WithResolverNoCache(noCache),
-				catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
-			}
-			if artifactCache != nil {
-				resolverOpts = append(resolverOpts, catalog.WithResolverArtifactCache(artifactCache))
-			}
-			catResolver := catalog.NewSolutionResolver(localCatalog, *lgr, resolverOpts...)
-			getterOpts = append(getterOpts, get.WithCatalogResolver(catResolver))
-		} else {
-			lgr.V(1).Info("catalog not available for solution resolution", "error", err)
-		}
-
-		// Wire up remote resolver for Docker-style OCI references
-		credStore, credErr := catalog.NewCredentialStore(*lgr)
-		if credErr != nil {
-			lgr.V(1).Info("credential store not available for remote resolution", "error", credErr)
-		}
-		remoteResolver := catalog.NewRemoteSolutionResolver(catalog.RemoteSolutionResolverConfig{
-			CredentialStore: credStore,
-			AuthHandlerFunc: func(registry string) auth.Handler {
-				cfg := config.FromContext(ctx)
-
-				// Check catalog config for an explicit authProvider matching this registry.
-				var handlerName string
-				if cfg != nil {
-					for _, cat := range cfg.Catalogs {
-						if cat.URL == "" || cat.AuthProvider == "" {
-							continue
-						}
-						host, _ := catalog.ParseCatalogURL(cat.URL)
-						if host == registry {
-							handlerName = cat.AuthProvider
-							break
-						}
-					}
-				}
-
-				// Fall back to inference from registry host.
-				if handlerName == "" {
-					var customHandlers []config.CustomOAuth2Config
-					if cfg != nil {
-						customHandlers = cfg.Auth.CustomOAuth2
-					}
-					handlerName = catalog.InferAuthHandler(registry, customHandlers)
-				}
-
-				if handlerName == "" {
-					return nil
-				}
-				handler, err := auth.GetHandler(ctx, handlerName)
-				if err != nil {
-					lgr.V(1).Info("failed to resolve auth handler for registry", "handler", handlerName, "registry", registry, "error", err)
-					return nil
-				}
-				return handler
-			},
-			AuthScopeFunc: func(registry string) string {
-				cfg := config.FromContext(ctx)
-				if cfg == nil {
-					return ""
-				}
-				for _, cat := range cfg.Catalogs {
-					if cat.URL == "" || cat.AuthScope == "" {
-						continue
-					}
-					host, _ := catalog.ParseCatalogURL(cat.URL)
-					if host == registry {
-						return cat.AuthScope
-					}
-				}
-				return ""
-			},
-			Logger:        *lgr,
-			ArtifactCache: artifactCache,
-			NoCache:       noCache,
-		})
-		getterOpts = append(getterOpts, get.WithRemoteResolver(remoteResolver))
+		lgr.V(1).Info("extracting solution bundle", "size", len(bundle))
 	}
 
-	return get.NewGetterFromContext(ctx, getterOpts...)
-}
-
-// loadSolutionWithBundle loads a solution and extracts its bundle if present.
-func loadSolutionWithBundle(ctx context.Context, getter get.Interface, path string, stdin io.Reader) (*solution.Solution, string, error) {
-	lgr := logger.FromContext(ctx)
-
-	// Handle stdin
-	if path == "-" {
-		if stdin == nil {
-			return nil, "", fmt.Errorf("stdin requested but no reader provided")
-		}
-		data, err := io.ReadAll(stdin)
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to read from stdin: %w", err)
-		}
-
-		var sol solution.Solution
-		if err := sol.LoadFromBytes(data); err != nil {
-			return nil, "", fmt.Errorf("failed to parse solution from stdin: %w", err)
-		}
-		return &sol, "", nil
-	}
-
-	// Use GetWithBundle for catalog solutions to extract bundle
-	sol, bundleData, err := getter.GetWithBundle(ctx, path)
+	dir, err := os.MkdirTemp("", paths.AppName()+"-bundle-*")
 	if err != nil {
-		return nil, "", err
+		return "", noop, fmt.Errorf("failed to create temp directory for bundle: %w", err)
 	}
+	remove := func() { _ = os.RemoveAll(dir) }
 
-	// If there's bundle data, extract it to a temp directory
-	if len(bundleData) > 0 {
-		if lgr != nil {
-			lgr.V(1).Info("extracting solution bundle", "size", len(bundleData))
-		}
-		tmpDir, err := os.MkdirTemp("", paths.AppName()+"-bundle-*")
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to create temp directory for bundle: %w", err)
-		}
-
-		// Write the solution YAML to the temp dir so relative paths work
-		solYAML, err := sol.ToYAML()
-		if err != nil {
-			os.RemoveAll(tmpDir)
-			return nil, "", fmt.Errorf("failed to serialize solution: %w", err)
-		}
-		if err := os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), solYAML, 0o600); err != nil {
-			os.RemoveAll(tmpDir)
-			return nil, "", fmt.Errorf("failed to write solution to temp dir: %w", err)
-		}
-
-		// Extract bundle tar
-		manifest, err := bundler.ExtractBundleTar(bundleData, tmpDir)
-		if err != nil {
-			os.RemoveAll(tmpDir)
-			return nil, "", fmt.Errorf("failed to extract bundle: %w", err)
-		}
-
-		if lgr != nil {
-			lgr.V(1).Info("extracted bundle",
-				"files", len(manifest.Files),
-				"dir", tmpDir)
-		}
-
-		return sol, tmpDir, nil
-	}
-
-	return sol, "", nil
-}
-
-// loadSolutionWithBundleAndLock loads a solution, its bundle, and its lock
-// layer in a single call. Returns the solution, the extracted bundle directory
-// (empty when no bundle), the raw lock layer bytes (nil when absent), and any
-// error. Delegates bundle extraction to loadSolutionWithBundle internally.
-func loadSolutionWithBundleAndLock(ctx context.Context, getter get.Interface, path string, stdin io.Reader) (*solution.Solution, string, []byte, error) {
-	lgr := logger.FromContext(ctx)
-
-	// stdin has no OCI layers — delegate to the plain bundle loader.
-	if path == "-" {
-		sol, bundleDir, err := loadSolutionWithBundle(ctx, getter, path, stdin)
-		return sol, bundleDir, nil, err
-	}
-
-	// Use GetWithLayers to fetch solution, bundle, and lock in one call.
-	sol, layers, err := getter.GetWithLayers(ctx, path, catalog.MediaTypeSolutionBundle, catalog.MediaTypeSolutionLock)
+	solYAML, err := sol.ToYAML()
 	if err != nil {
-		return nil, "", nil, err
+		remove()
+		return "", noop, fmt.Errorf("failed to serialize solution: %w", err)
 	}
-	bundleData := layers[catalog.MediaTypeSolutionBundle]
-	lockData := layers[catalog.MediaTypeSolutionLock]
-
-	// If there's bundle data, extract it to a temp directory
-	if len(bundleData) > 0 {
-		if lgr != nil {
-			lgr.V(1).Info("extracting solution bundle", "size", len(bundleData))
-		}
-		tmpDir, err := os.MkdirTemp("", paths.AppName()+"-bundle-*")
-		if err != nil {
-			return nil, "", nil, fmt.Errorf("failed to create temp directory for bundle: %w", err)
-		}
-
-		solYAML, err := sol.ToYAML()
-		if err != nil {
-			os.RemoveAll(tmpDir)
-			return nil, "", nil, fmt.Errorf("failed to serialize solution: %w", err)
-		}
-		if err := os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), solYAML, 0o600); err != nil {
-			os.RemoveAll(tmpDir)
-			return nil, "", nil, fmt.Errorf("failed to write solution to temp dir: %w", err)
-		}
-
-		manifest, err := bundler.ExtractBundleTar(bundleData, tmpDir)
-		if err != nil {
-			os.RemoveAll(tmpDir)
-			return nil, "", nil, fmt.Errorf("failed to extract bundle: %w", err)
-		}
-
-		if lgr != nil {
-			lgr.V(1).Info("extracted bundle",
-				"files", len(manifest.Files),
-				"dir", tmpDir)
-		}
-
-		return sol, tmpDir, lockData, nil
+	if err := os.WriteFile(filepath.Join(dir, bundleSolutionFileName), solYAML, 0o600); err != nil {
+		remove()
+		return "", noop, fmt.Errorf("failed to write solution to temp dir: %w", err)
 	}
 
-	return sol, "", lockData, nil
+	manifest, err := bundler.ExtractBundleTar(bundle, dir)
+	if err != nil {
+		remove()
+		return "", noop, fmt.Errorf("failed to extract bundle: %w", err)
+	}
+
+	if lgr != nil {
+		lgr.V(1).Info("extracted bundle", "files", len(manifest.Files), "dir", dir)
+	}
+	return dir, remove, nil
 }
 
 // applyOCILockLayer parses raw OCI lock layer bytes into cfg when the caller

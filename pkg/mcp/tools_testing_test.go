@@ -64,6 +64,44 @@ func TestHandleGenerateTestScaffold(t *testing.T) {
 		assert.True(t, result.IsError)
 	})
 
+	t.Run("detects file dependencies relative to cwd", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "templates"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "templates", "main.tmpl"), []byte("hi"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "solution.yaml"), []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: deps
+  version: 1.0.0
+spec:
+  resolvers:
+    tmpl:
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              path: templates/main.tmpl
+              operation: read
+`), 0o600))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]any{
+			"path": "solution.yaml",
+			"cwd":  dir,
+		}
+
+		result, err := srv.handleGenerateTestScaffold(context.Background(), request)
+		require.NoError(t, err)
+		require.False(t, result.IsError, extractText(t, result))
+
+		var data map[string]any
+		require.NoError(t, json.Unmarshal([]byte(extractText(t, result)), &data))
+		assert.Contains(t, data["yaml"], "templates/main.tmpl")
+	})
+
 	t.Run("errors on nonexistent file", func(t *testing.T) {
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)

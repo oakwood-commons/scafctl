@@ -14,8 +14,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -98,7 +98,7 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 			w := writer.FromContext(ctx)
 
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], opts.File, binaryName+" inspect solution"); err != nil {
+				if _, err := source.ValidatePositionalRef(args[0], opts.File, binaryName+" inspect solution"); err != nil {
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}

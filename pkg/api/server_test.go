@@ -19,6 +19,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -148,6 +150,29 @@ func TestServer_HandlerCtx_PluginPool(t *testing.T) {
 
 	hctx := srv.HandlerCtx()
 	assert.Equal(t, pool, hctx.PluginPool)
+}
+
+func TestServer_HandlerCtx_SolutionLoader(t *testing.T) {
+	t.Run("unset leaves the field nil for the remote-only default", func(t *testing.T) {
+		srv, err := NewServer()
+		require.NoError(t, err)
+		assert.Nil(t, srv.HandlerCtx().NewSolutionLoader)
+	})
+
+	t.Run("embedder factory reaches the handler context", func(t *testing.T) {
+		want := &load.MaterializedSolution{}
+		srv, err := NewServer(WithServerSolutionLoader(
+			func(context.Context, ...load.RouterOption) load.Loader { return stubLoader{ms: want} },
+		))
+		require.NoError(t, err)
+
+		hctx := srv.HandlerCtx()
+		require.NotNil(t, hctx.NewSolutionLoader)
+		got, err := hctx.SolutionLoader(t.Context()).
+			Load(t.Context(), source.Classification{Kind: source.KindLocalFile, Ref: "solution.yaml"})
+		require.NoError(t, err)
+		assert.Same(t, want, got)
+	})
 }
 
 func TestServer_Shutdown(t *testing.T) {

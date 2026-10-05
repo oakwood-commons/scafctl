@@ -191,8 +191,7 @@ var _ = Describe("Solution build", func() {
 			).WithEnv(iso.Env).Exec()
 
 			pushSession := utils.Scafctl(
-				"catalog", "push", "builtin-bundle@1.0.0",
-				"--catalog", registryAddr+"/scafctl",
+				"catalog", "push", registryAddr+"/scafctl/solutions/builtin-bundle@1.0.0",
 				"--insecure",
 			).WithEnv(iso.Env).Exec()
 			gomega.Expect(string(pushSession.Out.Contents())).To(gomega.ContainSubstring("builtin-bundle"))

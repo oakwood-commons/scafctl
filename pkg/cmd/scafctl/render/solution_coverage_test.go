@@ -206,7 +206,7 @@ func TestSolutionOptions_Run_ActionGraphRoute(t *testing.T) {
 		ActionGraph: true,
 		IOStreams:   &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
 		CliParams:   &settings.Run{},
-		getter:      &mockGetter{err: fmt.Errorf("load error")},
+		loader:      &mockLoader{err: fmt.Errorf("load error")},
 	}
 
 	ctx := setupWriterContext()
@@ -223,7 +223,7 @@ func TestSolutionOptions_Run_SnapshotRoute(t *testing.T) {
 		SnapshotFile: "/tmp/test-snap.json",
 		IOStreams:    &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
 		CliParams:    &settings.Run{},
-		getter:       &mockGetter{err: fmt.Errorf("load error")},
+		loader:       &mockLoader{err: fmt.Errorf("load error")},
 	}
 
 	ctx := setupWriterContext()
@@ -238,7 +238,7 @@ func TestSolutionOptions_Run_DefaultRoute(t *testing.T) {
 	opts := &SolutionOptions{
 		IOStreams: &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
 		CliParams: &settings.Run{},
-		getter:    &mockGetter{err: fmt.Errorf("load error")},
+		loader:    &mockLoader{err: fmt.Errorf("load error")},
 	}
 
 	ctx := setupWriterContext()
@@ -259,7 +259,7 @@ func TestSolutionOptions_runActionGraph_NoWorkflow(t *testing.T) {
 	opts := &SolutionOptions{
 		IOStreams: &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
 		CliParams: &settings.Run{},
-		getter:    &mockGetter{sol: sol},
+		loader:    &mockLoader{sol: sol},
 	}
 
 	ctx := setupWriterContext()
@@ -279,7 +279,7 @@ func TestSolutionOptions_runActionGraphVisualization_NoWorkflow(t *testing.T) {
 		ActionGraph: true,
 		IOStreams:   &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
 		CliParams:   &settings.Run{},
-		getter:      &mockGetter{sol: sol},
+		loader:      &mockLoader{sol: sol},
 	}
 
 	ctx := setupWriterContext()
@@ -300,7 +300,7 @@ func TestSolutionOptions_runSnapshot_NoResolvers(t *testing.T) {
 		SnapshotFile: "/tmp/snap.json",
 		IOStreams:    &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
 		CliParams:    &settings.Run{},
-		getter:       &mockGetter{sol: sol},
+		loader:       &mockLoader{sol: sol},
 	}
 
 	ctx := setupWriterContext()
@@ -651,28 +651,6 @@ func TestSolutionOptions_absolutizeOutputPaths(t *testing.T) {
 		require.NoError(t, opts.absolutizeOutputPaths())
 		assert.Empty(t, opts.OutputFile)
 		assert.Empty(t, opts.SnapshotFile)
-	})
-}
-
-func TestSolutionOptions_pluginConfig(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil when no CLI params", func(t *testing.T) {
-		t.Parallel()
-		opts := &SolutionOptions{}
-		assert.Nil(t, opts.pluginConfig())
-	})
-
-	t.Run("maps CLI params", func(t *testing.T) {
-		t.Parallel()
-		opts := &SolutionOptions{
-			CliParams: &settings.Run{IsQuiet: true, NoColor: true, BinaryName: "mycli"},
-		}
-		pc := opts.pluginConfig()
-		require.NotNil(t, pc)
-		assert.True(t, pc.Quiet)
-		assert.True(t, pc.NoColor)
-		assert.Equal(t, "mycli", pc.BinaryName)
 	})
 }
 

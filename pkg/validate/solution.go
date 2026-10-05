@@ -12,12 +12,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 )
 
 // SolutionResult captures the outcome of validating a solution. It bundles the
@@ -55,21 +55,25 @@ func (r *SolutionResult) Passed(strict bool) bool {
 // The registry is used for provider-aware lint rules; when nil, lint falls
 // back to a default registry.
 func Solution(ctx context.Context, filePath string, registry *provider.Registry) (*SolutionResult, error) {
-	getter := newGetter(ctx)
-
-	resolvedPath, err := get.Resolve(ctx, getter, filePath, "", get.ResolveOptions{
-		Risk: get.DiscoveryRiskLow,
-	})
+	c, err := source.Classify(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("resolving solution path: %w", err)
 	}
 
-	sol, err := getter.Get(ctx, resolvedPath)
+	// Load leniently so structural problems (e.g. an undefined dependsOn
+	// target) surface as lint findings rather than aborting the load; the
+	// error severity of those findings still drives a non-zero result.
+	ms, err := load.NewRouterFromContext(ctx, *logger.FromContext(ctx), load.WithLenient()).Load(ctx, c)
 	if err != nil {
 		return nil, fmt.Errorf("loading solution: %w", err)
 	}
+	load.ReportDiscovery(ctx, ms)
 
-	return LoadedSolution(sol, resolvedPath, registry), nil
+	resolvedPath := filePath
+	if ms.Discovery != nil {
+		resolvedPath = ms.Discovery.Path
+	}
+	return LoadedSolution(ms.Solution, resolvedPath, registry), nil
 }
 
 // LoadedSolution runs lint against an already-loaded solution. It is
@@ -81,25 +85,4 @@ func LoadedSolution(sol *solution.Solution, filePath string, registry *provider.
 		File: filePath,
 		Lint: result,
 	}
-}
-
-// newGetter builds a solution getter wired with the local (and any remote)
-// catalog resolver so bare catalog names resolve, mirroring the lint command.
-// It loads leniently so structural problems (e.g. an undefined dependsOn
-// target) surface as lint findings rather than aborting the load; the error
-// severity of those findings still drives a non-zero validation result.
-func newGetter(ctx context.Context) *get.Getter {
-	lgr := logger.FromContext(ctx)
-
-	getterOpts := []get.Option{get.WithLenientValidation()}
-	if localCatalog, err := catalog.NewLocalCatalog(*lgr); err == nil {
-		resolver := catalog.NewSolutionResolver(localCatalog, *lgr,
-			catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
-		)
-		getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
-	} else {
-		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
-	}
-
-	return get.NewGetterFromContext(ctx, getterOpts...)
 }

@@ -37,10 +37,10 @@ func newMockProvider(name, version string, capabilities ...Capability) Provider 
 
 	// Build output schemas for each capability with required fields
 	outputSchemas := make(map[Capability]*jsonschema.Schema)
-	for _, cap := range capabilities {
-		switch cap {
+	for _, cp := range capabilities {
+		switch cp {
 		case CapabilityValidation:
-			outputSchemas[cap] = &jsonschema.Schema{
+			outputSchemas[cp] = &jsonschema.Schema{
 				Type: "object",
 				Properties: map[string]*jsonschema.Schema{
 					"valid":  {Type: "boolean"},
@@ -48,7 +48,7 @@ func newMockProvider(name, version string, capabilities ...Capability) Provider 
 				},
 			}
 		case CapabilityAuthentication:
-			outputSchemas[cap] = &jsonschema.Schema{
+			outputSchemas[cp] = &jsonschema.Schema{
 				Type: "object",
 				Properties: map[string]*jsonschema.Schema{
 					"authenticated": {Type: "boolean"},
@@ -56,19 +56,21 @@ func newMockProvider(name, version string, capabilities ...Capability) Provider 
 				},
 			}
 		case CapabilityAction:
-			outputSchemas[cap] = &jsonschema.Schema{
+			outputSchemas[cp] = &jsonschema.Schema{
 				Type: "object",
 				Properties: map[string]*jsonschema.Schema{
 					"success": {Type: "boolean"},
 				},
 			}
 		case CapabilityFrom, CapabilityTransform:
-			outputSchemas[cap] = &jsonschema.Schema{
+			outputSchemas[cp] = &jsonschema.Schema{
 				Type: "object",
 				Properties: map[string]*jsonschema.Schema{
 					"result": {Type: "string"},
 				},
 			}
+		case CapabilityState, CapabilityKubeconfig:
+			// No output schema needed by these tests.
 		}
 	}
 

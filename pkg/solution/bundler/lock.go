@@ -59,15 +59,17 @@ type LockDependency struct {
 	VendoredAt string `json:"vendoredAt" yaml:"vendoredAt" doc:"Relative path to vendored file" maxLength:"500" example:".scafctl/vendor/deploy-to-k8s@2.0.0.yaml"`
 }
 
-// LockPluginSource records the resolved remote source of a sourced plugin.
-// Its presence (non-nil) marks the entry as sourced; unsourced entries leave
-// it nil, mirroring solution.PluginDependency.IsSourced().
+// LockPluginSource records where a sourced plugin entry was resolved from,
+// mirroring solution.PluginSource: exactly one of Registry or Built is set.
+// Unsourced (short-name) entries leave LockPlugin.Source nil, so registry,
+// built, and short-name entries never collide on name and kind alone.
 type LockPluginSource struct {
-	// Registry is the canonical origin from the spec's source block
-	// (known pre-resolution). Equals ResolvedCanonical for sourced entries.
-	Registry string `json:"registry" yaml:"registry" doc:"Canonical source registry" maxLength:"255" example:"ghcr.io/org/plugins"`
-	// Name is the RESOLVED remote leaf artifact name (never empty; the
-	// ArtifactName() fallback is already applied at write time).
+	// Registry is the origin as written in the spec's source.registry. Set for
+	// registry-sourced entries; empty for built entries.
+	Registry string `json:"registry,omitempty" yaml:"registry,omitempty" doc:"Source registry" maxLength:"255" example:"ghcr.io/org/plugins"`
+
+	// Built marks an entry resolved from the local catalog (source.built).
+	Built bool `json:"built,omitempty" yaml:"built,omitempty" doc:"Resolved from a locally built plugin"`
 }
 
 // LockPlugin records metadata about a vendored plugin dependency.
@@ -116,7 +118,7 @@ type LockPlugin struct {
 	// time. Nil when the plugin was locked without signature verification.
 	Signature *LockPluginSignature `json:"signature,omitempty" yaml:"signature,omitempty" doc:"Signature verification metadata"`
 
-	Source *LockPluginSource `json:"source,omitempty" yaml:"source,omitempty" doc:"Resolved remote source (sourced plugins only)"`
+	Source *LockPluginSource `json:"source,omitempty" yaml:"source,omitempty" doc:"Resolved source (registry or built plugins only)"`
 }
 
 // LockPluginSignature records cosign signature metadata captured during the
@@ -229,6 +231,12 @@ func LoadLockFile(path string) (*LockFile, error) {
 		return nil, fmt.Errorf("reading lock file: %w", err)
 	}
 
+	return ParseLockYAML(data)
+}
+
+// ParseLockYAML parses a YAML-encoded lock file, as stored on disk, and
+// validates its format version.
+func ParseLockYAML(data []byte) (*LockFile, error) {
 	var lf LockFile
 	if err := yaml.Unmarshal(data, &lf); err != nil {
 		return nil, fmt.Errorf("parsing lock file: %w", err)
@@ -302,6 +310,9 @@ type hasRegistry interface {
 	HasRegistry() bool
 	Registry() string
 }
+type hasBuilt interface {
+	HasBuilt() bool
+}
 type hasArtifactName interface {
 	ArtifactName() string
 }
@@ -311,6 +322,7 @@ type pluginKind interface {
 
 type pluginArtifact interface {
 	hasRegistry
+	hasBuilt
 	hasArtifactName
 	pluginKind
 }
@@ -341,10 +353,14 @@ func findPluginByDep[T pluginArtifact](lf *LockFile, dep T) *LockPlugin {
 		return nil
 	}
 	kind := string(dep.PluginKind())
-	if dep.HasRegistry() {
+	switch {
+	case dep.HasRegistry():
 		return lf.findByRegistry(dep.Registry(), dep.ArtifactName(), kind)
+	case dep.HasBuilt():
+		return lf.findBuilt(dep.ArtifactName(), kind)
+	default:
+		return lf.find(dep.ArtifactName(), kind)
 	}
-	return lf.find(dep.ArtifactName(), kind)
 }
 
 // findByRegistry: presence of Source is the guard; leaf+registry give drift safety.
@@ -353,6 +369,16 @@ func (lf *LockFile) findByRegistry(registry, name, kind string) *LockPlugin {
 		e := &lf.Plugins[i]
 		if e.Source != nil && e.Kind == kind &&
 			e.Source.Registry == registry && e.Name == name {
+			return e
+		}
+	}
+	return nil
+}
+
+func (lf *LockFile) findBuilt(name, kind string) *LockPlugin {
+	for i := range lf.Plugins {
+		e := &lf.Plugins[i]
+		if e.Source != nil && e.Source.Built && e.Name == name && e.Kind == kind {
 			return e
 		}
 	}
@@ -382,10 +408,15 @@ func findPluginByVersionConstraint[T versionPluginArtifact](lf *LockFile, dep T)
 	if lf == nil {
 		return nil
 	}
-	if dep.HasRegistry() {
-		return lf.findByRegistryAndConstraint(dep.Registry(), dep.ArtifactName(), string(dep.PluginKind()), dep.VersionConstraint())
+	kind := string(dep.PluginKind())
+	switch {
+	case dep.HasRegistry():
+		return lf.findByRegistryAndConstraint(dep.Registry(), dep.ArtifactName(), kind, dep.VersionConstraint())
+	case dep.HasBuilt():
+		return lf.findBuiltByConstraint(dep.ArtifactName(), kind, dep.VersionConstraint())
+	default:
+		return lf.findByConstraint(dep.ArtifactName(), kind, dep.VersionConstraint())
 	}
-	return lf.findByConstraint(dep.ArtifactName(), string(dep.PluginKind()), dep.VersionConstraint())
 }
 
 func (lf *LockFile) findByRegistryAndConstraint(registry, name, kind, constraint string) *LockPlugin {
@@ -394,6 +425,16 @@ func (lf *LockFile) findByRegistryAndConstraint(registry, name, kind, constraint
 		if e.Source != nil && e.Kind == kind &&
 			e.Source.Registry == registry && e.Name == name &&
 			e.Constraint == constraint {
+			return e
+		}
+	}
+	return nil
+}
+
+func (lf *LockFile) findBuiltByConstraint(name, kind, constraint string) *LockPlugin {
+	for i := range lf.Plugins {
+		e := &lf.Plugins[i]
+		if e.Source != nil && e.Source.Built && e.Name == name && e.Kind == kind && e.Constraint == constraint {
 			return e
 		}
 	}

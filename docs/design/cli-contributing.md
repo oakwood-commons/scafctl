@@ -138,10 +138,6 @@ pkg/cmd/scafctl/
 │   ├── inspect.go
 │   ├── solution.go      # 'inspect solution' metadata
 │   └── plugin.go        # 'inspect plugin' metadata/providers
-├── tag/                 # 'tag' verb
-│   ├── tag.go
-│   ├── solution.go      # 'tag solution' create alias
-│   └── plugin.go        # 'tag plugin' create alias
 ├── save/                # 'save' verb (analogous to docker save)
 │   ├── save.go
 │   ├── solution.go      # 'save solution' export to tar
@@ -909,26 +905,38 @@ type FooOptions struct {
     // ... flags
     
     // For testing
-    getter GetterInterface
+    loader load.Loader
 }
 
 // In Run method
 func (o *FooOptions) Run(ctx context.Context) error {
-    getter := o.getter
-    if getter == nil {
-        getter = NewDefaultGetter()  // Production default
+    router := load.NewRouterFromContext(ctx, *logger.FromContext(ctx))
+    sel, err := router.Select(ctx, o.File, o.Args, load.ArgsAreNames)
+    if err != nil {
+        return err
+    }
+
+    loader := o.loader
+    if loader == nil {
+        loader = router.SelectionLoader(sel)  // Production default
     }
     
-    data, err := getter.Get(ctx, o.File)
+    ms, err := loader.Load(ctx, sel.Source)
     // ...
 }
 
 // In tests
+type fakeLoader struct {
+    sol *solution.Solution
+}
+
+func (f fakeLoader) Load(context.Context, source.Classification) (*load.MaterializedSolution, error) {
+    return &load.MaterializedSolution{Solution: f.sol}, nil
+}
+
 func TestWithMock(t *testing.T) {
     options := &FooOptions{
-        getter: &mockGetter{
-            data: testData,
-        },
+        loader: fakeLoader{sol: testSolution},
     }
     // ...
 }
@@ -1220,7 +1228,6 @@ This section tracks which commands from the design are implemented and what work
 | `catalog inspect` | ✅ | Inspect artifact metadata |
 | `catalog delete` | ✅ | Delete artifact from catalog |
 | `catalog prune` | ✅ | Prune unused catalog entries |
-| `catalog tag` | ✅ | Create version aliases |
 | `catalog save` | ✅ | Export artifact to tar |
 | `catalog load` | ✅ | Import artifact from tar |
 | `inspect solution` | ✅ | Show solution structure/metadata (was `explain solution`; `--usage` for the usage view) |
@@ -1467,23 +1474,6 @@ type InspectOptions struct {
 ```bash
 scafctl inspect solution example@1.7.0
 scafctl inspect plugin aws-provider@1.5.0
-```
-
-##### `tag solution` / `tag plugin`
-
-```go
-// pkg/cmd/scafctl/tag/solution.go
-
-type TagOptions struct {
-    Source string // Source reference
-    Target string // Target tag
-}
-```
-
-**Examples**:
-```bash
-scafctl tag solution my-solution@1.2.3 my-solution:latest
-scafctl tag plugin aws-provider@1.5.0 aws-provider:stable
 ```
 
 ##### `save solution` / `save plugin`

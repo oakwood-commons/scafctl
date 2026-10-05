@@ -36,7 +36,7 @@ func TestResolveAuthScope_FromNamedCatalog(t *testing.T) {
 	}
 
 	ctx := appconfig.WithConfig(context.Background(), cfg)
-	scope := resolveAuthScope(ctx, "my-registry")
+	scope := resolveAuthScope(ctx, "ghcr.io", "my-registry")
 	assert.Equal(t, "repo:read", scope)
 }
 
@@ -44,7 +44,7 @@ func TestResolveAuthScope_EmptyWhenNoCatalog(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	scope := resolveAuthScope(ctx, "nonexistent")
+	scope := resolveAuthScope(ctx, "ghcr.io", "nonexistent")
 	assert.Equal(t, "", scope)
 }
 
@@ -52,8 +52,50 @@ func TestResolveAuthScope_EmptyWhenNoConfig(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	scope := resolveAuthScope(ctx, "")
+	scope := resolveAuthScope(ctx, "ghcr.io", "")
 	assert.Equal(t, "", scope)
+}
+
+func TestResolveAuthScope_FallsBackToRegistry(t *testing.T) {
+	t.Parallel()
+
+	cfg := &appconfig.Config{
+		Catalogs: []appconfig.CatalogConfig{
+			{
+				Name:      "private",
+				Type:      appconfig.CatalogTypeOCI,
+				URL:       "oci://registry.example.com/team",
+				AuthScope: "private:read",
+			},
+		},
+	}
+	ctx := appconfig.WithConfig(context.Background(), cfg)
+
+	tests := []struct {
+		name        string
+		registry    string
+		catalogFlag string
+		want        string
+	}{
+		{name: "full reference without --catalog uses the host's scope", registry: "registry.example.com", want: "private:read"},
+		{name: "unknown named catalog falls back to the host's scope", registry: "registry.example.com", catalogFlag: "missing", want: "private:read"},
+		{name: "unconfigured host has no scope", registry: "other.example.com", want: ""},
+		{name: "well-known registry uses the inferred default scope", registry: "us-docker.pkg.dev", want: catalog.InferDefaultScope("us-docker.pkg.dev")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, resolveAuthScope(ctx, tt.registry, tt.catalogFlag))
+		})
+	}
+}
+
+func TestResolveAuthScope_WithoutConfigInfersDefaultScope(t *testing.T) {
+	t.Parallel()
+
+	scope := resolveAuthScope(context.Background(), "gcr.io", "")
+	assert.NotEmpty(t, scope)
+	assert.Equal(t, catalog.InferDefaultScope("gcr.io"), scope)
 }
 
 func TestResolveAuthScope_EmptyWhenCatalogHasNoScope(t *testing.T) {
@@ -70,7 +112,7 @@ func TestResolveAuthScope_EmptyWhenCatalogHasNoScope(t *testing.T) {
 	}
 
 	ctx := appconfig.WithConfig(context.Background(), cfg)
-	scope := resolveAuthScope(ctx, "my-registry")
+	scope := resolveAuthScope(ctx, "ghcr.io", "my-registry")
 	assert.Equal(t, "", scope)
 }
 
@@ -182,7 +224,7 @@ func TestCommandCatalog_HasSubcommands(t *testing.T) {
 	assert.Equal(t, "catalog", cmd.Use)
 
 	// Verify expected subcommands exist
-	expectedSubs := []string{"list", "pull", "push", "delete", "login", "logout", "remote", "inspect", "tags", "tag", "attach"}
+	expectedSubs := []string{"list", "pull", "push", "delete", "login", "logout", "remote", "inspect", "tags", "attach"}
 	for _, name := range expectedSubs {
 		found := false
 		for _, sub := range cmd.Commands() {
@@ -192,6 +234,12 @@ func TestCommandCatalog_HasSubcommands(t *testing.T) {
 			}
 		}
 		assert.True(t, found, "expected subcommand %q", name)
+	}
+
+	// 'catalog tag' was removed: local alias tags shadowed version tags and
+	// broke delete. Remote aliasing is only done by 'catalog push --latest'.
+	for _, sub := range cmd.Commands() {
+		assert.NotEqual(t, "tag", sub.Name(), "'catalog tag' must not be registered")
 	}
 }
 
@@ -255,134 +303,6 @@ func TestHintOnAuthError_NonAuthError(t *testing.T) {
 func testIOStreams() *terminal.IOStreams {
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	return ioStreams
-}
-
-func TestResolveAuthScopeForRegistry(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		registry string
-		cfg      *appconfig.Config
-		want     string
-	}{
-		{
-			name:     "matches catalog by registry host",
-			registry: "us-central1-docker.pkg.dev",
-			cfg: &appconfig.Config{
-				Catalogs: []appconfig.CatalogConfig{
-					{Name: "gcp", URL: "oci://us-central1-docker.pkg.dev/proj/repo", AuthScope: "https://www.googleapis.com/auth/cloud-platform"},
-				},
-			},
-			want: "https://www.googleapis.com/auth/cloud-platform",
-		},
-		{
-			name:     "no match falls back to InferDefaultScope for GCP",
-			registry: "us-central1-docker.pkg.dev",
-			cfg: &appconfig.Config{
-				Catalogs: []appconfig.CatalogConfig{
-					{Name: "other", URL: "oci://ghcr.io/myorg", AuthScope: ""},
-				},
-			},
-			want: "https://www.googleapis.com/auth/cloud-platform",
-		},
-		{
-			name:     "no match and no inference returns empty",
-			registry: "ghcr.io",
-			cfg: &appconfig.Config{
-				Catalogs: []appconfig.CatalogConfig{
-					{Name: "gcp", URL: "oci://us-central1-docker.pkg.dev/proj/repo", AuthScope: "cloud-platform"},
-				},
-			},
-			want: "",
-		},
-		{
-			name:     "nil config falls back to InferDefaultScope",
-			registry: "us-east1-docker.pkg.dev",
-			cfg:      nil,
-			want:     "https://www.googleapis.com/auth/cloud-platform",
-		},
-		{
-			name:     "nil config unknown registry returns empty",
-			registry: "ghcr.io",
-			cfg:      nil,
-			want:     "",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			ctx := context.Background()
-			if tc.cfg != nil {
-				ctx = appconfig.WithConfig(ctx, tc.cfg)
-			}
-			got := resolveAuthScopeForRegistry(ctx, tc.registry)
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
-func TestValidateVersionConstraint(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		nameOrRef  string
-		constraint string
-		wantErr    string
-	}{
-		{
-			name:       "empty constraint is valid",
-			nameOrRef:  "my-app@1.0.0",
-			constraint: "",
-		},
-		{
-			name:       "constraint without @version is valid",
-			nameOrRef:  "my-app",
-			constraint: "^1.0.0",
-		},
-		{
-			name:       "constraint with @version is error",
-			nameOrRef:  "my-app@1.0.0",
-			constraint: "^1.0.0",
-			wantErr:    "cannot use --version with an explicit version",
-		},
-		{
-			name:       "invalid constraint syntax",
-			nameOrRef:  "my-app",
-			constraint: "not-semver!!",
-			wantErr:    "invalid version constraint",
-		},
-		{
-			name:       "valid tilde constraint",
-			nameOrRef:  "my-app",
-			constraint: "~1.2.0",
-		},
-		{
-			name:       "valid range constraint",
-			nameOrRef:  "my-app",
-			constraint: ">= 1.0.0, < 2.0.0",
-		},
-		{
-			name:       "wildcard constraint",
-			nameOrRef:  "my-app",
-			constraint: "*",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			err := validateVersionConstraint(tc.nameOrRef, tc.constraint)
-			if tc.wantErr != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.wantErr)
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
 }
 
 func TestFilterArtifactsByConstraint(t *testing.T) {
@@ -489,8 +409,10 @@ func TestFilterArtifactsByConstraint_MultipleKindsSameVersion(t *testing.T) {
 // mockVersionCatalog is a minimal Catalog implementation for testing
 // resolveVersionConstraint.
 type mockVersionCatalog struct {
-	artifacts []catalog.ArtifactInfo
-	listErr   error
+	artifacts   []catalog.ArtifactInfo
+	listErr     error
+	resolveInfo catalog.ArtifactInfo
+	resolveErr  error
 }
 
 func (m *mockVersionCatalog) Name() string { return "mock" }
@@ -516,7 +438,7 @@ func (m *mockVersionCatalog) FetchWithLayer(context.Context, catalog.Reference, 
 }
 
 func (m *mockVersionCatalog) Resolve(context.Context, catalog.Reference) (catalog.ArtifactInfo, error) {
-	return catalog.ArtifactInfo{}, nil
+	return m.resolveInfo, m.resolveErr
 }
 
 func (m *mockVersionCatalog) Exists(context.Context, catalog.Reference) (bool, error) {
@@ -592,6 +514,48 @@ func TestResolveVersionConstraint_ListError(t *testing.T) {
 	_, err := resolveVersionConstraint(context.Background(), mock, ref, "^1.0.0")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to list versions")
+}
+
+func TestResolvePullFetchReference(t *testing.T) {
+	t.Parallel()
+
+	mustVersion := func(s string) *semver.Version {
+		v, err := semver.NewVersion(s)
+		require.NoError(t, err)
+		return v
+	}
+
+	t.Run("resolves version constraint before final resolve", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := newCatalogTestCtx(t)
+		mock := &mockVersionCatalog{
+			artifacts: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: mustVersion("1.0.0")}},
+				{Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: mustVersion("1.1.0")}},
+			},
+			resolveInfo: catalog.ArtifactInfo{Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: mustVersion("1.1.0")}},
+		}
+
+		ref, err := resolvePullFetchReference(ctx, &PullOptions{VersionConstraint: "^1.0.0"}, mock, catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution})
+		require.NoError(t, err)
+		require.NotNil(t, ref.Version)
+		assert.Equal(t, "1.1.0", ref.Version.Original())
+	})
+
+	t.Run("resolves final fetch reference without version constraint", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := newCatalogTestCtx(t)
+		mock := &mockVersionCatalog{
+			resolveInfo: catalog.ArtifactInfo{Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindProvider, Version: mustVersion("2.0.0")}},
+		}
+
+		ref, err := resolvePullFetchReference(ctx, &PullOptions{}, mock, catalog.Reference{Name: "app", Kind: catalog.ArtifactKindProvider})
+		require.NoError(t, err)
+		require.NotNil(t, ref.Version)
+		assert.Equal(t, "2.0.0", ref.Version.Original())
+	})
 }
 
 func TestVerboseRemoteInfo_NoProvider(t *testing.T) {

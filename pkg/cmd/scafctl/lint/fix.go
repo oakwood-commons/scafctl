@@ -17,7 +17,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
@@ -50,18 +51,34 @@ func runLintFix(ctx context.Context, opts *Options) error {
 	}
 
 	lgr := logger.FromContext(ctx)
-	getter := newLintGetter(ctx, lgr)
-
-	// Fixing mutates a file, so ambiguous auto-discovery must error (high risk)
-	// rather than silently pick one of several matches, matching 'refactor rename'.
-	resolvedPath, resolveErr := get.Resolve(ctx, getter, opts.File, "", get.ResolveOptions{
-		Risk: get.DiscoveryRiskHigh,
-	})
-	if resolveErr != nil {
-		return failFix(opts, exitcode.FileNotFound, fmt.Errorf("failed to resolve solution: %w", resolveErr))
+	sel, err := load.NewRouterFromContext(ctx, *lgr).Select(ctx, opts.File, nil, load.ArgsAreNames)
+	if err != nil {
+		code := exitcode.FileNotFound
+		if errors.Is(err, source.ErrInvalidRef) {
+			code = exitcode.InvalidInput
+		}
+		return failFix(opts, code, fmt.Errorf("failed to resolve solution: %w", err))
 	}
-	if resolvedPath == "-" {
+
+	var resolvedPath string
+	switch sel.Source.Kind {
+	case source.KindAutoDiscover:
+		// Fixing mutates a file, so ambiguous auto-discovery must error (high
+		// risk) rather than silently pick one of several matches, matching
+		// 'refactor rename'.
+		resolvedPath, err = sel.DiscoveredPath(load.DiscoveryRiskHigh)
+		if err != nil {
+			return failFix(opts, exitcode.FileNotFound, fmt.Errorf("failed to resolve solution: %w", err))
+		}
+		if w != nil {
+			w.Verbosef("Using %s", resolvedPath)
+		}
+	case source.KindLocalFile:
+		resolvedPath = sel.Source.Ref
+	case source.KindStdin:
 		return failFix(opts, exitcode.ValidationFailed, errors.New("lint --fix requires a file path; stdin ('-') is not supported"))
+	case source.KindUnknown, source.KindURL, source.KindRemoteRef, source.KindCatalogQualified, source.KindBareName:
+		return failFix(opts, exitcode.ValidationFailed, fmt.Errorf("lint --fix requires a local solution file; %q is a %s", opts.File, sel.Source.Kind))
 	}
 	opts.File = resolvedPath
 

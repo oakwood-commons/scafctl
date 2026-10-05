@@ -193,22 +193,6 @@ func (b Bundle) IsEmpty() bool {
 	return len(b.Include) == 0 && len(b.Plugins) == 0
 }
 
-// PartitionPlugins splits the bundle's plugins into local and sourced sets.
-// Local plugins (a short Name with no Source) are resolved from the local
-// catalog; sourced plugins (those declaring a Source with a registry) are
-// resolved from remote registries. Order within each set is preserved. Both
-// return values are nil when the bundle declares no matching plugins.
-func (b Bundle) PartitionPlugins() (unsourced, sourced []PluginDependency) {
-	for _, p := range b.Plugins {
-		if p.HasRegistry() {
-			sourced = append(sourced, p)
-		} else {
-			unsourced = append(unsourced, p)
-		}
-	}
-	return unsourced, sourced
-}
-
 // PluginDependency declares an external plugin required by a solution.
 type PluginDependency struct {
 	// Name is the solution-local identity (alias) for the plugin. It is a short
@@ -239,16 +223,20 @@ type PluginDependency struct {
 // registry) rather than local (resolved from the local catalog by Name).
 type PluginSource struct {
 	// Registry is the OCI registry and namespace the plugin is fetched from.
-	Registry string `json:"registry" yaml:"registry" doc:"OCI registry (and namespace) for the plugin source" example:"ghcr.io/oakwood-commons" maxLength:"255"`
+	Registry string `json:"registry,omitempty" yaml:"registry,omitempty" doc:"OCI registry (and namespace) for the plugin source" example:"ghcr.io/oakwood-commons" maxLength:"255" required:"false"`
 
 	// Artifact is the OCI artifact (leaf) name within the registry.
 	Artifact string `json:"artifact" yaml:"artifact" doc:"OCI artifact name for the plugin source" example:"scafctl-exec-provider" maxLength:"100"`
+
+	// Built selects the locally built copy of the plugin from the local catalog.
+	Built bool `json:"built,omitempty" yaml:"built,omitempty" doc:"Resolve the plugin from the locally built copy in the local catalog" required:"false"`
 }
 
 // HasRegistry reports whether the dependency declares a remote OCI Source. When
 // true the plugin is resolved from that remote registry; otherwise it is
 // resolved from the local catalog by its Name.
 func (p PluginDependency) HasRegistry() bool { return p.Source != nil && p.Source.Registry != "" }
+func (p PluginDependency) HasBuilt() bool    { return p.Source != nil && p.Source.Built }
 
 // LocalName returns the solution-local identity (alias) for the plugin. Use it
 // for cache keys, allowlist checks, registration, and metrics.
@@ -273,12 +261,19 @@ func (p PluginDependency) Registry() string {
 	return ""
 }
 
+// ValidateSource checks that a declared Source names exactly one origin:
+// either a remote registry (source.registry) or the locally built copy
+// (source.built). A nil Source is valid (short-name dependency).
 func (p PluginDependency) ValidateSource() error {
 	if p.Source == nil {
 		return nil
 	}
-	if p.Source.Registry == "" {
-		return fmt.Errorf("plugin %q: source.registry is required when source is set", p.Name)
+	hasRegistry := p.Source.Registry != ""
+	switch {
+	case hasRegistry && p.Source.Built:
+		return fmt.Errorf("plugin %q: source.registry and source.built are mutually exclusive", p.Name)
+	case !hasRegistry && !p.Source.Built:
+		return fmt.Errorf("plugin %q: source.registry or source.built is required when source is set", p.Name)
 	}
 	return nil
 }

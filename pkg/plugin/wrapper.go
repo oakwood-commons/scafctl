@@ -146,7 +146,7 @@ func fallbackOutputSchema(capability provider.Capability) *jsonschema.Schema {
 				"success": {Type: "boolean"},
 			},
 		}
-	case provider.CapabilityFrom, provider.CapabilityTransform:
+	case provider.CapabilityFrom, provider.CapabilityTransform, provider.CapabilityState, provider.CapabilityKubeconfig:
 		fallthrough
 	default:
 		return &jsonschema.Schema{

@@ -15,23 +15,21 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/action"
-	"github.com/oakwood-commons/scafctl/pkg/cache"
-	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	cmdflags "github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
-	"github.com/oakwood-commons/scafctl/pkg/paths"
-	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/effective"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	solrender "github.com/oakwood-commons/scafctl/pkg/solution/render"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
@@ -64,6 +62,10 @@ type SolutionOptions struct {
 	NoTimestamp     bool
 	NoCache         bool
 
+	// Catalog is the --catalog flag value: the catalog to resolve a solution
+	// name from.
+	Catalog string
+
 	// NoState disables state loading. render is read-only (it never saves), so
 	// this only skips reading persisted state; resolvers that read the state
 	// provider fall back to their defaults.
@@ -94,7 +96,7 @@ type SolutionOptions struct {
 	flagsChanged map[string]bool
 
 	// For dependency injection in tests
-	getter   get.Interface
+	loader   load.Loader
 	registry *provider.Registry
 }
 
@@ -185,7 +187,7 @@ Examples:
 
 			// Handle positional catalog name argument
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" render solution"); err != nil {
+				if _, err := source.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" render solution"); err != nil {
 					writeSolutionError(options, err.Error())
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
@@ -272,6 +274,7 @@ Examples:
 	cCmd.Flags().DurationVar(&options.ResolverTimeout, "resolver-timeout", settings.DefaultResolverTimeout, "Timeout per resolver")
 	cCmd.Flags().DurationVar(&options.PhaseTimeout, "phase-timeout", settings.DefaultPhaseTimeout, "Timeout per phase")
 	cCmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Bypass the artifact cache and fetch directly from the catalog")
+	cmdflags.AddCatalogFlag(cCmd, &options.Catalog)
 	cCmd.Flags().BoolVar(&options.NoState, "no-state", false, "Skip loading persisted state (for CI/offline runs)")
 	cCmd.Flags().StringVar(&options.LockMode, "lock-mode", "", "Plugin version lock mode: strict, constrained, bestEffort (defaults to the same source-based mode as 'run')")
 
@@ -347,7 +350,7 @@ func (o *SolutionOptions) runEffective(ctx context.Context, lgr logr.Logger) err
 
 	sol, err := o.loadSolution(ctx)
 	if err != nil {
-		return o.exitWithCode(err, exitcode.FileNotFound)
+		return o.exitWithCode(err, prepare.ErrorExitCode(err))
 	}
 
 	// Effective mode defaults to YAML (the golden-file format), independent of
@@ -382,7 +385,7 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 	// run faithfully (lock-file honoring, official/third-party plugins resolved).
 	ctx, sol, reg, cleanup, err := o.prepareForExecution(ctx)
 	if err != nil {
-		return o.exitWithCode(err, exitcode.FileNotFound)
+		return o.exitWithCode(err, prepare.ErrorExitCode(err))
 	}
 	defer cleanup()
 
@@ -472,7 +475,7 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 	// Build the execution registry the same way `run` does.
 	ctx, sol, reg, cleanup, err := o.prepareForExecution(ctx)
 	if err != nil {
-		return o.exitWithCode(err, exitcode.FileNotFound)
+		return o.exitWithCode(err, prepare.ErrorExitCode(err))
 	}
 	defer cleanup()
 
@@ -540,7 +543,7 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 	// Build the execution registry the same way `run` does.
 	ctx, sol, reg, cleanup, err := o.prepareForExecution(ctx)
 	if err != nil {
-		return o.exitWithCode(err, exitcode.FileNotFound)
+		return o.exitWithCode(err, prepare.ErrorExitCode(err))
 	}
 	defer cleanup()
 
@@ -651,90 +654,64 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 	return nil
 }
 
-// loadSolution loads the solution from file, stdin, catalog, or auto-discovery
+// selectSource picks the solution source (-f or positional ref, else a
+// discovered file), scoped by --catalog, and the loader to load it with. A
+// discovered path is recorded in o.File so -o test places testdata/ next to
+// it. An injected test loader receives the classified -f value as-is.
+func (o *SolutionOptions) selectSource(ctx context.Context) (load.Loader, source.Classification, error) {
+	if o.loader != nil {
+		c, err := source.Classify(o.File, source.WithCatalog(o.Catalog))
+		return o.loader, c, err
+	}
+
+	router := load.NewRouterFromContext(ctx, *logger.FromContext(ctx),
+		load.CLIRouterOptions(o.stdin(), o.NoCache, settings.DiscoveryModeDefault)...)
+
+	sel, err := router.Select(ctx, o.File, nil, load.ArgsAreNames, source.WithCatalog(o.Catalog))
+	if err != nil {
+		return nil, source.Classification{}, err
+	}
+	// Low risk never fails: the first match wins.
+	if path, _ := sel.DiscoveredPath(load.DiscoveryRiskLow); path != "" {
+		o.File = path
+	}
+	return router.SelectionLoader(sel), sel.Source, nil
+}
+
+// stdin returns the command's stdin reader, or nil when there is none.
+func (o *SolutionOptions) stdin() io.Reader {
+	if o.IOStreams == nil || o.IOStreams.In == nil {
+		return nil
+	}
+	return o.IOStreams.In
+}
+
+// loadSolution loads the solution from file, stdin, catalog, or
+// auto-discovery without preparing it for execution.
 func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution, error) {
-	getter := o.getter
-	if getter == nil {
-		lgr := logger.FromContext(ctx)
-
-		// Set up getter options
-		getterOpts := []get.Option{
-			get.WithLogger(*lgr),
-		}
-
-		// Try to set up catalog resolver for bare name resolution
-		localCatalog, err := catalog.NewLocalCatalog(*lgr)
-		if err == nil {
-			resolverOpts := []catalog.SolutionResolverOption{
-				catalog.WithResolverNoCache(o.NoCache),
-				catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
-			}
-			if !o.NoCache {
-				artifactCache := cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)
-				resolverOpts = append(resolverOpts, catalog.WithResolverArtifactCache(artifactCache))
-			}
-			resolver := catalog.NewSolutionResolver(localCatalog, *lgr, resolverOpts...)
-			getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
-		} else {
-			lgr.V(1).Info("catalog not available for solution resolution", "error", err)
-		}
-
-		concreteGetter := get.NewGetterFromContext(ctx, getterOpts...)
-		getter = concreteGetter
-
-		// Unified resolution chain: -f > positional arg > auto-discover
-		if o.File != "-" {
-			resolvedPath, resolveErr := get.Resolve(ctx, concreteGetter, o.File, "", get.ResolveOptions{
-				Risk: get.DiscoveryRiskLow,
-			})
-			if resolveErr != nil {
-				return nil, resolveErr
-			}
-			o.File = resolvedPath
-		}
-	}
-
-	// Emit verbose discovery information
-	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
-		switch o.File {
-		case "-":
-			// stdin handled below
-		default:
-			w.Verbosef("Loading solution from: %s", o.File)
-		}
-	}
-
-	// Handle stdin
-	if o.File == "-" {
-		data, err := io.ReadAll(o.IOStreams.In)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read from stdin: %w", err)
-		}
-
-		var sol solution.Solution
-		if err := sol.LoadFromBytes(data); err != nil {
-			return nil, fmt.Errorf("failed to parse solution from stdin: %w", err)
-		}
-		return &sol, nil
-	}
-
-	// Use getter for file, catalog, or auto-discovery
-	sol, err := getter.Get(ctx, o.File)
+	loader, c, err := o.selectSource(ctx)
 	if err != nil {
 		return nil, err
 	}
+	load.ReportSource(ctx, c)
 
+	ms, err := loader.Load(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	load.ReportDiscovery(ctx, ms)
+
+	sol := ms.Solution
 	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
 		w.Verbosef("Solution loaded: %s (version=%s)", sol.Metadata.Name, sol.Metadata.Version)
 	}
-
 	return sol, nil
 }
 
 // executionRegistry is the consumer-side view of the provider registry that
 // the render command needs: provider lookup (Get/DescriptorLookup) plus
 // existence checks (Has) for workflow validation. The registry returned by
-// prepare.Solution satisfies it structurally, so no adapter is required.
+// prepare.SolutionFromLoader satisfies it structurally, so no adapter is required.
 type executionRegistry interface {
 	Get(name string) (provider.Provider, bool)
 	Has(name string) bool
@@ -742,58 +719,37 @@ type executionRegistry interface {
 }
 
 // prepareForExecution builds the same lock-file-honoring execution registry
-// that `run` builds (via prepare.Solution), so the executing render modes are a
-// faithful preview of `run`. Callers MUST defer the returned cleanup func; the
-// returned context carries per-execution provider settings and must be used for
-// subsequent resolver/action execution.
+// that `run` builds (via prepare.SolutionFromLoader), so the executing render
+// modes are a faithful preview of `run`. Callers MUST defer the returned
+// cleanup func; the returned context carries per-execution provider settings
+// and must be used for subsequent resolver/action execution.
 //
-// o.File is resolved first (unless a getter is injected or stdin is used) so an
-// adjacent lock file is discovered, and output/snapshot paths are absolutized
-// before prepare.Solution runs (which may chdir into an extracted bundle).
+// Output/snapshot paths are absolutized first because preparation may chdir
+// into an extracted bundle.
 func (o *SolutionOptions) prepareForExecution(ctx context.Context) (context.Context, *solution.Solution, executionRegistry, func(), error) {
 	noop := func() {}
 
-	// Resolve o.File first (mirrors loadSolution) so prepare can find a lock
-	// file adjacent to the resolved path. Skipped when a getter is injected
-	// (tests) or when reading from stdin.
-	if o.getter == nil && o.File != "-" {
-		getter := get.NewGetterFromContext(ctx)
-		resolvedPath, resolveErr := get.Resolve(ctx, getter, o.File, "", get.ResolveOptions{
-			Risk: get.DiscoveryRiskLow,
-		})
-		if resolveErr != nil {
-			return ctx, nil, nil, noop, resolveErr
-		}
-		o.File = resolvedPath
-	}
-
-	// prepare.Solution may chdir into an extracted bundle directory (restored by
+	// Preparation may chdir into an extracted bundle directory (restored by
 	// Cleanup). Absolutize output/snapshot paths now so writes land at the
 	// caller's CWD, not inside the temporary bundle dir.
 	if err := o.absolutizeOutputPaths(); err != nil {
 		return ctx, nil, nil, noop, err
 	}
 
-	var stdin io.Reader
-	if o.IOStreams != nil {
-		stdin = o.IOStreams.In
-	}
-
-	opts, err := prepare.OptionsFromContext(ctx, prepare.CLIWiring{
-		File:         o.File,
-		Getter:       o.getter,
-		Registry:     o.registry,
-		Stdin:        stdin,
-		NoCache:      o.NoCache,
-		LockMode:     o.LockMode,
-		PluginConfig: o.pluginConfig(),
-		DebugLogging: o.debugLogging(),
-	})
+	loader, c, err := o.selectSource(ctx)
 	if err != nil {
 		return ctx, nil, nil, noop, err
 	}
 
-	result, err := prepare.Solution(ctx, o.File, opts...)
+	w := prepare.NewCLIWiring(o.CliParams)
+	w.Registry = o.registry
+	w.LockMode = o.LockMode
+	opts, err := prepare.OptionsFromContext(ctx, w)
+	if err != nil {
+		return ctx, nil, nil, noop, err
+	}
+
+	result, err := prepare.SolutionFromLoader(ctx, loader, c, opts...)
 	if err != nil {
 		return ctx, nil, nil, noop, err
 	}
@@ -803,7 +759,7 @@ func (o *SolutionOptions) prepareForExecution(ctx context.Context) (context.Cont
 }
 
 // absolutizeOutputPaths resolves relative --output-file and --snapshot-file
-// paths against the current working directory before prepare.Solution may
+// paths against the current working directory before preparation may
 // change it.
 func (o *SolutionOptions) absolutizeOutputPaths() error {
 	if o.OutputFile != "" {
@@ -821,25 +777,6 @@ func (o *SolutionOptions) absolutizeOutputPaths() error {
 		o.SnapshotFile = abs
 	}
 	return nil
-}
-
-// pluginConfig derives the plugin provider config from CLI settings, mirroring
-// the run command's wiring. Returns nil when no CLI params are available.
-func (o *SolutionOptions) pluginConfig() *plugin.ProviderConfig {
-	if o.CliParams == nil {
-		return nil
-	}
-	return &plugin.ProviderConfig{
-		Quiet:      o.CliParams.IsQuiet,
-		NoColor:    o.CliParams.NoColor,
-		BinaryName: o.CliParams.BinaryName,
-	}
-}
-
-// debugLogging reports whether plugin client debug logging should be enabled,
-// derived from the configured log level.
-func (o *SolutionOptions) debugLogging() bool {
-	return o.CliParams != nil && logger.IsDebugLevel(o.CliParams.MinLogLevel)
 }
 
 // writeOutput writes the rendered output to stdout or file

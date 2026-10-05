@@ -13,7 +13,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +23,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/errdef"
 )
@@ -34,6 +34,16 @@ const (
 )
 
 // LocalCatalog implements Catalog using a local OCI layout store.
+//
+// TODO: concurrency across instances and processes. mu only serializes one
+// instance, but caching fetched remote solutions now writes the shared OCI
+// index.json, so concurrent run/build processes (or two LocalCatalog
+// instances on the same path) can lose tags. Follow up with:
+//   - a per-path singleton so all in-process users of a path share one store
+//     and lock (NewLocalCatalog/NewLocalCatalogAt return the same instance);
+//   - a cross-process file lock around index.json writes (and Prune);
+//   - IngestVerbatim no longer holding the write lock for the whole network
+//     copy: stage the blobs first, then take the lock only to tag.
 type LocalCatalog struct {
 	store  *oci.Store
 	path   string
@@ -88,9 +98,15 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundle
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	ref = writeRef(ref)
+
 	// Check if artifact already exists (unless force is set)
 	if !force {
-		if c.existsLocked(ctx, ref) {
+		exists, err := c.existsLocked(ctx, ref)
+		if err != nil {
+			return ArtifactInfo{}, err
+		}
+		if exists {
 			return ArtifactInfo{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
 		}
 	}
@@ -112,7 +128,7 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundle
 	// Default origin to "built" unless the caller set one (e.g., cacheArtifact
 	// passes "auto-cached from <catalog>").
 	if annotations[AnnotationOrigin] == "" {
-		annotations[AnnotationOrigin] = "built"
+		annotations[AnnotationOrigin] = originBuilt
 	}
 
 	// Create content layer
@@ -157,8 +173,8 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundle
 		return ArtifactInfo{}, err
 	}
 
-	// Create manifest — exclude descriptor-only annotations (e.g.
-	// AnnotationSourceCanonical) from the blob so they don't affect the
+	// Create manifest — exclude descriptor-only annotations (see
+	// descriptorOnlyAnnotations) from the blob so they don't affect the
 	// content digest. They are attached to the descriptor (index-level) below.
 	manifest := ocispec.Manifest{
 		Versioned: specs.Versioned{
@@ -167,7 +183,7 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundle
 		MediaType:   ocispec.MediaTypeImageManifest,
 		Config:      configDesc,
 		Layers:      layers,
-		Annotations: manifestAnnotations(annotations),
+		Annotations: stripDescriptorOnly(annotations),
 	}
 
 	manifestData, err := json.Marshal(manifest)
@@ -254,36 +270,12 @@ func (c *LocalCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]by
 		return nil, nil, ArtifactInfo{}, err
 	}
 
-	if len(manifest.Layers) == 0 {
-		return nil, nil, ArtifactInfo{}, fmt.Errorf("manifest has no content layers")
-	}
-
-	// Fetch content from first layer
-	content, err := c.fetchBlob(ctx, manifest.Layers[0])
+	content, bundleData, err := readSolutionLayers(manifest, func(desc ocispec.Descriptor) ([]byte, error) {
+		return c.fetchBlob(ctx, desc)
+	})
 	if err != nil {
-		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch content: %w", err)
+		return nil, nil, ArtifactInfo{}, err
 	}
-
-	// Fetch bundle from second layer if present
-	var bundleData []byte
-	if len(manifest.Layers) > 1 {
-		switch manifest.Layers[1].MediaType {
-		case MediaTypeSolutionBundle:
-			// Version 1: single tar layer
-			bundleData, err = c.fetchBlob(ctx, manifest.Layers[1])
-			if err != nil {
-				return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch bundle: %w", err)
-			}
-		case MediaTypeSolutionBundleManifest:
-			// Version 2: deduplicated — reassemble into a v1-compatible tar
-			// for backward-compatible consumers that use FetchWithBundle.
-			bundleData, err = c.reassembleDedup(ctx, manifest)
-			if err != nil {
-				return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to reassemble dedup bundle: %w", err)
-			}
-		}
-	}
-
 	return content, bundleData, info, nil
 }
 
@@ -404,88 +396,66 @@ func (c *LocalCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo
 	return c.resolveLocked(ctx, ref)
 }
 
+// resolveLocked resolves ref to one artifact. Caller must hold the read lock.
+//
+// The OCI tag is a pure function of the artifact's identity
+// (kind, name, version, origin), so a ref that carries all of it is a lookup:
+// the tag either exists or the artifact is absent, and nothing is scanned.
+// A ref that leaves any of it open (no version, or no origin) is a search and
+// is answered from annotation identity through findLocked, which owns
+// latest-version, pre-release and cross-origin ambiguity semantics.
+//
+// Stored tags are keyed by version, so a digest cannot derive a tag. A ref that
+// carries a digest is therefore a search too: find filters on the digest from
+// annotation identity and returns the tag that actually holds it.
 func (c *LocalCatalog) resolveLocked(ctx context.Context, ref Reference) (ArtifactInfo, error) {
-	// If version is specified, look for exact match
-	if ref.HasVersion() || ref.HasDigest() {
-		tag := c.tagForRef(ref)
-		desc, err := c.store.Resolve(ctx, tag)
-		if err == nil {
-			annotations, err := c.getManifestAnnotations(ctx, desc)
-			if err != nil {
-				return ArtifactInfo{}, err
-			}
-
-			return c.infoFromAnnotations(ref, desc, annotations), nil
-		}
-
-		// Tag lookup failed. This can happen when an artifact was pulled
-		// from a remote registry with an empty or incorrect kind, producing
-		// a tag that doesn't match the canonical format (e.g., "/name:1.0.0"
-		// instead of "solution/name:1.0.0"). Fall back to annotation-based
-		// listing which handles mismatched tags.
-		artifacts, err := c.listLocked(ctx, ref.Kind, ref.Name)
-		if err != nil {
-			return ArtifactInfo{}, err
-		}
-		for _, a := range artifacts {
-			if ref.HasVersion() && a.Reference.Version != nil && a.Reference.Version.Equal(ref.Version) {
-				return a, nil
-			}
-			if ref.HasDigest() && a.Digest == ref.Digest {
-				return a, nil
-			}
-		}
-		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	if !hasFullIdentity(ref) {
+		return c.resolveByQuery(ctx, ref)
 	}
 
-	// No version specified - find highest semver
-	artifacts, err := c.listLocked(ctx, ref.Kind, ref.Name)
+	tag := c.tagForRef(ref)
+	desc, err := c.store.Resolve(ctx, tag)
+	if err != nil {
+		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+	return c.infoForTag(ctx, tag, desc)
+}
+
+// hasFullIdentity reports whether ref carries every coordinate the OCI tag is
+// derived from (kind, name, version, explicit origin) and no digest, so a tag
+// lookup alone answers for it. Stored tags are keyed by version, so a digest
+// cannot derive a tag and a ref carrying one is always a search.
+func hasFullIdentity(ref Reference) bool {
+	return !ref.HasDigest() && ref.HasVersion() && canGenerateTag(ref) == nil
+}
+
+// resolveByQuery answers an under-specified ref by annotation identity,
+// reporting a miss against the caller's original ref.
+func (c *LocalCatalog) resolveByQuery(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	info, err := c.findLocked(ctx, queryFromRef(ref), false)
+	var notFound *ArtifactNotFoundError
+	if errors.As(err, &notFound) {
+		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+	return info, err
+}
+
+// infoForTag builds the ArtifactInfo for the artifact stored under tag,
+// recovering its identity (including origin) from annotations rather than
+// from the caller's ref or the tag text.
+func (c *LocalCatalog) infoForTag(ctx context.Context, tag string, desc ocispec.Descriptor) (ArtifactInfo, error) {
+	manifestAnns, err := c.getManifestAnnotations(ctx, desc)
 	if err != nil {
 		return ArtifactInfo{}, err
 	}
-
-	if len(artifacts) == 0 {
-		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	// Descriptor annotations take precedence, matching infoFromAnnotations.
+	ref, err := c.refFromAnnotations(mergeAnnotations(manifestAnns, desc.Annotations))
+	if err != nil {
+		return ArtifactInfo{}, err
 	}
-
-	// Filter out pre-release versions unless explicitly included
-	if !IncludePreReleaseFromContext(ctx) {
-		stable := make([]ArtifactInfo, 0, len(artifacts))
-		for _, a := range artifacts {
-			if IsPreRelease(a.Reference.Version) {
-				c.logger.V(1).Info("skipping pre-release version",
-					"name", ref.Name,
-					"version", a.Reference.Version.String())
-				continue
-			}
-			stable = append(stable, a)
-		}
-		if len(stable) > 0 {
-			artifacts = stable
-		} else {
-			c.logger.V(1).Info("no stable versions found, falling back to pre-release",
-				"name", ref.Name)
-		}
-	}
-
-	// Sort by version descending and return highest
-	sort.Slice(artifacts, func(i, j int) bool {
-		vi := artifacts[i].Reference.Version
-		vj := artifacts[j].Reference.Version
-		if vi == nil {
-			return false
-		}
-		if vj == nil {
-			return true
-		}
-		return vi.GreaterThan(vj)
-	})
-
-	c.logger.V(1).Info("resolved latest version",
-		"name", ref.Name,
-		"version", artifacts[0].Reference.VersionOrDigest())
-
-	return artifacts[0], nil
+	info := c.infoFromAnnotations(ref, desc, manifestAnns)
+	info.Tag = tagLabel(tag)
+	return info, nil
 }
 
 // List returns all artifacts matching the criteria.
@@ -525,8 +495,9 @@ func (c *LocalCatalog) listLocked(ctx context.Context, kind ArtifactKind, name s
 				continue
 			}
 
-			// Parse reference
-			ref, err := c.refFromAnnotations(annotations)
+			// Parse reference. Origin (AnnotationSourceCanonical) lives only on
+			// the descriptor, so merge it in as infoForTag does.
+			ref, err := c.refFromAnnotations(mergeAnnotations(annotations, desc.Annotations))
 			if err != nil {
 				c.logger.V(2).Info("failed to parse reference from annotations", "tag", tag, "error", err)
 				continue
@@ -552,95 +523,258 @@ func (c *LocalCatalog) listLocked(ctx context.Context, kind ArtifactKind, name s
 	return results, nil
 }
 
+// Find resolves a single artifact by its annotation identity, mirroring
+// LocalOciCatalog.Find. It returns one ArtifactInfo, or AmbiguousArtifactError
+// when a query without an explicit source selector matches artifacts spanning
+// multiple provenances or remote origins.
+func (c *LocalCatalog) Find(ctx context.Context, query ArtifactQuery) (ArtifactInfo, error) {
+	return c.find(ctx, query, false)
+}
+
+// FindStrict resolves a single artifact by annotation identity and rejects
+// any query that matches more than one artifact.
+func (c *LocalCatalog) FindStrict(ctx context.Context, query ArtifactQuery) (ArtifactInfo, error) {
+	return c.find(ctx, query, true)
+}
+
+func (c *LocalCatalog) find(ctx context.Context, query ArtifactQuery, strict bool) (ArtifactInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.findLocked(ctx, query, strict)
+}
+
+// findLocked is find without locking. Caller must hold the read lock.
+func (c *LocalCatalog) findLocked(ctx context.Context, query ArtifactQuery, strict bool) (ArtifactInfo, error) {
+	if err := query.Validate(); err != nil {
+		return ArtifactInfo{}, err
+	}
+
+	artifacts, err := c.findByAnnotation(ctx, query)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+	// An open version means "latest": prefer stable releases over pre-releases
+	// unless the context opts in. Strict lookups consider every match.
+	if !strict && wantsLatest(query) {
+		// Without a source selector, origin ambiguity is judged on every match
+		// first: the stable-first preference picks a version within one origin
+		// and must not silently pick the origin by filtering another one out.
+		if query.Source.Kind == SourceAny {
+			if err := checkAmbiguity(query, artifacts); err != nil {
+				sortByVersionDesc(artifacts)
+				return ArtifactInfo{}, err
+			}
+		}
+		artifacts = latestCandidates(ctx, artifacts)
+	}
+	switch len(artifacts) {
+	case 0:
+		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: Reference{Kind: query.Kind, Name: query.Name}, Catalog: LocalCatalogName}
+	case 1:
+		return artifacts[0], nil
+	}
+
+	// Several matches: order newest first so "latest wins" is a head pick.
+	sortByVersionDesc(artifacts)
+
+	if strict {
+		return ArtifactInfo{}, &AmbiguousArtifactError{Query: query, Matches: artifacts}
+	}
+
+	// An explicit source selector already pins the origin, so every match shares
+	// one provenance and the latest version is the answer.
+	if query.Source.Kind == SourceBuilt || query.Source.Kind == SourceRemote {
+		return artifacts[0], nil
+	}
+
+	// No source selector: matches may span provenances or origins, so comparing
+	// versions across origins is meaningless without an ambiguity check.
+	if err := checkAmbiguity(query, artifacts); err != nil {
+		return ArtifactInfo{}, err
+	}
+	return artifacts[0], nil
+}
+
+// findByAnnotation resolves artifacts matching query by their annotation
+// identity, reflecting origin (pulled vs built). Caller must hold the read lock.
+func (c *LocalCatalog) findByAnnotation(ctx context.Context, query ArtifactQuery) ([]ArtifactInfo, error) {
+	tagged, err := c.scanByAnnotation(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	artifacts := make([]ArtifactInfo, 0, len(tagged))
+	for _, t := range tagged {
+		artifacts = append(artifacts, t.info)
+	}
+	return artifacts, nil
+}
+
+// taggedArtifact is an annotation-search match together with the OCI tag and
+// descriptor it is stored under. ArtifactInfo.Tag carries only the tag label,
+// so callers that must act on the stored tag (such as Delete) need this.
+type taggedArtifact struct {
+	tag  string
+	desc ocispec.Descriptor
+	info ArtifactInfo
+}
+
+// scanByAnnotation is the single annotation-identity scan behind
+// findByAnnotation and Delete. Caller must hold a lock.
+func (c *LocalCatalog) scanByAnnotation(ctx context.Context, query ArtifactQuery) ([]taggedArtifact, error) {
+	var artifacts []taggedArtifact
+	err := c.store.Tags(ctx, "", func(tags []string) error {
+		for _, tag := range tags {
+			desc, err := c.store.Resolve(ctx, tag)
+			if err != nil {
+				continue
+			}
+
+			// Identity, including origin, comes from the artifact's own
+			// annotations, not from the query, so each match carries its real
+			// version and provenance even when the query left them open.
+			info, err := c.infoForTag(ctx, tag, desc)
+			if err != nil {
+				continue
+			}
+			if !query.matches(info) {
+				continue
+			}
+			artifacts = append(artifacts, taggedArtifact{tag: tag, desc: desc, info: info})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return artifacts, nil
+}
+
+// tagLabel extracts the label component from an OCI tag: the part after "@"
+// (digest) or ":" (version/alias).
+func tagLabel(tag string) string {
+	if idx := strings.LastIndex(tag, "@"); idx >= 0 {
+		return tag[idx+1:]
+	}
+	if idx := strings.LastIndex(tag, ":"); idx >= 0 {
+		return tag[idx+1:]
+	}
+	return tag
+}
+
 // Exists checks if an artifact exists in the catalog.
+//
+// Pass a full identity (kind, name, version and an explicit origin: Built or
+// Remote) for an exact tag lookup. A ref that leaves the version or origin
+// open, or carries a digest, is answered by annotation identity and matches
+// an artifact from any origin.
 func (c *LocalCatalog) Exists(ctx context.Context, ref Reference) (bool, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.existsLocked(ctx, ref), nil
+	return c.existsLocked(ctx, ref)
 }
 
-func (c *LocalCatalog) existsLocked(ctx context.Context, ref Reference) bool {
-	tag := c.tagForRef(ref)
-	_, err := c.store.Resolve(ctx, tag)
-	if err == nil {
-		return true
+// existsLocked is Exists without locking. Caller must hold a lock.
+//
+// A ref with full identity is answered by its tag alone, so a miss is a
+// definitive no and nothing is scanned. Anything else is a search over
+// annotation identity, where any match counts, including an ambiguous one.
+// An invalid query is reported as an error rather than as "not found".
+func (c *LocalCatalog) existsLocked(ctx context.Context, ref Reference) (bool, error) {
+	if hasFullIdentity(ref) {
+		tag := c.tagForRef(ref)
+		_, err := c.store.Resolve(ctx, tag)
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, errdef.ErrNotFound):
+			return false, nil
+		default:
+			return false, fmt.Errorf("checking tag %q: %w", tag, err)
+		}
 	}
 
-	// Tag lookup failed -- fall back to annotation-based listing to handle
-	// artifacts whose OCI tag doesn't match the canonical format.
-	artifacts, listErr := c.listLocked(ctx, ref.Kind, ref.Name)
-	if listErr != nil {
-		return false
+	query := queryFromRef(ref)
+	if err := query.Validate(); err != nil {
+		return false, err
 	}
-	for _, a := range artifacts {
-		if ref.HasVersion() && a.Reference.Version != nil && a.Reference.Version.Equal(ref.Version) {
-			return true
-		}
-		if ref.HasDigest() && a.Digest == ref.Digest {
-			return true
-		}
-		if !ref.HasVersion() && !ref.HasDigest() {
-			return true
-		}
+	matches, err := c.findByAnnotation(ctx, query)
+	if err != nil {
+		return false, err
 	}
-	return false
+	return len(matches) > 0, nil
 }
 
 // Delete removes an artifact from the catalog.
+//
+// Like Resolve and Exists, a ref with full identity (kind, name, version and
+// an explicit origin) is a tag lookup: a miss means the artifact is absent.
+// Any other ref is a search over annotation identity, which also finds
+// artifacts stored under a mismatched tag. A search matching more than one
+// artifact (for example the same version built and pulled) is ambiguous and
+// deletes nothing.
 func (c *LocalCatalog) Delete(ctx context.Context, ref Reference) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Try canonical tag first.
-	tag := c.tagForRef(ref)
-	desc, err := c.store.Resolve(ctx, tag)
+	tag, desc, err := c.locateForDelete(ctx, ref)
 	if err != nil {
-		// Fall back to resolving via annotations for mismatched tags.
-		tag, desc, err = c.findTagByAnnotations(ctx, ref)
-		if err != nil {
-			return &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
-		}
+		return err
 	}
 
 	// Delete the tag (blobs are orphaned but not deleted - would need GC)
 	if err := c.store.Untag(ctx, tag); err != nil {
 		return fmt.Errorf("failed to delete artifact: %w", err)
 	}
-
 	c.logger.V(1).Info("deleted artifact",
 		"name", ref.Name,
-		"version", ref.Version.String(),
+		"version", ref.VersionOrDigest(),
 		"digest", desc.Digest.String())
 
 	return nil
+}
+
+// locateForDelete returns the stored tag and descriptor ref designates.
+// Caller must hold the write lock.
+func (c *LocalCatalog) locateForDelete(ctx context.Context, ref Reference) (string, ocispec.Descriptor, error) {
+	notFound := &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+
+	if hasFullIdentity(ref) {
+		tag := c.tagForRef(ref)
+		desc, err := c.store.Resolve(ctx, tag)
+		if err != nil {
+			return "", ocispec.Descriptor{}, notFound
+		}
+		return tag, desc, nil
+	}
+
+	query := queryFromRef(ref)
+	if err := query.Validate(); err != nil {
+		return "", ocispec.Descriptor{}, err
+	}
+	matches, err := c.scanByAnnotation(ctx, query)
+	if err != nil {
+		return "", ocispec.Descriptor{}, err
+	}
+	switch len(matches) {
+	case 0:
+		return "", ocispec.Descriptor{}, notFound
+	case 1:
+		return matches[0].tag, matches[0].desc, nil
+	}
+
+	infos := make([]ArtifactInfo, 0, len(matches))
+	for _, m := range matches {
+		infos = append(infos, m.info)
+	}
+	sortByVersionDesc(infos)
+	return "", ocispec.Descriptor{}, &AmbiguousArtifactError{Query: query, Matches: infos}
 }
 
 // Helper methods
 
 func (c *LocalCatalog) tagForRef(ref Reference) string {
 	// Format: kind/name:version or kind/name@digest
-	if ref.HasDigest() {
-		return fmt.Sprintf("%s/%s@%s", ref.Kind, ref.Name, ref.Digest)
-	}
-	if ref.HasVersion() {
-		return fmt.Sprintf("%s/%s:%s", ref.Kind, ref.Name, ref.Version.String())
-	}
-	return fmt.Sprintf("%s/%s", ref.Kind, ref.Name)
-}
-
-// manifestAnnotations returns a copy of annotations with descriptor-only
-// keys removed, suitable for embedding in the manifest JSON blob.
-// Descriptor-only annotations carry local provenance metadata that must not
-// affect the manifest content digest.
-func manifestAnnotations(annotations map[string]string) map[string]string {
-	m := make(map[string]string, len(annotations))
-	for k, v := range annotations {
-		if k == AnnotationSourceCanonical {
-			continue
-		}
-		m[k] = v
-	}
-	return m
+	return buildLocalTag(ref)
 }
 
 func (c *LocalCatalog) pushBlob(ctx context.Context, mediaType string, content []byte) (ocispec.Descriptor, error) {
@@ -768,63 +902,6 @@ func (c *LocalCatalog) fetchBlob(ctx context.Context, desc ocispec.Descriptor) (
 	return buf.Bytes(), nil
 }
 
-// findTagByAnnotations searches all OCI tags for an artifact matching the
-// given reference by annotation metadata. Returns the actual stored tag and
-// its descriptor. This handles mismatched tags (e.g., "/name:1.0.0" instead
-// of "solution/name:1.0.0").
-func (c *LocalCatalog) findTagByAnnotations(ctx context.Context, ref Reference) (string, ocispec.Descriptor, error) {
-	var foundTag string
-	var foundDesc ocispec.Descriptor
-
-	err := c.store.Tags(ctx, "", func(tags []string) error {
-		for _, tag := range tags {
-			desc, err := c.store.Resolve(ctx, tag)
-			if err != nil {
-				continue
-			}
-			annotations, err := c.getManifestAnnotations(ctx, desc)
-			if err != nil {
-				continue
-			}
-
-			artifactName := annotations[AnnotationArtifactName]
-			artifactKind := ArtifactKind(annotations[AnnotationArtifactType])
-
-			if artifactName != ref.Name {
-				continue
-			}
-			if ref.Kind != "" && artifactKind != ref.Kind {
-				continue
-			}
-			if ref.HasDigest() && desc.Digest.String() != ref.Digest {
-				continue
-			}
-			if ref.HasVersion() {
-				versionStr := annotations[AnnotationVersion]
-				if versionStr != ref.Version.String() {
-					continue
-				}
-			}
-
-			foundTag = tag
-			foundDesc = desc
-			return errStopIteration
-		}
-		return nil
-	})
-
-	if err != nil && !errors.Is(err, errStopIteration) {
-		return "", ocispec.Descriptor{}, err
-	}
-	if foundTag == "" {
-		return "", ocispec.Descriptor{}, fmt.Errorf("not found")
-	}
-	return foundTag, foundDesc, nil
-}
-
-// errStopIteration is a sentinel used to break out of tag iteration early.
-var errStopIteration = fmt.Errorf("stop iteration")
-
 // fetchManifestByDigest fetches and unmarshals an OCI manifest using its
 // content digest. This avoids the need to reconstruct a tag which may not
 // match the actual stored tag (e.g., when the artifact was pulled from a
@@ -889,6 +966,12 @@ func (c *LocalCatalog) refFromAnnotations(annotations map[string]string) (Refere
 		ref.Version = v
 	}
 
+	// Provenance is binary: a canonical source marks a remote cache, its absence
+	// marks an artifact built here.
+	remote := annotations[AnnotationSourceCanonical]
+	ref.Remote = remote
+	ref.Built = remote == ""
+
 	return ref, nil
 }
 
@@ -921,47 +1004,6 @@ func (c *LocalCatalog) infoFromAnnotations(ref Reference, desc ocispec.Descripto
 		Catalog:     LocalCatalogName,
 		Canonical:   merged[AnnotationSourceCanonical],
 	}
-}
-
-// Tag creates an alias tag for an existing artifact.
-// The source reference must have a version or digest to resolve.
-// The alias is a freeform string (e.g., "stable", "production").
-// Returns the previous version string if the alias already existed (empty otherwise).
-func (c *LocalCatalog) Tag(ctx context.Context, ref Reference, alias string) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Resolve the source artifact to get its descriptor
-	tag := c.tagForRef(ref)
-	desc, err := c.store.Resolve(ctx, tag)
-	if err != nil {
-		return "", &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
-	}
-
-	// Build alias tag in the same format: kind/name:alias
-	aliasTag := fmt.Sprintf("%s/%s:%s", ref.Kind, ref.Name, alias)
-
-	// Check if alias already exists and points to a different artifact
-	var oldVersion string
-	if oldDesc, resolveErr := c.store.Resolve(ctx, aliasTag); resolveErr == nil {
-		if oldDesc.Digest != desc.Digest {
-			// Find the version of the old artifact
-			if annotations, annErr := c.getManifestAnnotations(ctx, oldDesc); annErr == nil {
-				oldVersion = annotations[AnnotationVersion]
-			}
-		}
-	}
-
-	if err := c.store.Tag(ctx, desc, aliasTag); err != nil {
-		return "", fmt.Errorf("failed to tag artifact: %w", err)
-	}
-
-	c.logger.V(1).Info("tagged artifact",
-		"name", ref.Name,
-		"source", tag,
-		"alias", alias)
-
-	return oldVersion, nil
 }
 
 // PruneResult contains statistics from a prune operation.
@@ -1310,8 +1352,14 @@ func (c *LocalCatalog) Load(ctx context.Context, inputPath string, force bool) (
 	}
 
 	// Check if artifact already exists
-	if c.existsLocked(ctx, ref) && !force {
-		return LoadResult{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
+	if !force {
+		exists, err := c.existsLocked(ctx, ref)
+		if err != nil {
+			return LoadResult{}, err
+		}
+		if exists {
+			return LoadResult{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
+		}
 	}
 
 	// Push all blobs to the store
@@ -1427,8 +1475,14 @@ func (c *LocalCatalog) StoreDedup(ctx context.Context, ref Reference, solutionYA
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	ref = writeRef(ref)
+
 	if !force {
-		if c.existsLocked(ctx, ref) {
+		exists, err := c.existsLocked(ctx, ref)
+		if err != nil {
+			return ArtifactInfo{}, err
+		}
+		if exists {
 			return ArtifactInfo{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
 		}
 	}
@@ -1509,7 +1563,7 @@ func (c *LocalCatalog) StoreDedup(ctx context.Context, ref Reference, solutionYA
 		MediaType:   ocispec.MediaTypeImageManifest,
 		Config:      configDesc,
 		Layers:      layers,
-		Annotations: manifestAnnotations(annotations),
+		Annotations: stripDescriptorOnly(annotations),
 	}
 
 	ociManifestData, err := json.Marshal(ociManifest)
@@ -1594,4 +1648,223 @@ func (c *LocalCatalog) FetchDedup(ctx context.Context, ref Reference) (solutionY
 	}
 
 	return solutionYAML, manifestJSON, layerFetcher, info, nil
+}
+
+// IngestVerbatim copies an artifact from src into the local catalog unchanged
+// and tags it under the local tag derived from localRef.
+func (c *LocalCatalog) IngestVerbatim(
+	ctx context.Context,
+	src oras.ReadOnlyTarget,
+	srcTag string,
+	localRef Reference,
+	copyOpts oras.CopyOptions,
+) (ArtifactInfo, error) {
+	tagger, err := NewLocalTagBuilder(localRef)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("tagging local reference %q: %w", localRef, err)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	desc, err := oras.Copy(ctx, src, srcTag, c.store, tagger.Tag(), copyOpts)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("copying artifact %q: %w", localRef, err)
+	}
+
+	// The manifest blob is copied byte for byte — that is what preserves the
+	// digest — so the scafctl identity and provenance are layered onto the root
+	// descriptor that oras.Copy returned. Descriptor annotations live in
+	// index.json, not in the manifest, so this does not touch the content.
+	tagged, err := tagger.Build(ctx, desc, c.store)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+
+	return c.artifactInfo(tagger.Tag(), tagged, tagged.Annotations), nil
+}
+
+func (c *LocalCatalog) artifactInfo(tag string, desc ocispec.Descriptor, annotations map[string]string) ArtifactInfo {
+	remote := annotations[AnnotationSourceCanonical]
+	ref := Reference{
+		Kind:   ArtifactKind(annotations[AnnotationArtifactType]),
+		Name:   annotations[AnnotationArtifactName],
+		Digest: desc.Digest.String(),
+		Remote: remote,
+		Built:  remote == "",
+	}
+	if v, err := semver.NewVersion(annotations[AnnotationVersion]); err == nil {
+		ref.Version = v
+	}
+
+	return ArtifactInfo{
+		Reference:   ref,
+		Tag:         tag,
+		Digest:      desc.Digest.String(),
+		Size:        desc.Size,
+		Annotations: annotations,
+		Catalog:     LocalCatalogName,
+	}
+}
+
+// ExportVerbatim streams an artifact from the local catalog to a destination target unchanged,
+// acquiring a read lock for the duration of the transfer.
+func (c *LocalCatalog) ExportVerbatim(
+	ctx context.Context,
+	srcTag string,
+	dst oras.Target,
+	dstTag string,
+	copyOpts oras.CopyOptions,
+) (ocispec.Descriptor, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	desc, err := oras.Copy(ctx, c.store, srcTag, dst, dstTag, copyOpts)
+	if err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("publishing artifact %q: %w", srcTag, err)
+	}
+	return desc, nil
+}
+
+// ExportRebuilt re-pushes an artifact under target's identity so the name and
+// version embedded in the manifest match what the destination publishes.
+//
+// Layers are re-pushed through LayerRef, which asks the destination whether it
+// already holds each digest, so a rename shares every unchanged blob with the
+// artifacts already in the repository and uploads only what is genuinely new.
+func (c *LocalCatalog) ExportRebuilt(
+	ctx context.Context,
+	srcTag string,
+	dst TargetWriter,
+	dstTag string,
+	target Reference,
+	onProgress func(ocispec.Descriptor),
+) (ocispec.Descriptor, error) {
+	// A rebuilt artifact is content the destination never published, under a
+	// name that may not exist there, so it carries no remote provenance.
+	target.Remote = ""
+	target.Built = true
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	srcDesc, err := c.store.Resolve(ctx, srcTag)
+	if err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("resolving local artifact %q: %w", srcTag, err)
+	}
+
+	builder, err := rebuildArtifact(ctx, c.store, srcDesc, target, onProgress)
+	if err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("rebuilding artifact %q as %q: %w", srcTag, target, err)
+	}
+
+	desc, err := builder.Push(ctx, dst)
+	if err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("pushing artifact %q: %w", target, err)
+	}
+
+	return NewTagBuilder(dstTag).Build(ctx, desc, dst)
+}
+
+// tagExists reports whether tag resolves in the local store. Only a
+// not-found result means absent; any other failure is returned so a broken
+// store is never mistaken for a free tag.
+func (c *LocalCatalog) tagExists(ctx context.Context, tag string) (bool, error) {
+	_, err := c.store.Resolve(ctx, tag)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, errdef.ErrNotFound):
+		return false, nil
+	default:
+		return false, fmt.Errorf("resolving tag %q: %w", tag, err)
+	}
+}
+
+// storeInternal pushes builder into the local store and tags it. The tag and
+// the descriptor provenance are both derived from builder.Reference(), the
+// same identity the builder stamps into the content. It returns the tagged
+// descriptor, annotations included.
+func (c *LocalCatalog) storeInternal(ctx context.Context, builder ArtifactBuilder, force bool) (ocispec.Descriptor, error) {
+	return c.storeInternalWith(ctx, builder, force, nil)
+}
+
+// storeInternalWith is storeInternal with extra descriptor-only annotations
+// (for example AnnotationOrigin) recorded on the tag. Identity and provenance
+// derived from the builder's reference are stamped after them and always win.
+func (c *LocalCatalog) storeInternalWith(ctx context.Context, builder ArtifactBuilder, force bool, descAnnotations map[string]string) (ocispec.Descriptor, error) {
+	if builder == nil {
+		return ocispec.Descriptor{}, &BuilderError{
+			Stage:  BuildStageAssemble,
+			Detail: "storing artifact: nil builder",
+		}
+	}
+
+	ref := builder.Reference()
+	tagger, err := NewLocalTagBuilder(ref)
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+	tagger.Annotations(descAnnotations)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !force {
+		exists, err := c.tagExists(ctx, tagger.Tag())
+		if err != nil {
+			return ocispec.Descriptor{}, err
+		}
+		if exists {
+			return ocispec.Descriptor{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
+		}
+	}
+	desc, err := builder.Push(ctx, c.store)
+	if err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("pushing artifact %q: %w", ref, err)
+	}
+	return tagger.Build(ctx, desc, c.store)
+}
+
+// storeArtifact stores an already-assembled artifact (a ManifestBuilder or an
+// IndexBuilder) under the builder's reference, delegating to storeInternal. It
+// complements Store, which stores raw content bytes, for callers that already
+// hold a builder — e.g. a pulled-and-rebuilt artifact.
+func (c *LocalCatalog) storeArtifact(ctx context.Context, builder ArtifactBuilder, force bool) (ArtifactInfo, error) {
+	return c.storeArtifactWith(ctx, builder, force, nil)
+}
+
+func (c *LocalCatalog) storeArtifactWith(ctx context.Context, builder ArtifactBuilder, force bool, descAnnotations map[string]string) (ArtifactInfo, error) {
+	desc, err := c.storeInternalWith(ctx, builder, force, descAnnotations)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+	tag, err := tagForLocalRef(builder.Reference())
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+	return c.artifactInfo(tag, desc, desc.Annotations), nil
+}
+
+// originBuilt is the AnnotationOrigin value recorded for artifacts built into
+// the local catalog.
+const originBuilt = "built"
+
+// StoreBuilt stores an artifact built on this machine under its built tag
+// (<kind>/<name>:<version>). The existence check (unless force) and the
+// overwrite only ever touch the built copy, so a pulled copy of the same
+// name@version is never consulted or replaced. A reference that carries a
+// remote origin is rejected: built content has no remote provenance.
+func (c *LocalCatalog) StoreBuilt(ctx context.Context, b ArtifactBuilder, force bool) (ArtifactInfo, error) {
+	if b == nil {
+		return ArtifactInfo{}, &BuilderError{
+			Stage:  BuildStageAssemble,
+			Detail: "storing built artifact: nil builder",
+		}
+	}
+	ref := b.Reference()
+	if ref.Remote != "" {
+		return ArtifactInfo{}, &InvalidReferenceError{Input: ref.String(), Message: "built artifact cannot carry a remote origin"}
+	}
+	return c.storeArtifactWith(ctx, b, force, map[string]string{AnnotationOrigin: originBuilt})
 }

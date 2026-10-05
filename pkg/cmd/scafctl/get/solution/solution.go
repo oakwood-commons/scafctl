@@ -10,15 +10,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
-	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
@@ -37,6 +36,9 @@ type CmdOptionsVersion struct {
 	File      string
 	NoCache   bool
 	Local     bool
+
+	// loader overrides solution loading; tests inject a fake.
+	loader load.Loader
 }
 
 func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
@@ -83,7 +85,7 @@ Examples:
 
 			// Handle positional catalog name argument
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" get solution"); err != nil {
+				if _, err := source.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" get solution"); err != nil {
 					output.NewWriteMessageOptions(
 						options.IOStreams,
 						output.MessageTypeError,
@@ -123,55 +125,12 @@ Examples:
 	return cCmd
 }
 
+// GetSolution loads the solution named by --file or a positional reference
+// (else a discovered file) and writes it in the requested output format.
 func (o *CmdOptionsVersion) GetSolution(ctx context.Context) error {
-	lgr := logger.FromContext(ctx)
-
-	// Set up getter with catalog resolver for bare name resolution
-	var getterOpts []get.Option
-	localCatalog, err := catalog.NewLocalCatalog(*lgr)
-	if err == nil {
-		resolverOpts := []catalog.SolutionResolverOption{
-			catalog.WithResolverNoCache(o.NoCache),
-			catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
-		}
-		if !o.NoCache {
-			artifactCache := cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)
-			resolverOpts = append(resolverOpts, catalog.WithResolverArtifactCache(artifactCache))
-		}
-		resolver := catalog.NewSolutionResolver(localCatalog, *lgr, resolverOpts...)
-		getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
-	} else {
-		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
-	}
-
-	getter := get.NewGetterFromContext(ctx, getterOpts...)
-
-	// Emit verbose discovery information
-	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
-		switch o.File {
-		case "":
-			binaryName := settings.CliBinaryName
-			if o.CliParams != nil && o.CliParams.BinaryName != "" {
-				binaryName = o.CliParams.BinaryName
-			}
-			w.Verbosef("Auto-discovering solution (binary=%s)", binaryName)
-			w.Verbosef("  Search folders: %v", settings.SolutionFoldersFor(binaryName))
-			w.Verbosef("  Search filenames: %v", settings.SolutionFileNamesFor(binaryName))
-		default:
-			w.Verbosef("Loading solution from: %s", o.File)
-		}
-	}
-
-	return o.GetSolutionWithGetter(ctx, getter)
-}
-
-// GetSolutionWithGetter retrieves a solution using the provided getter implementation.
-// This method allows for dependency injection, making it easier to test with mock implementations.
-// The getter parameter should implement the get.Interface.
-func (o *CmdOptionsVersion) GetSolutionWithGetter(ctx context.Context, getter get.Interface) error {
 	w := writer.FromContext(ctx)
 
-	sol, err := getter.Get(ctx, o.File)
+	sol, err := o.loadSolution(ctx)
 	if err != nil {
 		if w != nil {
 			w.Errorf("%v", err)
@@ -209,6 +168,42 @@ func (o *CmdOptionsVersion) GetSolutionWithGetter(ctx context.Context, getter ge
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 	return nil
+}
+
+// loadSolution loads the solution from file, URL, catalog, or
+// auto-discovery.
+func (o *CmdOptionsVersion) loadSolution(ctx context.Context) (*solution.Solution, error) {
+	loader, c, err := o.selectSource(ctx)
+	if err != nil {
+		return nil, err
+	}
+	load.ReportSource(ctx, c)
+
+	ms, err := loader.Load(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	load.ReportDiscovery(ctx, ms)
+	return ms.Solution, nil
+}
+
+// selectSource picks the solution source (-f or positional ref, else a
+// discovered file) and the loader to load it with. An injected test loader
+// receives the classified -f value as-is.
+func (o *CmdOptionsVersion) selectSource(ctx context.Context) (load.Loader, source.Classification, error) {
+	if o.loader != nil {
+		c, err := source.Classify(o.File)
+		return o.loader, c, err
+	}
+
+	router := load.NewRouterFromContext(ctx, *logger.FromContext(ctx),
+		load.CLIRouterOptions(nil, o.NoCache, settings.DiscoveryModeDefault)...)
+
+	sel, err := router.Select(ctx, o.File, nil, load.ArgsAreNames)
+	if err != nil {
+		return nil, source.Classification{}, err
+	}
+	return router.SelectionLoader(sel), sel.Source, nil
 }
 
 // ListSolutions lists solutions from the local and configured catalogs.

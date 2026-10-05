@@ -207,8 +207,8 @@ func (r *Registry) ListByCapability(capability Capability) []Provider {
 	var result []Provider
 	for _, p := range r.providers {
 		desc := p.Descriptor()
-		for _, cap := range desc.Capabilities {
-			if cap == capability {
+		for _, cp := range desc.Capabilities {
+			if cp == capability {
 				result = append(result, p)
 				break
 			}
@@ -320,9 +320,9 @@ func (r *Registry) validateDescriptor(desc *Descriptor) error {
 	}
 
 	// Validate all capabilities
-	for i, cap := range desc.Capabilities {
-		if !IsCapabilityValid(cap) {
-			return fmt.Errorf("capability at index %d (%q) is not valid", i, cap)
+	for i, cp := range desc.Capabilities {
+		if !IsCapabilityValid(cp) {
+			return fmt.Errorf("capability at index %d (%q) is not valid", i, cp)
 		}
 	}
 

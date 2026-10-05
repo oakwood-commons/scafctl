@@ -66,7 +66,7 @@ exec-credential helper), scafctl resolves it by name in this order:
    configured catalogs as an `auth-handler` artifact.
 
 Resolution is lazy: the plugin is fetched and started only when a handler is
-actually requested, so commands that never touch auth (e.g. `catalog tag`,
+actually requested, so commands that never touch auth (e.g. `catalog list`,
 `version`) incur no network I/O. All entry points funnel through the auth
 registry, so `kube login` and the exec-credential token path resolve third-party
 handlers the same way as `auth login`.

@@ -414,8 +414,8 @@ func (s *Server) handleGetProviderOutputShape(ctx context.Context, request mcp.C
 		result["outputSchema"] = provdetail.BuildSchemaOutput(schema)
 	} else {
 		outputSchemas := make(map[string]any, len(desc.OutputSchemas))
-		for cap, schema := range desc.OutputSchemas {
-			outputSchemas[string(cap)] = provdetail.BuildSchemaOutput(schema)
+		for cp, schema := range desc.OutputSchemas {
+			outputSchemas[string(cp)] = provdetail.BuildSchemaOutput(schema)
 		}
 		result["outputSchemas"] = outputSchemas
 	}

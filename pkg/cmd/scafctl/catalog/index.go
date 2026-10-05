@@ -336,7 +336,7 @@ func createIndexRemoteCatalog(ctx context.Context, catalogFlag string, insecure 
 	}
 
 	authHandler := resolveAuthHandler(ctx, registry, catalogFlag)
-	authScope := resolveAuthScope(ctx, catalogFlag)
+	authScope := resolveAuthScope(ctx, registry, catalogFlag)
 
 	verboseRemoteInfo(ctx, w, registry, repository, authHandlerName(authHandler), authScope)
 

@@ -10,7 +10,10 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -165,6 +168,68 @@ func TestRunLintFix_StdinRejected(t *testing.T) {
 	err := runLintFix(ctx, opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stdin")
+}
+
+func TestRunLintFix_SourceResolution(t *testing.T) {
+	t.Run("non-local source rejected", func(t *testing.T) {
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		opts := fixOptions("my-solution@1.0.0", ioStreams)
+		opts.Fix = true
+
+		err := runLintFix(testContext(ioStreams), opts)
+		require.Error(t, err)
+		assert.Equal(t, exitcode.ValidationFailed, exitcode.GetCode(err))
+		assert.Contains(t, err.Error(), "requires a local solution file")
+	})
+
+	t.Run("invalid reference", func(t *testing.T) {
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		opts := fixOptions("ftp://example.com/sol.yaml", ioStreams)
+		opts.Fix = true
+
+		err := runLintFix(testContext(ioStreams), opts)
+		require.ErrorIs(t, err, source.ErrInvalidRef)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	})
+
+	t.Run("ambiguous discovery rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, name := range []string{"solution.yaml", "scafctl.yaml"} {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(hyphenatedFixSolution), 0o600))
+		}
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		opts := fixOptions("", ioStreams)
+		opts.Fix = true
+
+		err := runLintFix(provider.WithWorkingDirectory(testContext(ioStreams), dir), opts)
+		require.ErrorIs(t, err, load.ErrAmbiguousSolution)
+		assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+	})
+
+	t.Run("nothing discovered", func(t *testing.T) {
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		opts := fixOptions("", ioStreams)
+		opts.Fix = true
+
+		err := runLintFix(provider.WithWorkingDirectory(testContext(ioStreams), t.TempDir()), opts)
+		require.ErrorIs(t, err, load.ErrNoSolutionFound)
+		assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+	})
+
+	t.Run("single discovered file is fixed", func(t *testing.T) {
+		dir := t.TempDir()
+		solPath := filepath.Join(dir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte(hyphenatedFixSolution), 0o600))
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		opts := fixOptions("", ioStreams)
+		opts.Fix = true
+
+		require.NoError(t, runLintFix(provider.WithWorkingDirectory(testContext(ioStreams), dir), opts))
+		assert.Equal(t, solPath, opts.File)
+		got, err := os.ReadFile(solPath) //nolint:gosec // test-controlled path
+		require.NoError(t, err)
+		assert.Contains(t, string(got), "myServiceName:")
+	})
 }
 
 func TestRunLintFix_NonDefaultBinaryName(t *testing.T) {

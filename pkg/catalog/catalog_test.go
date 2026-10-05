@@ -35,6 +35,69 @@ func TestIsPreRelease(t *testing.T) {
 	}
 }
 
+func TestWantsLatest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		query ArtifactQuery
+		want  bool
+	}{
+		{"empty version", ArtifactQuery{}, true},
+		{"latest alias", ArtifactQuery{Version: "latest"}, true},
+		{"exact version", ArtifactQuery{Version: "1.0.0"}, false},
+		{"exact pre-release", ArtifactQuery{Version: "1.0.0-rc.1"}, false},
+		{"constraint", ArtifactQuery{Version: ">=1.0.0"}, false},
+		{"digest pinned", ArtifactQuery{Digest: "sha256:abc"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, wantsLatest(tt.query))
+		})
+	}
+}
+
+func TestLatestCandidates(t *testing.T) {
+	t.Parallel()
+
+	info := func(v string) ArtifactInfo {
+		return ArtifactInfo{Reference: Reference{Version: semver.MustParse(v)}}
+	}
+	versions := func(in []ArtifactInfo) []string {
+		out := make([]string, 0, len(in))
+		for _, a := range in {
+			out = append(out, a.Reference.Version.String())
+		}
+		return out
+	}
+
+	t.Run("drops pre-releases when stable exists", func(t *testing.T) {
+		t.Parallel()
+		got := latestCandidates(context.Background(), []ArtifactInfo{info("1.0.0"), info("2.0.0-rc.1"), info("1.1.0")})
+		assert.Equal(t, []string{"1.0.0", "1.1.0"}, versions(got))
+	})
+
+	t.Run("falls back to pre-releases when none stable", func(t *testing.T) {
+		t.Parallel()
+		got := latestCandidates(context.Background(), []ArtifactInfo{info("2.0.0-rc.1"), info("2.0.0-rc.2")})
+		assert.Equal(t, []string{"2.0.0-rc.1", "2.0.0-rc.2"}, versions(got))
+	})
+
+	t.Run("keeps everything when pre-releases are included", func(t *testing.T) {
+		t.Parallel()
+		ctx := WithIncludePreRelease(context.Background())
+		got := latestCandidates(ctx, []ArtifactInfo{info("1.0.0"), info("2.0.0-rc.1")})
+		assert.Equal(t, []string{"1.0.0", "2.0.0-rc.1"}, versions(got))
+	})
+
+	t.Run("empty input", func(t *testing.T) {
+		t.Parallel()
+		assert.Empty(t, latestCandidates(context.Background(), nil))
+	})
+}
+
 func TestIncludePreReleaseContext(t *testing.T) {
 	t.Parallel()
 

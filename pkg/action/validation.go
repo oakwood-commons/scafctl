@@ -528,8 +528,8 @@ func validateProvider(action *Action, section string, registry RegistryInterface
 	}
 
 	hasActionCapability := false
-	for _, cap := range desc.Capabilities {
-		if cap == provider.CapabilityAction {
+	for _, cp := range desc.Capabilities {
+		if cp == provider.CapabilityAction {
 			hasActionCapability = true
 			break
 		}

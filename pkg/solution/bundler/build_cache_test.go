@@ -4,6 +4,8 @@
 package bundler
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,11 +25,9 @@ func TestComputeBuildFingerprint_Deterministic(t *testing.T) {
 	files := []FileEntry{{RelPath: "file1.txt", Source: StaticAnalysis}}
 	plugins := []BundlePluginEntry{{Name: "my-plugin", Kind: "provider", Version: "1.0.0"}}
 
-	fp1, err := ComputeBuildFingerprint(content, dir, files, plugins, "sha256:lockdigest")
-	require.NoError(t, err)
-
-	fp2, err := ComputeBuildFingerprint(content, dir, files, plugins, "sha256:lockdigest")
-	require.NoError(t, err)
+	annotations := map[string]string{"b": "2", "a": "1"}
+	fp1 := ComputeBuildFingerprint(content, snapshotOf(t, dir, files), plugins, "sha256:lockdigest", annotations)
+	fp2 := ComputeBuildFingerprint(content, snapshotOf(t, dir, files), plugins, "sha256:lockdigest", map[string]string{"a": "1", "b": "2"})
 
 	assert.Equal(t, fp1, fp2, "fingerprint should be deterministic")
 	assert.True(t, len(fp1) > 10, "fingerprint should be non-trivial")
@@ -41,60 +41,70 @@ func TestComputeBuildFingerprint_ChangesOnFileModification(t *testing.T) {
 	content := []byte("solution content")
 	files := []FileEntry{{RelPath: "file1.txt", Source: StaticAnalysis}}
 
-	fp1, err := ComputeBuildFingerprint(content, dir, files, nil, "")
-	require.NoError(t, err)
+	fp1 := ComputeBuildFingerprint(content, snapshotOf(t, dir, files), nil, "", nil)
 
 	// Modify the file
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "file1.txt"), []byte("modified"), 0o600))
 
-	fp2, err := ComputeBuildFingerprint(content, dir, files, nil, "")
-	require.NoError(t, err)
+	fp2 := ComputeBuildFingerprint(content, snapshotOf(t, dir, files), nil, "", nil)
 
 	assert.NotEqual(t, fp1, fp2, "fingerprint should change when file content changes")
 }
 
 func TestComputeBuildFingerprint_ChangesOnSolutionModification(t *testing.T) {
-	dir := t.TempDir()
-
-	files := []FileEntry{}
-
-	fp1, err := ComputeBuildFingerprint([]byte("version 1"), dir, files, nil, "")
-	require.NoError(t, err)
-
-	fp2, err := ComputeBuildFingerprint([]byte("version 2"), dir, files, nil, "")
-	require.NoError(t, err)
+	fp1 := ComputeBuildFingerprint([]byte("version 1"), nil, nil, "", nil)
+	fp2 := ComputeBuildFingerprint([]byte("version 2"), nil, nil, "", nil)
 
 	assert.NotEqual(t, fp1, fp2, "fingerprint should change when solution content changes")
 }
 
 func TestComputeBuildFingerprint_ChangesOnPluginChange(t *testing.T) {
-	dir := t.TempDir()
-
 	content := []byte("solution")
 	plugins1 := []BundlePluginEntry{{Name: "my-plugin", Kind: "provider", Version: "1.0.0"}}
 	plugins2 := []BundlePluginEntry{{Name: "my-plugin", Kind: "provider", Version: "2.0.0"}}
 
-	fp1, err := ComputeBuildFingerprint(content, dir, nil, plugins1, "")
-	require.NoError(t, err)
-
-	fp2, err := ComputeBuildFingerprint(content, dir, nil, plugins2, "")
-	require.NoError(t, err)
+	fp1 := ComputeBuildFingerprint(content, nil, plugins1, "", nil)
+	fp2 := ComputeBuildFingerprint(content, nil, plugins2, "", nil)
 
 	assert.NotEqual(t, fp1, fp2, "fingerprint should change when plugin version changes")
 }
 
 func TestComputeBuildFingerprint_ChangesOnLockChange(t *testing.T) {
-	dir := t.TempDir()
-
 	content := []byte("solution")
 
-	fp1, err := ComputeBuildFingerprint(content, dir, nil, nil, "sha256:aaa")
-	require.NoError(t, err)
-
-	fp2, err := ComputeBuildFingerprint(content, dir, nil, nil, "sha256:bbb")
-	require.NoError(t, err)
+	fp1 := ComputeBuildFingerprint(content, nil, nil, "sha256:aaa", nil)
+	fp2 := ComputeBuildFingerprint(content, nil, nil, "sha256:bbb", nil)
 
 	assert.NotEqual(t, fp1, fp2, "fingerprint should change when lock digest changes")
+}
+
+func TestComputeBuildFingerprint_ChangesOnAnnotationChange(t *testing.T) {
+	content := []byte("solution")
+	const commitKey, dirtyKey = "build.commit", "build.dirty"
+
+	tests := []struct {
+		name string
+		a, b map[string]string
+	}{
+		{name: "commit changes", a: map[string]string{commitKey: "abc"}, b: map[string]string{commitKey: "def"}},
+		{name: "dirty flag clears", a: map[string]string{commitKey: "abc", dirtyKey: "true"}, b: map[string]string{commitKey: "abc"}},
+		{name: "git metadata dropped", a: map[string]string{commitKey: "abc"}, b: nil},
+		{name: "key and value boundary is unambiguous", a: map[string]string{"ab": "c"}, b: map[string]string{"a": "bc"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fp1 := ComputeBuildFingerprint(content, nil, nil, "", tt.a)
+			fp2 := ComputeBuildFingerprint(content, nil, nil, "", tt.b)
+			assert.NotEqual(t, fp1, fp2)
+		})
+	}
+}
+
+func TestComputeBuildFingerprint_NilAndEmptyAnnotationsMatch(t *testing.T) {
+	content := []byte("solution")
+	assert.Equal(t,
+		ComputeBuildFingerprint(content, nil, nil, "", nil),
+		ComputeBuildFingerprint(content, nil, nil, "", map[string]string{}))
 }
 
 func TestComputeBuildFingerprint_SortedFiles(t *testing.T) {
@@ -115,13 +125,21 @@ func TestComputeBuildFingerprint_SortedFiles(t *testing.T) {
 		{RelPath: "a.txt", Source: StaticAnalysis},
 	}
 
-	fp1, err := ComputeBuildFingerprint(content, dir, files1, nil, "")
-	require.NoError(t, err)
-
-	fp2, err := ComputeBuildFingerprint(content, dir, files2, nil, "")
-	require.NoError(t, err)
+	fp1 := ComputeBuildFingerprint(content, snapshotOf(t, dir, files1), nil, "", nil)
+	fp2 := ComputeBuildFingerprint(content, snapshotOf(t, dir, files2), nil, "", nil)
 
 	assert.Equal(t, fp1, fp2, "fingerprint should be order-independent for files")
+}
+
+func TestComputeBuildFingerprint_ChangesOnPathChange(t *testing.T) {
+	content := []byte("solution")
+	same := []byte("same")
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(same))
+
+	fp1 := ComputeBuildFingerprint(content, &FileSnapshot{Files: []SnapshotFile{{RelPath: "a.txt", Content: same, Digest: digest}}}, nil, "", nil)
+	fp2 := ComputeBuildFingerprint(content, &FileSnapshot{Files: []SnapshotFile{{RelPath: "b.txt", Content: same, Digest: digest}}}, nil, "", nil)
+
+	assert.NotEqual(t, fp1, fp2, "fingerprint should change when a file is renamed")
 }
 
 func TestWriteAndCheckBuildCache(t *testing.T) {

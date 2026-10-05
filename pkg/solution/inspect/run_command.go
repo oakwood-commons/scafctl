@@ -11,7 +11,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 )
 
 // RunCommandInfo holds the structured result of analyzing a solution to
@@ -178,7 +178,7 @@ func solutionSourceArg(sol *solution.Solution, rawPath string) string {
 	// Catalog reference: run solution accepts the bare name positionally.
 	if ref, ok := strings.CutPrefix(resolved, "catalog:"); ok {
 		// catalogPath may be "catalog:<name[@ver]>" or "catalog:<cat>:<name[@ver]>".
-		if rawPath != "" && get.IsCatalogReference(rawPath) {
+		if c, err := source.Classify(rawPath); err == nil && c.Kind.IsReference() {
 			return rawPath
 		}
 		if i := strings.LastIndex(ref, ":"); i >= 0 {

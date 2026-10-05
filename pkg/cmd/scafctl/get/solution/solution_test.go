@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -16,383 +17,286 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	solutionpkg "github.com/oakwood-commons/scafctl/pkg/solution"
-	solutionget "github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
 // xdgMu serialises tests that mutate the global xdg.DataHome variable.
 var xdgMu sync.Mutex
 
-func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
-	t.Run("successful get from local file with json output", func(t *testing.T) {
-		mockGetter := &solutionget.MockGetter{}
-		expectedSolution := &solutionpkg.Solution{
-			APIVersion: "scafctl.io/v1",
-			Kind:       "Solution",
-			Metadata: solutionpkg.Metadata{
-				Name: "test-solution",
-			},
-		}
-
-		mockGetter.On("Get", mock.Anything, "/path/to/solution.yaml").
-			Return(expectedSolution, nil)
-
-		outBuf := &bytes.Buffer{}
-		errBuf := &bytes.Buffer{}
-		ioStreams := &terminal.IOStreams{
-			Out:    outBuf,
-			ErrOut: errBuf,
-		}
-
-		options := &CmdOptionsVersion{
-			IOStreams: ioStreams,
-			CliParams: &settings.Run{
-				NoColor: true,
-			},
-			Output: "json",
-			File:   "/path/to/solution.yaml",
-		}
-
-		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
-		require.NoError(t, err)
-		mockGetter.AssertExpectations(t)
-
-		assert.NotEmpty(t, outBuf.String())
-		assert.Contains(t, outBuf.String(), "test-solution")
-	})
-
-	t.Run("successful get from URL with yaml output", func(t *testing.T) {
-		mockGetter := &solutionget.MockGetter{}
-		expectedSolution := &solutionpkg.Solution{
-			APIVersion: "scafctl.io/v1",
-			Kind:       "Solution",
-			Metadata: solutionpkg.Metadata{
-				Name: "url-solution",
-			},
-		}
-
-		mockGetter.On("Get", mock.Anything, "https://example.com/solution.yaml").
-			Return(expectedSolution, nil)
-
-		outBuf := &bytes.Buffer{}
-		errBuf := &bytes.Buffer{}
-		ioStreams := &terminal.IOStreams{
-			Out:    outBuf,
-			ErrOut: errBuf,
-		}
-
-		options := &CmdOptionsVersion{
-			IOStreams: ioStreams,
-			CliParams: &settings.Run{
-				NoColor: true,
-			},
-			Output: "yaml",
-			File:   "https://example.com/solution.yaml",
-		}
-
-		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
-		require.NoError(t, err)
-		mockGetter.AssertExpectations(t)
-
-		assert.NotEmpty(t, outBuf.String())
-		assert.Contains(t, outBuf.String(), "url-solution")
-	})
-
-	t.Run("empty path uses auto-discovery", func(t *testing.T) {
-		mockGetter := &solutionget.MockGetter{}
-		expectedSolution := &solutionpkg.Solution{
-			APIVersion: "scafctl.io/v1",
-			Kind:       "Solution",
-			Metadata: solutionpkg.Metadata{
-				Name: "auto-discovered-solution",
-			},
-		}
-
-		mockGetter.On("Get", mock.Anything, "").
-			Return(expectedSolution, nil)
-
-		outBuf := &bytes.Buffer{}
-		errBuf := &bytes.Buffer{}
-		ioStreams := &terminal.IOStreams{
-			Out:    outBuf,
-			ErrOut: errBuf,
-		}
-
-		options := &CmdOptionsVersion{
-			IOStreams: ioStreams,
-			CliParams: &settings.Run{
-				NoColor: true,
-			},
-			Output: "json",
-			File:   "",
-		}
-
-		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
-		require.NoError(t, err)
-		mockGetter.AssertExpectations(t)
-
-		assert.NotEmpty(t, outBuf.String())
-		assert.Contains(t, outBuf.String(), "auto-discovered-solution")
-	})
-
-	t.Run("getter returns error", func(t *testing.T) {
-		mockGetter := &solutionget.MockGetter{}
-		expectedError := errors.New("failed to get solution")
-
-		mockGetter.On("Get", mock.Anything, "/invalid/path").
-			Return(nil, expectedError)
-
-		outBuf := &bytes.Buffer{}
-		errBuf := &bytes.Buffer{}
-		ioStreams := &terminal.IOStreams{
-			Out:    outBuf,
-			ErrOut: errBuf,
-		}
-
-		options := &CmdOptionsVersion{
-			IOStreams: ioStreams,
-			CliParams: &settings.Run{
-				NoColor: true,
-			},
-			Output: "json",
-			File:   "/invalid/path",
-		}
-
-		w := writer.New(ioStreams, options.CliParams)
-		ctx := writer.WithWriter(context.Background(), w)
-
-		err := options.GetSolutionWithGetter(ctx, mockGetter)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, expectedError), "error should wrap the original error")
-		assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err), "should return FileNotFound exit code")
-		mockGetter.AssertExpectations(t)
-
-		assert.Empty(t, outBuf.String())
-		assert.Contains(t, errBuf.String(), "failed to get solution", "error should be written to stderr")
-	})
-
-	t.Run("json output format explicitly", func(t *testing.T) {
-		mockGetter := &solutionget.MockGetter{}
-		expectedSolution := &solutionpkg.Solution{
-			APIVersion: "scafctl.io/v1",
-			Kind:       "Solution",
-			Metadata: solutionpkg.Metadata{
-				Name: "json-output-solution",
-			},
-		}
-
-		mockGetter.On("Get", mock.Anything, "/path/to/solution.yaml").
-			Return(expectedSolution, nil)
-
-		outBuf := &bytes.Buffer{}
-		errBuf := &bytes.Buffer{}
-		ioStreams := &terminal.IOStreams{
-			Out:    outBuf,
-			ErrOut: errBuf,
-		}
-
-		options := &CmdOptionsVersion{
-			IOStreams: ioStreams,
-			CliParams: &settings.Run{
-				NoColor: true,
-			},
-			Output: "json",
-			File:   "/path/to/solution.yaml",
-		}
-
-		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
-		require.NoError(t, err)
-		mockGetter.AssertExpectations(t)
-
-		assert.NotEmpty(t, outBuf.String())
-		// Verify it's valid JSON format
-		assert.Contains(t, outBuf.String(), "{")
-		assert.Contains(t, outBuf.String(), "}")
-	})
-
-	t.Run("context with values", func(t *testing.T) {
-		mockGetter := &solutionget.MockGetter{}
-		expectedSolution := &solutionpkg.Solution{
-			APIVersion: "scafctl.io/v1",
-			Kind:       "Solution",
-			Metadata: solutionpkg.Metadata{
-				Name: "context-solution",
-			},
-		}
-
-		cliParams := &settings.Run{
-			NoColor: true,
-		}
-		ctx := settings.IntoContext(context.Background(), cliParams)
-
-		mockGetter.On("Get", mock.Anything, "/path/to/solution.yaml").
-			Return(expectedSolution, nil)
-
-		outBuf := &bytes.Buffer{}
-		errBuf := &bytes.Buffer{}
-		ioStreams := &terminal.IOStreams{
-			Out:    outBuf,
-			ErrOut: errBuf,
-		}
-
-		options := &CmdOptionsVersion{
-			IOStreams: ioStreams,
-			CliParams: cliParams,
-			Output:    "json",
-			File:      "/path/to/solution.yaml",
-		}
-
-		err := options.GetSolutionWithGetter(ctx, mockGetter)
-		require.NoError(t, err)
-		mockGetter.AssertExpectations(t)
-
-		assert.NotEmpty(t, outBuf.String())
-		assert.Contains(t, outBuf.String(), "context-solution")
-	})
-
-	t.Run("default output does not crash", func(t *testing.T) {
-		mockGetter := &solutionget.MockGetter{}
-		expectedSolution := &solutionpkg.Solution{
-			APIVersion: "scafctl.io/v1",
-			Kind:       "Solution",
-			Metadata: solutionpkg.Metadata{
-				Name: "default-output-solution",
-			},
-		}
-
-		mockGetter.On("Get", mock.Anything, "/path/to/solution.yaml").
-			Return(expectedSolution, nil)
-
-		outBuf := &bytes.Buffer{}
-		errBuf := &bytes.Buffer{}
-		ioStreams := &terminal.IOStreams{
-			Out:    outBuf,
-			ErrOut: errBuf,
-		}
-
-		options := &CmdOptionsVersion{
-			IOStreams: ioStreams,
-			CliParams: &settings.Run{
-				NoColor:    true,
-				BinaryName: "scafctl",
-			},
-			Output: "",
-			File:   "/path/to/solution.yaml",
-		}
-
-		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
-		require.NoError(t, err)
-		mockGetter.AssertExpectations(t)
-
-		assert.NotEmpty(t, outBuf.String())
-		assert.Contains(t, outBuf.String(), "default-output-solution")
-	})
-
-	t.Run("table output does not crash", func(t *testing.T) {
-		mockGetter := &solutionget.MockGetter{}
-		expectedSolution := &solutionpkg.Solution{
-			APIVersion: "scafctl.io/v1",
-			Kind:       "Solution",
-			Metadata: solutionpkg.Metadata{
-				Name: "table-output-solution",
-			},
-		}
-
-		mockGetter.On("Get", mock.Anything, "/path/to/solution.yaml").
-			Return(expectedSolution, nil)
-
-		outBuf := &bytes.Buffer{}
-		errBuf := &bytes.Buffer{}
-		ioStreams := &terminal.IOStreams{
-			Out:    outBuf,
-			ErrOut: errBuf,
-		}
-
-		options := &CmdOptionsVersion{
-			IOStreams: ioStreams,
-			CliParams: &settings.Run{
-				NoColor:    true,
-				BinaryName: "scafctl",
-			},
-			Output: "table",
-			File:   "/path/to/solution.yaml",
-		}
-
-		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
-		require.NoError(t, err)
-		mockGetter.AssertExpectations(t)
-
-		assert.NotEmpty(t, outBuf.String())
-		assert.Contains(t, outBuf.String(), "table-output-solution")
-	})
-
-	t.Run("solution with complex data", func(t *testing.T) {
-		mockGetter := &solutionget.MockGetter{}
-		expectedSolution := &solutionpkg.Solution{
-			APIVersion: "scafctl.io/v1",
-			Kind:       "Solution",
-			Metadata: solutionpkg.Metadata{
-				Name:        "complex-solution",
-				Description: "A solution with detailed metadata",
-			},
-		}
-
-		mockGetter.On("Get", mock.Anything, "/path/to/complex.yaml").
-			Return(expectedSolution, nil)
-
-		outBuf := &bytes.Buffer{}
-		errBuf := &bytes.Buffer{}
-		ioStreams := &terminal.IOStreams{
-			Out:    outBuf,
-			ErrOut: errBuf,
-		}
-
-		options := &CmdOptionsVersion{
-			IOStreams: ioStreams,
-			CliParams: &settings.Run{
-				NoColor: true,
-			},
-			Output: "yaml",
-			File:   "/path/to/complex.yaml",
-		}
-
-		err := options.GetSolutionWithGetter(context.Background(), mockGetter)
-		require.NoError(t, err)
-		mockGetter.AssertExpectations(t)
-
-		output := outBuf.String()
-		assert.NotEmpty(t, output)
-		assert.Contains(t, output, "complex-solution")
-		assert.Contains(t, output, "A solution with detailed metadata")
-	})
+// mockLoader implements load.Loader for testing. It records the
+// classification it was asked to load.
+type mockLoader struct {
+	sol *solutionpkg.Solution
+	err error
+	got source.Classification
 }
 
-func TestCmdOptionsVersion_GetSolution(t *testing.T) {
-	t.Run("delegates to GetSolutionWithGetter", func(t *testing.T) {
-		outBuf := &bytes.Buffer{}
-		errBuf := &bytes.Buffer{}
-		ioStreams := &terminal.IOStreams{
-			Out:    outBuf,
-			ErrOut: errBuf,
-		}
+var _ load.Loader = (*mockLoader)(nil)
 
+func (m *mockLoader) Load(_ context.Context, c source.Classification) (*load.MaterializedSolution, error) {
+	m.got = c
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &load.MaterializedSolution{Solution: m.sol, Source: c}, nil
+}
+
+func testSolution(name, description string) *solutionpkg.Solution {
+	return &solutionpkg.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solutionpkg.Metadata{Name: name, Description: description},
+	}
+}
+
+func TestCmdOptionsVersion_GetSolution_Loader(t *testing.T) {
+	tests := []struct {
+		name     string
+		file     string
+		output   string
+		sol      *solutionpkg.Solution
+		wantKind source.Kind
+		wantOut  []string
+	}{
+		{
+			name:     "local file with json output",
+			file:     "/path/to/solution.yaml",
+			output:   "json",
+			sol:      testSolution("test-solution", ""),
+			wantKind: source.KindLocalFile,
+			wantOut:  []string{"test-solution", "{", "}"},
+		},
+		{
+			name:     "URL with yaml output",
+			file:     "https://example.com/solution.yaml",
+			output:   "yaml",
+			sol:      testSolution("url-solution", ""),
+			wantKind: source.KindURL,
+			wantOut:  []string{"url-solution"},
+		},
+		{
+			name:     "empty path auto-discovers",
+			file:     "",
+			output:   "json",
+			sol:      testSolution("auto-discovered-solution", ""),
+			wantKind: source.KindAutoDiscover,
+			wantOut:  []string{"auto-discovered-solution"},
+		},
+		{
+			name:     "catalog name",
+			file:     "my-solution@1.0.0",
+			output:   "json",
+			sol:      testSolution("my-solution", ""),
+			wantKind: source.KindBareName,
+			wantOut:  []string{"my-solution"},
+		},
+		{
+			name:     "remote reference",
+			file:     "ghcr.io/org/my-solution@1.0.0",
+			output:   "json",
+			sol:      testSolution("my-solution", ""),
+			wantKind: source.KindRemoteRef,
+			wantOut:  []string{"my-solution"},
+		},
+		{
+			name:     "default output",
+			file:     "/path/to/solution.yaml",
+			output:   "",
+			sol:      testSolution("default-output-solution", ""),
+			wantKind: source.KindLocalFile,
+			wantOut:  []string{"default-output-solution"},
+		},
+		{
+			name:     "table output",
+			file:     "/path/to/solution.yaml",
+			output:   "table",
+			sol:      testSolution("table-output-solution", ""),
+			wantKind: source.KindLocalFile,
+			wantOut:  []string{"table-output-solution"},
+		},
+		{
+			name:     "solution with description",
+			file:     "/path/to/complex.yaml",
+			output:   "yaml",
+			sol:      testSolution("complex-solution", "A solution with detailed metadata"),
+			wantKind: source.KindLocalFile,
+			wantOut:  []string{"complex-solution", "A solution with detailed metadata"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			outBuf := &bytes.Buffer{}
+			ioStreams := &terminal.IOStreams{Out: outBuf, ErrOut: &bytes.Buffer{}}
+			cliParams := &settings.Run{NoColor: true, BinaryName: "scafctl"}
+			ml := &mockLoader{sol: tc.sol}
+
+			options := &CmdOptionsVersion{
+				IOStreams: ioStreams,
+				CliParams: cliParams,
+				Output:    tc.output,
+				File:      tc.file,
+				loader:    ml,
+			}
+
+			err := options.GetSolution(settings.IntoContext(context.Background(), cliParams))
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantKind, ml.got.Kind)
+			assert.Equal(t, tc.file, ml.got.Ref)
+			for _, want := range tc.wantOut {
+				assert.Contains(t, outBuf.String(), want)
+			}
+		})
+	}
+}
+
+func TestCmdOptionsVersion_GetSolution_LoaderErrors(t *testing.T) {
+	t.Parallel()
+
+	loadErr := errors.New("failed to get solution")
+	tests := []struct {
+		name    string
+		file    string
+		loadErr error
+		wantIs  error
+		wantMsg string
+	}{
+		{
+			name:    "load error",
+			file:    "/invalid/path",
+			loadErr: loadErr,
+			wantIs:  loadErr,
+			wantMsg: "failed to get solution",
+		},
+		{
+			name:    "invalid reference",
+			file:    "ftp://example.com/solution",
+			wantIs:  source.ErrInvalidRef,
+			wantMsg: "invalid solution reference",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			outBuf := &bytes.Buffer{}
+			errBuf := &bytes.Buffer{}
+			ioStreams := &terminal.IOStreams{Out: outBuf, ErrOut: errBuf}
+			cliParams := &settings.Run{NoColor: true}
+			options := &CmdOptionsVersion{
+				IOStreams: ioStreams,
+				CliParams: cliParams,
+				Output:    "json",
+				File:      tc.file,
+				loader:    &mockLoader{err: tc.loadErr},
+			}
+			ctx := writer.WithWriter(context.Background(), writer.New(ioStreams, cliParams))
+
+			err := options.GetSolution(ctx)
+			require.ErrorIs(t, err, tc.wantIs)
+			assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+			assert.Empty(t, outBuf.String())
+			assert.Contains(t, errBuf.String(), tc.wantMsg, "error should be written to stderr")
+		})
+	}
+}
+
+const discoverySolutionYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: discovered
+  version: 1.0.0
+`
+
+func TestCmdOptionsVersion_GetSolution(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nonexistent file", func(t *testing.T) {
+		t.Parallel()
+
+		ioStreams := &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}}
 		options := &CmdOptionsVersion{
 			IOStreams: ioStreams,
-			CliParams: &settings.Run{
-				NoColor: true,
-			},
-			Output: "json",
-			File:   "/nonexistent/solution.yaml",
+			CliParams: &settings.Run{NoColor: true},
+			Output:    "json",
+			File:      "/nonexistent/solution.yaml",
 		}
 
 		err := options.GetSolution(context.Background())
 		require.Error(t, err)
+		assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+	})
+
+	t.Run("local file", func(t *testing.T) {
+		t.Parallel()
+
+		file := filepath.Join(t.TempDir(), "solution.yaml")
+		require.NoError(t, os.WriteFile(file, []byte(discoverySolutionYAML), 0o600))
+
+		outBuf := &bytes.Buffer{}
+		options := &CmdOptionsVersion{
+			IOStreams: &terminal.IOStreams{Out: outBuf, ErrOut: &bytes.Buffer{}},
+			CliParams: &settings.Run{NoColor: true},
+			Output:    "json",
+			File:      file,
+		}
+
+		require.NoError(t, options.GetSolution(t.Context()))
+		assert.Contains(t, outBuf.String(), "discovered")
+	})
+
+	t.Run("auto-discovers from working directory", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "solution.yaml"), []byte(discoverySolutionYAML), 0o600))
+
+		outBuf := &bytes.Buffer{}
+		errBuf := &bytes.Buffer{}
+		ioStreams := &terminal.IOStreams{Out: outBuf, ErrOut: errBuf}
+		cliParams := &settings.Run{NoColor: true, BinaryName: "mycli", Verbose: true}
+		options := &CmdOptionsVersion{
+			IOStreams: ioStreams,
+			CliParams: cliParams,
+			Output:    "json",
+			Local:     true,
+		}
+		ctx := provider.WithWorkingDirectory(settings.IntoContext(t.Context(), cliParams), dir)
+		ctx = writer.WithWriter(ctx, writer.New(ioStreams, cliParams))
+
+		require.NoError(t, options.GetSolution(ctx))
+		assert.Contains(t, outBuf.String(), "discovered")
+		assert.Contains(t, errBuf.String(), filepath.Join(dir, "solution.yaml"))
+	})
+
+	t.Run("auto-discovery finds nothing", func(t *testing.T) {
+		t.Parallel()
+
+		errBuf := &bytes.Buffer{}
+		ioStreams := &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: errBuf}
+		cliParams := &settings.Run{NoColor: true}
+		options := &CmdOptionsVersion{
+			IOStreams: ioStreams,
+			CliParams: cliParams,
+			Output:    "json",
+			Local:     true,
+		}
+		ctx := provider.WithWorkingDirectory(t.Context(), t.TempDir())
+		ctx = writer.WithWriter(ctx, writer.New(ioStreams, cliParams))
+
+		err := options.GetSolution(ctx)
+		require.ErrorIs(t, err, load.ErrNoSolutionFound)
+		assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+		assert.Contains(t, errBuf.String(), "no solution file found")
 	})
 }
 

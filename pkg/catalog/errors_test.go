@@ -294,3 +294,31 @@ func TestIsAuthDegraded(t *testing.T) {
 		assert.Nil(t, got)
 	})
 }
+
+func TestBuilderError(t *testing.T) {
+	t.Run("message renders detail then cause", func(t *testing.T) {
+		cause := errors.New("boom")
+		e := &BuilderError{
+			Stage:   BuildStagePush,
+			Builder: BuilderKindManifest,
+			Detail:  "pushing config",
+			Cause:   cause,
+		}
+		assert.Equal(t, "pushing config: boom", e.Error())
+	})
+
+	t.Run("message renders detail alone when no cause", func(t *testing.T) {
+		e := &BuilderError{
+			Stage:   BuildStageAssemble,
+			Builder: BuilderKindManifest,
+			Detail:  "building manifest: no layers",
+		}
+		assert.Equal(t, "building manifest: no layers", e.Error())
+	})
+
+	t.Run("unwrap returns cause", func(t *testing.T) {
+		cause := errors.New("boom")
+		e := &BuilderError{Stage: BuildStagePush, Builder: BuilderKindIndex, Detail: "pushing image index", Cause: cause}
+		assert.ErrorIs(t, e, cause)
+	})
+}

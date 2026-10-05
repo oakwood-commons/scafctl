@@ -65,43 +65,6 @@ func LooksLikeRemoteReference(ref string) bool {
 	return strings.Contains(host, ".") || strings.Contains(host, ":")
 }
 
-// InferKindFromLocalCatalog searches the local catalog to determine an artifact's kind.
-// It tries each known artifact kind in order and returns the first match.
-func InferKindFromLocalCatalog(ctx context.Context, localCatalog *LocalCatalog, name, version string) (ArtifactKind, error) {
-	kinds := []ArtifactKind{
-		ArtifactKindSolution,
-		ArtifactKindProvider,
-		ArtifactKindAuthHandler,
-	}
-
-	for _, kind := range kinds {
-		ref := Reference{
-			Kind: kind,
-			Name: name,
-		}
-
-		// If version specified, try to parse it
-		if version != "" {
-			parsedRef, err := ParseReference(kind, name+"@"+version)
-			if err != nil {
-				continue
-			}
-			ref = parsedRef
-		}
-
-		// Check if artifact exists with this kind
-		exists, err := localCatalog.Exists(ctx, ref)
-		if err != nil {
-			continue
-		}
-		if exists {
-			return kind, nil
-		}
-	}
-
-	return "", fmt.Errorf("artifact %q not found in local catalog", name)
-}
-
 // InferKindFromRemote resolves an artifact's kind by trying each known kind
 // against the remote catalog. For each kind it attempts to resolve the tag;
 // the first successful resolve wins. This avoids fetching the full manifest
@@ -174,7 +137,7 @@ func ResolveCatalogURL(ctx context.Context, catalogFlag string) (string, error) 
 	cat, ok := cfg.GetDefaultCatalog()
 	if !ok {
 		bin := settings.BinaryNameFromContext(ctx)
-		return "", fmt.Errorf("no --catalog specified and no default catalog configured\n\nTo set a default catalog:\n  %s config add-catalog <name> --type oci --url <registry-url> --default\n\nOr specify one explicitly:\n  %s catalog push <artifact> --catalog <registry-url>", bin, bin)
+		return "", fmt.Errorf("no --catalog specified and no default catalog configured\n\nTo set a default catalog:\n  %s config add-catalog <name> --type oci --url <registry-url> --default\n\nOr specify one explicitly:\n  %s catalog push <kind> <name> --catalog <registry-url>", bin, bin)
 	}
 
 	url := catalogURLFromCatalogConfig(cat)

@@ -2660,18 +2660,17 @@ func containsSubstr(s, substr string) bool {
 // newFakeProviderWithCapabilities creates a test provider with specific capabilities.
 func newFakeProviderWithCapabilities(name string, caps []provider.Capability) *fakeProvider {
 	outputSchemas := make(map[provider.Capability]*jsonschema.Schema)
-	for _, cap := range caps {
-		switch cap {
-		case provider.CapabilityValidation:
-			outputSchemas[cap] = &jsonschema.Schema{
+	for _, cp := range caps {
+		if cp == provider.CapabilityValidation {
+			outputSchemas[cp] = &jsonschema.Schema{
 				Type: "object",
 				Properties: map[string]*jsonschema.Schema{
 					"valid":  {Type: "boolean"},
 					"errors": {Type: "array"},
 				},
 			}
-		default:
-			outputSchemas[cap] = &jsonschema.Schema{Type: "object"}
+		} else {
+			outputSchemas[cp] = &jsonschema.Schema{Type: "object"}
 		}
 	}
 	return &fakeProvider{

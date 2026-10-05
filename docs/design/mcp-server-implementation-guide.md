@@ -7,6 +7,11 @@ weight: 101
 
 This document is the detailed, step-by-step implementation guide for building the MCP server into scafctl. It is the companion to the [MCP Server design document](./mcp-server.md) which covers the _why_ — this document covers the _how_.
 
+> **Note:** Code samples that call `prepare.Solution(ctx, path)` are
+> historical. MCP tools now build a `load.Router`, classify the path with
+> `source.Classify`, and call
+> `prepare.SolutionFromLoader(ctx, router, classification, opts...)`.
+
 ## Prerequisites
 
 Before starting implementation, the following must be true:

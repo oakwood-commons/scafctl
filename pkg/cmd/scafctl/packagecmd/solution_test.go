@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
@@ -244,7 +245,8 @@ func TestCommandPackageSolution_TagLatestRejected(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "'latest' is not a valid version")
+	assert.Contains(t, err.Error(), `"latest" is not a valid version`)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
 }
 
 func TestCommandPackageSolution_TagRemoteRefWrongKind(t *testing.T) {

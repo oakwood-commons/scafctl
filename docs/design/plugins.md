@@ -78,13 +78,13 @@ Users interact with these as distinct artifact kinds:
 
 ```bash
 # Push a provider artifact
-scafctl catalog push aws-provider@1.0.0 --catalog ghcr.io/myorg
+scafctl catalog push provider aws-provider@1.0.0 --catalog ghcr.io/myorg
 
 # Pull a provider artifact  
 scafctl catalog pull ghcr.io/myorg/providers/aws-provider@1.0.0
 
 # Push an auth handler artifact
-scafctl catalog push okta-handler@1.0.0 --catalog ghcr.io/myorg
+scafctl catalog push auth-handler okta-handler@1.0.0 --catalog ghcr.io/myorg
 
 # Pull an auth handler artifact
 scafctl catalog pull ghcr.io/myorg/auth-handlers/okta-handler@1.0.0

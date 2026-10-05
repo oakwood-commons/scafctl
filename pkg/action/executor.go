@@ -1041,8 +1041,8 @@ func (e *Executor) callProvider(ctx context.Context, providerName string, inputs
 	// Check for CapabilityAction
 	desc := prov.Descriptor()
 	hasActionCap := false
-	for _, cap := range desc.Capabilities {
-		if cap == provider.CapabilityAction {
+	for _, cp := range desc.Capabilities {
+		if cp == provider.CapabilityAction {
 			hasActionCap = true
 			break
 		}

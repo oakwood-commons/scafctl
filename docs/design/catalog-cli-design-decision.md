@@ -264,7 +264,7 @@ scafctl catalog push deploy@1.0.0 --catalog ghcr.io/other-org
 scafctl catalog pull ghcr.io/myorg/solutions/deploy@1.0.0
 
 # Delete with --catalog flag
-scafctl catalog delete deploy@1.0.0 --catalog ghcr
+scafctl catalog delete solution deploy@1.0.0 --catalog ghcr
 ```
 
 ### Files Changed
