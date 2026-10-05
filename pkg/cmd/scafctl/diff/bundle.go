@@ -9,12 +9,12 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/diffreport"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
-	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
@@ -83,19 +83,8 @@ func CommandDiffBundle(cliParams *settings.Run, ioStreams *terminal.IOStreams, b
 	return cmd
 }
 
-// Type aliases pointing to the domain types in the bundler package.
-type (
-	bundleDiffResult = bundler.DiffResult
-	SolutionDiff     = bundler.SolutionDiff
-	bundleDiffSets   = bundler.DiffSets
-	FilesDiff        = bundler.FilesDiff
-	FileDiffEntry    = bundler.FileDiffEntry
-	VendoredDiff     = bundler.VendoredDiff
-	VendoredEntry    = bundler.VendoredEntry
-	VendoredUpgrade  = bundler.VendoredUpgrade
-	PluginsDiff      = bundler.PluginsDiff
-	PluginDiffEntry  = bundler.PluginDiffEntry
-)
+// bundleDiffResult aliases the domain diff result for brevity.
+type bundleDiffResult = bundler.DiffResult
 
 func runBundleDiff(ctx context.Context, opts *BundleDiffOptions) error {
 	lgr := logger.FromContext(ctx)
@@ -144,109 +133,62 @@ func runBundleDiff(ctx context.Context, opts *BundleDiffOptions) error {
 	}
 
 	// Output
-	format := kvx.OutputFormat(opts.Output)
-	if kvx.IsStructuredFormat(format) {
-		out := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
-			kvx.WithIOStreams(opts.IOStreams),
-			kvx.WithOutputContext(ctx),
-		)
-		return out.Write(result)
-	}
+	appName := opts.CliParams.BinaryName + " diff bundle"
+	return writeDiffOutput(ctx, w, opts.IOStreams, &opts.KvxOutputFlags, appName, result, reportFromBundleDiff(result))
+}
 
-	// Text output
-	w.Infof("Comparing %s → %s", opts.RefA, opts.RefB)
+// reportFromBundleDiff maps a bundler.DiffResult into the shared diff report.
+func reportFromBundleDiff(result *bundler.DiffResult) *diffreport.Report {
+	r := diffreport.New("bundle", result.RefA, result.RefB)
 
 	if result.Solution != nil {
-		printSolutionDiff(w, result.Solution)
+		addBundleDiffSets(r, "resolvers", result.Solution.Resolvers)
+		addBundleDiffSets(r, "actions", result.Solution.Actions)
 	}
 	if result.Files != nil {
-		printFilesDiff(w, result.Files)
+		for _, f := range result.Files.Added {
+			r.Add(diffreport.Entry{Group: "files", Path: f.Path, Kind: diffreport.ChangeAdded, Detail: bundler.FormatSize(f.Size)})
+		}
+		for _, f := range result.Files.Modified {
+			r.Add(diffreport.Entry{Group: "files", Path: f.Path, Kind: diffreport.ChangeModified})
+		}
+		for _, f := range result.Files.Removed {
+			r.Add(diffreport.Entry{Group: "files", Path: f.Path, Kind: diffreport.ChangeRemoved})
+		}
 	}
 	if result.Vendored != nil {
-		printVendoredDiff(w, result.Vendored)
+		for _, v := range result.Vendored.Added {
+			r.Add(diffreport.Entry{Group: "vendored", Path: v.Name, Kind: diffreport.ChangeAdded, Detail: v.Version})
+		}
+		for _, v := range result.Vendored.Upgraded {
+			r.Add(diffreport.Entry{Group: "vendored", Path: v.Name, Kind: diffreport.ChangeModified, Before: v.From, After: v.To, Detail: v.From + " -> " + v.To})
+		}
+		for _, v := range result.Vendored.Removed {
+			r.Add(diffreport.Entry{Group: "vendored", Path: v.Name, Kind: diffreport.ChangeRemoved, Detail: v.Version})
+		}
 	}
 	if result.Plugins != nil {
-		printPluginsDiff(w, result.Plugins)
+		for _, p := range result.Plugins.Added {
+			r.Add(diffreport.Entry{Group: "plugins", Path: p.Name, Kind: diffreport.ChangeAdded, Detail: p.VersionTo})
+		}
+		for _, p := range result.Plugins.Modified {
+			r.Add(diffreport.Entry{Group: "plugins", Path: p.Name, Kind: diffreport.ChangeModified, Before: p.VersionFrom, After: p.VersionTo, Detail: p.VersionFrom + " -> " + p.VersionTo})
+		}
+		for _, p := range result.Plugins.Removed {
+			r.Add(diffreport.Entry{Group: "plugins", Path: p.Name, Kind: diffreport.ChangeRemoved, Detail: p.VersionFrom})
+		}
 	}
-
-	// Summary
-	w.Plain("")
-	changes := bundler.CountChanges(result)
-	w.Infof("Summary: %s", changes)
-
-	return nil
+	return r
 }
 
-func printSolutionDiff(w *writer.Writer, diff *SolutionDiff) {
-	w.Plain("")
-	w.Plain("Solution YAML:")
-	printDiffSets(w, "  resolvers:", diff.Resolvers)
-	printDiffSets(w, "  workflow.actions:", diff.Actions)
-}
-
-func printDiffSets(w *writer.Writer, label string, ds bundleDiffSets) {
-	if len(ds.Added) == 0 && len(ds.Removed) == 0 {
-		return
-	}
-	w.Plain(label)
+func addBundleDiffSets(r *diffreport.Report, group string, ds bundler.DiffSets) {
 	for _, name := range ds.Added {
-		w.Successf("    + %s (added)", name)
+		r.Add(diffreport.Entry{Group: group, Path: name, Kind: diffreport.ChangeAdded})
 	}
-	for _, name := range ds.Modified {
-		w.Infof("    ~ %s (present in both)", name)
-	}
+	// ds.Modified holds names present on both sides, not confirmed structural
+	// changes (see bundler.ComputeDiffSetsFromBool), so they are omitted to
+	// avoid reporting every shared resolver/action as modified.
 	for _, name := range ds.Removed {
-		w.Errorf("    - %s (removed)", name)
-	}
-}
-
-func printFilesDiff(w *writer.Writer, diff *FilesDiff) {
-	if diff == nil {
-		return
-	}
-	w.Plain("")
-	w.Plain("Bundled files:")
-	for _, f := range diff.Added {
-		w.Successf("    + %s (added, %s)", f.Path, bundler.FormatSize(f.Size))
-	}
-	for _, f := range diff.Modified {
-		w.Infof("    ~ %s (modified)", f.Path)
-	}
-	for _, f := range diff.Removed {
-		w.Errorf("    - %s (removed)", f.Path)
-	}
-}
-
-func printVendoredDiff(w *writer.Writer, diff *VendoredDiff) {
-	if diff == nil {
-		return
-	}
-	w.Plain("")
-	w.Plain("Vendored dependencies:")
-	for _, v := range diff.Added {
-		w.Successf("    + %s@%s (added)", v.Name, v.Version)
-	}
-	for _, v := range diff.Upgraded {
-		w.Infof("    ~ %s: %s → %s (upgraded)", v.Name, v.From, v.To)
-	}
-	for _, v := range diff.Removed {
-		w.Errorf("    - %s@%s (removed)", v.Name, v.Version)
-	}
-}
-
-func printPluginsDiff(w *writer.Writer, diff *PluginsDiff) {
-	if diff == nil {
-		return
-	}
-	w.Plain("")
-	w.Plain("Plugins:")
-	for _, p := range diff.Added {
-		w.Successf("    + %s %s (added)", p.Name, p.VersionTo)
-	}
-	for _, p := range diff.Modified {
-		w.Infof("    ~ %s: %s → %s (constraint changed)", p.Name, p.VersionFrom, p.VersionTo)
-	}
-	for _, p := range diff.Removed {
-		w.Errorf("    - %s %s (removed)", p.Name, p.VersionFrom)
+		r.Add(diffreport.Entry{Group: group, Path: name, Kind: diffreport.ChangeRemoved})
 	}
 }

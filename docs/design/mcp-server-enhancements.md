@@ -734,7 +734,7 @@ mcp.NewTool("diff_snapshots",
 }
 ```
 
-**Shared code:** `resolver.DiffSnapshotsWithOptions()` and formatting functions from `pkg/resolver/diff.go`.
+**Shared code:** `resolver.DiffSnapshotsWithOptions()` computes the diff; the CLI renders it through the shared `pkg/diffreport` report model.
 
 **CLI counterpart:** Already exists as `scafctl diff snapshot`. No new CLI command needed.
 

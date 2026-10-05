@@ -302,13 +302,10 @@ scafctl diff snapshot before.json after.json --ignore-unchanged
 {{% tab "Bash" %}}
 ```bash
 # Human-readable (default)
-scafctl diff snapshot before.json after.json -o human
+scafctl diff snapshot before.json after.json
 
 # JSON for CI pipelines
 scafctl diff snapshot before.json after.json -o json
-
-# Unified diff format
-scafctl diff snapshot before.json after.json -o unified
 
 # Save diff to file with shell redirection
 scafctl diff snapshot before.json after.json -o json > diff-report.json
@@ -317,13 +314,10 @@ scafctl diff snapshot before.json after.json -o json > diff-report.json
 {{% tab "PowerShell" %}}
 ```powershell
 # Human-readable (default)
-scafctl diff snapshot before.json after.json -o human
+scafctl diff snapshot before.json after.json
 
 # JSON for CI pipelines
 scafctl diff snapshot before.json after.json -o json
-
-# Unified diff format
-scafctl diff snapshot before.json after.json -o unified
 
 # Save diff to file with shell redirection
 scafctl diff snapshot before.json after.json -o json > diff-report.json
