@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/diffreport"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -33,12 +34,11 @@ func TestCommandDiffSnapshot(t *testing.T) {
 	assert.NotEmpty(t, cmd.Example)
 	assert.Contains(t, cmd.Example, "scafctl diff snapshot")
 
-	// Verify flags: format is exposed via -o/--output (house convention);
-	// -f is never used for format (it means file elsewhere in the CLI).
+	// Standard kvx output flag with the default report format.
 	outputFlag := cmd.Flags().Lookup("output")
 	require.NotNil(t, outputFlag, "output flag should exist")
 	assert.Equal(t, "o", outputFlag.Shorthand)
-	assert.Equal(t, "human", outputFlag.DefValue)
+	assert.Equal(t, "auto", outputFlag.DefValue)
 
 	// -f must NOT be bound (reserved for file semantics across the CLI).
 	assert.Nil(t, cmd.Flags().ShorthandLookup("f"), "-f must not be bound on diff snapshot")
@@ -63,17 +63,12 @@ func TestRunSnapshotDiff_MissingBeforeFile(t *testing.T) {
 	opts := &SnapshotDiffOptions{
 		BeforeFile: "/nonexistent/before.json",
 		AfterFile:  afterFile,
-		Format:     "human",
 	}
 	var stdout, stderr bytes.Buffer
-	ioStreams := terminal.IOStreams{
-		Out:    &stdout,
-		ErrOut: &stderr,
-	}
-	w := writer.New(&ioStreams, &settings.Run{})
-	testCtx := writer.WithWriter(ctx, w)
+	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+	testCtx := writer.WithWriter(ctx, writer.New(ioStreams, &settings.Run{}))
 
-	err = runSnapshotDiff(testCtx, opts, ioStreams)
+	err = runSnapshotDiff(testCtx, opts, ioStreams, "scafctl")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to load before snapshot")
@@ -91,23 +86,18 @@ func TestRunSnapshotDiff_MissingAfterFile(t *testing.T) {
 	opts := &SnapshotDiffOptions{
 		BeforeFile: beforeFile,
 		AfterFile:  "/nonexistent/after.json",
-		Format:     "human",
 	}
 	var stdout, stderr bytes.Buffer
-	ioStreams := terminal.IOStreams{
-		Out:    &stdout,
-		ErrOut: &stderr,
-	}
-	w := writer.New(&ioStreams, &settings.Run{})
-	testCtx := writer.WithWriter(ctx, w)
+	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+	testCtx := writer.WithWriter(ctx, writer.New(ioStreams, &settings.Run{}))
 
-	err = runSnapshotDiff(testCtx, opts, ioStreams)
+	err = runSnapshotDiff(testCtx, opts, ioStreams, "scafctl")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to load after snapshot")
 }
 
-func TestRunSnapshotDiff_InvalidFormat(t *testing.T) {
+func TestRunSnapshotDiff_DefaultReport(t *testing.T) {
 	ctx := logger.WithLogger(context.Background(), logger.Get(-1))
 
 	tmpDir := t.TempDir()
@@ -116,47 +106,20 @@ func TestRunSnapshotDiff_InvalidFormat(t *testing.T) {
 	opts := &SnapshotDiffOptions{
 		BeforeFile: beforeFile,
 		AfterFile:  afterFile,
-		Format:     "invalid-format",
 	}
 	var stdout, stderr bytes.Buffer
-	ioStreams := terminal.IOStreams{
-		Out:    &stdout,
-		ErrOut: &stderr,
-	}
-	w := writer.New(&ioStreams, &settings.Run{})
-	testCtx := writer.WithWriter(ctx, w)
+	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+	testCtx := writer.WithWriter(ctx, writer.New(ioStreams, &settings.Run{NoColor: true}))
 
-	err := runSnapshotDiff(testCtx, opts, ioStreams)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported format")
-}
-
-func TestRunSnapshotDiff_HumanFormat(t *testing.T) {
-	ctx := logger.WithLogger(context.Background(), logger.Get(-1))
-
-	tmpDir := t.TempDir()
-	beforeFile, afterFile := createTestSnapshotPair(t, tmpDir)
-
-	opts := &SnapshotDiffOptions{
-		BeforeFile: beforeFile,
-		AfterFile:  afterFile,
-		Format:     "human",
-	}
-	var stdout, stderr bytes.Buffer
-	ioStreams := terminal.IOStreams{
-		Out:    &stdout,
-		ErrOut: &stderr,
-	}
-	w := writer.New(&ioStreams, &settings.Run{})
-	testCtx := writer.WithWriter(ctx, w)
-
-	err := runSnapshotDiff(testCtx, opts, ioStreams)
+	err := runSnapshotDiff(testCtx, opts, ioStreams, "scafctl")
 
 	require.NoError(t, err)
 	output := stdout.String()
-	assert.Contains(t, output, "Snapshot Comparison")
-	assert.Contains(t, output, "Summary")
+	assert.Contains(t, output, "Diff: test-solution@1.0.0 -> test-solution@1.0.0")
+	assert.Contains(t, output, "test_resolver")
+	assert.Contains(t, output, "old-value")
+	assert.Contains(t, output, "new-value")
+	assert.Contains(t, output, "Summary:")
 }
 
 func TestRunSnapshotDiff_JSONFormat(t *testing.T) {
@@ -168,55 +131,93 @@ func TestRunSnapshotDiff_JSONFormat(t *testing.T) {
 	opts := &SnapshotDiffOptions{
 		BeforeFile: beforeFile,
 		AfterFile:  afterFile,
-		Format:     "json",
 	}
+	opts.Output = "json"
 	var stdout, stderr bytes.Buffer
-	ioStreams := terminal.IOStreams{
-		Out:    &stdout,
-		ErrOut: &stderr,
-	}
-	w := writer.New(&ioStreams, &settings.Run{})
-	testCtx := writer.WithWriter(ctx, w)
+	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+	testCtx := writer.WithWriter(ctx, writer.New(ioStreams, &settings.Run{}))
 
-	err := runSnapshotDiff(testCtx, opts, ioStreams)
+	err := runSnapshotDiff(testCtx, opts, ioStreams, "scafctl")
 
 	require.NoError(t, err)
 
-	// Verify output is valid JSON
+	// Verify output is valid JSON with the native snapshot-diff shape preserved.
 	var result map[string]any
 	err = json.Unmarshal(stdout.Bytes(), &result)
 	require.NoError(t, err, "output should be valid JSON")
 
-	// Check for expected fields
 	assert.Contains(t, result, "summary")
 	assert.Contains(t, result, "resolvers")
 }
 
-func TestRunSnapshotDiff_UnifiedFormat(t *testing.T) {
-	ctx := logger.WithLogger(context.Background(), logger.Get(-1))
+func TestReportFromSnapshotDiff(t *testing.T) {
+	diff := &resolver.SnapshotDiff{
+		Before: &resolver.SnapshotMetadata{Solution: "sol", Version: "1.0.0"},
+		After:  &resolver.SnapshotMetadata{Solution: "sol", Version: "2.0.0"},
+		Resolvers: map[string]*resolver.ResolverDiff{
+			"addr": {Type: resolver.DiffTypeAdded, After: &resolver.SnapshotResolver{Value: "fresh"}},
+			"rmr":  {Type: resolver.DiffTypeRemoved, Before: &resolver.SnapshotResolver{Value: "gone"}},
+			"modr": {
+				Type: resolver.DiffTypeModified,
+				Changes: []resolver.FieldChange{
+					{Field: "value", Before: "old", After: "new"},
+				},
+			},
+			"modempty": {Type: resolver.DiffTypeModified},
+			"unch":     {Type: resolver.DiffTypeUnchanged},
+		},
+	}
 
+	r := reportFromSnapshotDiff(diff)
+
+	assert.Equal(t, "snapshot", r.Kind)
+	assert.Equal(t, "sol@1.0.0", r.LeftRef)
+	assert.Equal(t, "sol@2.0.0", r.RightRef)
+
+	byPath := map[string]diffreport.Entry{}
+	for _, e := range r.Entries {
+		byPath[e.Path] = e
+	}
+
+	// Modified resolver expands to one entry per field change, grouped by name.
+	modEntry, ok := byPath["value"]
+	require.True(t, ok)
+	assert.Equal(t, "modr", modEntry.Group)
+	assert.Equal(t, diffreport.ChangeModified, modEntry.Kind)
+	assert.Equal(t, "old", modEntry.Before)
+	assert.Equal(t, "new", modEntry.After)
+
+	// A modified resolver with no field changes still yields one modified entry.
+	assert.Equal(t, diffreport.ChangeModified, byPath["modempty"].Kind)
+
+	// Unchanged resolvers are recorded when not ignored.
+	assert.Equal(t, diffreport.ChangeUnchanged, byPath["unch"].Kind)
+}
+
+func TestSnapshotRef(t *testing.T) {
+	assert.Equal(t, "", snapshotRef(nil))
+	assert.Equal(t, "sol@1.0.0", snapshotRef(&resolver.SnapshotMetadata{Solution: "sol", Version: "1.0.0"}))
+	assert.Equal(t, "sol", snapshotRef(&resolver.SnapshotMetadata{Solution: "sol"}))
+}
+
+func TestResolverValue(t *testing.T) {
+	assert.Nil(t, resolverValue(nil))
+	assert.Equal(t, "v", resolverValue(&resolver.SnapshotResolver{Value: "v"}))
+}
+
+func TestCommandDiffSnapshot_Execute(t *testing.T) {
 	tmpDir := t.TempDir()
 	beforeFile, afterFile := createTestSnapshotPair(t, tmpDir)
 
-	opts := &SnapshotDiffOptions{
-		BeforeFile: beforeFile,
-		AfterFile:  afterFile,
-		Format:     "unified",
-	}
 	var stdout, stderr bytes.Buffer
-	ioStreams := terminal.IOStreams{
-		Out:    &stdout,
-		ErrOut: &stderr,
-	}
-	w := writer.New(&ioStreams, &settings.Run{})
-	testCtx := writer.WithWriter(ctx, w)
+	ioStreams := terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+	cmd := CommandDiffSnapshot(&settings.Run{NoColor: true}, ioStreams, "scafctl")
+	cmd.SetArgs([]string{beforeFile, afterFile})
+	cmd.SetContext(logger.WithLogger(context.Background(), logger.Get(-1)))
 
-	err := runSnapshotDiff(testCtx, opts, ioStreams)
-
+	err := cmd.Execute()
 	require.NoError(t, err)
-	output := stdout.String()
-	assert.Contains(t, output, "---")
-	assert.Contains(t, output, "+++")
+	assert.Contains(t, stdout.String(), "Diff: test-solution@1.0.0 -> test-solution@1.0.0")
 }
 
 // Helper functions

@@ -6,8 +6,11 @@ package diff
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/diffreport"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -21,14 +24,16 @@ import (
 type SnapshotDiffOptions struct {
 	BeforeFile      string
 	AfterFile       string
-	Format          string
 	IgnoreUnchanged bool
 	IgnoreFields    []string
+
+	flags.KvxOutputFlags
 }
 
 // CommandDiffSnapshot creates the `diff snapshot` subcommand.
-func CommandDiffSnapshot(_ *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
+func CommandDiffSnapshot(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
 	opts := &SnapshotDiffOptions{}
+	opts.AppName = cliParams.BinaryName
 
 	cmd := &cobra.Command{
 		Use:          subSnapshot + " [before-snapshot] [after-snapshot]",
@@ -43,10 +48,9 @@ func CommandDiffSnapshot(_ *settings.Run, ioStreams terminal.IOStreams, binaryNa
 			  - CI/CD: Detect configuration drift
 			  - Development: Verify changes don't affect other resolvers
 			
-			Supported output formats:
-			  - human: Human-readable diff with sections (default)
-			  - json: Machine-readable JSON format
-			  - unified: Git-style unified diff format
+			The default output is a human-readable diff report. Use -o json/yaml
+			for the full structured result, or -o table/list/tree (and -i) for the
+			flattened, filterable change list.
 		`),
 		Example: heredoc.Docf(`
 			# Compare two snapshots
@@ -61,95 +65,110 @@ func CommandDiffSnapshot(_ *settings.Run, ioStreams terminal.IOStreams, binaryNa
 			# Output as JSON
 			$ %[1]s diff snapshot before.json after.json -o json
 			
-			# Output unified diff format
-			$ %[1]s diff snapshot before.json after.json -o unified
+			# Browse changes interactively
+			$ %[1]s diff snapshot before.json after.json -i
 			
 			# Save diff to a file with shell redirection
 			$ %[1]s diff snapshot before.json after.json -o json > diff.json
 		`, binaryName),
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if writer.FromContext(ctx) == nil {
+				ctx = writer.WithWriter(ctx, writer.New(&ioStreams, cliParams))
+				cmd.SetContext(ctx)
+			}
 			opts.BeforeFile = args[0]
 			opts.AfterFile = args[1]
-			return runSnapshotDiff(cmd.Context(), opts, ioStreams)
+			return runSnapshotDiff(ctx, opts, &ioStreams, binaryName)
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.Format, "output", "o", "human", "Output format: human, json, unified")
 	cmd.Flags().BoolVar(&opts.IgnoreUnchanged, "ignore-unchanged", false, "Omit unchanged resolvers from output")
 	cmd.Flags().StringSliceVar(&opts.IgnoreFields, "ignore-fields", []string{}, "Fields to ignore (e.g., duration,providerCalls)")
+	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
 
 	return cmd
 }
 
-func runSnapshotDiff(ctx context.Context, opts *SnapshotDiffOptions, ioStreams terminal.IOStreams) error {
+func runSnapshotDiff(ctx context.Context, opts *SnapshotDiffOptions, ioStreams *terminal.IOStreams, binaryName string) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
-	// Helper to write error
-	writeErr := func(err error) {
-		if w != nil {
-			w.Errorf("%v", err)
-		}
-	}
-
-	// Load before snapshot
 	lgr.V(-1).Info("loading before snapshot", "file", opts.BeforeFile)
 	before, err := resolver.LoadSnapshot(opts.BeforeFile)
 	if err != nil {
 		err = fmt.Errorf("failed to load before snapshot: %w", err)
-		writeErr(err)
+		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
-	// Load after snapshot
 	lgr.V(-1).Info("loading after snapshot", "file", opts.AfterFile)
 	after, err := resolver.LoadSnapshot(opts.AfterFile)
 	if err != nil {
 		err = fmt.Errorf("failed to load after snapshot: %w", err)
-		writeErr(err)
+		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
-	// Prepare diff options
 	diffOpts := &resolver.DiffOptions{
 		IgnoreUnchanged: opts.IgnoreUnchanged,
 		IgnoreFields:    opts.IgnoreFields,
 	}
 
-	// Compute diff
 	lgr.V(-1).Info("computing diff")
 	diff := resolver.DiffSnapshotsWithOptions(before, after, diffOpts)
 
-	// Format and output diff
-	var output string
-	switch opts.Format {
-	case "human":
-		output = resolver.FormatDiffHuman(diff)
+	return writeDiffOutput(ctx, w, ioStreams, &opts.KvxOutputFlags, binaryName+" diff snapshot", diff, reportFromSnapshotDiff(diff))
+}
 
-	case "json":
-		jsonOutput, err := resolver.FormatDiffJSON(diff)
-		if err != nil {
-			err = fmt.Errorf("failed to format JSON: %w", err)
-			writeErr(err)
-			return exitcode.WithCode(err, exitcode.GeneralError)
+// reportFromSnapshotDiff maps a resolver.SnapshotDiff into the shared diff
+// report. Modified resolvers expand to one entry per field change (Group =
+// resolver name) so field-level detail survives the flat model.
+func reportFromSnapshotDiff(diff *resolver.SnapshotDiff) *diffreport.Report {
+	r := diffreport.New("snapshot", snapshotRef(diff.Before), snapshotRef(diff.After))
+
+	names := make([]string, 0, len(diff.Resolvers))
+	for name := range diff.Resolvers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		rd := diff.Resolvers[name]
+		switch rd.Type {
+		case resolver.DiffTypeAdded:
+			r.Add(diffreport.Entry{Path: name, Kind: diffreport.ChangeAdded, After: resolverValue(rd.After)})
+		case resolver.DiffTypeRemoved:
+			r.Add(diffreport.Entry{Path: name, Kind: diffreport.ChangeRemoved, Before: resolverValue(rd.Before)})
+		case resolver.DiffTypeModified:
+			if len(rd.Changes) == 0 {
+				r.Add(diffreport.Entry{Path: name, Kind: diffreport.ChangeModified})
+				continue
+			}
+			for _, c := range rd.Changes {
+				r.Add(diffreport.Entry{Group: name, Path: c.Field, Kind: diffreport.ChangeModified, Before: c.Before, After: c.After})
+			}
+		case resolver.DiffTypeUnchanged:
+			r.Add(diffreport.Entry{Path: name, Kind: diffreport.ChangeUnchanged})
 		}
-		output = jsonOutput
-
-	case "unified":
-		output = resolver.FormatDiffUnified(diff)
-
-	default:
-		err := fmt.Errorf("unsupported format: %s (supported: human, json, unified)", opts.Format)
-		writeErr(err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
+	return r
+}
 
-	if _, err := fmt.Fprint(ioStreams.Out, output); err != nil {
-		err = fmt.Errorf("failed to write output: %w", err)
-		writeErr(err)
-		return exitcode.WithCode(err, exitcode.GeneralError)
+func snapshotRef(m *resolver.SnapshotMetadata) string {
+	if m == nil {
+		return ""
 	}
+	if m.Version != "" {
+		return m.Solution + "@" + m.Version
+	}
+	return m.Solution
+}
 
-	return nil
+func resolverValue(sr *resolver.SnapshotResolver) any {
+	if sr == nil {
+		return nil
+	}
+	return sr.Value
 }

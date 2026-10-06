@@ -10,12 +10,38 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/diffreport"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/soldiff"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReportFromSolutionDiff(t *testing.T) {
+	result := &soldiff.Result{
+		PathA: "a.yaml",
+		PathB: "b.yaml",
+		Changes: []soldiff.Change{
+			{Field: "metadata.name", Type: "changed", OldValue: "x", NewValue: "y"},
+			{Field: "spec.resolvers.new", Type: "added"},
+			{Field: "spec.resolvers.old", Type: "removed"},
+		},
+	}
+
+	r := reportFromSolutionDiff(result)
+
+	assert.Equal(t, "solution", r.Kind)
+	assert.Equal(t, "a.yaml", r.LeftRef)
+	assert.Equal(t, "b.yaml", r.RightRef)
+	require.Len(t, r.Entries, 3)
+	assert.Equal(t, diffreport.ChangeModified, r.Entries[0].Kind)
+	assert.Equal(t, "metadata.name", r.Entries[0].Path)
+	assert.Equal(t, "x", r.Entries[0].Before)
+	assert.Equal(t, "y", r.Entries[0].After)
+	assert.Equal(t, diffreport.Summary{Total: 3, Added: 1, Removed: 1, Modified: 1}, r.Summary)
+}
 
 func makeIOStreams() (*bytes.Buffer, terminal.IOStreams) {
 	out := &bytes.Buffer{}
@@ -77,7 +103,7 @@ spec:
               value: "new"
 `
 
-func TestCommandDiffSolution_TableOutput(t *testing.T) {
+func TestCommandDiffSolution_DefaultReport(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	fileA := writeSolution(t, dir, "v1.yaml", solutionV1)
@@ -91,10 +117,10 @@ func TestCommandDiffSolution_TableOutput(t *testing.T) {
 	require.NoError(t, err)
 
 	output := out.String()
-	assert.Contains(t, output, "Solution Diff:")
-	assert.Contains(t, output, "changed  metadata.version")
-	assert.Contains(t, output, "changed  metadata.description")
-	assert.Contains(t, output, "added    spec.resolvers.new_resolver")
+	assert.Contains(t, output, "Diff:")
+	assert.Contains(t, output, "metadata.version")
+	assert.Contains(t, output, "metadata.description")
+	assert.Contains(t, output, "spec.resolvers.new_resolver")
 	assert.Contains(t, output, "Summary:")
 }
 
@@ -177,7 +203,7 @@ func TestCommandDiffSolution_IdenticalSolutions(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 
-	assert.Contains(t, out.String(), "No structural differences found.")
+	assert.Contains(t, out.String(), "No differences found.")
 }
 
 func TestCommandDiffSolution_WrongArgCount(t *testing.T) {

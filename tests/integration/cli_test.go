@@ -9403,8 +9403,10 @@ func TestIntegration_BundleDiff_SameVersion(t *testing.T) {
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "Comparing")
-	assert.Contains(t, stdout, "Summary")
+	assert.Contains(t, stdout, "Diff:")
+	// Both builds share identical structure (only the version label differs), so
+	// shared resolvers/actions must not be reported as modified.
+	assert.Contains(t, stdout, "No differences found.")
 }
 
 func TestIntegration_BuildSolution_NestedBundle(t *testing.T) {
@@ -13216,13 +13218,12 @@ func TestIntegration_Snapshot_Diff_JSON(t *testing.T) {
 	assert.Contains(t, parsed, "summary")
 }
 
-func TestIntegration_Snapshot_Diff_Unified(t *testing.T) {
+func TestIntegration_Snapshot_Diff_RejectsUnified(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
 	beforeFile := filepath.Join(tmpDir, "before.json")
 	afterFile := filepath.Join(tmpDir, "after.json")
 
-	// Create two identical snapshots
 	_, _, exitCode := runScafctl(t,
 		"run", "resolver",
 		"-f", "examples/resolver-demo.yaml",
@@ -13239,11 +13240,11 @@ func TestIntegration_Snapshot_Diff_Unified(t *testing.T) {
 	)
 	require.Equal(t, 0, exitCode)
 
-	// Unified diff format
-	stdout, _, exitCode := runScafctl(t, "diff", "snapshot", beforeFile, afterFile, "-o", "unified")
-	assert.Equal(t, 0, exitCode)
-	// Output may be empty if nothing changed — that's fine
-	t.Logf("unified diff output: %s", stdout)
+	// The legacy git-style `unified` format was removed; it is no longer a
+	// valid output format and must be rejected.
+	_, stderr, exitCode := runScafctl(t, "diff", "snapshot", beforeFile, afterFile, "-o", "unified")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "unified")
 }
 
 func TestIntegration_Snapshot_Diff_IgnoreUnchanged(t *testing.T) {
@@ -13458,7 +13459,7 @@ func TestIntegration_SolutionDiff_Table(t *testing.T) {
 		"-f", "examples/soldiff/solution-v2.yaml",
 	)
 	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
-	assert.Contains(t, stdout, "Solution Diff:")
+	assert.Contains(t, stdout, "Diff:")
 	assert.Contains(t, stdout, "metadata.version")
 	assert.Contains(t, stdout, "Summary:")
 }

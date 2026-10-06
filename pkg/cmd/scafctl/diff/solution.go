@@ -5,13 +5,13 @@ package diff
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/diffreport"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -21,21 +21,13 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	"gopkg.in/yaml.v3"
-)
-
-var (
-	addedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Bold(true)
-	removedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000")).Bold(true)
-	changedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFF00"))
-	headerStyle  = lipgloss.NewStyle().Bold(true)
-	summaryStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFFF"))
 )
 
 // SolutionDiffOptions holds options for the diff solution command.
 type SolutionDiffOptions struct {
-	Files  []string
-	Output string
+	Files []string
+
+	flags.KvxOutputFlags
 }
 
 // diffSource represents one of the two solutions to compare.
@@ -46,6 +38,7 @@ type diffSource struct {
 // CommandDiffSolution creates the `diff solution` subcommand.
 func CommandDiffSolution(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
 	opts := &SolutionDiffOptions{}
+	opts.AppName = cliParams.BinaryName
 
 	cmd := &cobra.Command{
 		Use:          subSolution + " [catalog-ref-a] [catalog-ref-b]",
@@ -71,10 +64,9 @@ func CommandDiffSolution(cliParams *settings.Run, ioStreams terminal.IOStreams, 
 			  - Refactoring: Confirm no accidental additions or removals
 			  - Version comparison: Document what changed between releases
 
-			Supported output formats:
-			  - table: Human-readable table view (default)
-			  - json: Machine-readable JSON
-			  - yaml: Machine-readable YAML
+			The default output is a human-readable diff report. Use -o json/yaml
+			for the full structured result, or -o table/list/tree (and -i) for the
+			flattened, filterable change list.
 		`),
 		Example: heredoc.Docf(`
 			# Compare two local files
@@ -122,12 +114,12 @@ func CommandDiffSolution(cliParams *settings.Run, ioStreams terminal.IOStreams, 
 			// user's intended A→B ordering when mixing -f and positional args.
 			sources := resolveDiffSlotOrder(os.Args, cmd.Flags(), opts.Files, args)
 
-			return runSolutionDiff(cmd.Context(), sources[0].Value, sources[1].Value, opts.Output)
+			return runSolutionDiff(cmd.Context(), opts, &ioStreams, binaryName, sources[0].Value, sources[1].Value)
 		},
 	}
 
 	cmd.Flags().StringArrayVarP(&opts.Files, "file", "f", nil, "Local solution file path (repeatable, up to 2)")
-	cmd.Flags().StringVarP(&opts.Output, "output", "o", "table", "Output format: table, json, yaml")
+	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
 
 	return cmd
 }
@@ -227,7 +219,7 @@ func filesThenPositional(flagFiles, positionalArgs []string) []diffSource {
 	return sources
 }
 
-func runSolutionDiff(ctx context.Context, refA, refB, outputFmt string) error {
+func runSolutionDiff(ctx context.Context, opts *SolutionDiffOptions, ioStreams *terminal.IOStreams, binaryName, refA, refB string) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -241,73 +233,30 @@ func runSolutionDiff(ctx context.Context, refA, refB, outputFmt string) error {
 		return exitcode.WithCode(fmt.Errorf("diff failed: %w", err), exitcode.FileNotFound)
 	}
 
-	switch outputFmt {
-	case "json":
-		out := w.IOStreams().Out
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(result); err != nil {
-			return exitcode.WithCode(fmt.Errorf("failed to encode JSON: %w", err), exitcode.GeneralError)
-		}
-
-	case "yaml":
-		out := w.IOStreams().Out
-		enc := yaml.NewEncoder(out)
-		enc.SetIndent(2)
-		if err := enc.Encode(result); err != nil {
-			return exitcode.WithCode(fmt.Errorf("failed to encode YAML: %w", err), exitcode.GeneralError)
-		}
-
-	case "table":
-		formatHuman(w, result)
-
-	default:
-		err := fmt.Errorf("unsupported output format: %s (supported: table, json, yaml)", outputFmt)
-		if w != nil {
-			w.Errorf("%v", err)
-		}
-		return exitcode.WithCode(err, exitcode.InvalidInput)
-	}
-
-	return nil
+	return writeDiffOutput(ctx, w, ioStreams, &opts.KvxOutputFlags, binaryName+" diff solution", result, reportFromSolutionDiff(result))
 }
 
-func formatHuman(w *writer.Writer, result *soldiff.Result) {
-	render := func(s lipgloss.Style, text string) string {
-		if w.NoColor() {
-			return text
-		}
-		return s.Render(text)
-	}
-
-	w.Plainlnf("%s", render(headerStyle, fmt.Sprintf("Solution Diff: %s ↔ %s", result.PathA, result.PathB)))
-	w.Plainln("")
-
-	if len(result.Changes) == 0 {
-		w.Plainln("No structural differences found.")
-		return
-	}
-
-	w.Plainlnf("%s", render(headerStyle, fmt.Sprintf("Changes (%d):", result.Summary.Total)))
+// reportFromSolutionDiff maps a soldiff.Result into the shared diff report.
+func reportFromSolutionDiff(result *soldiff.Result) *diffreport.Report {
+	r := diffreport.New("solution", result.PathA, result.PathB)
 	for _, c := range result.Changes {
-		switch c.Type {
-		case "added":
-			w.Plainlnf("  %s %s", render(addedStyle, "+ added   "), c.Field)
-		case "removed":
-			w.Plainlnf("  %s %s", render(removedStyle, "- removed "), c.Field)
-		case "changed":
-			w.Plainlnf("  %s %s: %s → %s", render(changedStyle, "~ changed "), c.Field, render(removedStyle, fmt.Sprintf("%q", fmtValue(c.OldValue))), render(addedStyle, fmt.Sprintf("%q", fmtValue(c.NewValue))))
-		}
+		r.Add(diffreport.Entry{
+			Path:   c.Field,
+			Kind:   changeKindFromString(c.Type),
+			Before: c.OldValue,
+			After:  c.NewValue,
+		})
 	}
-
-	summary := fmt.Sprintf("\nSummary: %d total | %d added | %d removed | %d changed",
-		result.Summary.Total, result.Summary.Added, result.Summary.Removed, result.Summary.Changed)
-	w.Plainln(render(summaryStyle, summary))
+	return r
 }
 
-func fmtValue(v any) string {
-	if v == nil {
-		return "<nil>"
+func changeKindFromString(t string) diffreport.ChangeKind {
+	switch t {
+	case "added":
+		return diffreport.ChangeAdded
+	case "removed":
+		return diffreport.ChangeRemoved
+	default: // "changed"
+		return diffreport.ChangeModified
 	}
-	return fmt.Sprintf("%v", v)
 }
