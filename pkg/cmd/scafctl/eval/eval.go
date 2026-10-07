@@ -10,8 +10,22 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/spf13/cobra"
 )
+
+// dataOutputFormats is the subset of kvx output formats offered by the eval
+// commands. Their results are single objects, so the collection-only formats
+// (table/list/tree/mermaid) and serializations that flatten poorly for a
+// wrapper with nested/arbitrary fields (csv/toml) are intentionally excluded.
+// The human default stays "auto"; json/yaml/text/quiet route through kvx.
+var dataOutputFormats = []string{
+	string(kvx.OutputFormatAuto),
+	string(kvx.OutputFormatJSON),
+	string(kvx.OutputFormatYAML),
+	string(kvx.OutputFormatText),
+	string(kvx.OutputFormatQuiet),
+}
 
 // CommandEval creates the 'eval' command group.
 func CommandEval(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {

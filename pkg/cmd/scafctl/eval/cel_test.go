@@ -74,6 +74,61 @@ func TestCommandCEL_OutputShorthand(t *testing.T) {
 	assert.Equal(t, "output", f.Name)
 }
 
+func TestCommandCEL_HidesFullKvxFlags(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandCEL(cliParams, ioStreams, "scafctl/eval")
+
+	// The data-only subset must not expose the interactive/where/expression
+	// filter flags; eval cel returns a single object.
+	assert.Nil(t, cmd.Flags().Lookup("interactive"), "--interactive should not be registered")
+	assert.Nil(t, cmd.Flags().Lookup("where"), "--where should not be registered")
+	assert.Nil(t, cmd.Flags().ShorthandLookup("i"), "-i shorthand should not be registered")
+	assert.Nil(t, cmd.Flags().ShorthandLookup("e"), "-e shorthand should not be registered")
+	assert.Nil(t, cmd.Flags().ShorthandLookup("w"), "-w shorthand should not be registered")
+}
+
+func TestCommandCEL_OutputFormats(t *testing.T) {
+	tests := []struct {
+		name      string
+		format    string
+		wantErr   bool
+		wantOut   string
+		wantNoOut bool
+	}{
+		{name: "yaml", format: "yaml", wantOut: "result"},
+		{name: "json", format: "json", wantOut: "result"},
+		{name: "text", format: "text", wantOut: "3"},
+		{name: "quiet", format: "quiet", wantNoOut: true},
+		{name: "excluded table", format: "table", wantErr: true},
+		{name: "excluded csv", format: "csv", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cliParams := settings.NewCliParams()
+			ioStreams, out, _ := terminal.NewTestIOStreams()
+
+			cmd := CommandCEL(cliParams, ioStreams, "scafctl/eval")
+			cmd.SetArgs([]string{"--expression", "1 + 2", "-o", tt.format})
+
+			err := cmd.Execute()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid output format")
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantNoOut {
+				assert.Empty(t, out.String())
+				return
+			}
+			assert.Contains(t, out.String(), tt.wantOut)
+		})
+	}
+}
+
 func BenchmarkCommandCEL(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()

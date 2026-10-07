@@ -11,27 +11,29 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
 // TemplateOptions holds options for the eval template command.
 type TemplateOptions struct {
-	IOStreams    *terminal.IOStreams
-	CliParams    *settings.Run
-	Output       string
-	Template     string
-	TemplateFile string
-	Vars         []string
-	Data         string
-	File         string
-	ShowRefs     bool
-	MissingKey   string
+	IOStreams      *terminal.IOStreams
+	CliParams      *settings.Run
+	KvxOutputFlags flags.KvxOutputFlags
+	Template       string
+	TemplateFile   string
+	Vars           []string
+	Data           string
+	File           string
+	ShowRefs       bool
+	MissingKey     string
 }
 
 // TemplateResult holds the result of evaluating a Go template.
@@ -99,8 +101,8 @@ func CommandTemplate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	cCmd.Flags().StringVar(&opts.Data, "data", "", "Inline JSON data context")
 	cCmd.Flags().StringVar(&opts.File, "file", "", "JSON/YAML file for data context")
 	cCmd.Flags().BoolVar(&opts.ShowRefs, "show-refs", false, "Also output referenced template variables")
-	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "auto", "Output format: auto, json, yaml")
 	cCmd.Flags().StringVar(&opts.MissingKey, "missing-key", "error", "Behavior when a map key is missing: default, zero, error")
+	flags.AddKvxOutputFormatFlagToStructWithFormats(cCmd, &opts.KvxOutputFlags, dataOutputFormats)
 
 	cCmd.MarkFlagsMutuallyExclusive("template", "template-file")
 
@@ -163,9 +165,11 @@ func (o *TemplateOptions) Run(ctx context.Context) error {
 		}
 	}
 
-	// Handle structured output formats
-	if o.Output == "json" || o.Output == "yaml" {
-		return writeStructured(o.IOStreams, tmplResult, o.Output)
+	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags, kvx.WithIOStreams(o.IOStreams))
+	// auto keeps the bespoke human output (rendered template); json/yaml/text/quiet
+	// render the TemplateResult wrapper through kvx.
+	if kvxOpts.Format != kvx.OutputFormatAuto {
+		return kvxOpts.Write(tmplResult)
 	}
 
 	// Plain output - just the rendered template

@@ -11,22 +11,24 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
 // ValidateOptions holds options for the eval validate command.
 type ValidateOptions struct {
-	IOStreams  *terminal.IOStreams
-	CliParams  *settings.Run
-	Output     string
-	Expression string
-	Type       string
+	IOStreams      *terminal.IOStreams
+	CliParams      *settings.Run
+	KvxOutputFlags flags.KvxOutputFlags
+	Expression     string
+	Type           string
 }
 
 // ValidateResult holds the result of validating an expression.
@@ -86,7 +88,7 @@ func CommandValidate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 	cCmd.Flags().StringVar(&opts.Expression, "expression", "", "Expression to validate (required)")
 	cCmd.Flags().StringVar(&opts.Type, "type", "", "Expression type: cel or go-template (required)")
-	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "auto", "Output format: auto, json, yaml")
+	flags.AddKvxOutputFormatFlagToStructWithFormats(cCmd, &opts.KvxOutputFlags, dataOutputFormats)
 
 	_ = cCmd.MarkFlagRequired("expression")
 	_ = cCmd.MarkFlagRequired("type")
@@ -114,12 +116,21 @@ func (o *ValidateOptions) Run(ctx context.Context) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Handle structured output formats
-	if o.Output == "json" || o.Output == "yaml" {
-		return writeStructured(o.IOStreams, result, o.Output)
+	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags, kvx.WithIOStreams(o.IOStreams))
+	// auto keeps the bespoke human output; json/yaml/text/quiet render the
+	// ValidateResult wrapper through kvx. Either way, an invalid expression
+	// drives a non-zero exit code so CI pass/fail stays format-independent.
+	if kvxOpts.Format != kvx.OutputFormatAuto {
+		if err := kvxOpts.Write(result); err != nil {
+			return err
+		}
+		if !result.Valid {
+			return exitcode.WithCode(fmt.Errorf("invalid expression"), exitcode.InvalidInput)
+		}
+		return nil
 	}
 
-	// Table output
+	// Human output
 	if result.Valid {
 		w.Successf("Expression is valid (%s)\n", result.Type)
 		if len(result.References) > 0 {
