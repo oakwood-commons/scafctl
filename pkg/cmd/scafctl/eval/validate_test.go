@@ -95,6 +95,84 @@ func TestValidateCEL(t *testing.T) {
 	}
 }
 
+func TestCommandValidate_HidesFullKvxFlags(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandValidate(cliParams, ioStreams, "scafctl/eval")
+
+	assert.Nil(t, cmd.Flags().Lookup("interactive"), "--interactive should not be registered")
+	assert.Nil(t, cmd.Flags().Lookup("where"), "--where should not be registered")
+	assert.Nil(t, cmd.Flags().ShorthandLookup("i"), "-i shorthand should not be registered")
+	assert.Nil(t, cmd.Flags().ShorthandLookup("e"), "-e shorthand should not be registered")
+	assert.Nil(t, cmd.Flags().ShorthandLookup("w"), "-w shorthand should not be registered")
+}
+
+func TestCommandValidate_OutputFormats(t *testing.T) {
+	tests := []struct {
+		name      string
+		format    string
+		wantOut   string
+		wantNoOut bool
+	}{
+		{name: "yaml", format: "yaml", wantOut: "valid"},
+		{name: "json", format: "json", wantOut: "valid"},
+		{name: "text", format: "text", wantOut: "valid"},
+		{name: "quiet", format: "quiet", wantNoOut: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cliParams := settings.NewCliParams()
+			ioStreams, out, _ := terminal.NewTestIOStreams()
+
+			cmd := CommandValidate(cliParams, ioStreams, "scafctl/eval")
+			cmd.SetArgs([]string{"--expression", "1 + 2", "--type", "cel", "-o", tt.format})
+
+			err := cmd.Execute()
+			require.NoError(t, err)
+			if tt.wantNoOut {
+				assert.Empty(t, out.String())
+				return
+			}
+			assert.Contains(t, out.String(), tt.wantOut)
+		})
+	}
+}
+
+func TestCommandValidate_ExcludedFormatRejected(t *testing.T) {
+	for _, format := range []string{"table", "csv", "toml"} {
+		t.Run(format, func(t *testing.T) {
+			cliParams := settings.NewCliParams()
+			ioStreams, _, _ := terminal.NewTestIOStreams()
+
+			cmd := CommandValidate(cliParams, ioStreams, "scafctl/eval")
+			cmd.SetArgs([]string{"--expression", "1 + 2", "--type", "cel", "-o", format})
+
+			err := cmd.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid output format")
+		})
+	}
+}
+
+// Invalid expressions must drive a non-zero exit code in every format,
+// including quiet, so CI pass/fail stays format-independent.
+func TestCommandValidate_InvalidExpressionExitsNonZeroAllFormats(t *testing.T) {
+	for _, format := range []string{"auto", "json", "yaml", "text", "quiet"} {
+		t.Run(format, func(t *testing.T) {
+			cliParams := settings.NewCliParams()
+			ioStreams, _, _ := terminal.NewTestIOStreams()
+
+			cmd := CommandValidate(cliParams, ioStreams, "scafctl/eval")
+			cmd.SetArgs([]string{"--expression", "size('hello'", "--type", "cel", "-o", format})
+
+			err := cmd.Execute()
+			assert.Error(t, err, "invalid expression should return an error (non-zero exit) for -o %s", format)
+		})
+	}
+}
+
 func BenchmarkCommandValidate(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()

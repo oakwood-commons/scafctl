@@ -5,30 +5,30 @@ package eval
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
-	yaml "gopkg.in/yaml.v3"
 )
 
 // CELOptions holds options for the eval cel command.
 type CELOptions struct {
-	IOStreams  *terminal.IOStreams
-	CliParams  *settings.Run
-	Output     string
-	Expression string
-	Vars       []string
-	Data       string
-	File       string
+	IOStreams      *terminal.IOStreams
+	CliParams      *settings.Run
+	KvxOutputFlags flags.KvxOutputFlags
+	Expression     string
+	Vars           []string
+	Data           string
+	File           string
 }
 
 // CELResult holds the result of evaluating a CEL expression.
@@ -94,7 +94,7 @@ func CommandCEL(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 	cCmd.Flags().StringArrayVarP(&opts.Vars, "var", "v", nil, "Variable as key=value (repeatable)")
 	cCmd.Flags().StringVar(&opts.Data, "data", "", "Inline JSON data context")
 	cCmd.Flags().StringVar(&opts.File, "file", "", "JSON/YAML file for data context")
-	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "auto", "Output format: auto, json, yaml")
+	flags.AddKvxOutputFormatFlagToStructWithFormats(cCmd, &opts.KvxOutputFlags, dataOutputFormats)
 
 	_ = cCmd.MarkFlagRequired("expression")
 
@@ -135,31 +135,14 @@ func (o *CELOptions) Run(ctx context.Context) error {
 		Type:       fmt.Sprintf("%T", result),
 	}
 
-	// Handle structured output formats
-	if o.Output == "json" || o.Output == "yaml" {
-		return writeStructured(o.IOStreams, celResult, o.Output)
+	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags, kvx.WithIOStreams(o.IOStreams))
+	// auto keeps the bespoke human output (just the value); json/yaml/text/quiet
+	// render the CELResult wrapper through kvx.
+	if kvxOpts.Format != kvx.OutputFormatAuto {
+		return kvxOpts.Write(celResult)
 	}
 
-	// Table output
 	w.Plainf("%v\n", result)
 
 	return nil
-}
-
-// writeStructured writes data as JSON or YAML to the output stream.
-func writeStructured(ioStreams *terminal.IOStreams, data any, format string) error {
-	switch format {
-	case "json":
-		enc := json.NewEncoder(ioStreams.Out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(data)
-	case "yaml":
-		enc := yaml.NewEncoder(ioStreams.Out)
-		enc.SetIndent(2)
-		err := enc.Encode(data)
-		_ = enc.Close()
-		return err
-	default:
-		return fmt.Errorf("unsupported output format %q; use json or yaml", format)
-	}
 }

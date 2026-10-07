@@ -11173,6 +11173,35 @@ func TestIntegration_EvalCEL_JSON(t *testing.T) {
 	assert.Equal(t, "1 + 2", result["expression"])
 }
 
+func TestIntegration_EvalCEL_YAML(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "1 + 2", "-o", "yaml")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "expression: 1 + 2")
+	assert.Contains(t, stdout, "result: 3")
+}
+
+func TestIntegration_EvalCEL_Text(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "1 + 2", "-o", "text")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "3")
+}
+
+func TestIntegration_EvalCEL_Quiet(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "1 + 2", "-o", "quiet")
+	assert.Equal(t, 0, exitCode)
+	assert.Empty(t, strings.TrimSpace(stdout))
+}
+
+func TestIntegration_EvalCEL_ExcludedFormat(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "eval", "cel", "--expression", "1 + 2", "-o", "table")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "invalid output format")
+}
+
 func TestIntegration_EvalCEL_InvalidExpression(t *testing.T) {
 	t.Parallel()
 	_, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "invalid ++ syntax")
@@ -11200,6 +11229,34 @@ func TestIntegration_EvalTemplate_JSON(t *testing.T) {
 	var result map[string]any
 	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
 	assert.Contains(t, result["output"], "hi test")
+}
+
+func TestIntegration_EvalTemplate_YAML(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "eval", "template", "-t", "hi {{ .name }}", "-v", "name=test", "-o", "yaml")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "output: hi test")
+}
+
+func TestIntegration_EvalTemplate_Text(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "eval", "template", "-t", "hi {{ .name }}", "-v", "name=test", "-o", "text")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "hi test")
+}
+
+func TestIntegration_EvalTemplate_Quiet(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "eval", "template", "-t", "hi {{ .name }}", "-v", "name=test", "-o", "quiet")
+	assert.Equal(t, 0, exitCode)
+	assert.Empty(t, strings.TrimSpace(stdout))
+}
+
+func TestIntegration_EvalTemplate_ExcludedFormat(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "eval", "template", "-t", "hi {{ .name }}", "-v", "name=test", "-o", "csv")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "invalid output format")
 }
 
 func TestIntegration_EvalTemplate_ShowRefs(t *testing.T) {
@@ -11288,6 +11345,34 @@ func TestIntegration_EvalValidate_JSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
 	assert.Equal(t, true, result["valid"])
 	assert.Equal(t, "cel", result["type"])
+}
+
+func TestIntegration_EvalValidate_YAML(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "1 + 2", "--type", "cel", "-o", "yaml")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "valid: true")
+	assert.Contains(t, stdout, "type: cel")
+}
+
+// Quiet output must still drive the exit code: valid passes (0), invalid fails
+// (non-zero) with no stdout.
+func TestIntegration_EvalValidate_QuietExitCode(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "1 + 2", "--type", "cel", "-o", "quiet")
+	assert.Equal(t, 0, exitCode)
+	assert.Empty(t, strings.TrimSpace(stdout))
+
+	stdout, _, exitCode = runScafctl(t, "eval", "validate", "--expression", "size('hello'", "--type", "cel", "-o", "quiet")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Empty(t, strings.TrimSpace(stdout))
+}
+
+func TestIntegration_EvalValidate_ExcludedFormat(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "eval", "validate", "--expression", "1 + 2", "--type", "cel", "-o", "toml")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "invalid output format")
 }
 
 func TestIntegration_EvalValidate_UnsupportedType(t *testing.T) {
