@@ -141,6 +141,41 @@ func TestDisplayLoginResult(t *testing.T) {
 	}
 }
 
+func TestDisplayLoginResult_VerboseFlowLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		flow     auth.Flow
+		expected string
+	}{
+		{flow: auth.FlowServicePrincipal, expected: "Service Principal"},
+		{flow: auth.FlowWorkloadIdentity, expected: "Workload Identity"},
+		{flow: auth.FlowPAT, expected: "Personal Access Token"},
+		{flow: auth.FlowMetadata, expected: "Metadata Server"},
+		{flow: auth.FlowInteractive, expected: "Interactive (Browser OAuth)"},
+		{flow: auth.FlowDeviceCode, expected: "Device Code"},
+		{flow: auth.FlowGcloudADC, expected: "gcloud Application Default Credentials"},
+		{flow: auth.FlowGitHubApp, expected: "GitHub App"},
+		{flow: auth.FlowClientCredentials, expected: "Client Credentials"},
+		{flow: auth.FlowOnBehalfOf, expected: "On-Behalf-Of"},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.flow), func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			streams := terminal.NewIOStreams(nil, &buf, &buf, false)
+			params := settings.NewCliParams()
+			params.Verbose = true
+			w := writer.New(streams, params)
+
+			err := displayLoginResult(w, &auth.Result{Claims: &auth.Claims{}}, tc.flow, "Test", "")
+			require.NoError(t, err)
+			assert.Contains(t, buf.String(), "Flow:     "+tc.expected)
+		})
+	}
+}
+
 func TestParseFlow(t *testing.T) {
 	t.Parallel()
 

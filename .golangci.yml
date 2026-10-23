@@ -38,6 +38,8 @@ linters:
   # # disabling temporarily and will be enabled back after fixing issues
   #   - staticcheck
   settings:
+    exhaustive:
+      default-signifies-exhaustive: true
     gocritic:
       disabled-checks:
         - unlambda

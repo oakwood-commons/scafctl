@@ -575,6 +575,14 @@ func displayLoginResult(w *writer.Writer, result *auth.Result, flow auth.Flow, h
 		flowLabel = "Interactive (Browser OAuth)"
 	case auth.FlowDeviceCode:
 		flowLabel = "Device Code"
+	case auth.FlowGcloudADC:
+		flowLabel = "gcloud Application Default Credentials"
+	case auth.FlowGitHubApp:
+		flowLabel = "GitHub App"
+	case auth.FlowClientCredentials:
+		flowLabel = "Client Credentials"
+	case auth.FlowOnBehalfOf:
+		flowLabel = "On-Behalf-Of"
 	}
 	if flowLabel != "" {
 		w.Verbosef("  Flow:     %s", flowLabel)

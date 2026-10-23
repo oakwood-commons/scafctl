@@ -69,6 +69,8 @@ func newMockProvider(name, version string, capabilities ...Capability) Provider 
 					"result": {Type: "string"},
 				},
 			}
+		default:
+			// Remaining capabilities need no output schema for these tests.
 		}
 	}
 
