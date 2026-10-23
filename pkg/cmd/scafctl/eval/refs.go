@@ -5,33 +5,47 @@ package eval
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	refslib "github.com/oakwood-commons/scafctl/pkg/resolver/refs"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // RefsOptions holds options for the refs command
 type RefsOptions struct {
+	IOStreams *terminal.IOStreams
+	flags.KvxOutputFlags
 	TemplateFile string
 	Template     string
 	Expr         string
 	LeftDelim    string
 	RightDelim   string
-	Output       string
+}
+
+// refsOutputFormats is the subset of kvx formats that render meaningfully for
+// the single-object refs result; table/list/tree/mermaid add nothing for one
+// object and are omitted so help, PreRunE validation, and routing stay in sync.
+var refsOutputFormats = []string{
+	string(kvx.OutputFormatAuto),
+	string(kvx.OutputFormatJSON),
+	string(kvx.OutputFormatYAML),
+	string(kvx.OutputFormatCSV),
+	string(kvx.OutputFormatTOML),
+	string(kvx.OutputFormatText),
+	string(kvx.OutputFormatQuiet),
 }
 
 // CommandRefs creates the resolver refs command
-func CommandRefs(_ *settings.Run, ioStreams *terminal.IOStreams, binaryName string) *cobra.Command {
+func CommandRefs(cliParams *settings.Run, ioStreams *terminal.IOStreams, binaryName string) *cobra.Command {
 	opts := &RefsOptions{}
 
 	cmd := &cobra.Command{
@@ -81,7 +95,14 @@ func CommandRefs(_ *settings.Run, ioStreams *terminal.IOStreams, binaryName stri
 			$ echo '_.config.host' | %[1]s eval refs --expr -
 		`, binaryName),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runRefs(cmd.Context(), opts, ioStreams)
+			ctx := cmd.Context()
+			w := writer.FromContext(ctx)
+			if w == nil {
+				w = writer.New(ioStreams, cliParams)
+				ctx = writer.WithWriter(ctx, w)
+			}
+			opts.IOStreams = ioStreams
+			return runRefs(ctx, opts)
 		},
 	}
 
@@ -90,12 +111,12 @@ func CommandRefs(_ *settings.Run, ioStreams *terminal.IOStreams, binaryName stri
 	cmd.Flags().StringVar(&opts.Expr, "expr", "", "Inline CEL expression (use '-' to read from stdin)")
 	cmd.Flags().StringVar(&opts.LeftDelim, "left-delim", "{{", "Left delimiter for Go templates")
 	cmd.Flags().StringVar(&opts.RightDelim, "right-delim", "}}", "Right delimiter for Go templates")
-	cmd.Flags().StringVarP(&opts.Output, "output", "o", "text", "Output format: text, json, yaml")
+	flags.AddKvxOutputFormatFlagToStructWithFormats(cmd, &opts.KvxOutputFlags, refsOutputFormats)
 
 	return cmd
 }
 
-func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStreams) error {
+func runRefs(ctx context.Context, opts *RefsOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -143,7 +164,7 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 		sourceType = "template"
 		if opts.Template == "-" {
 			sourceType = "template-stdin"
-			opts.Template, err = refslib.ReadStdin(ioStreams.In)
+			opts.Template, err = refslib.ReadStdin(opts.IOStreams.In)
 			if err != nil {
 				writeErr(err)
 				return exitcode.WithCode(err, exitcode.GeneralError)
@@ -156,7 +177,7 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 		sourceType = "cel-expression"
 		if opts.Expr == "-" {
 			sourceType = "cel-expression-stdin"
-			opts.Expr, err = refslib.ReadStdin(ioStreams.In)
+			opts.Expr, err = refslib.ReadStdin(opts.IOStreams.In)
 			if err != nil {
 				writeErr(err)
 				return exitcode.WithCode(err, exitcode.GeneralError)
@@ -183,40 +204,45 @@ func runRefs(ctx context.Context, opts *RefsOptions, ioStreams *terminal.IOStrea
 		Count:      len(refs),
 	}
 
-	return writeOutput(ctx, ioStreams, opts.Output, output)
+	kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
+		kvx.WithIOStreams(opts.IOStreams),
+		kvx.WithOutputColumnOrder(refslib.RefsColumnOrder),
+	)
+	// auto is the only format rendered through the styled human block; every
+	// other allowed format is a serialization that kvx emits directly.
+	if kvxOpts.Format != kvx.OutputFormatAuto {
+		return kvxOpts.Write(refsForFormat(output, kvxOpts.Format))
+	}
+	return writeRefsHuman(ctx, output)
 }
 
-func writeOutput(ctx context.Context, ioStreams *terminal.IOStreams, format string, output refslib.Output) error {
-	switch format {
-	case "json":
-		enc := json.NewEncoder(ioStreams.Out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(output)
-
-	case "yaml":
-		enc := yaml.NewEncoder(ioStreams.Out)
-		enc.SetIndent(2)
-		return enc.Encode(output)
-
-	case "text":
-		if len(output.References) == 0 {
-			if w := writer.FromContext(ctx); w != nil {
-				w.Plainln("No resolver references found.")
-			}
-			return nil
-		}
-
-		w := writer.FromContext(ctx)
-		if w != nil {
-			w.Plainlnf("Resolver references found in %s:", output.SourceType)
-			for _, ref := range output.References {
-				w.Plainlnf("  - %s", ref)
-			}
-			w.Plainlnf("\nTotal: %d reference(s)", output.Count)
-		}
-		return nil
-
-	default:
-		return exitcode.WithCode(fmt.Errorf("unknown output format: %s (supported: text, json, yaml)", format), exitcode.InvalidInput)
+// refsForFormat returns the shape kvx needs for the given format. kvx's CSV
+// writer renders slice cells via %v, so References is flattened to a joined
+// string for CSV; every other format consumes the struct natively via its
+// json/yaml tags.
+func refsForFormat(o refslib.Output, f kvx.OutputFormat) any {
+	if f == kvx.OutputFormatCSV {
+		return o.ToMap()
 	}
+	return o
+}
+
+// writeRefsHuman renders the styled auto view: a bold header, a plain bullet
+// per reference, and a success-styled total.
+func writeRefsHuman(ctx context.Context, output refslib.Output) error {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return nil
+	}
+	if len(output.References) == 0 {
+		w.Infof("No resolver references found in %s.", output.SourceType)
+		return nil
+	}
+	w.SectionHeader(fmt.Sprintf("Resolver references found in %s:", output.SourceType))
+	for _, ref := range output.References {
+		w.Plainlnf("  - %s", ref)
+	}
+	w.Plainln("")
+	w.Successf("Total: %d reference(s)", output.Count)
+	return nil
 }
