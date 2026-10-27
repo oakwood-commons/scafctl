@@ -1,0 +1,39 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: run-dryrun
+  version: 1.0.0
+  description: Actions with side effects; --dry-run must perform none.
+
+spec:
+  resolvers:
+    greeting:
+      description: Greeting
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hi"
+
+  workflow:
+    actions:
+      write-file:
+        description: Writes a file
+        provider: file
+        inputs:
+          operation: write
+          path: out/greeting.txt
+          createDirs: true
+          content:
+            rslvr: greeting
+
+      write-marker:
+        description: Second write, ordered after the first
+        provider: file
+        dependsOn: [write-file]
+        inputs:
+          operation: write
+          path: marker.txt
+          content: marker
