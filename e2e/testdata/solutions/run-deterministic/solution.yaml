@@ -1,0 +1,83 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: run-deterministic
+  version: 1.0.0
+  description: Fully deterministic solution used by the run e2e suite.
+
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+
+    shout:
+      description: CEL transform of greeting
+      type: string
+      dependsOn: [greeting]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.greeting.upperAscii() + '!'"
+
+    settings:
+      description: Map output
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                region: us-east
+                replicas: 3
+                tags: [a, b, c]
+
+    message:
+      description: Go-template rendering of other resolvers
+      type: string
+      dependsOn: [shout, settings]
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: message
+              template: "{{ .shout }} in {{ .settings.region }} x{{ .settings.replicas }}"
+
+    standalone:
+      description: Has no dependencies, used for standalone-vs-graph checks
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "independent"
+
+  workflow:
+    actions:
+      write-message:
+        description: Write the rendered message
+        provider: file
+        inputs:
+          operation: write
+          path: out/message.txt
+          createDirs: true
+          content:
+            rslvr: message
+
+      write-settings:
+        description: Write a second file after the first
+        provider: file
+        dependsOn: [write-message]
+        inputs:
+          operation: write
+          path: out/settings.txt
+          createDirs: true
+          content:
+            expr: "_.settings.region + ':' + string(_.settings.replicas)"
