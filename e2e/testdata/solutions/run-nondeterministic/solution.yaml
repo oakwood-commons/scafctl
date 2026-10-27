@@ -1,0 +1,36 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: run-nondeterministic
+  version: 1.0.0
+  description: Mixes stable and non-deterministic resolvers; the run e2e suite masks the latter.
+
+spec:
+  resolvers:
+    stable:
+      description: Deterministic value
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "same-every-time"
+
+    id:
+      description: Random UUID (non-deterministic)
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "guid.new()"
+
+    now:
+      description: Wall-clock timestamp (non-deterministic)
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "string(time.now())"
