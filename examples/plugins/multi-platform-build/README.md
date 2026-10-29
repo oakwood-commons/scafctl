@@ -51,7 +51,7 @@ scafctl package plugin \
 ## Push to Remote Registry
 
 ```bash
-scafctl catalog push my-provider@1.0.0 --catalog ghcr.io/myorg/scafctl
+scafctl catalog push provider my-provider@1.0.0 --catalog ghcr.io/myorg/scafctl
 ```
 
 ## Reference in a Solution

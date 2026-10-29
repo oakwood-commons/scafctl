@@ -9,18 +9,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
-	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -50,6 +47,9 @@ type FunctionalOptions struct {
 	NoProgress        bool
 	Watch             bool
 	positionalPathErr error
+
+	// selector overrides the solution source router; tests inject a fake.
+	selector load.Selector
 
 	// kvx output integration
 	flags.KvxOutputFlags
@@ -105,7 +105,7 @@ Examples:
 		Args:         cobra.MaximumNArgs(1),
 		PreRun: func(_ *cobra.Command, args []string) {
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test functional"); err != nil {
+				if _, err := source.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test functional"); err != nil {
 					opts.positionalPathErr = err
 				} else {
 					opts.File = args[0]
@@ -164,72 +164,21 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 		return exitcode.WithCode(opts.positionalPathErr, exitcode.InvalidInput)
 	}
 
-	// Determine the path to discover solutions from.
-	// Priority: --tests-path > -f/positional arg > auto-discover
-	testsPath := opts.TestsPath
-	if testsPath == "" {
-		testsPath = opts.File
+	// Priority: --tests-path > -f/positional arg > auto-discover. A URL,
+	// registry, or catalog reference is fetched to a temp directory.
+	local, err := localSolution(ctx, w, opts.selector, opts.TestsPath, opts.File, testsPathHint)
+	if err != nil {
+		return err
 	}
-	if testsPath == "" {
-		getter := get.NewGetterFromContext(ctx)
-		resolvedPath, resolveErr := get.Resolve(ctx, getter, "", "", get.ResolveOptions{
-			Risk: get.DiscoveryRiskLow,
-		})
-		if resolveErr != nil {
-			searchedPaths := getter.SearchedPaths()
-			err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f) or --tests-path\n  searched: %s", strings.Join(searchedPaths, ", "))
-			if w != nil {
-				w.Errorf("%s", err)
-			}
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-		testsPath = resolvedPath
-	}
+	defer func() { _ = local.Close() }()
+	testsPath := local.Path
 
-	// If the path is a catalog/remote reference (and not a local file/directory),
-	// fetch the solution and its bundle to a temp directory.
-	if get.IsCatalogReference(testsPath) && !fileExists(testsPath) {
-		w.Infof("Fetching %s...", testsPath)
-		getter := prepare.NewDefaultGetter(ctx, false)
-		sol, bundleData, getErr := getter.GetWithBundle(ctx, testsPath)
-		if getErr != nil {
-			w.Errorf("failed to fetch solution %q: %v", testsPath, getErr)
-			return exitcode.WithCode(getErr, exitcode.CatalogError)
-		}
-		solName := sol.Metadata.Name
-		if sol.Metadata.Version != nil {
-			solName += "@" + sol.Metadata.Version.String()
-		}
-		w.Infof("Resolved %s", solName)
-
-		// Create a temp directory for the solution and its bundled files.
-		tmpDir, tmpErr := os.MkdirTemp("", paths.AppName()+"-test-*")
-		if tmpErr != nil {
-			return fmt.Errorf("failed to create temp directory: %w", tmpErr)
-		}
-		defer os.RemoveAll(tmpDir)
-
-		// Extract bundle tar if present (contains templates/, static files, etc.)
-		if len(bundleData) > 0 {
-			if _, extractErr := bundler.ExtractBundleTar(bundleData, tmpDir); extractErr != nil {
-				return fmt.Errorf("failed to extract solution bundle: %w", extractErr)
-			}
-		}
-
-		// Write the solution YAML into the temp directory.
-		rawContent := sol.RawContent()
-		if len(rawContent) == 0 {
-			var marshalErr error
-			rawContent, marshalErr = sol.ToYAML()
-			if marshalErr != nil {
-				return fmt.Errorf("failed to marshal solution: %w", marshalErr)
-			}
-		}
-		solFile := filepath.Join(tmpDir, "solution.yaml")
-		if writeErr := os.WriteFile(solFile, rawContent, 0o600); writeErr != nil {
-			return fmt.Errorf("failed to write solution file: %w", writeErr)
-		}
-		testsPath = solFile
+	// Snapshot updates and watching act on the solution's directory, which
+	// for a fetched solution is a temporary copy removed on exit.
+	if local.Fetched() && (opts.UpdateSnapshots || opts.Watch) {
+		err := fmt.Errorf("--update-snapshots and --watch require a local solution; %q was fetched", opts.File)
+		w.Errorf("%s", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	// Watch mode — delegate to the watcher loop.
@@ -507,15 +456,4 @@ func runWatchMode(ctx context.Context, opts *FunctionalOptions, w *writer.Writer
 		return nil
 	}
 	return err
-}
-
-// fileExists returns true if the given path exists on the local filesystem.
-// Returns false only for non-existence; other errors (e.g. permission) are
-// treated as existence to avoid misrouting inaccessible local paths.
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	if err == nil {
-		return true
-	}
-	return !os.IsNotExist(err)
 }

@@ -100,3 +100,5 @@ func (p *MyPlugin) StopProvider(_ context.Context, _ string) error {
 func main() {
 	sdkplugin.Serve(&MyPlugin{})
 }
+
+var _ sdkplugin.ProviderPlugin = (*MyPlugin)(nil)

@@ -280,9 +280,9 @@ func TestDescriptorConversion(t *testing.T) {
 			// Compare output schemas
 			if len(tt.descriptor.OutputSchemas) > 0 {
 				assert.Equal(t, len(tt.descriptor.OutputSchemas), len(converted.OutputSchemas))
-				for cap, schema := range tt.descriptor.OutputSchemas {
-					convertedSchema, ok := converted.OutputSchemas[cap]
-					require.True(t, ok, "output schema for capability %s not found", cap)
+				for cp, schema := range tt.descriptor.OutputSchemas {
+					convertedSchema, ok := converted.OutputSchemas[cp]
+					require.True(t, ok, "output schema for capability %s not found", cp)
 					if schema != nil && convertedSchema != nil {
 						assert.Equal(t, len(schema.Properties), len(convertedSchema.Properties))
 					}

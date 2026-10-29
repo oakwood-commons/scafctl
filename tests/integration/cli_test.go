@@ -6802,7 +6802,8 @@ func TestIntegration_BuildSolution_FileNotFound(t *testing.T) {
 	_, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "nonexistent.yaml", "--version", "1.0.0")
 
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "failed to read")
+	assert.Contains(t, stderr, "reading solution")
+	assert.Contains(t, stderr, "nonexistent.yaml")
 }
 
 func TestIntegration_BuildSolution_Success(t *testing.T) {
@@ -7354,7 +7355,41 @@ func TestIntegration_CatalogDeleteHelp(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "catalog", "delete", "--help")
 
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "Delete an artifact")
+	assert.Contains(t, stdout, "Delete a catalog artifact from a remote OCI registry")
+}
+
+// TestIntegration_CatalogDelete_RootRejectsShortReference verifies the root
+// command is remote-only (like pull) and points at the kind subcommands.
+func TestIntegration_CatalogDelete_RootRejectsShortReference(t *testing.T) {
+	t.Parallel()
+	env := isolatedCatalogEnv(t)
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "resolver-demo@1.0.0")
+
+	// Validation errors are rendered on stdout, so check both streams.
+	assert.Equal(t, exitcode.InvalidInput, exitCode)
+	assert.Contains(t, stdout+stderr, "catalog delete <kind> <name@version>")
+}
+
+// TestIntegration_CatalogRoot_UnknownKind verifies a mistyped kind on the root
+// pull, push, and delete commands reports the valid kinds instead of a generic
+// argument-count error.
+func TestIntegration_CatalogRoot_UnknownKind(t *testing.T) {
+	t.Parallel()
+
+	for _, verb := range []string{"pull", "push", "delete"} {
+		t.Run(verb, func(t *testing.T) {
+			t.Parallel()
+			env := isolatedCatalogEnv(t)
+
+			stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", verb, "bogus-kind", "x@1.0.0")
+
+			assert.Equal(t, exitcode.InvalidInput, exitCode)
+			out := stdout + stderr
+			assert.Contains(t, out, `unknown artifact kind "bogus-kind"`)
+			assert.Contains(t, out, "valid kinds: solution, provider, auth-handler")
+		})
+	}
 }
 
 func TestIntegration_CatalogDelete_RequiresVersion(t *testing.T) {
@@ -7371,9 +7406,9 @@ func TestIntegration_CatalogDelete_RequiresVersion(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Delete without version should fail
-	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "resolver-demo")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "solution", "resolver-demo")
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "version required")
+	assert.Contains(t, stdout+stderr, "version required")
 }
 
 func TestIntegration_CatalogDelete_NotFound(t *testing.T) {
@@ -7385,7 +7420,7 @@ func TestIntegration_CatalogDelete_NotFound(t *testing.T) {
 		"XDG_CACHE_HOME": tmpDir,
 	}
 
-	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "nonexistent@1.0.0")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "solution", "nonexistent@1.0.0")
 
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "not found")
@@ -7405,7 +7440,7 @@ func TestIntegration_CatalogDelete_Success(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Delete the artifact
-	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "resolver-demo@1.0.0")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "solution", "resolver-demo@1.0.0")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Deleted")
 
@@ -7413,6 +7448,78 @@ func TestIntegration_CatalogDelete_Success(t *testing.T) {
 	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "inspect", "resolver-demo@1.0.0")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "not found")
+}
+
+// TestIntegration_CatalogDeleteKind_DryRunThenDelete verifies that --dry-run
+// leaves the artifact in place and a real delete removes it from the listing.
+func TestIntegration_CatalogDeleteKind_DryRunThenDelete(t *testing.T) {
+	t.Parallel()
+	env := isolatedCatalogEnv(t)
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "solution", "resolver-demo@1.0.0", "--dry-run")
+	assert.Equal(t, 0, exitCode, "dry-run failed: %s", stderr)
+	assert.Contains(t, stdout+stderr, "Would delete")
+
+	stdout, _, exitCode = runScafctlWithEnv(t, env, "catalog", "list", "-o", "json")
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "resolver-demo", "dry-run must not remove the artifact")
+
+	stdout, stderr, exitCode = runScafctlWithEnv(t, env, "catalog", "delete", "solution", "resolver-demo@1.0.0")
+	assert.Equal(t, 0, exitCode, "delete failed: %s", stderr)
+	assert.Contains(t, stdout+stderr, "Deleted")
+
+	stdout, _, exitCode = runScafctlWithEnv(t, env, "catalog", "list", "-o", "json")
+	require.Equal(t, 0, exitCode)
+	assert.NotContains(t, stdout, "resolver-demo")
+}
+
+func TestIntegration_CatalogDeleteKind_NotFound(t *testing.T) {
+	t.Parallel()
+	env := isolatedCatalogEnv(t)
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "solution", "nonexistent@1.0.0")
+
+	assert.Equal(t, exitcode.FileNotFound, exitCode)
+	assert.Contains(t, stdout+stderr, "not found")
+}
+
+// TestIntegration_CatalogDeleteKind_AmbiguousOrigin seeds a built copy and a
+// registry-origin copy of the same version (via push + pull against the local
+// OCI registry), then verifies the unpinned delete hints one --origin value
+// per origin and that re-running with one of them deletes only that copy.
+func TestIntegration_CatalogDeleteKind_AmbiguousOrigin(t *testing.T) {
+	t.Parallel()
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+	_, stderr, exitCode = runScafctlWithEnv(t, env, "catalog", "push",
+		registryAddr+"/scafctl/solutions/resolver-demo@1.0.0", "--insecure")
+	require.Equal(t, 0, exitCode, "push failed: %s", stderr)
+	_, stderr, exitCode = runScafctlWithEnv(t, env, "catalog", "pull",
+		registryAddr+"/scafctl/solutions/resolver-demo@1.0.0", "--insecure")
+	require.Equal(t, 0, exitCode, "pull failed: %s", stderr)
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "solution", "resolver-demo@1.0.0")
+	require.NotEqual(t, 0, exitCode, "unpinned delete must be ambiguous; out: %s err: %s", stdout, stderr)
+	combined := stdout + stderr
+	// Match order is not fixed, so check the hint prefix and each origin
+	// separately.
+	assert.Contains(t, combined, "re-run the same command with one of: ")
+	assert.Contains(t, combined, "--origin built")
+	assert.Contains(t, combined, "--origin "+registryAddr+"/scafctl")
+
+	// Re-running with a hinted origin deletes only that origin's copy.
+	_, stderr, exitCode = runScafctlWithEnv(t, env, "catalog", "delete", "solution", "resolver-demo@1.0.0", "--origin", "built")
+	require.Equal(t, 0, exitCode, "delete --origin built failed: %s", stderr)
+
+	// The remaining copy is now unambiguous.
+	_, stderr, exitCode = runScafctlWithEnv(t, env, "catalog", "delete", "solution", "resolver-demo@1.0.0")
+	assert.Equal(t, 0, exitCode, "remaining copy should delete unambiguously: %s", stderr)
 }
 
 // ============================================================================
@@ -7474,7 +7581,7 @@ func TestIntegration_CatalogPrune_AfterDelete(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Delete the artifact (leaves orphaned blobs)
-	_, _, exitCode = runScafctlWithEnv(t, env, "catalog", "delete", "resolver-demo@1.0.0")
+	_, _, exitCode = runScafctlWithEnv(t, env, "catalog", "delete", "solution", "resolver-demo@1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Prune should clean up
@@ -7714,10 +7821,9 @@ func TestIntegration_CatalogPush_LocalRegistry(t *testing.T) {
 	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
-	// Push to the local registry by URL
+	// Push to the local registry by full remote reference
 	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push",
-		"resolver-demo@1.0.0",
-		"--catalog", registryAddr+"/scafctl",
+		registryAddr+"/scafctl/solutions/resolver-demo@1.0.0",
 		"--insecure")
 	assert.Equal(t, 0, exitCode, "push failed: %s", stderr)
 }
@@ -8028,14 +8134,14 @@ func TestIntegration_CatalogIndexShowHelp(t *testing.T) {
 func TestIntegration_CatalogPushHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, _ := runScafctl(t, "catalog", "push", "--help")
-	assert.Contains(t, stdout, "Push a catalog artifact to a remote OCI registry")
-	assert.Contains(t, stdout, "--catalog")
+	assert.Contains(t, stdout, "Push a catalog artifact from the local catalog to a remote OCI registry")
+	assert.Contains(t, stdout, "--origin")
 	assert.Contains(t, stdout, "--as")
 	assert.Contains(t, stdout, "--force")
-	assert.Contains(t, stdout, "configured catalog name")
+	assert.Contains(t, stdout, "full remote OCI references")
 }
 
-func TestIntegration_CatalogPush_NoCatalog(t *testing.T) {
+func TestIntegration_CatalogPush_ShortReferenceRejected(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
 	env := map[string]string{
@@ -8044,11 +8150,11 @@ func TestIntegration_CatalogPush_NoCatalog(t *testing.T) {
 		"XDG_CONFIG_HOME": tmpDir,
 	}
 
-	// Push without --catalog and no default configured should error.
-	// Since artifact also doesn't exist locally, kind inference fails first.
-	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "my-solution@1.0.0")
+	// The root push command only accepts full remote references.
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "my-solution@1.0.0")
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "not found")
+	assert.Contains(t, stdout+stderr, "full remote references")
+	assert.Contains(t, stdout+stderr, "catalog push <kind>")
 }
 
 func TestIntegration_CatalogPush_ArtifactNotFound(t *testing.T) {
@@ -8060,7 +8166,7 @@ func TestIntegration_CatalogPush_ArtifactNotFound(t *testing.T) {
 	}
 
 	// Push a nonexistent artifact
-	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "nonexistent@1.0.0", "--catalog", "ghcr.io/test/scafctl")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "ghcr.io/test/scafctl/solutions/nonexistent@1.0.0")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "not found")
 }
@@ -8088,11 +8194,12 @@ func TestIntegration_CatalogPull_InvalidReference(t *testing.T) {
 		"XDG_CONFIG_HOME": tmpDir,
 	}
 
-	// Pull with a bare name (no OCI prefix) -- resolves against the default
-	// catalog which fails because the artifact does not exist.
-	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "pull", "just-a-name")
-	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "failed to resolve artifact")
+	// The root pull command only accepts full remote references; a bare name
+	// is rejected up front and points at the kind subcommands.
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "pull", "just-a-name")
+	assert.Equal(t, exitcode.InvalidInput, exitCode)
+	assert.Contains(t, stdout+stderr, "full remote references")
+	assert.Contains(t, stdout+stderr, "catalog pull <kind>")
 }
 
 // TestIntegration_CatalogPull_StrictFailsOnIncompleteBundle verifies the
@@ -8114,7 +8221,7 @@ func TestIntegration_CatalogPull_StrictFailsOnIncompleteBundle(t *testing.T) {
 
 	// Push it to the local registry.
 	_, stderr, exitCode = runScafctlWithEnv(t, env, "catalog", "push",
-		"incomplete-demo@1.0.0", "--catalog", registryAddr+"/scafctl", "--insecure")
+		registryAddr+"/scafctl/solutions/incomplete-demo@1.0.0", "--insecure")
 	require.Equal(t, 0, exitCode, "push failed: %s", stderr)
 
 	// Pull with --strict into a fresh catalog: must fail closed.
@@ -8138,10 +8245,11 @@ func TestIntegration_CatalogPull_StrictFailsOnIncompleteBundle(t *testing.T) {
 func TestIntegration_CatalogDeleteRemoteHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, _ := runScafctl(t, "catalog", "delete", "--help")
-	assert.Contains(t, stdout, "Delete an artifact from the local or remote catalog")
+	assert.Contains(t, stdout, "Delete a catalog artifact from a remote OCI registry")
 	assert.Contains(t, stdout, "ghcr.io/myorg/scafctl/solutions/my-solution")
 	assert.Contains(t, stdout, "--insecure")
-	assert.Contains(t, stdout, "--catalog")
+	assert.Contains(t, stdout, "--all")
+	assert.Contains(t, stdout, "--force")
 }
 
 func TestIntegration_CatalogDelete_RemoteDetection(t *testing.T) {
@@ -8160,107 +8268,212 @@ func TestIntegration_CatalogDelete_RemoteDetection(t *testing.T) {
 	assert.NotContains(t, stderr, "invalid reference")
 }
 
-// =============================================================================
-// Catalog Tag Tests
-// =============================================================================
-
-func TestIntegration_CatalogTagHelp(t *testing.T) {
+func TestIntegration_CatalogDelete_RemoteDryRun(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "catalog", "tag", "--help")
+	env := isolatedCatalogEnv(t)
 
-	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "Create an alias tag")
-	assert.Contains(t, stdout, "--catalog")
-	assert.Contains(t, stdout, "--kind")
-	assert.Contains(t, stdout, "stable")
+	// Dry-run never contacts the registry, so it succeeds without a server.
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete",
+		"fake.registry.io/myorg/scafctl/solutions/test@1.0.0", "--dry-run")
+	assert.Equal(t, 0, exitCode, "dry-run failed: %s", stderr)
+	assert.Contains(t, stdout+stderr, "Would delete")
 }
 
-func TestIntegration_CatalogTag_RequiresVersion(t *testing.T) {
+func TestIntegration_CatalogDelete_AllForce(t *testing.T) {
 	t.Parallel()
-	tmpDir := t.TempDir()
-	env := map[string]string{
-		"XDG_DATA_HOME":   tmpDir,
-		"XDG_CACHE_HOME":  tmpDir,
-		"XDG_CONFIG_HOME": tmpDir,
-	}
+	env := isolatedCatalogEnv(t)
 
-	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "tag", "my-solution", "stable")
-	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "version required")
-}
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
 
-func TestIntegration_CatalogTag_RejectsSemverAlias(t *testing.T) {
-	t.Parallel()
-	tmpDir := t.TempDir()
-	env := map[string]string{
-		"XDG_DATA_HOME":   tmpDir,
-		"XDG_CACHE_HOME":  tmpDir,
-		"XDG_CONFIG_HOME": tmpDir,
-	}
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "--all", "--force")
+	assert.Equal(t, 0, exitCode, "delete --all failed: out: %s err: %s", stdout, stderr)
 
-	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "tag", "my-solution@1.0.0", "2.0.0")
-	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "semver version")
-}
-
-func TestIntegration_CatalogTag_ArtifactNotFound(t *testing.T) {
-	t.Parallel()
-	tmpDir := t.TempDir()
-	env := map[string]string{
-		"XDG_DATA_HOME":   tmpDir,
-		"XDG_CACHE_HOME":  tmpDir,
-		"XDG_CONFIG_HOME": tmpDir,
-	}
-
-	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "tag", "nonexistent@1.0.0", "stable", "--kind", "solution")
-	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "not found")
-}
-
-func TestIntegration_CatalogTag_Success(t *testing.T) {
-	t.Parallel()
-	tmpDir := t.TempDir()
-	env := map[string]string{
-		"XDG_DATA_HOME":   tmpDir,
-		"XDG_CACHE_HOME":  tmpDir,
-		"XDG_CONFIG_HOME": tmpDir,
-	}
-
-	// Build an artifact first
-	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	stdout, _, exitCode = runScafctlWithEnv(t, env, "catalog", "list", "-o", "json")
 	require.Equal(t, 0, exitCode)
-
-	// Tag it
-	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "tag", "resolver-demo@1.0.0", "stable")
-	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "Tagged")
-	assert.Contains(t, stdout, "stable")
+	assert.NotContains(t, stdout, "resolver-demo")
 }
 
-func TestIntegration_CatalogTag_MoveAlias(t *testing.T) {
+// TestIntegration_CatalogKindSubcommands_Help verifies every kind subcommand
+// is registered under pull, push and delete and documents its reference form.
+func TestIntegration_CatalogKindSubcommands_Help(t *testing.T) {
 	t.Parallel()
-	tmpDir := t.TempDir()
-	env := map[string]string{
-		"XDG_DATA_HOME":   tmpDir,
-		"XDG_CACHE_HOME":  tmpDir,
-		"XDG_CONFIG_HOME": tmpDir,
+	for _, verb := range []string{"pull", "push", "delete"} {
+		for _, kind := range []string{"solution", "provider", "auth-handler"} {
+			t.Run(verb+"/"+kind, func(t *testing.T) {
+				t.Parallel()
+				stdout, stderr, exitCode := runScafctl(t, "catalog", verb, kind, "--help")
+				assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+				assert.Contains(t, stdout, "scafctl catalog "+verb+" "+kind)
+				assert.Contains(t, stdout, "--catalog")
+			})
+		}
 	}
+}
 
-	// Build two versions
-	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+// TestIntegration_CatalogKind_PushPullRoundTrip pushes a built solution with
+// the kind subcommand and a --catalog registry, then pulls it back with the
+// kind subcommand into a fresh local catalog.
+func TestIntegration_CatalogKind_PushPullRoundTrip(t *testing.T) {
+	t.Parallel()
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+	remote := registryAddr + "/scafctl"
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "solution", "resolver-demo@1.0.0",
+		"--catalog", remote, "--insecure")
+	require.Equal(t, 0, exitCode, "push failed: out: %s err: %s", stdout, stderr)
+
+	pullEnv := isolatedCatalogEnv(t)
+	stdout, stderr, exitCode = runScafctlWithEnv(t, pullEnv, "catalog", "pull", "solution", "resolver-demo@1.0.0",
+		"--catalog", remote, "--insecure")
+	require.Equal(t, 0, exitCode, "pull failed: out: %s err: %s", stdout, stderr)
+
+	stdout, _, exitCode = runScafctlWithEnv(t, pullEnv, "catalog", "list", "-o", "json")
 	require.Equal(t, 0, exitCode)
-	_, _, exitCode = runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "2.0.0", "--force", "--no-cache")
+	assert.Contains(t, stdout, "resolver-demo")
+}
+
+func TestIntegration_CatalogKind_PushDryRun(t *testing.T) {
+	t.Parallel()
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+	remote := registryAddr + "/scafctl"
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "solution", "resolver-demo@1.0.0",
+		"--catalog", remote, "--insecure", "--dry-run")
+	assert.Equal(t, 0, exitCode, "dry-run failed: %s", stderr)
+	assert.Contains(t, stdout+stderr, "Would push")
+
+	// Nothing was written to the registry, so a pull must fail.
+	pullEnv := isolatedCatalogEnv(t)
+	_, _, exitCode = runScafctlWithEnv(t, pullEnv, "catalog", "pull", "solution", "resolver-demo@1.0.0",
+		"--catalog", remote, "--insecure")
+	assert.NotEqual(t, 0, exitCode, "dry-run push must not publish the artifact")
+}
+
+func TestIntegration_CatalogKind_PushAs(t *testing.T) {
+	t.Parallel()
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+	remote := registryAddr + "/scafctl"
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "solution", "resolver-demo@1.0.0",
+		"--as", "renamed-demo@2.0.0", "--catalog", remote, "--insecure")
+	require.Equal(t, 0, exitCode, "push --as failed: out: %s err: %s", stdout, stderr)
+
+	pullEnv := isolatedCatalogEnv(t)
+	stdout, stderr, exitCode = runScafctlWithEnv(t, pullEnv, "catalog", "pull", "solution", "renamed-demo@2.0.0",
+		"--catalog", remote, "--insecure")
+	require.Equal(t, 0, exitCode, "pull failed: out: %s err: %s", stdout, stderr)
+
+	stdout, _, exitCode = runScafctlWithEnv(t, pullEnv, "catalog", "list", "-o", "json")
 	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "renamed-demo")
+}
 
-	// Tag v1 as stable
-	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "tag", "resolver-demo@1.0.0", "stable")
-	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "1.0.0")
+func TestIntegration_CatalogKind_PushNotFound(t *testing.T) {
+	t.Parallel()
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
 
-	// Move stable to v2
-	stdout, _, exitCode = runScafctlWithEnv(t, env, "catalog", "tag", "resolver-demo@2.0.0", "stable")
-	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "2.0.0")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "solution", "nonexistent@1.0.0",
+		"--catalog", registryAddr+"/scafctl", "--insecure")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stdout+stderr, "not found")
+}
+
+func TestIntegration_CatalogKind_PullNotFound(t *testing.T) {
+	t.Parallel()
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "pull", "solution", "nonexistent@1.0.0",
+		"--catalog", registryAddr+"/scafctl", "--insecure")
+	assert.NotEqual(t, 0, exitCode)
+	assert.NotEmpty(t, stdout+stderr)
+}
+
+// TestIntegration_CatalogPush_OriginBuilt pushes a full remote reference while
+// selecting the local copy explicitly with --origin built.
+func TestIntegration_CatalogPush_OriginBuilt(t *testing.T) {
+	t.Parallel()
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push",
+		registryAddr+"/scafctl/solutions/resolver-demo@1.0.0", "--origin", "built", "--insecure")
+	assert.Equal(t, 0, exitCode, "push --origin built failed: out: %s err: %s", stdout, stderr)
+}
+
+func TestIntegration_CatalogPush_OriginNoMatch(t *testing.T) {
+	t.Parallel()
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+
+	// The only local copy is built, so selecting another origin must fail.
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push",
+		registryAddr+"/scafctl/solutions/resolver-demo@1.0.0", "--origin", "ghcr.io/other/org", "--insecure")
+	assert.NotEqual(t, 0, exitCode, "out: %s err: %s", stdout, stderr)
+}
+
+func TestIntegration_CatalogPush_DryRun(t *testing.T) {
+	t.Parallel()
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push",
+		registryAddr+"/scafctl/solutions/resolver-demo@1.0.0", "--insecure", "--dry-run")
+	assert.Equal(t, 0, exitCode, "dry-run failed: %s", stderr)
+	assert.Contains(t, stdout+stderr, "Would push")
+}
+
+// TestIntegration_CatalogPull_FullReferenceRoundTrip pulls with the root
+// command (full remote reference) and stores it under a different name.
+func TestIntegration_CatalogPull_FullReferenceRoundTrip(t *testing.T) {
+	t.Parallel()
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+	ref := registryAddr + "/scafctl/solutions/resolver-demo@1.0.0"
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+	_, stderr, exitCode = runScafctlWithEnv(t, env, "catalog", "push", ref, "--insecure")
+	require.Equal(t, 0, exitCode, "push failed: %s", stderr)
+
+	// Dry-run reports the plan without storing anything.
+	pullEnv := isolatedCatalogEnv(t)
+	stdout, stderr, exitCode := runScafctlWithEnv(t, pullEnv, "catalog", "pull", ref, "--insecure", "--dry-run")
+	assert.Equal(t, 0, exitCode, "dry-run failed: %s", stderr)
+	assert.Contains(t, stdout+stderr, "Would pull")
+	stdout, _, exitCode = runScafctlWithEnv(t, pullEnv, "catalog", "list", "-o", "json")
+	require.Equal(t, 0, exitCode)
+	assert.NotContains(t, stdout, "resolver-demo", "dry-run must not store the artifact")
+
+	// --as stores the pulled artifact under a different local name.
+	stdout, stderr, exitCode = runScafctlWithEnv(t, pullEnv, "catalog", "pull", ref, "--insecure", "--as", "local-copy@1.0.0")
+	require.Equal(t, 0, exitCode, "pull --as failed: out: %s err: %s", stdout, stderr)
+	stdout, _, exitCode = runScafctlWithEnv(t, pullEnv, "catalog", "list", "-o", "json")
+	require.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "local-copy")
 }
 
 // Catalog Tags Tests
@@ -10886,6 +11099,95 @@ func TestIntegration_Test_List_AutoDiscoveryNoFile(t *testing.T) {
 	_, stderr, exitCode := runScafctlInDir(t, emptyDir, "test", "list")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "no solution path provided")
+}
+
+// TestIntegration_Test_CatalogReference verifies that test list, test
+// functional, and test init fetch a catalog solution, with its bundle, by
+// name@version.
+func TestIntegration_Test_CatalogReference(t *testing.T) {
+	t.Parallel()
+	env := isolatedCatalogEnv(t)
+	tmpDir := t.TempDir()
+	env["TMPDIR"] = tmpDir
+
+	srcDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: catalog-tested
+  version: 1.0.0
+bundle:
+  include:
+    - data.txt
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  testing:
+    cases:
+      resolve-greeting:
+        description: Verify greeting resolver
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: hello
+`
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "solution.yaml"), []byte(solutionContent), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "data.txt"), []byte("bundled"), 0o600))
+	_, stderr, exitCode := runScafctlWithEnvInDir(t, srcDir, env, "build", "solution", "-f", "solution.yaml")
+	require.Equal(t, 0, exitCode, "build must succeed: %s", stderr)
+
+	runDir := t.TempDir()
+	const ref = "catalog-tested@1.0.0"
+
+	// Runs after the parallel subtests and before the temp dirs are removed.
+	t.Cleanup(func() {
+		entries, err := os.ReadDir(runDir)
+		require.NoError(t, err)
+		assert.Empty(t, entries, "fetching must not write into the working directory")
+
+		tmpEntries, err := os.ReadDir(tmpDir)
+		require.NoError(t, err)
+		for _, e := range tmpEntries {
+			assert.NotContains(t, e.Name(), "-solution-", "fetched solution temp dirs are removed")
+		}
+	})
+
+	t.Run("list", func(t *testing.T) {
+		t.Parallel()
+		stdout, stderr, exitCode := runScafctlWithEnvInDir(t, runDir, env, "test", "list", ref, "--no-color")
+		require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+		assert.Contains(t, stdout, "resolve-greeting")
+	})
+
+	t.Run("functional", func(t *testing.T) {
+		t.Parallel()
+		stdout, stderr, exitCode := runScafctlWithEnvInDir(t, runDir, env, "test", "functional", ref, "--skip-builtins", "--no-color")
+		require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+		assert.Contains(t, stdout, "resolve-greeting")
+	})
+
+	t.Run("init", func(t *testing.T) {
+		t.Parallel()
+		stdout, stderr, exitCode := runScafctlWithEnvInDir(t, runDir, env, "test", "init", ref, "--verbose")
+		require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+		assert.True(t, strings.HasPrefix(stdout, "# Generated test scaffold for "+ref), "stdout is only the scaffold: %s", stdout)
+		assert.Contains(t, stdout, "data.txt", "bundled files are listed as dependencies")
+		assert.Contains(t, stderr, "Fetched "+ref)
+		assert.NotContains(t, stdout, "Fetched ")
+	})
+
+	t.Run("unknown reference", func(t *testing.T) {
+		t.Parallel()
+		_, stderr, exitCode := runScafctlWithEnvInDir(t, runDir, env, "test", "list", "missing-solution@1.0.0")
+		assert.NotEqual(t, 0, exitCode)
+		assert.Contains(t, stderr, "fetch solution")
+	})
 }
 
 func TestIntegration_Test_Init(t *testing.T) {

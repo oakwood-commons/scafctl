@@ -504,51 +504,6 @@ func TestBundle_IsEmpty(t *testing.T) {
 	assert.False(t, b2.IsEmpty())
 }
 
-func TestBundle_PartitionPlugins(t *testing.T) {
-	t.Run("empty bundle", func(t *testing.T) {
-		unsourced, sourced := Bundle{}.PartitionPlugins()
-		assert.Nil(t, unsourced)
-		assert.Nil(t, sourced)
-	})
-
-	t.Run("splits and preserves order", func(t *testing.T) {
-		b := Bundle{Plugins: []PluginDependency{
-			{Name: "local-a"},
-			{Name: "remote-a", Source: &PluginSource{Registry: "ghcr.io/myorg", Artifact: "remote-a"}},
-			{Name: "local-b"},
-			{Name: "remote-b", Source: &PluginSource{Registry: "registry.example.com", Artifact: "remote-b"}},
-		}}
-
-		unsourced, sourced := b.PartitionPlugins()
-
-		assert.Equal(t, []PluginDependency{
-			{Name: "local-a"},
-			{Name: "local-b"},
-		}, unsourced)
-		assert.Equal(t, []PluginDependency{
-			{Name: "remote-a", Source: &PluginSource{Registry: "ghcr.io/myorg", Artifact: "remote-a"}},
-			{Name: "remote-b", Source: &PluginSource{Registry: "registry.example.com", Artifact: "remote-b"}},
-		}, sourced)
-	})
-
-	t.Run("all unsourced", func(t *testing.T) {
-		b := Bundle{Plugins: []PluginDependency{{Name: "a"}, {Name: "b"}}}
-		unsourced, sourced := b.PartitionPlugins()
-		assert.Len(t, unsourced, 2)
-		assert.Nil(t, sourced)
-	})
-
-	t.Run("all include registry", func(t *testing.T) {
-		b := Bundle{Plugins: []PluginDependency{
-			{Name: "a", Source: &PluginSource{Registry: "ghcr.io/org", Artifact: "a"}},
-			{Name: "b", Source: &PluginSource{Registry: "ghcr.io/org", Artifact: "b"}},
-		}}
-		unsourced, sourced := b.PartitionPlugins()
-		assert.Nil(t, unsourced)
-		assert.Len(t, sourced, 2)
-	})
-}
-
 func TestPluginKind_IsValid(t *testing.T) {
 	assert.True(t, PluginKindProvider.IsValid())
 	assert.True(t, PluginKindAuthHandler.IsValid())
@@ -568,6 +523,44 @@ func TestPluginDependency_ArtifactName(t *testing.T) {
 		dep := PluginDependency{Name: "my-exec", Source: &PluginSource{Registry: "ghcr.io/myorg", Artifact: "scafctl-exec-provider"}}
 		assert.Equal(t, "my-exec", dep.LocalName())
 	})
+}
+
+func TestPluginDependency_ValidateSource(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		source  *PluginSource
+		wantErr string
+	}{
+		{name: "nil source is valid", source: nil},
+		{name: "registry only", source: &PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"}},
+		{name: "built only", source: &PluginSource{Built: true}},
+		{name: "built with artifact rename", source: &PluginSource{Built: true, Artifact: "git"}},
+		{
+			name:    "registry and built are mutually exclusive",
+			source:  &PluginSource{Registry: "ghcr.io/myorg", Built: true},
+			wantErr: "source.registry and source.built are mutually exclusive",
+		},
+		{
+			name:    "neither registry nor built",
+			source:  &PluginSource{Artifact: "exec"},
+			wantErr: "source.registry or source.built is required when source is set",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := PluginDependency{Name: "exec", Source: tt.source}.ValidateSource()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestSolution_ToJSONPretty(t *testing.T) {

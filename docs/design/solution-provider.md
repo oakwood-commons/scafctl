@@ -15,9 +15,9 @@ Three guiding principles:
 
 1. **Fail loud by default, opt into silence.** Sub-solution failures should be Go errors unless the user explicitly asks for envelope-only reporting. This prevents the most common mistake (forgetting to check `status`).
 
-2. **Reuse existing types everywhere.** The codebase already has `ValueRef`, `get.Interface`, `resolver.Context`, `action.ExecutionResult`, etc. The solution provider should compose these, not reinvent them.
+2. **Reuse existing types everywhere.** The codebase already has `ValueRef`, `load.Loader`, `resolver.Context`, `action.ExecutionResult`, etc. The solution provider should compose these, not reinvent them.
 
-3. **Separation of loading vs execution.** The provider should do one thing — execute a loaded solution. Loading is delegated entirely to `get.Interface`. This makes testing trivial and keeps the provider focused.
+3. **Separation of loading vs execution.** The provider should do one thing — execute a loaded solution. Loading is delegated entirely to a small `Loader` interface backed by `pkg/solution/load`. This makes testing trivial and keeps the provider focused.
 
 ---
 
@@ -57,7 +57,7 @@ This supports a composition model where reusable solutions are published to the 
 
 ## Solution Sources
 
-The provider resolves sub-solutions from multiple locations, using the same resolution logic as `scafctl run solution` via `get.Getter`:
+The provider resolves sub-solutions from multiple locations, using the same loader (`pkg/solution/load`) as the parent `scafctl run solution` invocation:
 
 | Source Type | Example `source` Value | Resolution |
 |-------------|----------------------|------------|
@@ -65,7 +65,7 @@ The provider resolves sub-solutions from multiple locations, using the same reso
 | **Catalog** | `deploy-to-k8s`, `deploy-to-k8s@2.0.0` | Searches local catalog first, then configured remote catalogs |
 | **URL** | `https://example.com/solution.yaml` | Fetched via HTTP(S) |
 
-Resolution priority follows `get.Getter` behavior: catalog bare name → filesystem → URL.
+The `source` value is classified with `source.Classify` (purely syntactic, first match wins): `http(s)://` is a URL; paths starting with `/`, `./`, `~/`, or ending in `.yaml`/`.yml`/`.json` are local files; `host.tld/.../name` and `oci://` are registry references; anything else (`name`, `name@1.2.3`) is a catalog name. Stdin (`-`) is rejected for sub-solutions because the parent solution owns it.
 
 > **Note**: When a parent solution referencing local file paths (e.g., `source: "./child.yaml"`) is built and pushed to a catalog, all referenced files, sub-solutions, and catalog dependencies are bundled into the artifact automatically. See [catalog-build-bundling.md](catalog-build-bundling.md) for the full design covering file bundling, multi-file composition (`compose`), catalog vendoring (`solution.lock`), and plugin dependencies (`bundle.plugins`).
 
@@ -455,7 +455,7 @@ Execute(ctx, input) → *Output
   2. Resolve `inputs` → map[string]any params
   3. Check ancestor stack + depth
   4. Push ancestor
-  5. Load solution via get.Interface.Get(ctx, path)
+  5. Load solution via the Loader (Loader.Get(ctx, path))
   6. Build isolated context:
      - Fresh resolver context (empty)
      - Parameters from `inputs`
@@ -733,50 +733,45 @@ spec:
 ~~~go
 // pkg/provider/builtin/solutionprovider/solution.go
 
+type Loader interface {
+    Get(ctx context.Context, path string) (*solution.Solution, error)
+}
+
 type SolutionProvider struct {
-    loader   get.Interface
+    loader   Loader
     registry *provider.Registry
+    // ... plugin/official-provider settings for child solutions
 }
 
 type Option func(*SolutionProvider)
 
-func WithLoader(l get.Interface) Option
+func WithLoader(l Loader) Option
 func WithRegistry(r *provider.Registry) Option
 
 func New(opts ...Option) *SolutionProvider
 ~~~
 
-The provider uses `get.Interface` directly for solution loading. `get.Interface` is a small, focused interface and `get.MockGetter` already exists for testing. If decoupling from the `get` package is desired, a local interface can be defined — Go's structural typing means `get.Getter` satisfies it automatically:
-
-~~~go
-type Loader interface {
-    Get(ctx context.Context, path string) (*solution.Solution, error)
-}
-~~~
+The provider depends only on the local `Loader` interface. In production,
+`prepare` adapts its `load.Loader` (the same router used for the parent
+solution) with `subSolutionLoader`, which classifies the path, rejects stdin,
+and returns the loaded solution. Tests supply a mock `Loader`.
 
 The provider also receives a reference to the provider registry so sub-solutions have access to all built-in and plugin providers.
 
 ### Registration
 
-The solution provider is **not** registered in `builtin.go`. It depends on `get.Interface` (which needs catalog config) and a reference to the `*provider.Registry` itself — both are available only at CLI wiring time.
+The solution provider is registered in `builtin.go` without a loader. The loader depends on the parent's `load.Loader` (which needs catalog config and the CLI/MCP/API source policy), so it is injected per execution rather than at registration time.
 
-Registration happens in the CLI run command:
+`prepare.SolutionFromLoader` builds a `ProviderCtx` function that injects the loader into each provider execution context:
 
 ~~~go
-// In pkg/cmd/scafctl/run/solution.go, inside Run():
+// In pkg/solution/prepare/prepare.go (simplified):
 
-getter := get.NewGetter(...)
-registry, err := builtin.DefaultRegistry(ctx)
-if err != nil {
-    return err
-}
-
-solutionProv := solutionprovider.New(
-    solutionprovider.WithLoader(getter),
-    solutionprovider.WithRegistry(registry),
-)
-registry.Register(solutionProv)
+ctx = solutionprovider.WithLoaderCtx(ctx, subSolutionLoader{loader: loader})
 ~~~
+
+`Execute` reads it with `solutionprovider.LoaderFromContext(ctx)`. Embedders can
+alternatively call `Configure(WithLoader(...))` on the registered provider.
 
 ### Custom Dependency Extraction
 

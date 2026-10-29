@@ -13,8 +13,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -25,6 +26,9 @@ type InitOptions struct {
 	IOStreams *terminal.IOStreams
 	CliParams *settings.Run
 	File      string
+
+	// selector overrides the solution source router; tests inject a fake.
+	selector load.Selector
 }
 
 // CommandInit creates the 'test init' subcommand that generates a starter test suite.
@@ -34,7 +38,7 @@ func CommandInit(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	cCmd := &cobra.Command{
 		Use:   "init [name[@version]]",
 		Short: "Generate a starter test suite from a solution",
-		Long: `Generate skeleton test cases by analyzing a solution's structure.
+		Long: fmt.Sprintf(`Generate skeleton test cases by analyzing a solution's structure.
 
 This command parses the solution YAML and generates starter test definitions
 based on the resolvers, validation rules, and workflow actions it finds.
@@ -45,21 +49,25 @@ spec.testing.cases section or saved to a separate test file.
 
 Examples:
   # Generate tests from a solution file
-  scafctl test init -f solution.yaml
+  %[1]s test init -f solution.yaml
+
+  # Generate tests from a catalog solution
+  %[1]s test init my-solution@1.0.0
 
   # Save generated tests to a file
-  scafctl test init -f solution.yaml > tests.yaml
+  %[1]s test init -f solution.yaml > tests.yaml
 
   # Pipe into a compose file
-  scafctl test init -f solution.yaml >> solution-tests.yaml`,
+  %[1]s test init -f solution.yaml >> solution-tests.yaml`, cliParams.BinaryName),
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		PreRunE: func(_ *cobra.Command, args []string) error {
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test init"); err != nil {
+				c, err := source.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test init")
+				if err != nil {
 					return err
 				}
-				if !get.IsUnambiguousCatalogReference(args[0]) {
+				if c.IsUnversionedName() {
 					return fmt.Errorf("bare names are not supported as positional args for test init; use -f to specify a solution file or a versioned catalog ref (name@version)")
 				}
 				opts.File = args[0]
@@ -89,18 +97,19 @@ func runInit(ctx context.Context, opts *InitOptions) error {
 		w = writer.New(opts.IOStreams, opts.CliParams)
 	}
 
-	// Auto-discover solution file if not provided
-	filePath := opts.File
-	if filePath == "" {
-		getter := get.NewGetterFromContext(ctx)
-		resolvedPath, resolveErr := get.Resolve(ctx, getter, "", "", get.ResolveOptions{
-			Risk: get.DiscoveryRiskLow,
-		})
-		if resolveErr != nil {
-			w.Errorf("%s", resolveErr)
-			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
-		}
-		filePath = resolvedPath
+	// Auto-discover the solution file when not provided; fetch a URL,
+	// registry, or catalog reference to a temp directory.
+	local, err := localSolution(ctx, w, opts.selector, "", opts.File, "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = local.Close() }()
+	filePath := local.Path
+
+	// The header names the solution as given, not a resolved or temp path.
+	displayName := filePath
+	if opts.File != "" {
+		displayName = opts.File
 	}
 
 	// Read and parse the solution
@@ -117,11 +126,10 @@ func runInit(ctx context.Context, opts *InitOptions) error {
 	}
 
 	// Build scaffold input from the parsed solution
-	fileDeps := discoverFileDepsFromSolution(&sol, filePath)
 	input := &soltesting.ScaffoldInput{
 		Resolvers:        sol.Spec.Resolvers,
 		Workflow:         sol.Spec.Workflow,
-		FileDependencies: fileDeps,
+		FileDependencies: bundler.LocalFileDependencies(&sol, filePath),
 	}
 
 	// Generate scaffold
@@ -135,26 +143,10 @@ func runInit(ctx context.Context, opts *InitOptions) error {
 	}
 
 	// Write YAML header comment
-	w.Plainlnf("# Generated test scaffold for %s", filePath)
+	w.Plainlnf("# Generated test scaffold for %s", displayName)
 	w.Plainln("# Paste this into your solution's spec section or a compose test file.")
 	w.Plainlnf("# Customize assertions and parameters to match your expected behavior.\n")
 	w.Plain(string(out))
 
 	return nil
-}
-
-// discoverFileDepsFromSolution uses bundler.DiscoverFiles to extract file dependencies.
-// Returns nil on error (best-effort).
-func discoverFileDepsFromSolution(sol *solution.Solution, solutionPath string) []string {
-	bundleRoot := filepath.Dir(solutionPath)
-	result, err := bundler.DiscoverFiles(sol, bundleRoot)
-	if err != nil || result == nil {
-		return nil
-	}
-
-	var deps []string
-	for _, f := range result.LocalFiles {
-		deps = append(deps, f.RelPath)
-	}
-	return deps
 }

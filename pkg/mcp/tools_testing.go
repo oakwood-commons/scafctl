@@ -6,11 +6,8 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/oakwood-commons/scafctl/pkg/provider"
-	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
@@ -29,7 +26,7 @@ func (s *Server) registerTestingTools() {
 		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("Path to the solution file to generate tests for"),
+			mcp.Description("Solution file path, URL, or catalog reference (name[@version]) to generate tests for"),
 		),
 		mcp.WithString("cwd",
 			mcp.Description(cwdDescDefault),
@@ -47,7 +44,7 @@ func (s *Server) registerTestingTools() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithString("path",
-			mcp.Description("Path to a solution file or directory containing solutions with tests"),
+			mcp.Description("Solution file or directory containing solutions with tests, or a URL or catalog reference (name[@version]). Default: current directory"),
 		),
 		mcp.WithString("filter",
 			mcp.Description("Filter test names by glob pattern (e.g., 'smoke-*')"),
@@ -85,7 +82,15 @@ func (s *Server) handleGenerateTestScaffold(_ context.Context, request mcp.CallT
 		), nil
 	}
 
-	sol, err := inspect.LoadSolution(ctx, path)
+	// File dependencies are found next to the solution file, so a URL,
+	// registry, or catalog reference is fetched with its bundle first.
+	local, errResult := localSolution(ctx, path)
+	if errResult != nil {
+		return errResult, nil
+	}
+	defer func() { _ = local.Close() }()
+
+	sol, err := inspect.LoadSolution(ctx, local.Path)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load solution: %v", err),
 			WithField("path"),
@@ -97,7 +102,7 @@ func (s *Server) handleGenerateTestScaffold(_ context.Context, request mcp.CallT
 	input := &soltesting.ScaffoldInput{
 		Resolvers:        sol.Spec.Resolvers,
 		Workflow:         sol.Spec.Workflow,
-		FileDependencies: discoverFileDeps(sol, path),
+		FileDependencies: bundler.LocalFileDependencies(sol, local.Path),
 	}
 
 	result := soltesting.Scaffold(input)
@@ -196,15 +201,15 @@ func (s *Server) handleListTests(_ context.Context, request mcp.CallToolRequest)
 		), nil
 	}
 
-	// Resolve relative path against the working directory
-	path, err = provider.AbsFromContext(ctx, path)
-	if err != nil {
-		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("failed to resolve path: %v", err),
-			WithField("path"),
-		), nil
+	// Resolve a local path against the working directory, or fetch a
+	// URL, registry, or catalog reference.
+	local, errResult := localSolution(ctx, path)
+	if errResult != nil {
+		return errResult, nil
 	}
+	defer func() { _ = local.Close() }()
 
-	solutions, err := soltesting.DiscoverSolutions(path)
+	solutions, err := soltesting.DiscoverSolutions(local.Path)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to discover tests: %v", err),
 			WithField("path"),
@@ -274,24 +279,4 @@ func (s *Server) handleListTests(_ context.Context, request mcp.CallToolRequest)
 		"totalTests":     totalTests,
 		"totalSolutions": len(solutionResults),
 	})
-}
-
-// discoverFileDeps uses bundler.DiscoverFiles to extract local file dependencies
-// from a loaded solution. Returns nil on error (best-effort).
-func discoverFileDeps(sol *solution.Solution, solutionPath string) []string {
-	if sol == nil {
-		return nil
-	}
-
-	bundleRoot := filepath.Dir(solutionPath)
-	result, err := bundler.DiscoverFiles(sol, bundleRoot)
-	if err != nil || result == nil {
-		return nil
-	}
-
-	var deps []string
-	for _, f := range result.LocalFiles {
-		deps = append(deps, f.RelPath)
-	}
-	return deps
 }

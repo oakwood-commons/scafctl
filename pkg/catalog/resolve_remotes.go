@@ -12,12 +12,11 @@ import (
 )
 
 // RemoteCatalogsFromContext builds Catalog instances for every OCI remote catalog
-// in the application config. These are suitable for passing to
-// WithResolverRemoteCatalogs so the SolutionResolver can auto-pull artifacts
-// that are not in the local catalog.
+// in the application config, so callers can auto-pull artifacts that are not
+// in the local catalog.
 //
 // Catalogs that fail to initialise (e.g. missing credentials) are silently
-// skipped — the resolver will simply not search them.
+// skipped and are not searched.
 func RemoteCatalogsFromContext(ctx context.Context, lgr logr.Logger) []Catalog {
 	cfg := config.FromContext(ctx)
 	if cfg == nil {

@@ -6,13 +6,12 @@ package bundler
 import (
 	"archive/tar"
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 const (
@@ -32,8 +31,6 @@ type DedupeOption func(*dedupeConfig)
 
 type dedupeConfig struct {
 	threshold int64
-	maxSize   int64
-	readFile  func(string) ([]byte, error)
 }
 
 // WithDedupeThreshold sets the minimum file size for individual blob layers.
@@ -41,20 +38,6 @@ type dedupeConfig struct {
 func WithDedupeThreshold(size int64) DedupeOption {
 	return func(c *dedupeConfig) {
 		c.threshold = size
-	}
-}
-
-// WithDedupeMaxSize sets the maximum total size of all bundled files.
-func WithDedupeMaxSize(size int64) DedupeOption {
-	return func(c *dedupeConfig) {
-		c.maxSize = size
-	}
-}
-
-// WithDedupeReadFileFunc overrides the file reading function for testing.
-func WithDedupeReadFileFunc(fn func(string) ([]byte, error)) DedupeOption {
-	return func(c *dedupeConfig) {
-		c.readFile = fn
 	}
 }
 
@@ -87,41 +70,26 @@ type DedupeResult struct {
 	TotalSize int64
 }
 
-// CreateDeduplicatedBundle prepares files for content-addressable OCI storage.
-// Large files (>= threshold) become individual layers; small files are tarred together.
-// Returns a DedupeResult containing the manifest and all blobs to push.
-func CreateDeduplicatedBundle(bundleRoot string, files []FileEntry, plugins []BundlePluginEntry, opts ...DedupeOption) (*DedupeResult, error) {
-	cfg := &dedupeConfig{
-		threshold: DefaultDedupeThreshold,
-		maxSize:   DefaultMaxBundleSize,
-		readFile:  os.ReadFile,
-	}
+// CreateDeduplicatedBundle prepares the snapshot's files for content-addressable
+// OCI storage. Large files (>= threshold) become individual layers; small files
+// are tarred together. Returns a DedupeResult containing the manifest and all
+// blobs to push.
+func CreateDeduplicatedBundle(files *FileSnapshot, plugins []BundlePluginEntry, opts ...DedupeOption) (*DedupeResult, error) {
+	cfg := &dedupeConfig{threshold: DefaultDedupeThreshold}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
-	// Read all files and compute digests
+	entries := files.entries()
 	var totalSize int64
-	blobs := make([]DedupeFileBlob, 0, len(files))
-
-	for _, f := range files {
-		absPath := filepath.Join(bundleRoot, f.RelPath)
-		content, err := cfg.readFile(absPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read %s: %w", f.RelPath, err)
-		}
-
-		totalSize += int64(len(content))
-		if totalSize > cfg.maxSize {
-			return nil, fmt.Errorf("bundle exceeds maximum size limit (%d bytes, limit %d bytes)", totalSize, cfg.maxSize)
-		}
-
-		digest := fmt.Sprintf("sha256:%x", sha256.Sum256(content))
+	blobs := make([]DedupeFileBlob, 0, len(entries))
+	for _, f := range entries {
+		totalSize += int64(len(f.Content))
 		blobs = append(blobs, DedupeFileBlob{
-			RelPath: filepath.ToSlash(f.RelPath),
-			Content: content,
-			Digest:  digest,
-			Size:    int64(len(content)),
+			RelPath: f.RelPath,
+			Content: f.Content,
+			Digest:  f.Digest,
+			Size:    int64(len(f.Content)),
 		})
 	}
 
@@ -282,7 +250,10 @@ func ExtractDeduplicatedBundle(manifest *BundleManifest, destDir string, layerFe
 		} else {
 			// Raw blob — write to each path that references this layer+digest
 			for _, entry := range entries {
-				destPath := filepath.Join(destDir, filepath.FromSlash(entry.Path))
+				destPath, err := safeExtractPath(destDir, entry.Path)
+				if err != nil {
+					return err
+				}
 				if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 					return fmt.Errorf("failed to create directory for %s: %w", entry.Path, err)
 				}
@@ -323,7 +294,7 @@ func extractPlainTar(data []byte, destDir string) error {
 	tr := tar.NewReader(bytes.NewReader(data))
 	for {
 		header, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -331,15 +302,9 @@ func extractPlainTar(data []byte, destDir string) error {
 		}
 
 		cleanName := filepath.Clean(header.Name)
-		if filepath.IsAbs(cleanName) || strings.HasPrefix(cleanName, "..") {
-			return fmt.Errorf("tar contains path traversal: %s", header.Name)
-		}
-
-		destPath := filepath.Join(destDir, cleanName)
-
-		// Security: verify the resolved path stays within destDir (zip-slip protection).
-		if !strings.HasPrefix(destPath, filepath.Clean(destDir)+string(os.PathSeparator)) && destPath != filepath.Clean(destDir) {
-			return fmt.Errorf("tar entry %q resolves outside destination directory", header.Name)
+		destPath, err := safeExtractPath(destDir, header.Name)
+		if err != nil {
+			return err
 		}
 
 		switch header.Typeflag {

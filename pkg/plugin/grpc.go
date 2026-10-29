@@ -1132,8 +1132,8 @@ func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 		WriteOperations:        desc.WriteOperations,
 	}
 
-	for i, cap := range desc.Capabilities {
-		protoDesc.Capabilities[i] = string(cap)
+	for i, cp := range desc.Capabilities {
+		protoDesc.Capabilities[i] = string(cp)
 	}
 
 	// Convert rich per-operation metadata (write classification, schemas, etc.)
@@ -1180,16 +1180,16 @@ func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 	if len(desc.OutputSchemas) > 0 {
 		protoDesc.OutputSchemas = make(map[string]*proto.Schema)
 		protoDesc.RawOutputSchemas = make(map[string][]byte, len(desc.OutputSchemas))
-		for cap, schema := range desc.OutputSchemas {
+		for cp, schema := range desc.OutputSchemas {
 			if schema == nil {
 				continue
 			}
 			// Raw JSON for lossless round-tripping.
 			if raw, err := json.Marshal(schema); err == nil {
-				protoDesc.RawOutputSchemas[string(cap)] = raw
+				protoDesc.RawOutputSchemas[string(cp)] = raw
 			}
 			if ps := schemaToProto(schema); ps != nil {
-				protoDesc.OutputSchemas[string(cap)] = ps
+				protoDesc.OutputSchemas[string(cp)] = ps
 			}
 		}
 	}
@@ -1310,8 +1310,8 @@ func protoToDescriptor(protoDesc *proto.ProviderDescriptor) (*provider.Descripto
 		WriteOperations: protoDesc.WriteOperations,
 	}
 
-	for i, cap := range protoDesc.Capabilities {
-		desc.Capabilities[i] = provider.Capability(cap)
+	for i, cp := range protoDesc.Capabilities {
+		desc.Capabilities[i] = provider.Capability(cp)
 	}
 
 	// Convert rich per-operation metadata.

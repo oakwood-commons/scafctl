@@ -6,13 +6,17 @@ package test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
@@ -51,6 +55,101 @@ func TestRunFunctional_NoPathProvided(t *testing.T) {
 	err := runFunctional(ctx, opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no solution path provided")
+}
+
+// TestRunFunctional_AutoDiscover_NotFound verifies discovery honors the
+// context working directory and keeps the --tests-path hint.
+func TestRunFunctional_AutoDiscover_NotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx, _ := discoveryDir(t, false)
+	streams, _, errOut := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	ctx = writer.WithWriter(ctx, writer.New(streams, cliParams))
+
+	err := runFunctional(ctx, &FunctionalOptions{IOStreams: streams, CliParams: cliParams})
+	require.ErrorIs(t, err, load.ErrNoSolutionFound)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	assert.Contains(t, err.Error(), "--tests-path")
+	assert.Contains(t, errOut.String(), "no solution file found")
+}
+
+// TestRunFunctional_FetchesCatalogReference verifies a catalog reference is
+// fetched and its tests run from the materialized file.
+func TestRunFunctional_FetchesCatalogReference(t *testing.T) {
+	t.Parallel()
+
+	ctx, buf := newFuncTestCtx(t)
+	fl := &fakeLoader{ms: &load.MaterializedSolution{Solution: parsedSolution(t)}}
+
+	opts := &FunctionalOptions{
+		IOStreams:      terminal.NewIOStreams(nil, buf, buf, false),
+		CliParams:      settings.NewCliParams(),
+		File:           "discovered@1.0.0",
+		DryRun:         true,
+		NoProgress:     true,
+		selector:       newFakeSelector(fl),
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+	}
+
+	require.NoError(t, runFunctional(ctx, opts))
+	assert.Equal(t, source.KindBareName, fl.got.Kind)
+	assert.Contains(t, buf.String(), "renders", "the fetched solution's test case ran")
+}
+
+// TestRunFunctional_FetchError verifies a failed fetch exits with CatalogError.
+func TestRunFunctional_FetchError(t *testing.T) {
+	t.Parallel()
+
+	ctx, buf := newFuncTestCtx(t)
+	opts := &FunctionalOptions{
+		IOStreams: terminal.NewIOStreams(nil, buf, buf, false),
+		CliParams: settings.NewCliParams(),
+		File:      "ghcr.io/org/sol@1.0.0",
+		selector:  newFakeSelector(&fakeLoader{err: errors.New("registry unreachable")}),
+	}
+
+	err := runFunctional(ctx, opts)
+	require.ErrorIs(t, err, load.ErrFetch)
+	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
+	assert.Contains(t, buf.String(), "registry unreachable")
+}
+
+// TestRunFunctional_FetchedRejectsLocalOnlyFlags verifies that snapshot
+// updates and watch mode, which act on the solution directory, are rejected
+// for a fetched (temporary) solution.
+func TestRunFunctional_FetchedRejectsLocalOnlyFlags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		update bool
+		watch  bool
+	}{
+		{name: "update snapshots", update: true},
+		{name: "watch", watch: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, buf := newFuncTestCtx(t)
+			fl := &fakeLoader{ms: &load.MaterializedSolution{Solution: parsedSolution(t)}}
+			opts := &FunctionalOptions{
+				IOStreams:       terminal.NewIOStreams(nil, buf, buf, false),
+				CliParams:       settings.NewCliParams(),
+				File:            "discovered@1.0.0",
+				UpdateSnapshots: tc.update,
+				Watch:           tc.watch,
+				selector:        newFakeSelector(fl),
+			}
+
+			err := runFunctional(ctx, opts)
+			require.Error(t, err)
+			assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+			assert.Contains(t, buf.String(), "require a local solution")
+		})
+	}
 }
 
 // TestRunFunctional_EmptyDirectory verifies that runFunctional returns no error

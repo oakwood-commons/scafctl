@@ -31,9 +31,17 @@ func (c *LocalCatalog) StoreMultiPlatform(ctx context.Context, ref Reference, pl
 		return ArtifactInfo{}, fmt.Errorf("at least one platform binary is required")
 	}
 
+	ref = writeRef(ref)
+
 	// Check existence (unless force)
-	if !force && c.existsLocked(ctx, ref) {
-		return ArtifactInfo{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
+	if !force {
+		exists, err := c.existsLocked(ctx, ref)
+		if err != nil {
+			return ArtifactInfo{}, err
+		}
+		if exists {
+			return ArtifactInfo{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
+		}
 	}
 
 	now := time.Now().UTC()

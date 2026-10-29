@@ -1,0 +1,25 @@
+# e2e fixture: smallest solution that packages, pushes, pulls and deletes
+# cleanly. Catalog specs derive differing-digest copies of it by rewriting the
+# description line (see e2e/suite/catalog/catalog_helpers_test.go), so keep the
+# `description: baseline` line intact.
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: demo
+  displayName: Catalog Basic E2E Fixture
+  category: developer-tools
+  tags:
+    - e2e
+  description: baseline
+
+spec:
+  resolvers:
+    greeting:
+      type: string
+      description: "Static greeting"
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello

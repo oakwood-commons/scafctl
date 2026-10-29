@@ -38,6 +38,13 @@ type PlatformAwareCatalog interface {
 // It resolves plugin references, selects the appropriate platform variant via
 // the OCI image index (preferred) or AnnotationPlatform annotation (fallback),
 // and returns the raw binary data.
+//
+// TODO(plugin-fetcher-origin): ResolvePlugin, FetchPlugin (buildRef,
+// directFetch) and the List-based platform fallback all use origin-less
+// name@version lookups, which the local catalog now treats as searches across
+// built and pulled copies (AmbiguousArtifactError, or a copy from the wrong
+// origin in the List fallback). Accept a SourceSelector so callers can pin the
+// origin. See the matching TODO on plugin.Fetcher for the cache-keying side.
 type PluginFetcher struct {
 	catalog   Catalog
 	logger    logr.Logger

@@ -24,7 +24,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 )
 
 // ── Request / Response types ──
@@ -118,66 +120,34 @@ type SolutionTestResponse struct {
 	}
 }
 
-// requireRemotePath returns a 400 Huma error if path looks like a local
-// filesystem reference. The API server accepts HTTP/HTTPS URLs and catalog
-// names. Local file paths are blocked because the server cannot safely
-// access arbitrary paths supplied by remote callers.
-func requireRemotePath(path, opName string) error {
-	if path == "" {
-		return huma.NewError(http.StatusBadRequest,
-			fmt.Sprintf("%s: path is required", opName))
+// loadSolution classifies path and fetches it through the request's solution
+// loader (see api.HandlerContext.SolutionLoader), which owns the source
+// policy: the default loader reads only URLs and catalog references, never
+// the server's filesystem or stdin. Every failure is an already-mapped 400
+// Huma error.
+func loadSolution(
+	ctx context.Context,
+	hctx *api.HandlerContext,
+	path, operation string,
+	opts ...load.RouterOption,
+) (*load.MaterializedSolution, error) {
+	c, err := source.Classify(path)
+	if err != nil {
+		// The classification error names only the caller's own input and the
+		// syntax problem, so it is safe to return.
+		return nil, api.HandleError(ctx, err, operation, http.StatusBadRequest,
+			fmt.Sprintf("%s: %v", operation, err))
 	}
 
-	// Reject path-traversal segments regardless of surrounding context.
-	for _, seg := range strings.Split(path, "/") {
-		if seg == ".." {
-			return huma.NewError(http.StatusBadRequest,
-				fmt.Sprintf("%s: path must not contain '..' segments", opName))
+	ms, err := hctx.SolutionLoader(ctx, opts...).Load(ctx, c)
+	if err != nil {
+		if errors.Is(err, load.ErrSourceNotEnabled) {
+			return nil, api.HandleError(ctx, err, operation, http.StatusBadRequest,
+				fmt.Sprintf("%s: %s sources are not enabled on this server; use a URL or catalog reference", operation, c.Kind))
 		}
+		return nil, api.HandleError(ctx, err, operation, http.StatusBadRequest, "failed to load solution")
 	}
-
-	lower := strings.ToLower(path)
-
-	// Explicitly allowed schemes.
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		return nil
-	}
-
-	// Block all other URL schemes (file://, ftp://, data://, oci://, etc.).
-	if strings.Contains(lower, "://") {
-		return huma.NewError(http.StatusBadRequest,
-			fmt.Sprintf("%s: unsupported URL scheme; only http:// and https:// are allowed", opName))
-	}
-
-	// Block obvious local-path indicators.
-	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, ".") ||
-		strings.HasPrefix(path, "~") || strings.Contains(path, "\\") ||
-		scafpath.HasWindowsDrivePrefix(path) {
-		return huma.NewError(http.StatusBadRequest,
-			fmt.Sprintf("%s: path must be a URL or catalog reference, not a local file path", opName))
-	}
-
-	// Bare filenames ending in .yaml/.yml/.json are almost certainly local files.
-	if strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".json") {
-		return huma.NewError(http.StatusBadRequest,
-			fmt.Sprintf("%s: path must be a URL or catalog reference, not a local file path", opName))
-	}
-
-	// Paths containing "/" are either registry refs (ghcr.io/org/sol) or
-	// relative local paths (configs/secret, dir/../../etc/passwd). Registry
-	// hostnames always contain "." or ":" in the first segment; plain
-	// directory names do not. Block the latter to prevent path traversal.
-	if strings.Contains(path, "/") {
-		firstSegment := strings.SplitN(path, "/", 2)[0]
-		if !strings.Contains(firstSegment, ".") && !strings.Contains(firstSegment, ":") {
-			return huma.NewError(http.StatusBadRequest,
-				fmt.Sprintf("%s: path must be a URL or catalog reference, not a local file path", opName))
-		}
-	}
-
-	// Anything else is treated as a catalog reference (e.g. "my-app",
-	// "my-app@1.0.0", "ghcr.io/org/solution").
-	return nil
+	return ms, nil
 }
 
 // rejectUnsafePath returns a 400 Huma error if path is unsafe for server-side
@@ -203,15 +173,14 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Validates a solution file and returns findings (errors, warnings, info).",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionLintRequest) (*SolutionLintResponse, error) {
-		if err := requireRemotePath(input.Body.Path, "solution-lint"); err != nil {
+		// Lenient: a solution that fails validation still loads, so lint can
+		// report the problems as findings instead of failing the request.
+		ms, err := loadSolution(ctx, hctx, input.Body.Path, "solution-lint", load.WithLenient())
+		if err != nil {
 			return nil, err
 		}
-		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
-		if err != nil {
-			return nil, api.HandleError(ctx, err, "solution-lint", http.StatusBadRequest, "failed to load solution")
-		}
 
-		result := lint.Solution(sol, input.Body.Path, hctx.ProviderRegistry)
+		result := lint.Solution(ms.Solution, input.Body.Path, hctx.ProviderRegistry)
 		return &SolutionLintResponse{Body: result}, nil
 	})
 
@@ -224,15 +193,12 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Loads a solution and returns its full structural explanation.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionInspectRequest) (*SolutionInspectResponse, error) {
-		if err := requireRemotePath(input.Body.Path, "solution-inspect"); err != nil {
+		ms, err := loadSolution(ctx, hctx, input.Body.Path, "solution-inspect")
+		if err != nil {
 			return nil, err
 		}
-		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
-		if err != nil {
-			return nil, api.HandleError(ctx, err, "solution-inspect", http.StatusBadRequest, "failed to load solution")
-		}
 
-		explanation := inspect.BuildSolutionExplanation(sol)
+		explanation := inspect.BuildSolutionExplanation(ms.Solution)
 		return &SolutionInspectResponse{Body: explanation}, nil
 	})
 
@@ -245,10 +211,6 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Performs a dry run of the solution, showing what actions would be taken without executing them.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionDryRunRequest) (*SolutionDryRunResponse, error) {
-		if err := requireRemotePath(input.Body.Path, "solution-dryrun"); err != nil {
-			return nil, err
-		}
-
 		sol, executionRegistry, release, err := loadAndPrepareSolution(ctx, hctx, input.Body.Path, input.Body.LockMode, "solution-dryrun")
 		defer releaseFunc(release)
 		if err != nil {
@@ -276,9 +238,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Executes a solution: resolves all inputs and runs the action workflow.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionRunRequest) (*SolutionRunResponse, error) {
-		if err := requireRemotePath(input.Body.Path, "solution-run"); err != nil {
-			return nil, err
-		}
+		// Validate outputDir before loading so a bad request never fetches.
 		if input.Body.OutputDir != "" {
 			if err := rejectUnsafePath(input.Body.OutputDir, "solution-run outputDir"); err != nil {
 				return nil, err
@@ -331,10 +291,6 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Resolves all inputs in a solution without executing actions. Returns the resolved values.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionRenderRequest) (*SolutionRenderResponse, error) {
-		if err := requireRemotePath(input.Body.Path, "solution-render"); err != nil {
-			return nil, err
-		}
-
 		sol, executionRegistry, release, err := loadAndPrepareSolution(ctx, hctx, input.Body.Path, input.Body.LockMode, "solution-render")
 		defer releaseFunc(release)
 		if err != nil {
@@ -363,15 +319,12 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Validates a solution's structure and workflow against the provider registry.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionTestRequest) (*SolutionTestResponse, error) {
-		if err := requireRemotePath(input.Body.Path, "solution-test"); err != nil {
+		ms, err := loadSolution(ctx, hctx, input.Body.Path, "solution-test")
+		if err != nil {
 			return nil, err
 		}
-		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
-		if err != nil {
-			return nil, api.HandleError(ctx, err, "solution-test", http.StatusBadRequest, "failed to load solution")
-		}
 
-		validation := execute.ValidateSolution(ctx, sol, hctx.ProviderRegistry)
+		validation := execute.ValidateSolution(ctx, ms.Solution, hctx.ProviderRegistry)
 
 		resp := &SolutionTestResponse{}
 		resp.Body.Validation = validation
@@ -411,12 +364,13 @@ func parseLockMode(s string) (prepare.LockMode, error) {
 }
 
 // loadAndPrepareSolution runs the shared preparation pipeline for the dryrun,
-// run, and render endpoints: it parses the lock mode, loads the solution with
-// its lock file, and builds the execution registry with provider dependencies
-// resolved. On success it returns the loaded solution and its execution
-// registry; on failure it returns an already-mapped Huma error (400 for a bad
-// lock mode or a load failure, or the classification chosen by
-// handleEnsureError for a dependency-resolution failure).
+// run, and render endpoints: it parses the lock mode, loads the solution via
+// loadSolution, parses its lock layer, and builds the execution registry with
+// provider dependencies resolved. On success it returns the loaded solution and
+// its execution registry; on failure it returns an already-mapped Huma error
+// (400 for a bad lock mode, a load failure, or a malformed lock, or the
+// classification chosen by handleEnsureError for a dependency-resolution
+// failure).
 //
 // The returned release function is always safe to pass to releaseFunc and MUST
 // be deferred by the caller regardless of the returned error, since provider
@@ -431,10 +385,15 @@ func loadAndPrepareSolution(
 		return nil, nil, nil, err
 	}
 
-	sol, lock, err := inspect.LoadSolutionWithLock(ctx, path)
+	ms, err := loadSolution(ctx, hctx, path, operation)
 	if err != nil {
-		return nil, nil, nil, api.HandleError(ctx, err, operation, http.StatusBadRequest, "failed to load solution")
+		return nil, nil, nil, err
 	}
+	lock, err := ms.LockFile()
+	if err != nil {
+		return nil, nil, nil, api.HandleError(ctx, err, operation, http.StatusBadRequest, "failed to parse solution lock")
+	}
+	sol := ms.Solution
 
 	executionRegistry, release, err := ensureProviderDependencies(
 		ctx, sol, hctx.CompositeRegistry, hctx.CatalogIndex,

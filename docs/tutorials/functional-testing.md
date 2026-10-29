@@ -90,6 +90,28 @@ my-solution    run-basic                 PASS     8ms
 > The builtin tests (`builtin:parse`, `builtin:lint`, `builtin:resolve-defaults`) run automatically
 > for every solution.
 
+You can also test a solution you have built or pulled into a catalog. Pass a
+catalog reference, registry reference, or URL instead of a file path.
+`test functional`, `test list`, and `test init` fetch the solution and its
+bundled files into a temporary directory, then remove it when they finish:
+
+{{< tabs "functional-testing-cmd-catalog" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl test functional my-solution@1.0.0
+scafctl test list my-solution@1.0.0
+scafctl test init my-solution@1.0.0
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl test functional my-solution@1.0.0
+scafctl test list my-solution@1.0.0
+scafctl test init my-solution@1.0.0
+```
+{{% /tab %}}
+{{< /tabs >}}
+
 Each test specifies a `command` (the scafctl subcommand to run) and one or more
 `assertions` to validate the output. The runner automatically injects
 `-f <sandbox-copy-of-solution>` unless you set `injectFile: false`.

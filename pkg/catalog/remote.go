@@ -234,11 +234,28 @@ func (c *RemoteCatalog) Repository() string {
 // used by the plugin cache identity (see plugin.IdentityFromCatalog) so that
 // locks record a rename-proof, portable origin rather than the config alias.
 func (c *RemoteCatalog) canonicalID() string {
-	canonical := c.registry
-	if c.repository != "" {
-		canonical += "/" + c.repository
+	return CanonicalRemoteCatalogID(c.registry, c.repository)
+}
+
+// CanonicalRemoteCatalogID returns the stable, machine-independent identity of
+// a remote catalog: "registry" or "registry/repository".
+func CanonicalRemoteCatalogID(registry, repository string) string {
+	canonical := registry
+	if repository != "" {
+		canonical += "/" + repository
 	}
 	return canonical
+}
+
+// normalizeRemoteResultRef stamps the reference as originating from this
+// remote catalog. The Remote field records base catalog provenance, not the
+// full artifact repository path, and Built is cleared because the returned
+// artifact now represents registry state rather than a local rebuild.
+func (c *RemoteCatalog) normalizeRemoteResultRef(ref Reference) Reference {
+	normalized := ref
+	normalized.Remote = c.canonicalID()
+	normalized.Built = false
+	return normalized
 }
 
 // clientUpdatable is implemented by enumerators that can update the OCI
@@ -675,7 +692,7 @@ func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference) ([]byt
 	}
 
 	info := ArtifactInfo{
-		Reference:   ref,
+		Reference:   c.normalizeRemoteResultRef(ref),
 		Digest:      manifestDesc.Digest.String(),
 		ImageRef:    c.buildRepositoryPath(ref) + "@" + manifestDesc.Digest.String(),
 		CreatedAt:   createdAt,
@@ -782,7 +799,7 @@ func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Referen
 	}
 
 	info := ArtifactInfo{
-		Reference:   ref,
+		Reference:   c.normalizeRemoteResultRef(ref),
 		Digest:      manifestDesc.Digest.String(),
 		CreatedAt:   createdAt,
 		Size:        int64(len(contentData)),
@@ -902,7 +919,7 @@ func (c *RemoteCatalog) fetchWithLayersInternal(ctx context.Context, ref Referen
 	}
 
 	info := ArtifactInfo{
-		Reference:   ref,
+		Reference:   c.normalizeRemoteResultRef(ref),
 		Digest:      manifestDesc.Digest.String(),
 		ImageRef:    c.buildRepositoryPath(ref) + "@" + manifestDesc.Digest.String(),
 		CreatedAt:   createdAt,
@@ -996,7 +1013,7 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 		}
 
 		return ArtifactInfo{
-			Reference: ref,
+			Reference: c.normalizeRemoteResultRef(ref),
 			Digest:    desc.Digest.String(),
 			Size:      desc.Size,
 			Catalog:   c.name,
@@ -1169,7 +1186,7 @@ func (c *RemoteCatalog) List(ctx context.Context, kind ArtifactKind, name string
 		var infos []ArtifactInfo
 		for _, v := range versions {
 			infos = append(infos, ArtifactInfo{
-				Reference: Reference{Kind: kind, Name: name, Version: v},
+				Reference: c.normalizeRemoteResultRef(Reference{Kind: kind, Name: name, Version: v}),
 				Catalog:   c.name,
 				Canonical: c.canonicalID(),
 			})
@@ -1196,7 +1213,7 @@ func (c *RemoteCatalog) listAcrossKinds(ctx context.Context, name string) ([]Art
 		}
 		for _, v := range versions {
 			allInfos = append(allInfos, ArtifactInfo{
-				Reference: Reference{Kind: k, Name: name, Version: v},
+				Reference: c.normalizeRemoteResultRef(Reference{Kind: k, Name: name, Version: v}),
 				Catalog:   c.name,
 				Canonical: c.canonicalID(),
 			})
@@ -1330,7 +1347,7 @@ func (c *RemoteCatalog) listAllArtifacts(ctx context.Context, kind ArtifactKind)
 		annotations := r.artifact.ToAnnotations()
 		for _, v := range r.versions {
 			allInfos = append(allInfos, ArtifactInfo{
-				Reference:   Reference{Kind: r.artifact.Kind, Name: r.artifact.Name, Version: v},
+				Reference:   c.normalizeRemoteResultRef(Reference{Kind: r.artifact.Kind, Name: r.artifact.Name, Version: v}),
 				Catalog:     c.name,
 				Canonical:   c.canonicalID(),
 				Annotations: annotations,
@@ -1354,7 +1371,7 @@ func (c *RemoteCatalog) listAllArtifacts(ctx context.Context, kind ArtifactKind)
 				continue
 			}
 			allInfos = append(allInfos, ArtifactInfo{
-				Reference:   Reference{Kind: d.Kind, Name: d.Name, Version: v},
+				Reference:   c.normalizeRemoteResultRef(Reference{Kind: d.Kind, Name: d.Name, Version: v}),
 				Catalog:     c.name,
 				Canonical:   c.canonicalID(),
 				Annotations: d.ToAnnotations(),
@@ -1728,6 +1745,98 @@ func (c *RemoteCatalog) Tag(ctx context.Context, ref Reference, alias string) (s
 	return oldVersion, nil
 }
 
+// compile-time check that RemoteCatalog can back a SolutionFetcher.
+var _ SolutionRemote = (*RemoteCatalog)(nil)
+
+// pull resolves ref (which must carry a version or digest) in its remote
+// repository and copies the artifact into dst tagged dstTag, returning the
+// root descriptor.
+func (c *RemoteCatalog) pull(ctx context.Context, ref Reference, dst oras.Target, dstTag string) (ocispec.Descriptor, error) {
+	desc, err := c.resolveByTag(ctx, ref, c.tagForRef(ref))
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+	if err := c.copyToStorage(ctx, ref, desc, dstTag, dst); err != nil {
+		return ocispec.Descriptor{}, err
+	}
+	return desc, nil
+}
+
+// CanonicalID returns the stable, machine-independent identity of this remote
+// catalog ("registry" or "registry/repository").
+func (c *RemoteCatalog) CanonicalID() string {
+	return c.canonicalID()
+}
+
+// resolveByTag resolves tag (a version or digest) to the manifest descriptor in
+// ref's repository. ref is only used to locate the repository (kind/name); tag
+// is passed to the registry as-is, with no latest-version lookup.
+func (c *RemoteCatalog) resolveByTag(ctx context.Context, ref Reference, tag string) (ocispec.Descriptor, error) {
+	repo, err := c.getRepository(ref)
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+
+	desc, err := repo.Resolve(ctx, tag)
+	if err != nil && isOCIAuthError(err) {
+		c.logger.V(1).Info("resolve rejected by registry, retrying anonymously",
+			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
+		c.switchToAnonymous()
+		repo.Client = c.client
+		desc, err = repo.Resolve(ctx, tag)
+	}
+	if err != nil {
+		if isNetworkError(err) {
+			return ocispec.Descriptor{}, &UnreachableError{Catalog: c.name, Cause: err}
+		}
+		return ocispec.Descriptor{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+	}
+
+	return desc, nil
+}
+
+// copyToStorage copies the artifact identified by ref from its remote
+// repository into target and tags it as destinationReference (when empty,
+// oras.Copy reuses the source tag). The source tag comes from tagForRef, so
+// the caller must pass a ref (with version or digest) that pairs with desc.
+// The copied root must match desc, so a tag that moved after resolveByTag is
+// reported rather than silently copying different content.
+func (c *RemoteCatalog) copyToStorage(ctx context.Context, ref Reference, desc ocispec.Descriptor, destinationReference string, target oras.Target) error {
+	repo, err := c.getRepository(ref)
+	if err != nil {
+		return err
+	}
+	srcTag := c.tagForRef(ref)
+	// The target may be an in-memory store, so bound every blob by its
+	// advertised size before it is transferred. oras verifies the copied bytes
+	// against the descriptor, so the advertised size cannot be exceeded.
+	copyOpts := oras.DefaultCopyOptions
+	copyOpts.PreCopy = func(_ context.Context, desc ocispec.Descriptor) error {
+		return checkLayerSize(desc)
+	}
+	root, err := oras.Copy(ctx, repo, srcTag, target, destinationReference, copyOpts)
+	if err != nil && isOCIAuthError(err) {
+		c.logger.V(1).Info("copy rejected by registry, retrying anonymously",
+			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
+		c.switchToAnonymous()
+		repo.Client = c.client
+		root, err = oras.Copy(ctx, repo, srcTag, target, destinationReference, copyOpts)
+	}
+	if err != nil {
+		if isNetworkError(err) {
+			return &UnreachableError{Catalog: c.name, Cause: err}
+		}
+		return c.wrapWithCredentialHint(fmt.Errorf("copying %s:%s from catalog %q: %w", ref.Name, srcTag, c.name, err))
+	}
+
+	if root.Digest != desc.Digest {
+		return fmt.Errorf("copying %s:%s from catalog %q: resolved %s but copied %s (tag moved)",
+			ref.Name, srcTag, c.name, desc.Digest, root.Digest)
+	}
+
+	return nil
+}
+
 // tagForRef returns the OCI tag string for a reference.
 // The reference must have a version or digest — scafctl does not use
 // arbitrary tags like "latest". Callers must resolve the version before
@@ -2021,3 +2130,205 @@ var _ Catalog = (*RemoteCatalog)(nil)
 
 // Ensure content.Storage is satisfied for oras.Copy (compile-time check).
 var _ content.Storage = (*remote.Repository)(nil)
+
+// remoteRefToLocalRef converts a remote reference into the local reference a
+// pull stores under: Remote records the base catalog origin (registry and
+// repository) and Built is cleared. Remote is the base provenance, not the full
+// repository path — the full kind/name path is re-derived when the local tag is
+// built, so carrying it here too would double it.
+func (c *RemoteCatalog) remoteRefToLocalRef(ref Reference) Reference {
+	return c.normalizeRemoteResultRef(ref)
+}
+
+// CopyToLocal pulls ref from this remote catalog into a LocalCatalog.
+//
+// Without a rename the artifact is streamed verbatim with oras.Copy, so the
+// digest is preserved and the remote origin is recorded on the local tag
+// descriptor (which lives in index.json and therefore does not affect the
+// digest).
+//
+// With a rename (opts.TargetName, in "name@version" form) the artifact is
+// stored under the renamed reference and its identity annotations are rewritten
+// to match.
+// invariant : ref.Name , ref.Version, ref.kind must be resolved before this function is called
+func (c *RemoteCatalog) CopyToLocal(ctx context.Context, ref Reference, local *LocalCatalog, opts CopyOptions) (ArtifactInfo, error) {
+	if local == nil {
+		return ArtifactInfo{}, errors.New("copying artifact: nil local catalog")
+	}
+
+	repo, err := c.getRepository(ref)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("getting repository for %q: %w", ref, err)
+	}
+
+	srcTag := c.tagForRef(ref)
+
+	if opts.TargetName == "" {
+		return c.copyVerbatim(ctx, repo, srcTag, ref, local, opts)
+	}
+	return c.copyRenamed(ctx, repo, srcTag, ref, local, opts)
+}
+
+// copyVerbatim streams the artifact unchanged and records its remote origin on
+// the local tag descriptor.
+func (c *RemoteCatalog) copyVerbatim(
+	ctx context.Context,
+	repo oras.ReadOnlyTarget,
+	srcTag string,
+	ref Reference,
+	local *LocalCatalog,
+	opts CopyOptions,
+) (ArtifactInfo, error) {
+	localRef := c.remoteRefToLocalRef(ref)
+
+	return local.IngestVerbatim(ctx, repo, srcTag, localRef, copyOptions(opts))
+}
+
+// copyRenamed rebuilds the artifact under the --as target, which must be a
+// concrete "name@version" (see ResolveLocalTarget), so the identity annotations
+// embedded in the rebuilt manifest match the local reference it is stored as.
+//
+// A rename is classified as locally built, not as a copy of the remote: the
+// rebuilt artifact has content the source registry never published under the
+// target name, so claiming that origin would make the remote answerable for an
+// artifact it has no copy of.
+func (c *RemoteCatalog) copyRenamed(
+	ctx context.Context,
+	repo oras.ReadOnlyTarget,
+	srcTag string,
+	ref Reference,
+	local *LocalCatalog,
+	opts CopyOptions,
+) (ArtifactInfo, error) {
+	targetRef, err := ResolveLocalTarget(ref, opts.TargetName)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("invalid target name %q: %w", opts.TargetName, err)
+	}
+	targetRef.Built = true
+
+	desc, err := repo.Resolve(ctx, srcTag)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("resolving remote artifact %q: %w", ref, err)
+	}
+
+	builder, err := rebuildArtifact(ctx, repo, desc, targetRef, opts.OnProgress)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("rebuilding artifact %q as %q: %w", ref, targetRef, err)
+	}
+
+	return local.storeArtifact(ctx, builder, opts.Force)
+}
+
+// CopyFromLocal publishes an artifact from a LocalCatalog to this remote
+// catalog. Without a rename the artifact is streamed verbatim with oras.Copy,
+// preserving its digest. With a rename (opts.TargetName, in "name@version"
+// form) the artifact is rebuilt under the renamed reference so the identity
+// embedded in the manifest matches what is published.
+// invariant : ref.Name , ref.Version, ref.Kind and ref.Remote must be resolved before this function is called
+func (c *RemoteCatalog) CopyFromLocal(ctx context.Context, ref Reference, local *LocalCatalog, opts CopyOptions) (ArtifactInfo, error) {
+	if local == nil {
+		return ArtifactInfo{}, errors.New("publishing artifact: nil local catalog")
+	}
+
+	srcTag, err := tagForLocalRef(ref)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+
+	target := ref
+	if opts.TargetName != "" {
+		if target, err = ResolveLocalTarget(ref, opts.TargetName); err != nil {
+			return ArtifactInfo{}, err
+		}
+	}
+
+	dstTag := c.tagForRef(target)
+	repo, err := c.getRepository(target)
+	if err != nil {
+		return ArtifactInfo{}, fmt.Errorf("getting repository for %q: %w", target, err)
+	}
+
+	if !opts.Force {
+		if _, err := repo.Resolve(ctx, dstTag); err == nil {
+			return ArtifactInfo{}, &ArtifactExistsError{Reference: target, Catalog: c.name}
+		}
+	}
+
+	var desc ocispec.Descriptor
+	if opts.TargetName == "" {
+		desc, err = local.ExportVerbatim(ctx, srcTag, repo, dstTag, copyOptions(opts))
+	} else {
+		desc, err = local.ExportRebuilt(ctx, srcTag, repo, dstTag, target, opts.OnProgress)
+	}
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+
+	return c.publishedInfo(target, dstTag, desc), nil
+}
+
+// publishedInfo describes the artifact as it now exists in the registry: its
+// canonical home is this repository, so the returned reference reports remote
+// provenance regardless of how the local copy was classified.
+func (c *RemoteCatalog) publishedInfo(target Reference, tag string, desc ocispec.Descriptor) ArtifactInfo {
+	repoPath := c.buildRepositoryPath(target)
+
+	published := c.normalizeRemoteResultRef(target)
+	published.Digest = desc.Digest.String()
+
+	return ArtifactInfo{
+		Reference:   published,
+		Tag:         tag,
+		Digest:      desc.Digest.String(),
+		ImageRef:    repoPath + "@" + desc.Digest.String(),
+		Size:        desc.Size,
+		Annotations: desc.Annotations,
+		Catalog:     c.name,
+		Canonical:   c.canonicalID(),
+	}
+}
+
+func copyOptions(opts CopyOptions) oras.CopyOptions {
+	copyOpts := oras.DefaultCopyOptions
+	if opts.OnProgress == nil {
+		return copyOpts
+	}
+
+	report := func(_ context.Context, desc ocispec.Descriptor) error {
+		opts.OnProgress(desc)
+		return nil
+	}
+	copyOpts.OnCopySkipped = report
+	copyOpts.PostCopy = report
+	return copyOpts
+}
+
+// ResolveLocalTarget names the local reference a pull stores under. Without a
+// rename the source ref is used unchanged. With --as the target must be a
+// concrete "name@version": it is parsed into a Reference from which the local
+// tag and its identity annotations later derive. A digest pin or a bare name
+// (which includes the "latest" alias) is rejected because neither can
+// round-trip into the version a local tag implies. The input is never mutated.
+func ResolveLocalTarget(source Reference, targetName string) (Reference, error) {
+	if targetName == "" {
+		return source, nil
+	}
+
+	target, err := ParseReference(source.Kind, targetName)
+	if err != nil {
+		return Reference{}, fmt.Errorf("invalid --as %q: %w", targetName, err)
+	}
+	if target.HasDigest() {
+		return Reference{}, &InvalidReferenceError{
+			Input:   targetName,
+			Message: "expected name@version, got a digest pin",
+		}
+	}
+	if !target.HasVersion() {
+		return Reference{}, &InvalidReferenceError{
+			Input:   targetName,
+			Message: "expected name@version, got a bare name",
+		}
+	}
+	return target, nil
+}

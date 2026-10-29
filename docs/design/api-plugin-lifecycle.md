@@ -145,7 +145,7 @@ The pool accepts three options, which can be tuned via server options:
 | Plugin scope | Per-invocation | Shared across requests |
 | Official providers | Fetched per `scafctl run` | Pre-loaded at startup, adopted into pool |
 | External plugins | Fetched + killed per run | Lazy-loaded, pooled, idle-evicted |
-| Cleanup | `defer` chain in `prepare.Solution()` | `pool.Shutdown()` on server stop |
+| Cleanup | `defer` chain in `prepare.SolutionFromLoader()` | `pool.Shutdown()` on server stop |
 | Concurrency | Single-threaded | gRPC multiplexing, mutex-protected |
 
 ---

@@ -4,10 +4,14 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -223,10 +227,49 @@ func TestDiscoverWorkspaceRoots(t *testing.T) {
 	})
 }
 
-func TestContainsPath(t *testing.T) {
-	assert.True(t, containsPath([]string{"/a/b", "/c/d"}, "/a/b"))
-	assert.False(t, containsPath([]string{"/a/b", "/c/d"}, "/e/f"))
-	assert.False(t, containsPath(nil, "/a/b"))
+func TestFindSolutionFiles(t *testing.T) {
+	t.Parallel()
+
+	const solYAML = "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: demo\n"
+	const goTaskYAML = "version: '3'\ntasks:\n  build:\n    cmds:\n      - echo hi\n"
+
+	write := func(t *testing.T, path, content string) {
+		t.Helper()
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	}
+
+	t.Run("searches cwd then roots, dedupes, and skips go-task files", func(t *testing.T) {
+		t.Parallel()
+		cwd := t.TempDir()
+		root := t.TempDir()
+		cwdSol := filepath.Join(cwd, "solution.yaml")
+		rootSol := filepath.Join(root, "scafctl", "solution.yaml")
+		write(t, cwdSol, solYAML)
+		write(t, rootSol, solYAML)
+		write(t, filepath.Join(root, "taskfile.yaml"), goTaskYAML)
+
+		ctx := provider.WithWorkingDirectory(context.Background(), cwd)
+		files := findSolutionFiles(ctx, "scafctl", []string{root, cwd})
+		assert.Equal(t, []string{cwdSol, rootSol}, files)
+	})
+
+	t.Run("uses the binary name for folders", func(t *testing.T) {
+		t.Parallel()
+		cwd := t.TempDir()
+		sol := filepath.Join(cwd, "mycli", "solution.yaml")
+		write(t, sol, solYAML)
+		write(t, filepath.Join(cwd, "scafctl", "solution.yaml"), solYAML)
+
+		ctx := provider.WithWorkingDirectory(context.Background(), cwd)
+		assert.Equal(t, []string{sol}, findSolutionFiles(ctx, "mycli", nil))
+	})
+
+	t.Run("returns nil when nothing is found", func(t *testing.T) {
+		t.Parallel()
+		ctx := provider.WithWorkingDirectory(context.Background(), t.TempDir())
+		assert.Nil(t, findSolutionFiles(ctx, "scafctl", []string{t.TempDir()}))
+	})
 }
 
 func TestSendLog(t *testing.T) {

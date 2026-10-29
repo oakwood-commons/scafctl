@@ -4,12 +4,28 @@
 package catalog
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/oakwood-commons/scafctl/pkg/paths"
 )
+
+// ParseNameVersion splits "name@version" into (name, version).
+// If no @ is present, returns (input, "").
+// Handles digest references (e.g., "name@sha256:abc123").
+func ParseNameVersion(input string) (string, string) {
+	// Handle digest references (sha256:...)
+	if strings.Contains(input, "@sha256:") {
+		parts := strings.SplitN(input, "@sha256:", 2)
+		return parts[0], "sha256:" + parts[1]
+	}
+
+	// Handle version references
+	if idx := strings.LastIndex(input, "@"); idx != -1 {
+		return input[:idx], input[idx+1:]
+	}
+
+	return input, ""
+}
 
 // ParseReference parses a reference string into a Reference struct.
 // Supported formats:
@@ -264,8 +280,9 @@ func ParseRemoteReference(input string) (*RemoteReference, error) {
 // ToReference converts a RemoteReference to a Reference.
 func (r *RemoteReference) ToReference() (Reference, error) {
 	ref := Reference{
-		Kind: r.Kind,
-		Name: r.Name,
+		Kind:   r.Kind,
+		Name:   r.Name,
+		Remote: CanonicalRemoteCatalogID(r.Registry, r.Repository),
 	}
 
 	if r.Tag == "" || strings.EqualFold(r.Tag, "latest") {
@@ -326,60 +343,4 @@ func NormalizeRegistryHost(host string) string {
 	default:
 		return host
 	}
-}
-
-// ValidateAlias checks that an alias tag is valid for use as a non-version tag.
-// It must not be empty, must not be a valid semver version, and must only contain
-// characters valid in OCI tags ([a-zA-Z0-9_.-]).
-func ValidateAlias(alias string) error {
-	if alias == "" {
-		return fmt.Errorf("alias tag cannot be empty")
-	}
-
-	// "latest" is a reserved virtual alias (auto-resolves to highest semver)
-	if strings.EqualFold(alias, "latest") {
-		return fmt.Errorf("alias %q is reserved; it automatically resolves to the highest semver version", alias)
-	}
-
-	// Must not be purely numeric (confusing with versions)
-	if isNumericOnly(alias) {
-		return fmt.Errorf("alias %q is purely numeric and could be confused with a version; use a descriptive name like 'v%s' instead", alias, alias)
-	}
-
-	// Must not be a valid semver version (those should be created via build)
-	if _, err := ParseReference(ArtifactKindSolution, "x@"+alias); err == nil {
-		return fmt.Errorf("alias %q looks like a semver version; use '%s build solution' to create versioned artifacts", alias, paths.AppName())
-	}
-
-	// OCI tag constraints: must match [a-zA-Z0-9_.-]+
-	for _, ch := range alias {
-		if !IsValidTagChar(ch) {
-			return fmt.Errorf("alias %q contains invalid character %q; valid characters: letters, digits, '.', '-', '_'", alias, string(ch))
-		}
-	}
-
-	// Must not start with a dot or hyphen
-	if strings.HasPrefix(alias, ".") || strings.HasPrefix(alias, "-") {
-		return fmt.Errorf("alias %q must start with a letter, digit, or underscore", alias)
-	}
-
-	return nil
-}
-
-// IsValidTagChar returns true if the rune is valid for an OCI tag.
-func IsValidTagChar(ch rune) bool {
-	return (ch >= 'a' && ch <= 'z') ||
-		(ch >= 'A' && ch <= 'Z') ||
-		(ch >= '0' && ch <= '9') ||
-		ch == '_' || ch == '.' || ch == '-'
-}
-
-// isNumericOnly returns true if the string contains only digits.
-func isNumericOnly(s string) bool {
-	for _, ch := range s {
-		if ch < '0' || ch > '9' {
-			return false
-		}
-	}
-	return true
 }

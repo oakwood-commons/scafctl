@@ -18,7 +18,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/kube"
-	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -227,26 +226,6 @@ func TestRoot_WithExitFunc(t *testing.T) {
 	// during PersistentPreRun. We verify it was accepted without error.
 	_ = exitCalled
 	_ = captured
-}
-
-func TestRoot_CustomBinaryNameUpdatesSolutionDiscovery(t *testing.T) {
-	// Restore package-level state regardless of test outcome.
-	t.Cleanup(func() {
-		settings.SetSolutionDiscovery(settings.SolutionFoldersFor(settings.CliBinaryName), settings.SolutionFileNamesFor(settings.CliBinaryName))
-	})
-
-	cmd, _ := Root(&RootOptions{
-		BinaryName: "mycli",
-	})
-	require.NotNil(t, cmd)
-	if cmd.Use != "mycli" {
-		t.Errorf("Root().Use = %q, want %q", cmd.Use, "mycli")
-	}
-	// Verify package-level solution discovery vars were updated
-	expectedFolders := settings.SolutionFoldersFor("mycli")
-	assert.Equal(t, expectedFolders, settings.GetRootSolutionFolders())
-	expectedNames := settings.SolutionFileNamesFor("mycli")
-	assert.Equal(t, expectedNames, settings.GetSolutionFileNames())
 }
 
 // stubAuthHandler is a minimal auth.Handler for testing BuiltinAuthHandlers.

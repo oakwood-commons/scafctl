@@ -18,7 +18,7 @@ import (
 	pkgrefactor "github.com/oakwood-commons/scafctl/pkg/refactor"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -112,12 +112,15 @@ type renameFunc func(sol *solution.Solution, oldName, newName string) (*pkgrefac
 func runRename(ctx context.Context, opts *renameOptions, kind string, rename renameFunc, oldName, newName string) error {
 	w := writer.FromContext(ctx)
 
-	getter := get.NewGetterFromContext(ctx)
-	// Rename mutates a file, so ambiguous auto-discovery must error (high risk)
-	// rather than silently pick one of several matches.
-	resolvedPath, err := get.Resolve(ctx, getter, opts.File, "", get.ResolveOptions{Risk: get.DiscoveryRiskHigh})
-	if err != nil {
-		return fail(w, exitcode.FileNotFound, fmt.Errorf("failed to resolve solution: %w", err))
+	resolvedPath := opts.File
+	if resolvedPath == "" {
+		// Rename mutates a file, so ambiguous auto-discovery must error (high
+		// risk) rather than silently pick one of several matches.
+		var err error
+		resolvedPath, err = load.DiscoverPath(ctx, load.DiscoveryRiskHigh)
+		if err != nil {
+			return fail(w, exitcode.FileNotFound, fmt.Errorf("failed to resolve solution: %w", err))
+		}
 	}
 	if resolvedPath == "-" {
 		return fail(w, exitcode.ValidationFailed, errors.New("refactor rename requires a file path; stdin ('-') is not supported"))

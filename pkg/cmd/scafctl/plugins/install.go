@@ -23,7 +23,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -314,7 +314,8 @@ func loadPluginsFromSolution(ctx context.Context, opts *InstallOptions) ([]solut
 
 	filePath := opts.File
 	if filePath == "" {
-		filePath = get.NewGetterFromContext(ctx).FindSolution()
+		// Not found leaves filePath empty, which is reported below.
+		filePath, _ = load.DiscoverPath(ctx, load.DiscoveryRiskLow)
 	}
 	if filePath == "" {
 		err := fmt.Errorf("no plugin names or solution file provided; use positional args or --file (-f)")

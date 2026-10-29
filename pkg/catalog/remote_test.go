@@ -1250,3 +1250,156 @@ type fakeTimeoutError struct{}
 func (fakeTimeoutError) Error() string   { return "fake: i/o timeout" }
 func (fakeTimeoutError) Timeout() bool   { return true }
 func (fakeTimeoutError) Temporary() bool { return true }
+
+func TestRemoteCatalog_remoteRefToLocalRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		registry   string
+		repository string
+		wantRemote string // Remote is the base catalog origin, not the full repo path
+	}{
+		{name: "base with repository", registry: "ghcr.io", repository: "myorg/scafctl", wantRemote: "ghcr.io/myorg/scafctl"},
+		{name: "no repository", registry: "ghcr.io", repository: "", wantRemote: "ghcr.io"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+				Registry:   tt.registry,
+				Repository: tt.repository,
+				Logger:     logr.Discard(),
+			})
+			require.NoError(t, err)
+
+			got := cat.remoteRefToLocalRef(Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse("1.0.0")})
+			assert.Equal(t, tt.wantRemote, got.Remote)
+			assert.False(t, got.Built, "a copied local ref must never be marked built")
+		})
+	}
+}
+
+func TestRemoteCatalog_remoteRefToLocalRefPreservesIdentity(t *testing.T) {
+	t.Parallel()
+
+	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Registry:   "ghcr.io",
+		Repository: "myorg/scafctl",
+		Logger:     logr.Discard(),
+	})
+	require.NoError(t, err)
+
+	version := semver.MustParse("1.2.3")
+	ref := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "demo",
+		Version: version,
+		Digest:  "sha256:abc123",
+		Built:   true, // must be cleared; the copy is a cached remote artifact
+	}
+
+	got := cat.remoteRefToLocalRef(ref)
+
+	// Identity fields are carried over unchanged.
+	assert.Equal(t, ArtifactKindSolution, got.Kind)
+	assert.Equal(t, "demo", got.Name)
+	assert.Equal(t, version, got.Version)
+	assert.Equal(t, "sha256:abc123", got.Digest)
+
+	// Provenance fields are rewritten.
+	assert.Equal(t, "ghcr.io/myorg/scafctl", got.Remote)
+	assert.False(t, got.Built)
+
+	// The input reference is not mutated.
+	assert.Equal(t, true, ref.Built)
+	assert.Equal(t, "", ref.Remote)
+}
+
+func TestResolveLocalTarget(t *testing.T) {
+	t.Parallel()
+
+	source := Reference{
+		Kind:    ArtifactKindSolution,
+		Name:    "src",
+		Version: semver.MustParse("1.0.0"),
+		Remote:  "ghcr.io/myorg/solutions/src",
+	}
+
+	t.Run("empty target returns the source unchanged", func(t *testing.T) {
+		t.Parallel()
+		got, err := ResolveLocalTarget(source, "")
+		require.NoError(t, err)
+		assert.Equal(t, source, got)
+	})
+
+	t.Run("name@version derives a versioned target inheriting the kind", func(t *testing.T) {
+		t.Parallel()
+		got, err := ResolveLocalTarget(source, "demo@2.1.0")
+		require.NoError(t, err)
+		assert.Equal(t, ArtifactKindSolution, got.Kind)
+		assert.Equal(t, "demo", got.Name)
+		require.NotNil(t, got.Version)
+		assert.Equal(t, "2.1.0", got.Version.String())
+		assert.False(t, got.HasDigest())
+	})
+
+	t.Run("does not mutate the source", func(t *testing.T) {
+		t.Parallel()
+		orig := source
+		_, err := ResolveLocalTarget(source, "demo@2.1.0")
+		require.NoError(t, err)
+		assert.Equal(t, orig, source)
+	})
+
+	t.Run("bare name is rejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := ResolveLocalTarget(source, "demo")
+		require.Error(t, err)
+		var e *InvalidReferenceError
+		require.ErrorAs(t, err, &e)
+	})
+
+	t.Run("digest pin is rejected", func(t *testing.T) {
+		_, err := ResolveLocalTarget(source, "demo@sha256:abc")
+		require.Error(t, err)
+		var e *InvalidReferenceError
+		require.ErrorAs(t, err, &e)
+	})
+
+	t.Run("latest alias is rejected as a bare name", func(t *testing.T) {
+		_, err := ResolveLocalTarget(source, "demo@latest")
+		require.Error(t, err)
+		var e *InvalidReferenceError
+		require.ErrorAs(t, err, &e)
+	})
+
+	t.Run("missing version after @ is rejected", func(t *testing.T) {
+		_, err := ResolveLocalTarget(source, "demo@")
+		require.Error(t, err)
+		var e *InvalidReferenceError
+		require.ErrorAs(t, err, &e)
+	})
+
+	t.Run("invalid version is rejected", func(t *testing.T) {
+		_, err := ResolveLocalTarget(source, "demo@not-a-version")
+		require.Error(t, err)
+		var e *InvalidReferenceError
+		require.ErrorAs(t, err, &e)
+	})
+
+	t.Run("empty name is rejected", func(t *testing.T) {
+		_, err := ResolveLocalTarget(source, "@1.0.0")
+		require.Error(t, err)
+		var e *InvalidReferenceError
+		require.ErrorAs(t, err, &e)
+	})
+
+	t.Run("source digest is preserved when no rename", func(t *testing.T) {
+		digSource := Reference{Kind: ArtifactKindProvider, Name: "p", Digest: "sha256:abc", Remote: "ghcr.io/x"}
+		got, err := ResolveLocalTarget(digSource, "")
+		require.NoError(t, err)
+		assert.Equal(t, digSource, got)
+	})
+}

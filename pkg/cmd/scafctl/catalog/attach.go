@@ -126,7 +126,7 @@ func runAttach(ctx context.Context, opts *AttachOptions) error {
 
 	// Resolve auth provider for automatic token bridging
 	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
-	authScope := resolveAuthScope(ctx, opts.Catalog)
+	authScope := resolveAuthScope(ctx, registry, opts.Catalog)
 
 	// Create remote catalog
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{

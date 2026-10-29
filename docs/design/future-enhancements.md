@@ -99,10 +99,6 @@ Source: [cli.md](cli.md)
 
 **Implemented.** `scafctl catalog pull` pulls artifacts from a remote catalog. See `pkg/cmd/scafctl/catalog/pull.go`.
 
-### ✅ Tagging Artifacts (`tag`)
-
-**Implemented.** `scafctl catalog tag` creates version aliases. See `pkg/cmd/scafctl/catalog/tag.go`.
-
 ### ✅ Catalog Resolution (`--catalog` flag)
 
 **Implemented.** The `--catalog` flag targets a specific configured catalog. Falls back to config-based default. See `pkg/cmd/scafctl/catalog/resolve.go`.

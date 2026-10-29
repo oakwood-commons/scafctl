@@ -12,7 +12,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
-	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 )
 
@@ -78,7 +77,7 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 		}
 	}
 
-	// Capture caller's CWD before prepare.Solution may os.Chdir to a bundle temp dir
+	// Capture caller's CWD before preparation may os.Chdir to a bundle temp dir
 	originalCwd, err := provider.GetWorkingDirectory(ctx)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to get working directory: %v", err),
@@ -87,7 +86,7 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	}
 
 	// Load solution
-	prepResult, err := prepare.Solution(ctx, path, s.prepareOptions(ctx)...)
+	prepResult, err := s.prepareSolution(ctx, path)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
 			WithField("path"),

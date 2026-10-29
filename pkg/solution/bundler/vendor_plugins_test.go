@@ -17,662 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockPluginResolver implements PluginResolver for testing.
-type mockPluginResolver struct {
-	plugins map[string]catalog.ArtifactInfo
-}
-
-func (m *mockPluginResolver) ResolvePlugin(_ context.Context, name string, kind catalog.ArtifactKind, _ string) (catalog.ArtifactInfo, error) {
-	key := name + ":" + string(kind)
-	info, ok := m.plugins[key]
-	if !ok {
-		return catalog.ArtifactInfo{}, &catalog.ArtifactNotFoundError{
-			Reference: catalog.Reference{Kind: kind, Name: name},
-			Catalog:   "mock",
-		}
-	}
-	return info, nil
-}
-
-func TestVendorPlugins_ResolvesFromCatalog(t *testing.T) {
-	ctx := testContext()
-
-	resolver := &mockPluginResolver{
-		plugins: map[string]catalog.ArtifactInfo{
-			"azure-provider:provider": {
-				Reference: catalog.Reference{
-					Kind:    catalog.ArtifactKindProvider,
-					Name:    "azure-provider",
-					Version: semver.MustParse("1.2.3"),
-				},
-				Digest:    "sha256:abc123",
-				Catalog:   "test-catalog",
-				Canonical: "ghcr.io/org/plugins",
-			},
-		},
-	}
-
-	plugins := []solution.PluginDependency{
-		{
-			Name:    "azure-provider",
-			Kind:    solution.PluginKindProvider,
-			Version: "^1.0.0",
-		},
-	}
-
-	result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-		PluginResolver: resolver,
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-
-	assert.Equal(t, "azure-provider", result.ResolvedPlugins[0].Name)
-	assert.Equal(t, "provider", result.ResolvedPlugins[0].Kind)
-	assert.Equal(t, "1.2.3", result.ResolvedPlugins[0].Version)
-	assert.Equal(t, "^1.0.0", result.ResolvedPlugins[0].Constraint)
-	assert.Equal(t, "sha256:abc123", result.ResolvedPlugins[0].Digest)
-	assert.Equal(t, "test-catalog", result.ResolvedPlugins[0].ResolvedFrom)
-	// The stable canonical identity is recorded alongside the mutable alias.
-	assert.Equal(t, "ghcr.io/org/plugins", result.ResolvedPlugins[0].ResolvedCanonical)
-}
-
-func TestVendorPlugins_EmptyCanonicalWhenUnpinnable(t *testing.T) {
-	ctx := testContext()
-
-	// A resolver that returns no canonical identity (e.g. a local catalog,
-	// whose filesystem path is machine-specific and not portable).
-	resolver := &mockPluginResolver{
-		plugins: map[string]catalog.ArtifactInfo{
-			"local-provider:provider": {
-				Reference: catalog.Reference{
-					Kind:    catalog.ArtifactKindProvider,
-					Name:    "local-provider",
-					Version: semver.MustParse("1.0.0"),
-				},
-				Digest:  "sha256:localdigest",
-				Catalog: "local",
-			},
-		},
-	}
-
-	plugins := []solution.PluginDependency{
-		{
-			Name:    "local-provider",
-			Kind:    solution.PluginKindProvider,
-			Version: "^1.0.0",
-		},
-	}
-
-	result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-		PluginResolver: resolver,
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-
-	assert.Equal(t, "local", result.ResolvedPlugins[0].ResolvedFrom)
-	assert.Empty(t, result.ResolvedPlugins[0].ResolvedCanonical)
-}
-
-func TestVendorPlugins_ReplaysFromLockFile(t *testing.T) {
-	ctx := testContext()
-
-	// Resolver should NOT be called if lock entry is valid
-	resolver := &mockPluginResolver{
-		plugins: map[string]catalog.ArtifactInfo{},
-	}
-
-	plugins := []solution.PluginDependency{
-		{
-			Name:    "azure-provider",
-			Kind:    solution.PluginKindProvider,
-			Version: "^1.0.0",
-		},
-	}
-
-	existingLock := &LockFile{
-		Version: 1,
-		Plugins: []LockPlugin{
-			{
-				Name:         "azure-provider",
-				Kind:         "provider",
-				Version:      "1.2.3",
-				Constraint:   ">=1.0.0",
-				Digest:       "sha256:abc123",
-				ResolvedFrom: "cached-catalog",
-			},
-		},
-	}
-
-	result, err := VendorPlugins(ctx, plugins, existingLock, VendorPluginsOptions{
-		PluginResolver: resolver,
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-
-	// Should come from the lock file, not the resolver
-	assert.Equal(t, "cached-catalog", result.ResolvedPlugins[0].ResolvedFrom)
-	assert.Equal(t, "1.2.3", result.ResolvedPlugins[0].Version)
-	// The pinned version is replayed, but the requested constraint is refreshed
-	// to the current spec value (was ">=1.0.0" in the lock).
-	assert.Equal(t, "^1.0.0", result.ResolvedPlugins[0].Constraint)
-}
-
-func TestVendorPlugins_StaleLockEntryReResolves(t *testing.T) {
-	ctx := testContext()
-
-	resolver := &mockPluginResolver{
-		plugins: map[string]catalog.ArtifactInfo{
-			"azure-provider:provider": {
-				Reference: catalog.Reference{
-					Kind:    catalog.ArtifactKindProvider,
-					Name:    "azure-provider",
-					Version: semver.MustParse("2.0.0"),
-				},
-				Digest:  "sha256:newdigest",
-				Catalog: "fresh-catalog",
-			},
-		},
-	}
-
-	plugins := []solution.PluginDependency{
-		{
-			Name:    "azure-provider",
-			Kind:    solution.PluginKindProvider,
-			Version: "^2.0.0",
-		},
-	}
-
-	// Lock file has version 1.2.3 which doesn't satisfy ^2.0.0
-	existingLock := &LockFile{
-		Version: 1,
-		Plugins: []LockPlugin{
-			{
-				Name:         "azure-provider",
-				Kind:         "provider",
-				Version:      "1.2.3",
-				Digest:       "sha256:olddigest",
-				ResolvedFrom: "old-catalog",
-			},
-		},
-	}
-
-	result, err := VendorPlugins(ctx, plugins, existingLock, VendorPluginsOptions{
-		PluginResolver: resolver,
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-
-	// Should be re-resolved from catalog, not the stale lock
-	assert.Equal(t, "fresh-catalog", result.ResolvedPlugins[0].ResolvedFrom)
-	assert.Equal(t, "2.0.0", result.ResolvedPlugins[0].Version)
-	assert.Equal(t, "sha256:newdigest", result.ResolvedPlugins[0].Digest)
-}
-
-func TestVendorPlugins_NilResolver(t *testing.T) {
-	ctx := testContext()
-
-	plugins := []solution.PluginDependency{
-		{
-			Name:    "azure-provider",
-			Kind:    solution.PluginKindProvider,
-			Version: "^1.0.0",
-		},
-	}
-
-	result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-		PluginResolver: nil,
-	})
-	require.NoError(t, err)
-	assert.Empty(t, result.ResolvedPlugins)
-}
-
-func TestVendorPlugins_MultiplePlugins(t *testing.T) {
-	ctx := testContext()
-
-	resolver := &mockPluginResolver{
-		plugins: map[string]catalog.ArtifactInfo{
-			"azure-provider:provider": {
-				Reference: catalog.Reference{
-					Kind:    catalog.ArtifactKindProvider,
-					Name:    "azure-provider",
-					Version: semver.MustParse("1.5.0"),
-				},
-				Digest:  "sha256:prov123",
-				Catalog: "catalog-a",
-			},
-			"entra-auth:auth-handler": {
-				Reference: catalog.Reference{
-					Kind:    catalog.ArtifactKindAuthHandler,
-					Name:    "entra-auth",
-					Version: semver.MustParse("2.1.0"),
-				},
-				Digest:  "sha256:auth456",
-				Catalog: "catalog-b",
-			},
-		},
-	}
-
-	plugins := []solution.PluginDependency{
-		{
-			Name:    "azure-provider",
-			Kind:    solution.PluginKindProvider,
-			Version: "^1.0.0",
-		},
-		{
-			Name:    "entra-auth",
-			Kind:    solution.PluginKindAuthHandler,
-			Version: "^2.0.0",
-		},
-	}
-
-	result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-		PluginResolver: resolver,
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 2)
-
-	assert.Equal(t, "azure-provider", result.ResolvedPlugins[0].Name)
-	assert.Equal(t, "provider", result.ResolvedPlugins[0].Kind)
-	assert.Equal(t, "entra-auth", result.ResolvedPlugins[1].Name)
-	assert.Equal(t, "auth-handler", result.ResolvedPlugins[1].Kind)
-}
-
-func TestVendorPlugins_VersionConstraintViolation(t *testing.T) {
-	ctx := testContext()
-
-	resolver := &mockPluginResolver{
-		plugins: map[string]catalog.ArtifactInfo{
-			"azure-provider:provider": {
-				Reference: catalog.Reference{
-					Kind:    catalog.ArtifactKindProvider,
-					Name:    "azure-provider",
-					Version: semver.MustParse("3.0.0"),
-				},
-				Digest:  "sha256:wrongversion",
-				Catalog: "catalog",
-			},
-		},
-	}
-
-	plugins := []solution.PluginDependency{
-		{
-			Name:    "azure-provider",
-			Kind:    solution.PluginKindProvider,
-			Version: "^1.0.0", // Wants 1.x, but catalog has 3.0.0
-		},
-	}
-
-	_, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-		PluginResolver: resolver,
-	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "does not satisfy constraint")
-}
-
-func TestVendorPlugins_WithSignatureVerification(t *testing.T) {
-	ctx := testContext()
-
-	resolver := &mockPluginResolver{
-		plugins: map[string]catalog.ArtifactInfo{
-			"signed-plugin:provider": {
-				Reference: catalog.Reference{
-					Kind:    catalog.ArtifactKindProvider,
-					Name:    "signed-plugin",
-					Version: semver.MustParse("2.0.0"),
-				},
-				Digest:   "sha256:def456",
-				ImageRef: "ghcr.io/org/plugins/providers/signed-plugin@sha256:manifest123",
-				Catalog:  "remote-catalog",
-			},
-		},
-	}
-
-	plugins := []solution.PluginDependency{
-		{Name: "signed-plugin", Kind: solution.PluginKindProvider, Version: "^2.0.0"},
-	}
-
-	t.Run("records signature metadata", func(t *testing.T) {
-		result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-			PluginResolver: resolver,
-			VerifySignature: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
-				assert.Equal(t, "ghcr.io/org/plugins/providers/signed-plugin@sha256:manifest123", imageRef)
-				return &LockPluginSignature{
-					Issuer:   "https://token.actions.githubusercontent.com",
-					Identity: "https://github.com/org/plugin/.github/workflows/release.yaml@refs/tags/v2.0.0",
-					SignedAt: "2025-06-01T10:00:00Z",
-				}, nil
-			},
-		})
-		require.NoError(t, err)
-		require.Len(t, result.ResolvedPlugins, 1)
-		require.NotNil(t, result.ResolvedPlugins[0].Signature)
-		assert.Equal(t, "https://token.actions.githubusercontent.com", result.ResolvedPlugins[0].Signature.Issuer)
-		assert.Equal(t, "2025-06-01T10:00:00Z", result.ResolvedPlugins[0].Signature.SignedAt)
-	})
-
-	t.Run("nil signature on warn-mode failure", func(t *testing.T) {
-		result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-			PluginResolver: resolver,
-			VerifySignature: func(_ context.Context, _ string) (*LockPluginSignature, error) {
-				// Warn mode: caller returns nil (no error to propagate)
-				return nil, nil
-			},
-		})
-		require.NoError(t, err)
-		require.Len(t, result.ResolvedPlugins, 1)
-		assert.Nil(t, result.ResolvedPlugins[0].Signature)
-	})
-
-	t.Run("error on enforce-mode failure", func(t *testing.T) {
-		_, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-			PluginResolver: resolver,
-			VerifySignature: func(_ context.Context, _ string) (*LockPluginSignature, error) {
-				return nil, assert.AnError
-			},
-		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "signature verification failed during lock")
-	})
-}
-
-// fakePlatformDigestCatalog is a minimal platformDigestCatalog for unit-testing
-// resolvePlatformDigests without a real OCI catalog.
-type fakePlatformDigestCatalog struct {
-	platforms    []string
-	platformsErr error
-	digestByPlat map[string]string
-	fetchErr     map[string]error
-}
-
-func (f *fakePlatformDigestCatalog) ListPlatforms(_ context.Context, _ catalog.Reference) ([]string, error) {
-	return f.platforms, f.platformsErr
-}
-
-func (f *fakePlatformDigestCatalog) FetchByPlatform(_ context.Context, _ catalog.Reference, platform string) ([]byte, catalog.ArtifactInfo, error) {
-	if err := f.fetchErr[platform]; err != nil {
-		return nil, catalog.ArtifactInfo{}, err
-	}
-	return []byte("binary"), catalog.ArtifactInfo{Digest: f.digestByPlat[platform]}, nil
-}
-
-func TestResolvePlatformDigests_MultiPlatform(t *testing.T) {
-	cat := &fakePlatformDigestCatalog{
-		platforms: []string{"linux/amd64", "darwin/arm64"},
-		digestByPlat: map[string]string{
-			"linux/amd64":  "sha256:aaa",
-			"darwin/arm64": "sha256:bbb",
-		},
-	}
-
-	digests, primary, err := resolvePlatformDigests(context.Background(), cat, catalog.Reference{}, "linux/amd64")
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{
-		"linux/amd64":  "sha256:aaa",
-		"darwin/arm64": "sha256:bbb",
-	}, digests)
-	assert.Equal(t, "sha256:aaa", primary, "primary is the build-platform digest")
-}
-
-func TestResolvePlatformDigests_SinglePlatformNilMap(t *testing.T) {
-	// ListPlatforms returns empty (single-platform artifact): the map is nil
-	// (the invariant marker) and the sole digest is returned as primary.
-	cat := &fakePlatformDigestCatalog{
-		platforms:    nil,
-		digestByPlat: map[string]string{"linux/amd64": "sha256:only"},
-	}
-
-	digests, primary, err := resolvePlatformDigests(context.Background(), cat, catalog.Reference{}, "linux/amd64")
-	require.NoError(t, err)
-	assert.Nil(t, digests, "single-platform must leave Digests nil")
-	assert.Equal(t, "sha256:only", primary)
-}
-
-func TestResolvePlatformDigests_ListPlatformsError(t *testing.T) {
-	cat := &fakePlatformDigestCatalog{platformsErr: errors.New("boom")}
-
-	_, _, err := resolvePlatformDigests(context.Background(), cat, catalog.Reference{}, "linux/amd64")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "listing platforms")
-}
-
-func TestResolvePlatformDigests_FetchError(t *testing.T) {
-	cat := &fakePlatformDigestCatalog{
-		platforms:    []string{"linux/amd64", "darwin/arm64"},
-		digestByPlat: map[string]string{"linux/amd64": "sha256:aaa"},
-		fetchErr:     map[string]error{"darwin/arm64": errors.New("network")},
-	}
-
-	_, _, err := resolvePlatformDigests(context.Background(), cat, catalog.Reference{}, "linux/amd64")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "darwin/arm64")
-}
-
-func TestResolvePlatformDigests_EmptyDigest(t *testing.T) {
-	cat := &fakePlatformDigestCatalog{
-		platforms:    []string{"linux/amd64"},
-		digestByPlat: map[string]string{"linux/amd64": ""}, // catalog returned blank
-	}
-
-	_, _, err := resolvePlatformDigests(context.Background(), cat, catalog.Reference{}, "linux/amd64")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "empty digest")
-}
-
-func TestVendorPlugins_ResolvesPerPlatformDigests(t *testing.T) {
-	ctx := testContext()
-
-	resolver := &mockPluginResolver{
-		plugins: map[string]catalog.ArtifactInfo{
-			"multi-plat:provider": {
-				Reference: catalog.Reference{
-					Kind:    catalog.ArtifactKindProvider,
-					Name:    "multi-plat",
-					Version: semver.MustParse("1.0.0"),
-				},
-				Digest:  "sha256:index-digest",
-				Catalog: "remote",
-			},
-		},
-	}
-
-	fakeCat := &fakePlatformDigestCatalog{
-		platforms: []string{"linux/amd64", "darwin/arm64", "linux/arm64"},
-		digestByPlat: map[string]string{
-			"linux/amd64":  "sha256:aaa",
-			"darwin/arm64": "sha256:bbb",
-			"linux/arm64":  "sha256:ccc",
-		},
-	}
-
-	plugins := []solution.PluginDependency{
-		{Name: "multi-plat", Kind: solution.PluginKindProvider, Version: "^1.0.0"},
-	}
-
-	result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-		PluginResolver:  resolver,
-		PlatformCatalog: fakeCat,
-		Platform:        "darwin/arm64",
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-
-	lp := result.ResolvedPlugins[0]
-	// Primary digest is the build platform's content digest.
-	assert.Equal(t, "sha256:bbb", lp.Digest)
-	// All platforms are recorded.
-	assert.Equal(t, map[string]string{
-		"linux/amd64":  "sha256:aaa",
-		"darwin/arm64": "sha256:bbb",
-		"linux/arm64":  "sha256:ccc",
-	}, lp.Digests)
-}
-
-func TestVendorPlugins_SinglePlatformDigests(t *testing.T) {
-	ctx := testContext()
-
-	resolver := &mockPluginResolver{
-		plugins: map[string]catalog.ArtifactInfo{
-			"single-plat:provider": {
-				Reference: catalog.Reference{
-					Kind:    catalog.ArtifactKindProvider,
-					Name:    "single-plat",
-					Version: semver.MustParse("1.0.0"),
-				},
-				Digest:  "sha256:manifest-digest",
-				Catalog: "remote",
-			},
-		},
-	}
-
-	// ListPlatforms returns empty → single-platform fallback
-	fakeCat := &fakePlatformDigestCatalog{
-		platforms:    nil,
-		digestByPlat: map[string]string{"linux/amd64": "sha256:only-one"},
-	}
-
-	plugins := []solution.PluginDependency{
-		{Name: "single-plat", Kind: solution.PluginKindProvider, Version: "^1.0.0"},
-	}
-
-	result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-		PluginResolver:  resolver,
-		PlatformCatalog: fakeCat,
-		Platform:        "linux/amd64",
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-
-	lp := result.ResolvedPlugins[0]
-	assert.Equal(t, "sha256:only-one", lp.Digest)
-	// Single-platform: Digests stays nil (the invariant marker); the sole
-	// digest lives in the primary Digest above.
-	assert.Nil(t, lp.Digests, "single-platform must leave Digests nil")
-}
-
-func TestVendorPlugins_PlatformDigestFailureFallsBack(t *testing.T) {
-	ctx := testContext()
-
-	resolver := &mockPluginResolver{
-		plugins: map[string]catalog.ArtifactInfo{
-			"fallback-plat:provider": {
-				Reference: catalog.Reference{
-					Kind:    catalog.ArtifactKindProvider,
-					Name:    "fallback-plat",
-					Version: semver.MustParse("1.0.0"),
-				},
-				Digest:  "sha256:manifest-level",
-				Catalog: "remote",
-			},
-		},
-	}
-
-	// resolvePlatformDigests will fail → graceful fallback to manifest digest
-	fakeCat := &fakePlatformDigestCatalog{
-		platformsErr: errors.New("registry unavailable"),
-	}
-
-	plugins := []solution.PluginDependency{
-		{Name: "fallback-plat", Kind: solution.PluginKindProvider, Version: "^1.0.0"},
-	}
-
-	result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-		PluginResolver:  resolver,
-		PlatformCatalog: fakeCat,
-		Platform:        "linux/amd64",
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-
-	lp := result.ResolvedPlugins[0]
-	// Falls back to the manifest-level digest; no per-platform map.
-	assert.Equal(t, "sha256:manifest-level", lp.Digest)
-	assert.Nil(t, lp.Digests)
-}
-
-func TestVendorPlugins_NoPlatformCatalog_NoDigests(t *testing.T) {
-	ctx := testContext()
-
-	resolver := &mockPluginResolver{
-		plugins: map[string]catalog.ArtifactInfo{
-			"no-plat:provider": {
-				Reference: catalog.Reference{
-					Kind:    catalog.ArtifactKindProvider,
-					Name:    "no-plat",
-					Version: semver.MustParse("1.0.0"),
-				},
-				Digest:  "sha256:plain-digest",
-				Catalog: "local",
-			},
-		},
-	}
-
-	plugins := []solution.PluginDependency{
-		{Name: "no-plat", Kind: solution.PluginKindProvider, Version: "^1.0.0"},
-	}
-
-	// No PlatformCatalog set
-	result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
-		PluginResolver: resolver,
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-
-	lp := result.ResolvedPlugins[0]
-	assert.Equal(t, "sha256:plain-digest", lp.Digest)
-	assert.Nil(t, lp.Digests)
-}
-
-// fakeSourcedCatalog is a minimal SourcedCatalog for unit-testing
-// VendorPluginsFQN and resolveContentDigests without a real OCI registry.
+// fakeSourcedCatalog is a minimal content-digest catalog for unit-testing
+// resolveContentDigests and VendorAllPlugins without a real OCI registry.
 type fakeSourcedCatalog struct {
-	// resolveInfo is the base metadata returned by Resolve. When the reference
-	// passed to Resolve carries a version (an exact pin or a range-selected
-	// version), that version is echoed back on the returned Reference so the
-	// resolved version reflects what the selector chose; ImageRef and other
-	// fields come from resolveInfo. With a nil reference version, resolveInfo is
-	// returned verbatim (the "latest" path).
-	resolveInfo  catalog.ArtifactInfo
-	resolveErr   error
-	resolveCalls int
-	resolveRef   catalog.Reference
-
-	// forcedResolveVersion, when set, overrides the echoed version regardless of
-	// the requested reference. It simulates a misbehaving catalog that returns a
-	// version outside the selected constraint, exercising the post-condition
-	// guard.
-	forcedResolveVersion *semver.Version
-
-	// listInfos/listErr back the range-constraint path (List). listCalls counts
-	// invocations so tests can assert the fast paths (exact/latest) never list.
-	listInfos []catalog.ArtifactInfo
-	listErr   error
-	listCalls int
-
 	platforms    []string
 	platformsErr error
 	digestByPlat map[string]string
 	digestErr    map[string]error
-}
-
-func (f *fakeSourcedCatalog) Resolve(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
-	f.resolveCalls++
-	f.resolveRef = ref
-	if f.resolveErr != nil {
-		return catalog.ArtifactInfo{}, f.resolveErr
-	}
-	info := f.resolveInfo
-	switch {
-	case f.forcedResolveVersion != nil:
-		info.Reference = catalog.Reference{Kind: ref.Kind, Name: ref.Name, Version: f.forcedResolveVersion}
-	case ref.Version != nil:
-		info.Reference = catalog.Reference{Kind: ref.Kind, Name: ref.Name, Version: ref.Version}
-	}
-	return info, nil
-}
-
-func (f *fakeSourcedCatalog) List(_ context.Context, _ catalog.ArtifactKind, _ string) ([]catalog.ArtifactInfo, error) {
-	f.listCalls++
-	return f.listInfos, f.listErr
 }
 
 func (f *fakeSourcedCatalog) ListPlatforms(_ context.Context, _ catalog.Reference) ([]string, error) {
@@ -684,18 +35,6 @@ func (f *fakeSourcedCatalog) ResolveContentDigest(_ context.Context, _ catalog.R
 		return catalog.ContentDigestInfo{}, err
 	}
 	return catalog.ContentDigestInfo{ContentDigest: f.digestByPlat[platform]}, nil
-}
-
-// versionInfos builds a []catalog.ArtifactInfo (one per version) for seeding a
-// fakeSourcedCatalog's List response.
-func versionInfos(kind catalog.ArtifactKind, name string, versions ...string) []catalog.ArtifactInfo { //nolint:unparam // test helper uses constant kind for clarity
-	infos := make([]catalog.ArtifactInfo, 0, len(versions))
-	for _, v := range versions {
-		infos = append(infos, catalog.ArtifactInfo{
-			Reference: catalog.Reference{Kind: kind, Name: name, Version: semver.MustParse(v)},
-		})
-	}
-	return infos
 }
 
 // newTestAliasResolver builds a catalog index mapping a single catalog alias to
@@ -769,369 +108,698 @@ func TestResolveContentDigests_EmptyDigest(t *testing.T) {
 	assert.Contains(t, err.Error(), "empty digest")
 }
 
-func TestVendorPluginsFQN_ResolvesFromSourcedCatalog(t *testing.T) {
-	ctx := testContext()
+// fakeArtifactResolver is a minimal ArtifactResolver for VendorAllPlugins
+// tests. Find returns findInfo; content digests come from the embedded
+// fakeSourcedCatalog.
+type fakeArtifactResolver struct {
+	fakeSourcedCatalog
+	findInfo  catalog.ArtifactInfo
+	findErr   error
+	findCalls int
+	findQuery catalog.ArtifactQuery
+}
 
-	cat := &fakeSourcedCatalog{
-		resolveInfo: catalog.ArtifactInfo{
-			ImageRef: "ghcr.io/myorg/exec@sha256:aaa",
+func (f *fakeArtifactResolver) Find(_ context.Context, q catalog.ArtifactQuery) (catalog.ArtifactInfo, error) {
+	f.findCalls++
+	f.findQuery = q
+	if f.findErr != nil {
+		return catalog.ArtifactInfo{}, f.findErr
+	}
+	return f.findInfo, nil
+}
+
+// newFakeRemote returns a resolver for ghcr.io/myorg that resolves exec to
+// 1.2.3, published for linux/amd64 and darwin/arm64.
+func newFakeRemote() *fakeArtifactResolver {
+	return &fakeArtifactResolver{
+		fakeSourcedCatalog: fakeSourcedCatalog{
+			platforms: []string{"linux/amd64", "darwin/arm64"},
+			digestByPlat: map[string]string{
+				"linux/amd64":  "sha256:aaa",
+				"darwin/arm64": "sha256:bbb",
+			},
 		},
-		// Range constraint lists versions; the selector must pick the highest
-		// that satisfies ^1.0.0 (1.2.3, not 1.1.0).
-		listInfos: versionInfos(catalog.ArtifactKindProvider, "exec", "1.0.0", "1.1.0", "1.2.3"),
-		platforms: []string{"linux/amd64", "darwin/arm64"},
-		digestByPlat: map[string]string{
+		findInfo: catalog.ArtifactInfo{
+			Reference: catalog.Reference{Kind: catalog.ArtifactKindProvider, Name: "exec", Version: semver.MustParse("1.2.3")},
+			Catalog:   "myorg",
+			Canonical: "ghcr.io/myorg",
+		},
+	}
+}
+
+// registryExecDep is an exec provider dependency sourced from ghcr.io/myorg.
+func registryExecDep(version string) solution.PluginDependency {
+	return solution.PluginDependency{
+		Name:    "exec",
+		Kind:    solution.PluginKindProvider,
+		Version: version,
+		Source:  &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"},
+	}
+}
+
+// lockedExec is a lock entry for the exec provider pinned at version.
+func lockedExec(version string, source *LockPluginSource) LockPlugin {
+	return LockPlugin{
+		Name:              "exec",
+		Kind:              "provider",
+		Version:           version,
+		Constraint:        "^1.0.0",
+		Digest:            "sha256:locked",
+		ResolvedFrom:      "myorg",
+		ResolvedCanonical: "ghcr.io/myorg",
+		Source:            source,
+	}
+}
+
+func TestVendorAllPlugins_RegistryResolves(t *testing.T) {
+	remote := newFakeRemote()
+
+	result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep("^1.0.0")}, nil, VendorAllPluginsOptions{
+		CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+		Remotes:         map[string]ArtifactResolver{"myorg": remote},
+		Platform:        "linux/amd64",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.ResolvedPlugins, 1)
+
+	assert.Equal(t, catalog.ArtifactQuery{
+		Kind:    catalog.ArtifactKindProvider,
+		Name:    "exec",
+		Version: "^1.0.0",
+		Source:  catalog.SourceSelector{Kind: catalog.SourceRemote, Remote: "ghcr.io/myorg"},
+	}, remote.findQuery)
+
+	assert.Equal(t, LockPlugin{
+		Name:       "exec",
+		Kind:       "provider",
+		Version:    "1.2.3",
+		Constraint: "^1.0.0",
+		Digest:     "sha256:aaa",
+		Digests: map[string]string{
 			"linux/amd64":  "sha256:aaa",
 			"darwin/arm64": "sha256:bbb",
 		},
-	}
+		ResolvedFrom:      "myorg",
+		ResolvedCanonical: "ghcr.io/myorg",
+		Source:            &LockPluginSource{Registry: "ghcr.io/myorg"},
+	}, result.ResolvedPlugins[0])
+}
 
-	// Alias "myorg" maps origin "ghcr.io/myorg" to the sourced catalog.
-	plugins := []solution.PluginDependency{
+func TestVendorAllPlugins_VerifySignature(t *testing.T) {
+	const imageRef = "ghcr.io/myorg/providers/exec:1.2.3"
+	sigErr := errors.New("untrusted signer")
+
+	tests := []struct {
+		name     string
+		imageRef string
+		verify   func(context.Context, string) (*LockPluginSignature, error)
+		wantSig  *LockPluginSignature
+		wantErr  error
+		wantRefs []string
+	}{
 		{
-			Name:    "exec", // solution-local alias, NOT stored in the lock
-			Kind:    solution.PluginKindProvider,
-			Version: "^1.0.0",
-			Source:  &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"},
-		},
-	}
-
-	result, err := VendorPluginsFQN(ctx, plugins, nil, VendorPluginFQNOptions{
-		SourcedCatalogs:      map[string]SourcedCatalog{"myorg": cat},
-		CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-		Platform:             "darwin/arm64",
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-	assert.Equal(t, 1, cat.listCalls, "range constraint must list versions")
-
-	lp := result.ResolvedPlugins[0]
-	// Identity is (canonical, leaf, kind): Name is the leaf, not the alias.
-	assert.Equal(t, "exec", lp.Name)
-	assert.Equal(t, "provider", lp.Kind)
-	assert.Equal(t, "ghcr.io/myorg", lp.ResolvedCanonical)
-	assert.Equal(t, "myorg", lp.ResolvedFrom)
-	assert.Equal(t, "1.2.3", lp.Version)
-	assert.Equal(t, "^1.0.0", lp.Constraint)
-	// Primary digest is the build platform's content digest.
-	assert.Equal(t, "sha256:bbb", lp.Digest)
-	assert.Equal(t, map[string]string{
-		"linux/amd64":  "sha256:aaa",
-		"darwin/arm64": "sha256:bbb",
-	}, lp.Digests)
-}
-
-func TestVendorPluginsFQN_NilCatalogsSkips(t *testing.T) {
-	ctx := testContext()
-
-	result, err := VendorPluginsFQN(ctx, []solution.PluginDependency{
-		{Name: "exec", Kind: solution.PluginKindProvider, Version: "^1.0.0", Source: &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"}},
-	}, nil, VendorPluginFQNOptions{})
-	require.NoError(t, err)
-	assert.Empty(t, result.ResolvedPlugins)
-}
-
-func TestVendorPluginsFQN_MissingPlatform(t *testing.T) {
-	ctx := testContext()
-
-	_, err := VendorPluginsFQN(ctx, []solution.PluginDependency{
-		{Name: "exec", Kind: solution.PluginKindProvider, Version: "^1.0.0", Source: &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"}},
-	}, nil, VendorPluginFQNOptions{
-		SourcedCatalogs: map[string]SourcedCatalog{"myorg": &fakeSourcedCatalog{}},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "target platform")
-}
-
-func TestVendorPluginsFQN_UnconfiguredOrigin(t *testing.T) {
-	ctx := testContext()
-
-	_, err := VendorPluginsFQN(ctx, []solution.PluginDependency{
-		{Name: "exec", Kind: solution.PluginKindProvider, Version: "^1.0.0", Source: &solution.PluginSource{Registry: "ghcr.io/other", Artifact: "exec"}},
-	}, nil, VendorPluginFQNOptions{
-		SourcedCatalogs:      map[string]SourcedCatalog{"myorg": &fakeSourcedCatalog{}},
-		CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-		Platform:             "linux/amd64",
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "does not match any configured catalog")
-}
-
-func TestVendorPluginsFQN_NoCatalogForAlias(t *testing.T) {
-	ctx := testContext()
-
-	// The origin resolves to alias "myorg", but no catalog is registered for it.
-	_, err := VendorPluginsFQN(ctx, []solution.PluginDependency{
-		{Name: "exec", Kind: solution.PluginKindProvider, Version: "^1.0.0", Source: &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"}},
-	}, nil, VendorPluginFQNOptions{
-		SourcedCatalogs:      map[string]SourcedCatalog{"different": &fakeSourcedCatalog{}},
-		CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-		Platform:             "linux/amd64",
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no catalog available for alias")
-}
-
-func TestVendorPluginsFQN_ReplaysFromLock(t *testing.T) {
-	ctx := testContext()
-
-	// A catalog that errors if Resolve is called, proving replay short-circuits.
-	cat := &fakeSourcedCatalog{resolveErr: errors.New("should not be called")}
-
-	const registry = "ghcr.io/myorg"
-	existingLock := &LockFile{
-		Version: LockFileVersion,
-		Plugins: []LockPlugin{
-			{
-				Name:              "exec", // leaf identity
-				Kind:              "provider",
-				Version:           "1.2.3",
-				Constraint:        ">=1.0.0",
-				Digest:            "sha256:locked",
-				ResolvedCanonical: registry,
-				ResolvedFrom:      "myorg",
-				Source: &LockPluginSource{
-					Registry: registry,
-				},
+			name: "records signature", imageRef: imageRef,
+			verify: func(context.Context, string) (*LockPluginSignature, error) {
+				return &LockPluginSignature{Issuer: "https://issuer.example", Identity: "release"}, nil
 			},
+			wantSig:  &LockPluginSignature{Issuer: "https://issuer.example", Identity: "release"},
+			wantRefs: []string{imageRef},
+		},
+		{
+			name: "verification failure is fatal", imageRef: imageRef,
+			verify:   func(context.Context, string) (*LockPluginSignature, error) { return nil, sigErr },
+			wantErr:  sigErr,
+			wantRefs: []string{imageRef},
+		},
+		{
+			name:   "no image reference skips verification",
+			verify: func(context.Context, string) (*LockPluginSignature, error) { return nil, sigErr },
 		},
 	}
-
-	plugins := []solution.PluginDependency{
-		{Name: "exec", Kind: solution.PluginKindProvider, Version: "^1.0.0", Source: &solution.PluginSource{Registry: registry, Artifact: "exec"}},
-	}
-
-	result, err := VendorPluginsFQN(ctx, plugins, existingLock, VendorPluginFQNOptions{
-		SourcedCatalogs:      map[string]SourcedCatalog{"myorg": cat},
-		CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-		Platform:             "linux/amd64",
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-	assert.Equal(t, 0, cat.resolveCalls)
-
-	lp := result.ResolvedPlugins[0]
-	assert.Equal(t, "1.2.3", lp.Version)
-	assert.Equal(t, "sha256:locked", lp.Digest)
-	// Constraint refreshed to the current spec value.
-	assert.Equal(t, "^1.0.0", lp.Constraint)
-}
-
-func TestVendorPluginsFQN_StaleLockReResolves(t *testing.T) {
-	ctx := testContext()
-
-	cat := &fakeSourcedCatalog{
-		listInfos:    versionInfos(catalog.ArtifactKindProvider, "exec", "1.0.0", "2.0.0"),
-		platforms:    nil,
-		digestByPlat: map[string]string{"linux/amd64": "sha256:fresh"},
-	}
-
-	// Lock pins 1.0.0, but the constraint now demands ^2.0.0.
-	existingLock := &LockFile{
-		Version: LockFileVersion,
-		Plugins: []LockPlugin{
-			{Name: "exec", Kind: "provider", Version: "1.0.0", ResolvedCanonical: "ghcr.io/myorg", ResolvedFrom: "myorg", Source: &LockPluginSource{Registry: "ghcr.io/myorg"}},
-		},
-	}
-
-	plugins := []solution.PluginDependency{
-		{Name: "exec", Kind: solution.PluginKindProvider, Version: "^2.0.0", Source: &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"}},
-	}
-
-	result, err := VendorPluginsFQN(ctx, plugins, existingLock, VendorPluginFQNOptions{
-		SourcedCatalogs:      map[string]SourcedCatalog{"myorg": cat},
-		CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-		Platform:             "linux/amd64",
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-	assert.Equal(t, 1, cat.resolveCalls)
-	assert.Equal(t, "2.0.0", result.ResolvedPlugins[0].Version)
-	assert.Equal(t, "sha256:fresh", result.ResolvedPlugins[0].Digest)
-}
-
-// TestVendorPluginsFQN_ConstraintViolation exercises the post-condition guard:
-// the selector picks a satisfying version, but a misbehaving catalog resolves a
-// version outside the constraint. Vendoring must reject it rather than pin it.
-func TestVendorPluginsFQN_ConstraintViolation(t *testing.T) {
-	ctx := testContext()
-
-	cat := &fakeSourcedCatalog{
-		// A satisfying version exists and is selected...
-		listInfos: versionInfos(catalog.ArtifactKindProvider, "exec", "1.5.0"),
-		// ...but Resolve returns 2.0.0, which violates ^1.0.0.
-		forcedResolveVersion: semver.MustParse("2.0.0"),
-	}
-
-	plugins := []solution.PluginDependency{
-		{Name: "exec", Kind: solution.PluginKindProvider, Version: "^1.0.0", Source: &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"}},
-	}
-
-	_, err := VendorPluginsFQN(ctx, plugins, nil, VendorPluginFQNOptions{
-		SourcedCatalogs:      map[string]SourcedCatalog{"myorg": cat},
-		CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-		Platform:             "linux/amd64",
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "does not satisfy constraint")
-}
-
-func TestVendorPluginsFQN_SignatureVerification(t *testing.T) {
-	ctx := testContext()
-
-	cat := &fakeSourcedCatalog{
-		resolveInfo: catalog.ArtifactInfo{
-			ImageRef: "ghcr.io/myorg/exec@sha256:aaa",
-		},
-		listInfos:    versionInfos(catalog.ArtifactKindProvider, "exec", "1.0.0"),
-		platforms:    nil,
-		digestByPlat: map[string]string{"linux/amd64": "sha256:aaa"},
-	}
-
-	plugins := []solution.PluginDependency{
-		{Name: "exec", Kind: solution.PluginKindProvider, Version: "^1.0.0", Source: &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"}},
-	}
-
-	t.Run("failure aborts vendoring", func(t *testing.T) {
-		_, err := VendorPluginsFQN(ctx, plugins, nil, VendorPluginFQNOptions{
-			SourcedCatalogs:      map[string]SourcedCatalog{"myorg": cat},
-			CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-			Platform:             "linux/amd64",
-			VerifySignature: func(_ context.Context, _ string) (*LockPluginSignature, error) {
-				return nil, errors.New("untrusted signer")
-			},
-		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "signature verification failed during lock")
-	})
-
-	t.Run("metadata recorded on success", func(t *testing.T) {
-		result, err := VendorPluginsFQN(ctx, plugins, nil, VendorPluginFQNOptions{
-			SourcedCatalogs:      map[string]SourcedCatalog{"myorg": cat},
-			CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-			Platform:             "linux/amd64",
-			VerifySignature: func(_ context.Context, _ string) (*LockPluginSignature, error) {
-				return &LockPluginSignature{Issuer: "https://token.actions.githubusercontent.com"}, nil
-			},
-		})
-		require.NoError(t, err)
-		require.Len(t, result.ResolvedPlugins, 1)
-		require.NotNil(t, result.ResolvedPlugins[0].Signature)
-		assert.Equal(t, "https://token.actions.githubusercontent.com", result.ResolvedPlugins[0].Signature.Issuer)
-	})
-}
-
-// TestVendorPluginsFQN_ExactVersionPinsTag verifies that an exact version pins
-// that tag directly -- no version listing, and the requested version is what
-// gets resolved even when newer versions exist in the catalog.
-func TestVendorPluginsFQN_ExactVersionPinsTag(t *testing.T) {
-	ctx := testContext()
-
-	cat := &fakeSourcedCatalog{
-		resolveInfo: catalog.ArtifactInfo{ImageRef: "ghcr.io/myorg/exec@sha256:pinned"},
-		// List would offer a newer version, but an exact pin must not consult it.
-		listInfos:    versionInfos(catalog.ArtifactKindProvider, "exec", "1.2.3", "9.9.9"),
-		platforms:    nil,
-		digestByPlat: map[string]string{"linux/amd64": "sha256:pinned"},
-	}
-
-	plugins := []solution.PluginDependency{
-		{Name: "exec", Kind: solution.PluginKindProvider, Version: "1.2.3", Source: &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"}},
-	}
-
-	result, err := VendorPluginsFQN(ctx, plugins, nil, VendorPluginFQNOptions{
-		SourcedCatalogs:      map[string]SourcedCatalog{"myorg": cat},
-		CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-		Platform:             "linux/amd64",
-	})
-	require.NoError(t, err)
-	require.Len(t, result.ResolvedPlugins, 1)
-	assert.Equal(t, 0, cat.listCalls, "exact version must not list versions")
-	assert.Equal(t, "1.2.3", result.ResolvedPlugins[0].Version)
-	// The reference passed to Resolve carried the exact pinned version.
-	require.NotNil(t, cat.resolveRef.Version)
-	assert.Equal(t, "1.2.3", cat.resolveRef.Version.String())
-}
-
-// TestVendorPluginsFQN_LatestResolvesNewest verifies that an empty or "latest"
-// constraint leaves the reference version nil (Resolve picks the newest) and
-// never lists versions.
-func TestVendorPluginsFQN_LatestResolvesNewest(t *testing.T) {
-	ctx := testContext()
-
-	for _, constraint := range []string{"", "latest", "LATEST"} {
-		t.Run("constraint="+constraint, func(t *testing.T) {
-			cat := &fakeSourcedCatalog{
-				resolveInfo: catalog.ArtifactInfo{
-					Reference: catalog.Reference{
-						Kind:    catalog.ArtifactKindProvider,
-						Name:    "exec",
-						Version: semver.MustParse("3.1.0"),
-					},
-				},
-				platforms:    nil,
-				digestByPlat: map[string]string{"linux/amd64": "sha256:newest"},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			remote := newFakeRemote()
+			remote.findInfo.ImageRef = tt.imageRef
+			var gotRefs []string
+			verify := func(ctx context.Context, ref string) (*LockPluginSignature, error) {
+				gotRefs = append(gotRefs, ref)
+				return tt.verify(ctx, ref)
 			}
 
-			plugins := []solution.PluginDependency{
-				{Name: "exec", Kind: solution.PluginKindProvider, Version: constraint, Source: &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"}},
+			result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep("^1.0.0")}, nil, VendorAllPluginsOptions{
+				CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+				Remotes:         map[string]ArtifactResolver{"myorg": remote},
+				Platform:        "linux/amd64",
+				VerifySignature: verify,
+			})
+
+			assert.Equal(t, tt.wantRefs, gotRefs)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, result.ResolvedPlugins, 1)
+			assert.Equal(t, tt.wantSig, result.ResolvedPlugins[0].Signature)
+		})
+	}
+}
+
+func TestVendorAllPlugins_RegistryMixedCaseAlias(t *testing.T) {
+	// AliasForRegistry returns the alias as configured ("MyOrg"); Remotes is
+	// keyed by the lowercased alias.
+	remote := newFakeRemote()
+
+	result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep("^1.0.0")}, nil, VendorAllPluginsOptions{
+		CatalogResolver: newTestAliasResolver("MyOrg", "oci://ghcr.io/myorg"),
+		Remotes:         map[string]ArtifactResolver{"myorg": remote},
+		Platform:        "linux/amd64",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.ResolvedPlugins, 1)
+	assert.Equal(t, 1, remote.findCalls)
+}
+
+func TestVendorAllPlugins_RegistryErrors(t *testing.T) {
+	tests := []struct {
+		name         string
+		resolver     RegistryAliasResolver
+		remoteKey    string
+		findErr      error
+		existingLock *LockFile
+		wantErr      string
+		wantFind     int
+	}{
+		{
+			name:     "nil catalog resolver",
+			resolver: nil,
+			wantErr:  "no catalog resolver configured",
+		},
+		{
+			name:     "registry not configured",
+			resolver: newTestAliasResolver("myorg", "oci://ghcr.io/other"),
+			wantErr:  "does not match any configured catalog",
+		},
+		{
+			name:      "no remote for alias",
+			resolver:  newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+			remoteKey: "different",
+			wantErr:   "no catalog available for alias",
+		},
+		{
+			name:     "find error propagates",
+			resolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+			findErr:  errors.New("registry unreachable"),
+			wantErr:  "registry unreachable",
+			wantFind: 1,
+		},
+		{
+			// The configured-catalog check runs before replay, so a lock
+			// cannot be used to pin a plugin from an unconfigured registry.
+			name:     "registry not configured even when locked",
+			resolver: newTestAliasResolver("myorg", "oci://ghcr.io/other"),
+			existingLock: &LockFile{Plugins: []LockPlugin{
+				lockedExec("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}),
+			}},
+			wantErr: "does not match any configured catalog",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			remote := newFakeRemote()
+			remote.findErr = tt.findErr
+			key := tt.remoteKey
+			if key == "" {
+				key = "myorg"
 			}
 
-			result, err := VendorPluginsFQN(ctx, plugins, nil, VendorPluginFQNOptions{
-				SourcedCatalogs:      map[string]SourcedCatalog{"myorg": cat},
-				CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-				Platform:             "linux/amd64",
+			_, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep("^1.0.0")}, tt.existingLock, VendorAllPluginsOptions{
+				CatalogResolver: tt.resolver,
+				Remotes:         map[string]ArtifactResolver{key: remote},
+				Platform:        "linux/amd64",
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Equal(t, tt.wantFind, remote.findCalls)
+		})
+	}
+}
+
+func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
+	tests := []struct {
+		name        string
+		lock        *LockFile
+		constraint  string
+		wantVersion string
+		wantDigest  string
+		wantFind    int
+	}{
+		{
+			name: "pinned version satisfies constraint is replayed",
+			lock: &LockFile{Plugins: []LockPlugin{
+				lockedExec("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}),
+			}},
+			constraint:  "^1.0",
+			wantVersion: "1.1.0",
+			wantDigest:  "sha256:locked",
+			wantFind:    0,
+		},
+		{
+			name: "stale pinned version is re-resolved",
+			lock: &LockFile{Plugins: []LockPlugin{
+				lockedExec("0.9.0", &LockPluginSource{Registry: "ghcr.io/myorg"}),
+			}},
+			constraint:  "^1.0.0",
+			wantVersion: "1.2.3",
+			wantDigest:  "sha256:aaa",
+			wantFind:    1,
+		},
+		{
+			name: "short-name entry with same name is not replayed",
+			lock: &LockFile{Plugins: []LockPlugin{
+				lockedExec("1.1.0", nil),
+			}},
+			constraint:  "^1.0.0",
+			wantVersion: "1.2.3",
+			wantDigest:  "sha256:aaa",
+			wantFind:    1,
+		},
+		{
+			name: "entry from a different registry is not replayed",
+			lock: &LockFile{Plugins: []LockPlugin{
+				lockedExec("1.1.0", &LockPluginSource{Registry: "ghcr.io/other"}),
+			}},
+			constraint:  "^1.0.0",
+			wantVersion: "1.2.3",
+			wantDigest:  "sha256:aaa",
+			wantFind:    1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			remote := newFakeRemote()
+
+			result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep(tt.constraint)}, tt.lock, VendorAllPluginsOptions{
+				CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+				Remotes:         map[string]ArtifactResolver{"myorg": remote},
+				Platform:        "linux/amd64",
 			})
 			require.NoError(t, err)
 			require.Len(t, result.ResolvedPlugins, 1)
-			assert.Equal(t, 0, cat.listCalls, "latest must not list versions")
-			assert.Nil(t, cat.resolveRef.Version, "latest must resolve with a nil version")
-			assert.Equal(t, "3.1.0", result.ResolvedPlugins[0].Version)
+
+			lp := result.ResolvedPlugins[0]
+			assert.Equal(t, tt.wantFind, remote.findCalls)
+			assert.Equal(t, tt.wantVersion, lp.Version)
+			assert.Equal(t, tt.wantDigest, lp.Digest)
+			assert.Equal(t, tt.constraint, lp.Constraint, "constraint is refreshed to the current spec value")
+			assert.Equal(t, &LockPluginSource{Registry: "ghcr.io/myorg"}, lp.Source)
 		})
 	}
 }
 
-// TestVendorPluginsFQN_RangeNoSatisfyingVersion verifies a clear error when no
-// published version satisfies a range constraint.
-func TestVendorPluginsFQN_RangeNoSatisfyingVersion(t *testing.T) {
-	ctx := testContext()
-
-	cat := &fakeSourcedCatalog{
-		listInfos: versionInfos(catalog.ArtifactKindProvider, "exec", "1.0.0", "1.5.0"),
+func TestVendorAllPlugins_RegistryLockRoundTrip(t *testing.T) {
+	// A lock written by one build must be replayed by the next.
+	opts := func(r ArtifactResolver) VendorAllPluginsOptions {
+		return VendorAllPluginsOptions{
+			CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+			Remotes:         map[string]ArtifactResolver{"myorg": r},
+			Platform:        "linux/amd64",
+		}
 	}
+	deps := []solution.PluginDependency{registryExecDep("^1.0.0")}
 
-	plugins := []solution.PluginDependency{
-		{Name: "exec", Kind: solution.PluginKindProvider, Version: "^2.0.0", Source: &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"}},
-	}
+	first, err := VendorAllPlugins(testContext(), deps, nil, opts(newFakeRemote()))
+	require.NoError(t, err)
 
-	_, err := VendorPluginsFQN(ctx, plugins, nil, VendorPluginFQNOptions{
-		SourcedCatalogs:      map[string]SourcedCatalog{"myorg": cat},
-		CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-		Platform:             "linux/amd64",
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no published version of")
-	assert.Contains(t, err.Error(), "satisfies constraint")
-	assert.Equal(t, 0, cat.resolveCalls, "must not resolve when nothing satisfies")
+	second := newFakeRemote()
+	replayed, err := VendorAllPlugins(testContext(), deps, &LockFile{Plugins: first.ResolvedPlugins}, opts(second))
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, second.findCalls, "second build must replay from the lock")
+	assert.Equal(t, first.ResolvedPlugins, replayed.ResolvedPlugins)
 }
 
-// TestVendorPluginsFQN_ListErrorPropagates verifies that a version-listing
-// failure aborts vendoring with context.
-func TestVendorPluginsFQN_ListErrorPropagates(t *testing.T) {
-	ctx := testContext()
+// newFakeLocal returns a local-catalog resolver that resolves exec to 1.2.3.
+// Local artifacts have no portable canonical identity.
+func newFakeLocal() *fakeArtifactResolver {
+	f := newFakeRemote()
+	f.findInfo.Catalog = "local"
+	f.findInfo.Canonical = ""
+	return f
+}
 
-	cat := &fakeSourcedCatalog{listErr: errors.New("registry unreachable")}
+// builtExecDep is an exec provider dependency sourced from a local build.
+func builtExecDep() solution.PluginDependency {
+	return solution.PluginDependency{
+		Name:    "exec",
+		Kind:    solution.PluginKindProvider,
+		Version: "^1.0.0",
+		Source:  &solution.PluginSource{Built: true},
+	}
+}
 
-	plugins := []solution.PluginDependency{
-		{Name: "exec", Kind: solution.PluginKindProvider, Version: "~1.2", Source: &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "exec"}},
+func TestVendorAllPlugins_BuiltResolves(t *testing.T) {
+	local := newFakeLocal()
+
+	result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{builtExecDep()}, nil, VendorAllPluginsOptions{
+		Local:    local,
+		Platform: "linux/amd64",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.ResolvedPlugins, 1)
+
+	assert.Equal(t, catalog.ArtifactQuery{
+		Kind:    catalog.ArtifactKindProvider,
+		Name:    "exec",
+		Version: "^1.0.0",
+		Source:  catalog.SourceSelector{Kind: catalog.SourceBuilt},
+	}, local.findQuery)
+
+	assert.Equal(t, LockPlugin{
+		Name:       "exec",
+		Kind:       "provider",
+		Version:    "1.2.3",
+		Constraint: "^1.0.0",
+		Digest:     "sha256:aaa",
+		Digests: map[string]string{
+			"linux/amd64":  "sha256:aaa",
+			"darwin/arm64": "sha256:bbb",
+		},
+		ResolvedFrom: "local",
+		Source:       &LockPluginSource{Built: true},
+	}, result.ResolvedPlugins[0])
+}
+
+func TestVendorAllPlugins_BuiltErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		local    func() *fakeArtifactResolver
+		wantErr  string
+		wantFind int
+	}{
+		{
+			name:    "no local catalog configured",
+			local:   func() *fakeArtifactResolver { return nil },
+			wantErr: "no local catalog configured",
+		},
+		{
+			name: "find error propagates",
+			local: func() *fakeArtifactResolver {
+				f := newFakeLocal()
+				f.findErr = errors.New("artifact not found")
+				return f
+			},
+			wantErr:  "artifact not found",
+			wantFind: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			local := tt.local()
+			opts := VendorAllPluginsOptions{Platform: "linux/amd64"}
+			if local != nil {
+				// Avoid a typed-nil interface: only set Local when non-nil.
+				opts.Local = local
+			}
+
+			_, err := VendorAllPlugins(testContext(), []solution.PluginDependency{builtExecDep()}, nil, opts)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			if local != nil {
+				assert.Equal(t, tt.wantFind, local.findCalls)
+			}
+		})
+	}
+}
+
+func TestVendorAllPlugins_BuiltNeverReplayed(t *testing.T) {
+	// The local catalog can overwrite a version in place, so a satisfying
+	// built lock entry must still be re-resolved to pick up the current digest.
+	lock := &LockFile{Plugins: []LockPlugin{
+		lockedExec("1.2.3", &LockPluginSource{Built: true}),
+	}}
+	local := newFakeLocal()
+
+	result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{builtExecDep()}, lock, VendorAllPluginsOptions{
+		Local:    local,
+		Platform: "linux/amd64",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.ResolvedPlugins, 1)
+
+	assert.Equal(t, 1, local.findCalls)
+	assert.Equal(t, "sha256:aaa", result.ResolvedPlugins[0].Digest, "digest comes from the local catalog, not the lock")
+}
+
+func TestVendorAllPlugins_BuiltAndRegistrySameNameRoundTrip(t *testing.T) {
+	// A built and a registry plugin sharing name+kind get distinct lock
+	// identities: on the next build the registry entry replays and the built
+	// entry re-resolves, neither picking up the other's entry.
+	deps := []solution.PluginDependency{registryExecDep("^1.0.0"), builtExecDep()}
+	opts := func(remote, local ArtifactResolver) VendorAllPluginsOptions {
+		return VendorAllPluginsOptions{
+			CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+			Remotes:         map[string]ArtifactResolver{"myorg": remote},
+			Local:           local,
+			Platform:        "linux/amd64",
+		}
 	}
 
-	_, err := VendorPluginsFQN(ctx, plugins, nil, VendorPluginFQNOptions{
-		SourcedCatalogs:      map[string]SourcedCatalog{"myorg": cat},
-		CatalogAliasResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
-		Platform:             "linux/amd64",
+	first, err := VendorAllPlugins(testContext(), deps, nil, opts(newFakeRemote(), newFakeLocal()))
+	require.NoError(t, err)
+	require.Len(t, first.ResolvedPlugins, 2)
+	assert.Equal(t, &LockPluginSource{Registry: "ghcr.io/myorg"}, first.ResolvedPlugins[0].Source)
+	assert.Equal(t, &LockPluginSource{Built: true}, first.ResolvedPlugins[1].Source)
+
+	remote, local := newFakeRemote(), newFakeLocal()
+	second, err := VendorAllPlugins(testContext(), deps, &LockFile{Plugins: first.ResolvedPlugins}, opts(remote, local))
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, remote.findCalls, "registry entry replays")
+	assert.Equal(t, 1, local.findCalls, "built entry re-resolves")
+	assert.Equal(t, first.ResolvedPlugins, second.ResolvedPlugins, "unchanged artifacts yield an identical lock")
+}
+
+// shortExecDep is an exec provider dependency declared by short name only.
+func shortExecDep() solution.PluginDependency {
+	return solution.PluginDependency{
+		Name:    "exec",
+		Kind:    solution.PluginKindProvider,
+		Version: "^1.0.0",
+	}
+}
+
+func TestVendorAllPlugins_ShortNameResolves(t *testing.T) {
+	// A short name searches the local catalog across all sources. The lock
+	// entry keeps a nil Source (its lock identity) even though the resolved
+	// copy came from a remote origin, which is recorded in ResolvedCanonical.
+	local := newFakeLocal()
+	local.findInfo.Canonical = "ghcr.io/myorg"
+
+	result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{shortExecDep()}, nil, VendorAllPluginsOptions{
+		Local:    local,
+		Platform: "linux/amd64",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.ResolvedPlugins, 1)
+
+	assert.Equal(t, catalog.ArtifactQuery{
+		Kind:    catalog.ArtifactKindProvider,
+		Name:    "exec",
+		Version: "^1.0.0",
+		Source:  catalog.SourceSelector{Kind: catalog.SourceAny},
+	}, local.findQuery)
+
+	assert.Equal(t, LockPlugin{
+		Name:       "exec",
+		Kind:       "provider",
+		Version:    "1.2.3",
+		Constraint: "^1.0.0",
+		Digest:     "sha256:aaa",
+		Digests: map[string]string{
+			"linux/amd64":  "sha256:aaa",
+			"darwin/arm64": "sha256:bbb",
+		},
+		ResolvedFrom:      "local",
+		ResolvedCanonical: "ghcr.io/myorg",
+	}, result.ResolvedPlugins[0])
+}
+
+func TestVendorAllPlugins_ShortNameErrors(t *testing.T) {
+	ambiguous := &catalog.AmbiguousArtifactError{
+		Query: catalog.ArtifactQuery{Kind: catalog.ArtifactKindProvider, Name: "exec"},
+	}
+	tests := []struct {
+		name          string
+		local         func() *fakeArtifactResolver
+		wantErr       string
+		wantAmbiguous bool
+		wantFind      int
+	}{
+		{
+			name:    "no local catalog configured",
+			local:   func() *fakeArtifactResolver { return nil },
+			wantErr: "no local catalog configured",
+		},
+		{
+			name: "find error propagates",
+			local: func() *fakeArtifactResolver {
+				f := newFakeLocal()
+				f.findErr = errors.New("artifact not found")
+				return f
+			},
+			wantErr:  "artifact not found",
+			wantFind: 1,
+		},
+		{
+			name: "ambiguous match is surfaced",
+			local: func() *fakeArtifactResolver {
+				f := newFakeLocal()
+				f.findErr = ambiguous
+				return f
+			},
+			wantAmbiguous: true,
+			wantFind:      1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			local := tt.local()
+			opts := VendorAllPluginsOptions{Platform: "linux/amd64"}
+			if local != nil {
+				// Avoid a typed-nil interface: only set Local when non-nil.
+				opts.Local = local
+			}
+
+			_, err := VendorAllPlugins(testContext(), []solution.PluginDependency{shortExecDep()}, nil, opts)
+			require.Error(t, err)
+			if tt.wantErr != "" {
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+			if tt.wantAmbiguous {
+				var ambErr *catalog.AmbiguousArtifactError
+				assert.ErrorAs(t, err, &ambErr)
+				assert.ErrorIs(t, err, catalog.ErrAmbiguousArtifact)
+			}
+			if local != nil {
+				assert.Equal(t, tt.wantFind, local.findCalls)
+			}
+		})
+	}
+}
+
+func TestVendorAllPlugins_ShortNameNeverReplayed(t *testing.T) {
+	// A short name may resolve to a built copy whose digest can change in
+	// place, so a satisfying short-name lock entry is still re-resolved.
+	lock := &LockFile{Plugins: []LockPlugin{lockedExec("1.2.3", nil)}}
+	local := newFakeLocal()
+
+	result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{shortExecDep()}, lock, VendorAllPluginsOptions{
+		Local:    local,
+		Platform: "linux/amd64",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.ResolvedPlugins, 1)
+
+	assert.Equal(t, 1, local.findCalls)
+	assert.Equal(t, "sha256:aaa", result.ResolvedPlugins[0].Digest, "digest comes from the local catalog, not the lock")
+	assert.Nil(t, result.ResolvedPlugins[0].Source)
+}
+
+func TestVendorAllPlugins_AllFormsSameNameRoundTrip(t *testing.T) {
+	// Registry, built, and short-name plugins sharing name+kind get distinct
+	// lock identities, and each is found again by its own declaration.
+	deps := []solution.PluginDependency{registryExecDep("^1.0.0"), builtExecDep(), shortExecDep()}
+	opts := VendorAllPluginsOptions{
+		CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+		Remotes:         map[string]ArtifactResolver{"myorg": newFakeRemote()},
+		Local:           newFakeLocal(),
+		Platform:        "linux/amd64",
+	}
+
+	result, err := VendorAllPlugins(testContext(), deps, nil, opts)
+	require.NoError(t, err)
+	require.Len(t, result.ResolvedPlugins, 3)
+
+	lock := &LockFile{Plugins: result.ResolvedPlugins}
+	for i, dep := range deps {
+		found := lock.FindPluginByDep(dep)
+		require.NotNil(t, found, "dep %d must find its own entry", i)
+		assert.Same(t, &lock.Plugins[i], found, "dep %d must find its own entry, not another form's", i)
+	}
+}
+
+func TestVendorAllPlugins_EmptyPlatform(t *testing.T) {
+	remote, local := newFakeRemote(), newFakeLocal()
+	deps := []solution.PluginDependency{registryExecDep("^1.0.0"), builtExecDep(), shortExecDep()}
+
+	_, err := VendorAllPlugins(testContext(), deps, nil, VendorAllPluginsOptions{
+		CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+		Remotes:         map[string]ArtifactResolver{"myorg": remote},
+		Local:           local,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "listing versions")
-	assert.Contains(t, err.Error(), "registry unreachable")
+	assert.Contains(t, err.Error(), "requires a build platform")
+	assert.Zero(t, remote.findCalls)
+	assert.Zero(t, local.findCalls)
+}
+
+func TestVendorAllPlugins_BuildPlatformNotPublished(t *testing.T) {
+	// The fakes publish linux/amd64 and darwin/arm64 only, so a windows build
+	// has no primary digest and must fail rather than lock a blank digest.
+	tests := []struct {
+		name string
+		dep  solution.PluginDependency
+	}{
+		{name: "registry", dep: registryExecDep("^1.0.0")},
+		{name: "built", dep: builtExecDep()},
+		{name: "short name", dep: shortExecDep()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{tt.dep}, nil, VendorAllPluginsOptions{
+				CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+				Remotes:         map[string]ArtifactResolver{"myorg": newFakeRemote()},
+				Local:           newFakeLocal(),
+				Platform:        "windows/amd64",
+			})
+			require.Error(t, err)
+			assert.Nil(t, result)
+			assert.Contains(t, err.Error(), `no content digest resolved for build platform "windows/amd64"`)
+		})
+	}
+}
+
+func TestLockSourceFor(t *testing.T) {
+	tests := []struct {
+		name string
+		dep  solution.PluginDependency
+		want *LockPluginSource
+	}{
+		{name: "registry", dep: registryExecDep("^1.0.0"), want: &LockPluginSource{Registry: "ghcr.io/myorg"}},
+		{name: "built", dep: builtExecDep(), want: &LockPluginSource{Built: true}},
+		{name: "short name", dep: shortExecDep(), want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, lockSourceFor(tt.dep))
+		})
+	}
+}
+
+func TestSelectorFor(t *testing.T) {
+	tests := []struct {
+		name string
+		dep  solution.PluginDependency
+		want catalog.SourceSelector
+	}{
+		{name: "registry", dep: registryExecDep("^1.0.0"), want: catalog.SourceSelector{Kind: catalog.SourceRemote, Remote: "ghcr.io/myorg"}},
+		{name: "built", dep: builtExecDep(), want: catalog.SourceSelector{Kind: catalog.SourceBuilt}},
+		{name: "short name", dep: shortExecDep(), want: catalog.SourceSelector{Kind: catalog.SourceAny}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, selectorFor(tt.dep))
+		})
+	}
 }

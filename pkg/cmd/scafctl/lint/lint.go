@@ -14,9 +14,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
-	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/kvx/pkg/tui"
-	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
@@ -25,7 +23,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
@@ -127,7 +126,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 		Args: cobra.MaximumNArgs(1),
 		PreRunE: func(_ *cobra.Command, args []string) error {
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" lint"); err != nil {
+				if _, err := source.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" lint"); err != nil {
 					return err
 				}
 				options.File = args[0]
@@ -182,25 +181,6 @@ func findingsColumnHints() map[string]tui.ColumnHint {
 	}
 }
 
-// newLintGetter builds the solution getter used by both the lint and the
-// lint --fix paths. Lint loads leniently: a structural problem such as an
-// undefined dependsOn target must surface as a finding rather than aborting the
-// load and hiding every other issue behind the first one ("onion peeling"). The
-// catalog resolver is attached when available so bare name references resolve.
-func newLintGetter(ctx context.Context, lgr *logr.Logger) *get.Getter {
-	getterOpts := []get.Option{get.WithLenientValidation()}
-	localCatalog, err := catalog.NewLocalCatalog(*lgr)
-	if err == nil {
-		resolver := catalog.NewSolutionResolver(localCatalog, *lgr,
-			catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
-		)
-		getterOpts = append(getterOpts, get.WithCatalogResolver(resolver))
-	} else {
-		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
-	}
-	return get.NewGetterFromContext(ctx, getterOpts...)
-}
-
 func runLint(ctx context.Context, opts *Options) error {
 	if opts.BinaryName == "" {
 		opts.BinaryName = settings.CliBinaryName
@@ -208,34 +188,32 @@ func runLint(ctx context.Context, opts *Options) error {
 
 	lgr := logger.FromContext(ctx)
 
-	getter := newLintGetter(ctx, lgr)
-
-	// Unified resolution chain: -f > positional arg > auto-discover
-	resolvedPath, resolveErr := get.Resolve(ctx, getter, opts.File, "", get.ResolveOptions{
-		Risk: get.DiscoveryRiskLow,
-	})
-	if resolveErr != nil {
-		writeError(opts, fmt.Sprintf("failed to load solution: %v", resolveErr))
-		return exitcode.WithCode(resolveErr, exitcode.FileNotFound)
+	// Source: -f (or positional arg, copied into opts.File) > auto-discover.
+	c, err := source.Classify(opts.File)
+	if err != nil {
+		writeError(opts, fmt.Sprintf("failed to load solution: %v", err))
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
-	// Update opts.File so downstream linting reports the correct path.
-	opts.File = resolvedPath
+	load.ReportSource(ctx, c)
 
-	// Emit verbose discovery information
-	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
-		switch opts.File {
-		case "-":
-			w.Verbose("Loading solution from stdin")
-		default:
-			w.Verbosef("Loading solution from: %s", opts.File)
-		}
+	// Lint loads leniently: a structural problem such as an undefined
+	// dependsOn target must surface as a finding rather than aborting the load
+	// and hiding every other issue behind the first one ("onion peeling").
+	routerOpts := []load.RouterOption{load.WithLenient()}
+	if opts.IOStreams != nil && opts.IOStreams.In != nil {
+		routerOpts = append(routerOpts, load.WithStdin(opts.IOStreams.In))
 	}
-
-	sol, err := getter.Get(ctx, opts.File)
+	ms, err := load.NewRouterFromContext(ctx, *lgr, routerOpts...).Load(ctx, c)
 	if err != nil {
 		writeError(opts, fmt.Sprintf("failed to load solution: %v", err))
 		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
+	load.ReportDiscovery(ctx, ms)
+	if ms.Discovery != nil {
+		// Update opts.File so downstream linting reports the correct path.
+		opts.File = ms.Discovery.Path
+	}
+	sol := ms.Solution
 
 	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
 		w.Verbosef("Solution loaded: %s (version=%s)", sol.Metadata.Name, sol.Metadata.Version)

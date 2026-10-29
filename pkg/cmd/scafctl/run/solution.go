@@ -28,8 +28,10 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -246,7 +248,7 @@ Examples:
 			// reference. Local file paths require -f/--file. Providing both
 			// -f/--file and a positional arg is also an error.
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" run solution"); err != nil {
+				if _, err := source.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" run solution"); err != nil {
 					options.positionalPathErr = err
 				} else {
 					options.File = args[0]
@@ -346,19 +348,12 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 
 	// Include pre-release versions in catalog resolution when --pre-release is set.
-	// Must happen before resolveVersionConstraintForFile so --version constraints
-	// also respect the flag.
 	if o.PreRelease {
 		ctx = catalog.WithIncludePreRelease(ctx)
 	}
 
-	// Resolve --version constraint before loading solution
-	if err := o.resolveVersionConstraintForFile(ctx); err != nil {
-		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
-	}
-
 	// Validate --lock-mode early so an invalid value fails with InvalidInput
-	// instead of a misleading FileNotFound from prepareSolutionForExecution.
+	// instead of a misleading FileNotFound from prepareSolutionFromSource.
 	if err := o.validateLockMode(); err != nil {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
@@ -413,7 +408,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 			exitcode.InvalidInput)
 	}
 
-	// Capture the original working directory before prepareSolutionForExecution,
+	// Capture the original working directory before prepareSolutionFromSource,
 	// which may os.Chdir into a bundle extraction directory. This ensures __cwd
 	// in action expressions reflects the user's actual working directory.
 	originalCwd, err := provider.GetWorkingDirectory(ctx)
@@ -421,10 +416,16 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
 	}
 
-	// Prepare solution: load, set up registry, handle bundles
-	sol, reg, solutionDir, cleanup, providerCtx, err := o.prepareSolutionForExecution(ctx)
+	// Prepare solution: select the source (-f or the positional ref, else a
+	// discovered file), load it, set up the registry, and handle bundles.
+	loader := o.newSolutionLoader(ctx)
+	sel, err := loader.Select(ctx, o.File, nil, load.ArgsAreNames, o.sourceOptions()...)
 	if err != nil {
-		return o.exitWithCode(ctx, err, prepareErrorCode(err))
+		return o.exitWithCode(ctx, err, prepare.ErrorExitCode(err))
+	}
+	sol, reg, solutionDir, cleanup, providerCtx, err := o.prepareSolutionFromSource(ctx, loader.SelectionLoader(sel), sel.Source)
+	if err != nil {
+		return o.exitWithCode(ctx, err, prepare.ErrorExitCode(err))
 	}
 	defer cleanup()
 	if providerCtx != nil {

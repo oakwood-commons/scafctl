@@ -6,7 +6,6 @@ package run
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,7 +19,6 @@ import (
 	cmdflags "github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	cmdlint "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/flags"
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -30,8 +28,10 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -282,8 +282,7 @@ Examples:
 			cCmd.Flags().Visit(func(f *pflag.Flag) {
 				options.flagsChanged[f.Name] = true
 			})
-			fileExplicit := options.flagsChanged["file"]
-			parseResolverArgs(args, options, fileExplicit)
+			parseResolverArgs(args, options)
 		},
 		RunE:         makeRunEFunc(cfg, "resolver"),
 		SilenceUsage: true,
@@ -383,8 +382,7 @@ Examples:
 			cCmd.Flags().Visit(func(f *pflag.Flag) {
 				options.flagsChanged[f.Name] = true
 			})
-			fileExplicit := options.flagsChanged["file"]
-			parseResolverArgs(args, options, fileExplicit)
+			parseResolverArgs(args, options)
 		},
 		RunE:         makeRunEFunc(cfg, "resolver"),
 		SilenceUsage: true,
@@ -405,23 +403,12 @@ Examples:
 	return cCmd
 }
 
-// parseResolverArgs splits positional args into resolver names and dynamic parameters.
-// Bare words are resolver names, args containing '=' or starting with '@' are parameters.
-// URLs (http(s)://, oci://) and unambiguous catalog references (versioned refs,
-// registry refs) are auto-detected as solution refs when no -f flag is set.
-// Bare names like "my-resolver" are always treated as resolver names.
-func parseResolverArgs(args []string, options *ResolverOptions, fileExplicit bool) {
-	for _, arg := range args {
-		switch {
-		case !fileExplicit && options.File == "" && (filepath.IsURL(arg) || get.IsUnambiguousCatalogReference(arg)):
-			options.File = arg
-			fileExplicit = true
-		case strings.Contains(arg, "=") || strings.HasPrefix(arg, "@"):
-			options.DynamicArgs = append(options.DynamicArgs, arg)
-		default:
-			options.Names = append(options.Names, arg)
-		}
-	}
+// parseResolverArgs splits positional args into names and dynamic parameters.
+// Args containing '=' or starting with '@' are parameters, except URLs; the
+// rest are names. Run decides whether the first name is a solution source
+// (see load.Router.Select).
+func parseResolverArgs(args []string, options *ResolverOptions) {
+	options.Names, options.DynamicArgs = splitNamesAndParams(args)
 }
 
 // Run executes the resolver-only flow
@@ -436,19 +423,12 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	}
 
 	// Include pre-release versions in catalog resolution when --pre-release is set.
-	// Must happen before resolveVersionConstraintForFile so --version constraints
-	// also respect the flag.
 	if o.PreRelease {
 		ctx = catalog.WithIncludePreRelease(ctx)
 	}
 
-	// Resolve --version constraint before loading solution
-	if err := o.resolveVersionConstraintForFile(ctx); err != nil {
-		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
-	}
-
 	// Validate --lock-mode early so an invalid value fails with InvalidInput
-	// instead of a misleading FileNotFound from prepareSolutionForExecution.
+	// instead of a misleading FileNotFound from prepareSolutionFromSource.
 	if err := o.validateLockMode(); err != nil {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
@@ -498,13 +478,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 			exitcode.InvalidInput)
 	}
 
-	// Track whether the file was explicitly provided (via -f flag or as a
-	// positional unambiguous catalog reference). Auto-discovered files set
-	// o.File inside prepareSolutionForExecution, so we capture the state here
-	// to enable catalog fallback when auto-discovery finds a non-solution file.
-	fileWasExplicit := o.File != ""
-
-	// Capture the invoking working directory before prepareSolutionForExecution,
+	// Capture the invoking working directory before loading the solution,
 	// which may os.Chdir into a bundle extraction directory: relative state
 	// paths (declared, --state-file, --state-output) resolve against it.
 	invokingCwd, err := provider.GetWorkingDirectory(ctx)
@@ -512,34 +486,26 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
 	}
 
-	// Prepare solution: load, set up registry, handle bundles
-	sol, reg, solutionDir, cleanup, providerCtx, err := o.prepareSolutionForExecution(ctx)
+	// Decide where the solution comes from before loading anything: -f, a
+	// solution reference in the first positional arg, a discovered solution
+	// file, or else a catalog name in the first positional arg. Whatever the
+	// selection does not consume are resolver names.
+	loader := o.newSolutionLoader(ctx)
+	sel, err := loader.Select(ctx, o.File, o.Names, load.ArgsAreNamesOrCatalog, o.sourceOptions()...)
 	if err != nil {
-		// When no explicit file was provided and auto-discovery either found
-		// nothing (ErrNoSolutionFound) or picked a known non-solution file
-		// (taskfile.yaml/yml), check if the first positional arg looks like a
-		// catalog reference and retry using it as the solution source.
-		// We intentionally do NOT retry when a real solution file was discovered
-		// but failed to parse -- that would mask useful validation errors.
-		canRetry := errors.Is(err, get.ErrNoSolutionFound) || isNonSolutionDiscoveryFile(o.File)
-		if !fileWasExplicit && canRetry && len(o.Names) > 0 && get.IsCatalogReference(o.Names[0]) {
-			o.File = o.Names[0]
-			o.Names = o.Names[1:]
-			lgr.V(1).Info("retrying with first positional arg as catalog reference", "file", o.File)
-			sol, reg, solutionDir, cleanup, providerCtx, err = o.prepareSolutionForExecution(ctx)
-		}
-		if err != nil {
-			return o.exitWithCode(ctx, err, prepareErrorCode(err))
-		}
+		return o.exitWithCode(ctx, err, prepare.ErrorExitCode(err))
 	}
+	names := sel.Args
 
-	// Validate mutually exclusive --action and positional resolver names.
-	// This check is placed after catalog fallback so that bare catalog names
-	// (parsed into o.Names) can be consumed by fallback first.
-	if len(o.Actions) > 0 && len(o.Names) > 0 {
+	if len(o.Actions) > 0 && len(names) > 0 {
 		return o.exitWithCode(ctx,
 			fmt.Errorf("--action and positional resolver names are mutually exclusive"),
 			exitcode.InvalidInput)
+	}
+
+	sol, reg, solutionDir, cleanup, providerCtx, err := o.prepareSolutionFromSource(ctx, loader.SelectionLoader(sel), sel.Source)
+	if err != nil {
+		return o.exitWithCode(ctx, err, prepare.ErrorExitCode(err))
 	}
 	defer cleanup()
 	if providerCtx != nil {
@@ -603,7 +569,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		if actionErr != nil {
 			return o.exitWithCode(ctx, actionErr, exitcode.InvalidInput)
 		}
-		o.Names = actionNames
+		names = actionNames
 		lgr.V(1).Info("--action resolved to resolver names", "actions", o.Actions, "resolvers", actionNames)
 	}
 
@@ -617,16 +583,16 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	if reg != nil {
 		lookup = reg.DescriptorLookup()
 	}
-	resolvers := execute.FilterResolversWithDependencies(allResolvers, o.Names, lookup)
+	resolvers := execute.FilterResolversWithDependencies(allResolvers, names, lookup)
 
 	// Validate requested names exist
-	if len(o.Names) > 0 {
+	if len(names) > 0 {
 		resolverMap := make(map[string]bool)
 		for _, r := range allResolvers {
 			resolverMap[r.Name] = true
 		}
 		var unknown []string
-		for _, name := range o.Names {
+		for _, name := range names {
 			if !resolverMap[name] {
 				unknown = append(unknown, name)
 			}
@@ -781,7 +747,8 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 
 	// When -o test: generate a functional test definition instead of normal output.
 	if o.Output == "test" {
-		return o.generateTestOutput(ctx, []string{"run", "resolver"}, o.Names, results)
+		return o.generateTestOutput(ctx, []string{"run", "resolver"}, names,
+			localSolutionFile(sel, invokingCwd), results)
 	}
 
 	if err := o.writeResolverOutput(ctx, results, o.BinaryName+" run resolver"); err != nil {
@@ -1207,12 +1174,21 @@ func (o *ResolverOptions) resolveActionResolverNames(sol *solution.Solution) ([]
 	return names, nil
 }
 
-// isNonSolutionDiscoveryFile returns true if the given path refers to a file
-// that auto-discovery may resolve but is not a valid solution file. When such
-// a file is found and loading fails, the catalog fallback is safe to try.
-func isNonSolutionDiscoveryFile(path string) bool {
-	base := stdfilepath.Base(path)
-	return base == "taskfile.yaml" || base == "taskfile.yml"
+// localSolutionFile returns the local solution file selected by sel: the -f
+// path as given, or the discovered file relative to cwd. It is empty for
+// sources without a local file (stdin, URL, catalog).
+func localSolutionFile(sel load.Selection, cwd string) string {
+	if sel.Source.Kind == source.KindLocalFile {
+		return sel.Source.Ref
+	}
+	if len(sel.Discovered) == 0 {
+		return ""
+	}
+	path := sel.Discovered[0].Path
+	if rel, err := stdfilepath.Rel(cwd, path); err == nil {
+		return rel
+	}
+	return path
 }
 
 // extractSolutionPath determines the solution file path from:
@@ -1239,6 +1215,12 @@ func extractSolutionPath(c *cobra.Command) string {
 		}
 	}
 
-	// Final fallback: auto-discover solution file in the current directory
-	return get.NewGetterFromContext(c.Context()).FindSolution()
+	// Final fallback: auto-discover the solution file. Help is best effort, so
+	// nothing found (or a command run without a context) shows no inputs.
+	ctx := c.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	path, _ := load.DiscoverPath(ctx, load.DiscoveryRiskLow)
+	return path
 }

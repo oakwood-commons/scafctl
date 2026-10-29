@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,10 +15,13 @@ import (
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
@@ -958,6 +962,141 @@ func TestRunLint_FileNotFound(t *testing.T) {
 	}
 	err := runLint(ctx, opts)
 	assert.Error(t, err)
+}
+
+const cleanLintSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-loader
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+
+func TestRunLint_Stdin(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	ioStreams.In = io.NopCloser(strings.NewReader(cleanLintSolution))
+	ctx := testContext(ioStreams)
+	opts := &Options{
+		File:           "-",
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		Severity:       "info",
+		CliParams:      testCliParams(),
+		IOStreams:      ioStreams,
+		BinaryName:     "scafctl",
+	}
+	require.NoError(t, runLint(ctx, opts))
+	assert.Equal(t, "-", opts.File)
+	assert.Contains(t, outBuf.String(), "findings")
+}
+
+func TestRunLint_StdinLenient(t *testing.T) {
+	t.Parallel()
+
+	const undefinedDep = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: stdin-lenient
+  version: 1.0.0
+spec:
+  resolvers:
+    app:
+      dependsOn: [doesNotExist]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: x
+`
+
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	ioStreams.In = io.NopCloser(strings.NewReader(undefinedDep))
+	ctx := testContext(ioStreams)
+	opts := &Options{
+		File:           "-",
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		Severity:       "info",
+		CliParams:      testCliParams(),
+		IOStreams:      ioStreams,
+		BinaryName:     "scafctl",
+	}
+	_ = runLint(ctx, opts)
+	assert.NotContains(t, errBuf.String(), "failed to load solution")
+	assert.Contains(t, outBuf.String(), "findings")
+	assert.Contains(t, outBuf.String(), "doesNotExist")
+}
+
+func TestRunLint_InvalidRef(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	ctx := testContext(ioStreams)
+	opts := &Options{
+		File:           "ftp://example.com/sol.yaml",
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+		Severity:       "info",
+		CliParams:      testCliParams(),
+		IOStreams:      ioStreams,
+		BinaryName:     "scafctl",
+	}
+	err := runLint(ctx, opts)
+	require.ErrorIs(t, err, source.ErrInvalidRef)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	assert.Contains(t, errBuf.String(), "failed to load solution")
+}
+
+func TestRunLint_LoadErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	ctx := testContext(ioStreams)
+	opts := &Options{
+		File:           filepath.Join(t.TempDir(), "missing.yaml"),
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+		Severity:       "info",
+		CliParams:      testCliParams(),
+		IOStreams:      ioStreams,
+		BinaryName:     "scafctl",
+	}
+	err := runLint(ctx, opts)
+	require.Error(t, err)
+	assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+}
+
+func TestRunLint_AutoDiscover(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	for _, name := range []string{"solution.yaml", "scafctl.yaml"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(cleanLintSolution), 0o600))
+	}
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	cliParams := testCliParams()
+	cliParams.Verbose = true
+	cliParams.NoColor = true
+	ctx := logger.WithLogger(provider.WithWorkingDirectory(context.Background(), dir), logger.GetNoopLogger())
+	ctx = writer.WithWriter(ctx, writer.New(ioStreams, cliParams))
+	opts := &Options{
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "quiet"},
+		Severity:       "info",
+		CliParams:      cliParams,
+		IOStreams:      ioStreams,
+		BinaryName:     "scafctl",
+	}
+	require.NoError(t, runLint(ctx, opts))
+	assert.Equal(t, filepath.Join(dir, "solution.yaml"), opts.File, "lint reports the discovered path")
+	assert.Contains(t, errBuf.String(), "Multiple solution files found")
+	assert.Contains(t, errBuf.String(), "Using "+filepath.Join(dir, "solution.yaml"))
 }
 
 // ── Delegate re-export tests ─────────────────────────────────────────────────

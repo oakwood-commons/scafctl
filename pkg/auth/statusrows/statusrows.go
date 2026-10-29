@@ -134,6 +134,9 @@ func isUserFlow(f auth.Flow) bool {
 	switch f {
 	case auth.FlowInteractive, auth.FlowDeviceCode, auth.FlowPAT:
 		return true
+	case auth.FlowServicePrincipal, auth.FlowWorkloadIdentity, auth.FlowMetadata,
+		auth.FlowGcloudADC, auth.FlowGitHubApp, auth.FlowClientCredentials, auth.FlowOnBehalfOf:
+		return false
 	default:
 		return false
 	}

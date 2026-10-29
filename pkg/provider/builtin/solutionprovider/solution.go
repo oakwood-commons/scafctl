@@ -37,7 +37,7 @@ const (
 )
 
 // Loader is the interface for loading solutions.
-// get.Getter satisfies this via Go structural typing.
+// prepare.subSolutionLoader adapts a load.Loader to it.
 type Loader interface {
 	Get(ctx context.Context, path string) (*solution.Solution, error)
 }

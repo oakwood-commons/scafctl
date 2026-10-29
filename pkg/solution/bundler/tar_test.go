@@ -28,7 +28,7 @@ func TestCreateBundleTar_BasicFiles(t *testing.T) {
 		{RelPath: "child.yaml", Source: ExplicitInclude},
 	}
 
-	tarData, manifest, err := CreateBundleTar(tmpDir, files, nil)
+	tarData, manifest, err := CreateBundleTar(snapshotOf(t, tmpDir, files), nil)
 	require.NoError(t, err)
 	require.NotNil(t, manifest)
 
@@ -61,7 +61,7 @@ func TestCreateBundleTar_WithPlugins(t *testing.T) {
 		{Name: "vault-auth", Kind: "auth-handler", Version: "~1.2.0"},
 	}
 
-	_, manifest, err := CreateBundleTar(tmpDir, files, plugins)
+	_, manifest, err := CreateBundleTar(snapshotOf(t, tmpDir, files), plugins)
 	require.NoError(t, err)
 
 	assert.Len(t, manifest.Plugins, 2)
@@ -70,24 +70,8 @@ func TestCreateBundleTar_WithPlugins(t *testing.T) {
 	assert.Equal(t, "^1.5.0", manifest.Plugins[0].Version)
 }
 
-func TestCreateBundleTar_ExceedsMaxSize(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create a file that's bigger than our limit
-	bigData := make([]byte, 1024)
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "big.bin"), bigData, 0o644))
-
-	files := []FileEntry{
-		{RelPath: "big.bin", Source: StaticAnalysis},
-	}
-
-	_, _, err := CreateBundleTar(tmpDir, files, nil, WithMaxBundleSize(100))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bundle exceeds maximum size limit")
-}
-
 func TestCreateBundleTar_EmptyFileList(t *testing.T) {
-	tarData, manifest, err := CreateBundleTar(t.TempDir(), nil, nil)
+	tarData, manifest, err := CreateBundleTar(nil, nil)
 	require.NoError(t, err)
 	assert.Empty(t, manifest.Files)
 	assert.NotEmpty(t, tarData, "tar should at least contain the manifest")
@@ -107,7 +91,7 @@ func TestExtractBundleTar_RoundTrip(t *testing.T) {
 	}
 
 	// Create tar
-	tarData, _, err := CreateBundleTar(srcDir, files, nil)
+	tarData, _, err := CreateBundleTar(snapshotOf(t, srcDir, files), nil)
 	require.NoError(t, err)
 
 	// Extract tar
@@ -151,6 +135,41 @@ func TestExtractBundleTar_PathTraversal(t *testing.T) {
 	assert.Contains(t, err.Error(), "path traversal")
 }
 
+func TestSafeExtractPath(t *testing.T) {
+	t.Parallel()
+	dest := t.TempDir()
+
+	tests := []struct {
+		name    string
+		entry   string
+		want    string
+		wantErr bool
+	}{
+		{name: "simple file", entry: "file.txt", want: filepath.Join(dest, "file.txt")},
+		{name: "nested file", entry: "a/b/c.yaml", want: filepath.Join(dest, "a", "b", "c.yaml")},
+		{name: "internal dotdot stays local", entry: "a/../b.txt", want: filepath.Join(dest, "b.txt")},
+		{name: "dotdot-prefixed name is local", entry: "..foo", want: filepath.Join(dest, "..foo")},
+		{name: "parent escape", entry: "../evil", wantErr: true},
+		{name: "deep escape", entry: "a/../../evil", wantErr: true},
+		{name: "absolute path", entry: "/etc/passwd", wantErr: true},
+		{name: "empty name", entry: "", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := safeExtractPath(dest, tc.entry)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "path traversal")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestExtractBundleTar_NoManifest(t *testing.T) {
 	// Create tar without manifest
 	var buf bytes.Buffer
@@ -179,10 +198,10 @@ func TestCreateBundleTar_DigestConsistency(t *testing.T) {
 		{RelPath: "file.txt", Source: StaticAnalysis},
 	}
 
-	_, manifest1, err := CreateBundleTar(tmpDir, files, nil)
+	_, manifest1, err := CreateBundleTar(snapshotOf(t, tmpDir, files), nil)
 	require.NoError(t, err)
 
-	_, manifest2, err := CreateBundleTar(tmpDir, files, nil)
+	_, manifest2, err := CreateBundleTar(snapshotOf(t, tmpDir, files), nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, manifest1.Files[0].Digest, manifest2.Files[0].Digest, "digests should be consistent")
@@ -201,21 +220,4 @@ func listTarEntries(t *testing.T, tarData []byte) []string {
 		entries = append(entries, header.Name)
 	}
 	return entries
-}
-
-func TestWithTarReadFileFunc(t *testing.T) {
-	called := false
-	opt := WithTarReadFileFunc(func(path string) ([]byte, error) {
-		called = true
-		return []byte("file content"), nil
-	})
-
-	cfg := &tarConfig{}
-	opt(cfg)
-	assert.NotNil(t, cfg.readFile)
-
-	data, err := cfg.readFile("/any/path")
-	assert.NoError(t, err)
-	assert.Equal(t, []byte("file content"), data)
-	assert.True(t, called)
 }

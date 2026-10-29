@@ -13,7 +13,6 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
-	catversion "github.com/oakwood-commons/scafctl/pkg/catalog/version"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -50,7 +49,6 @@ func CommandCatalog(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 	cmd.AddCommand(CommandLoad(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandPush(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandPull(cliParams, ioStreams, path))
-	cmd.AddCommand(CommandTag(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandTags(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandLogin(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandLogout(cliParams, ioStreams, path))
@@ -125,7 +123,9 @@ func warnStaleCredentials(ctx context.Context, w *writer.Writer, rc *catalog.Rem
 // resolveAuthProvider attempts to find and return the auth provider name for a registry.
 // It checks:
 //  1. Catalog config authProvider field (when catalogFlag resolves to a named catalog)
-//  2. InferAuthHandler (built-in + custom OAuth2 mappings)
+//  2. catalog.AuthProviderForRegistry (host-matched catalog config, then
+//     InferAuthHandler built-in + custom OAuth2 mappings)
+//  3. The default catalog's authProvider
 //
 // Returns "" if no provider can be resolved.
 // This is best-effort — push/pull/delete still work via credential store alone.
@@ -145,11 +145,7 @@ func resolveAuthProvider(ctx context.Context, registry, catalogFlag string) stri
 	// like "us-central1-docker.pkg.dev/..." picks up the correct handler even
 	// when the default catalog points to a different provider.
 	if handlerName == "" {
-		var customHandlers []config.CustomOAuth2Config
-		if cfg != nil {
-			customHandlers = cfg.Auth.CustomOAuth2
-		}
-		handlerName = catalog.InferAuthHandler(registry, customHandlers)
+		handlerName = catalog.AuthProviderForRegistry(ctx, registry)
 	}
 
 	// Fall back to default catalog's authProvider (last resort).
@@ -184,57 +180,34 @@ func authHandlerName(h auth.Handler) string {
 	return h.Name()
 }
 
-// resolveAuthScope returns the authScope configured for the named catalog, or
-// by matching the registry host against configured catalogs.
-func resolveAuthScope(ctx context.Context, catalogFlag string) string {
-	cfg := config.FromContext(ctx)
-	if cfg == nil {
-		return ""
-	}
-
-	// Try named catalog first.
-	if catalogFlag != "" {
+// resolveAuthScope returns the authScope for a registry. It checks:
+//  1. The named catalog's authScope (when catalogFlag names a catalog)
+//  2. A configured catalog on the same host as catalogFlag (when it is a URL)
+//  3. catalog.AuthScopeForRegistry for the resolved registry, so a full remote
+//     reference without --catalog still gets the scope configured for its host
+func resolveAuthScope(ctx context.Context, registry, catalogFlag string) string {
+	if cfg := config.FromContext(ctx); cfg != nil && catalogFlag != "" {
+		// Try named catalog first.
 		if cat, ok := cfg.GetCatalog(catalogFlag); ok && cat.AuthScope != "" {
 			return cat.AuthScope
 		}
-	}
 
-	// Fall back: match by registry host from catalogFlag (when it's a URL).
-	if catalogFlag != "" && catalog.LooksLikeCatalogURL(catalogFlag) {
-		host, _ := catalog.ParseCatalogURL(catalogFlag)
-		for _, cat := range cfg.Catalogs {
-			if cat.URL == "" || cat.AuthScope == "" {
-				continue
-			}
-			catHost, _ := catalog.ParseCatalogURL(cat.URL)
-			if catHost == host {
-				return cat.AuthScope
-			}
-		}
-	}
-
-	return ""
-}
-
-// resolveAuthScopeForRegistry returns the authScope by matching a registry host
-// against configured catalogs. Used when a full OCI reference is provided and
-// there is no --catalog flag to look up. Falls back to InferDefaultScope for
-// well-known registries (e.g. GCP Artifact Registry).
-func resolveAuthScopeForRegistry(ctx context.Context, registry string) string {
-	cfg := config.FromContext(ctx)
-	if cfg != nil {
-		for _, cat := range cfg.Catalogs {
-			if cat.URL == "" || cat.AuthScope == "" {
-				continue
-			}
-			catHost, _ := catalog.ParseCatalogURL(cat.URL)
-			if catHost == registry {
-				return cat.AuthScope
+		// Match by registry host from catalogFlag (when it's a URL).
+		if catalog.LooksLikeCatalogURL(catalogFlag) {
+			host, _ := catalog.ParseCatalogURL(catalogFlag)
+			for _, cat := range cfg.Catalogs {
+				if cat.URL == "" || cat.AuthScope == "" {
+					continue
+				}
+				catHost, _ := catalog.ParseCatalogURL(cat.URL)
+				if catHost == host {
+					return cat.AuthScope
+				}
 			}
 		}
 	}
 
-	return catalog.InferDefaultScope(registry)
+	return catalog.AuthScopeForRegistry(ctx, registry)
 }
 
 // resolveDiscoveryStrategy returns the discovery strategy for a named catalog.
@@ -337,22 +310,6 @@ func verboseRefInfo(w *writer.Writer, name, kind, version string) {
 		msg += " version=" + version
 	}
 	w.Verbose(msg)
-}
-
-// validateVersionConstraint checks for conflicts between an explicit @version
-// in the reference name and a --version constraint flag. Returns an error if
-// both are set, which would be ambiguous.
-func validateVersionConstraint(nameOrRef, versionConstraint string) error {
-	if versionConstraint == "" {
-		return nil
-	}
-
-	// Check for @version in the reference
-	if idx := strings.LastIndex(nameOrRef, "@"); idx > 0 {
-		return fmt.Errorf("cannot use --version with an explicit version in reference %q; use one or the other", nameOrRef)
-	}
-
-	return catversion.ValidateConstraint(versionConstraint)
 }
 
 // resolveVersionConstraint lists all versions of the artifact in the

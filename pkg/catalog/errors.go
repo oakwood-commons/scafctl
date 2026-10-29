@@ -6,6 +6,7 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrArtifactNotFound is returned when an artifact cannot be found.
@@ -16,6 +17,116 @@ var ErrArtifactExists = errors.New("artifact already exists")
 
 // ErrInvalidReference is returned when a reference is malformed.
 var ErrInvalidReference = errors.New("invalid reference")
+
+// ErrInvalidQuery is returned when an artifact query is under-specified or
+// internally inconsistent.
+var ErrInvalidQuery = errors.New("invalid artifact query")
+
+// ErrAmbiguousArtifact is returned when a query that must identify a single
+// artifact matches more than one.
+var ErrAmbiguousArtifact = errors.New("ambiguous artifact")
+
+// InvalidQueryError provides details about a malformed artifact query.
+type InvalidQueryError struct {
+	Query   ArtifactQuery
+	Message string
+}
+
+// Error implements the error interface.
+func (e *InvalidQueryError) Error() string {
+	return fmt.Sprintf("invalid artifact query %s: %s", e.Query.String(), e.Message)
+}
+
+// Unwrap returns the base error for errors.Is support.
+func (e *InvalidQueryError) Unwrap() error {
+	return ErrInvalidQuery
+}
+
+// AmbiguousArtifactError reports that a query matched several distinct
+// artifacts. Matches holds every candidate so callers can present them, and
+// the message names the selectors that would narrow the query.
+type AmbiguousArtifactError struct {
+	Query   ArtifactQuery
+	Matches []ArtifactInfo
+}
+
+// Error implements the error interface.
+func (e *AmbiguousArtifactError) Error() string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "artifact query %s matched %d artifacts", e.Query.String(), len(e.Matches))
+
+	if hints := e.Discriminators(); len(hints) > 0 {
+		fmt.Fprintf(&sb, "; narrow by %s", strings.Join(hints, " or "))
+	}
+
+	for _, m := range e.Matches {
+		fmt.Fprintf(&sb, "\n  - %s (%s) %s", m.Reference.VersionOrDigest(), describeSource(m.Annotations), m.Digest)
+	}
+	return sb.String()
+}
+
+// Discriminators names the query field that would narrow the match set to a
+// single artifact.
+//
+// Source takes precedence over version: when the matches span several origins
+// the ambiguity is an origin ambiguity, and comparing versions across
+// different origins is meaningless. Only once every match shares one origin
+// does a version difference become the thing to narrow by.
+func (e *AmbiguousArtifactError) Discriminators() []string {
+	versions := make(map[string]struct{}, len(e.Matches))
+	sources := make(map[string]struct{}, len(e.Matches))
+	for _, m := range e.Matches {
+		versions[m.Annotations[AnnotationVersion]] = struct{}{}
+		sources[describeSource(m.Annotations)] = struct{}{}
+	}
+
+	switch {
+	case len(sources) > 1:
+		return []string{"source"}
+	case len(versions) > 1:
+		return []string{"version"}
+	default:
+		return nil
+	}
+}
+
+// Unwrap returns the base error for errors.Is support.
+func (e *AmbiguousArtifactError) Unwrap() error {
+	return ErrAmbiguousArtifact
+}
+
+// AmbiguousCandidate describes one artifact an ambiguous query matched, in a
+// form callers can use to build follow-up commands.
+type AmbiguousCandidate struct {
+	// Reference is the matched artifact's identity.
+	Reference Reference
+
+	// Origin is the value that selects this artifact as a source: SourceBuiltKeyword
+	// for locally built artifacts, or the canonical remote catalog identity.
+	// It round-trips through ParseSourceSelector.
+	Origin string
+
+	// Digest is the matched artifact's content digest.
+	Digest string
+}
+
+// Candidates returns every matched artifact with the origin that selects it,
+// in the order the matches were found.
+func (e *AmbiguousArtifactError) Candidates() []AmbiguousCandidate {
+	candidates := make([]AmbiguousCandidate, 0, len(e.Matches))
+	for _, m := range e.Matches {
+		origin := m.Annotations[AnnotationSourceCanonical]
+		if origin == "" {
+			origin = SourceBuiltKeyword
+		}
+		candidates = append(candidates, AmbiguousCandidate{
+			Reference: m.Reference,
+			Origin:    origin,
+			Digest:    m.Digest,
+		})
+	}
+	return candidates
+}
 
 // ArtifactNotFoundError provides details about a missing artifact.
 type ArtifactNotFoundError struct {
@@ -169,6 +280,87 @@ var ErrEnumerationNotSupported = errors.New("registry does not support repositor
 // does not support listing all repositories.
 func IsEnumerationNotSupported(err error) bool {
 	return errors.Is(err, ErrEnumerationNotSupported)
+}
+
+// BuilderKind identifies which builder produced a BuilderError.
+type BuilderKind string
+
+const (
+	// BuilderKindManifest identifies errors raised by a ManifestBuilder.
+	BuilderKindManifest BuilderKind = "manifest"
+	// BuilderKindIndex identifies errors raised by an IndexBuilder.
+	BuilderKindIndex BuilderKind = "index"
+)
+
+// BuildStage is the phase of artifact assembly that failed.
+type BuildStage string
+
+const (
+	// BuildStageAssemble covers validating the builder chain and deriving a
+	// descriptor from in-memory state (e.g. missing layers, config, platforms).
+	BuildStageAssemble BuildStage = "assemble"
+	// BuildStageEncode covers serializing the manifest or index to JSON.
+	BuildStageEncode BuildStage = "encode"
+	// BuildStagePush covers writing a layer, config, manifest, or index blob.
+	BuildStagePush BuildStage = "push"
+	// BuildStagePlatform covers resolving or validating a platform string.
+	BuildStagePlatform BuildStage = "platform"
+)
+
+// BuilderError reports a failure while assembling or pushing an OCI artifact
+// through a ManifestBuilder or an IndexBuilder. Stage and Builder identify the
+// failing phase and producer; Platform is set for platform-scoped failures;
+// Detail is a human-readable description of the specific thing that failed
+// (e.g. "no layers", "pushing config"); Cause holds the underlying error.
+type BuilderError struct {
+	Stage    BuildStage
+	Builder  BuilderKind
+	Platform string
+	Detail   string
+	Cause    error
+}
+
+// Error implements the error interface. Detail carries the full non-cause
+// message prefix, so callers that relied on the previous fmt.Errorf strings
+// still see the same text.
+func (e *BuilderError) Error() string {
+	if e.Cause == nil {
+		return e.Detail
+	}
+	return e.Detail + ": " + e.Cause.Error()
+}
+
+// Unwrap returns the underlying error so callers can inspect the root cause.
+func (e *BuilderError) Unwrap() error {
+	return e.Cause
+}
+
+// TagError reports a failure while tagging an artifact descriptor. Tag names
+// the tag being written (empty for pre-write validation errors); Reason
+// describes a validation failure when Cause is nil; Cause holds the underlying
+// tagger error when the write itself failed.
+type TagError struct {
+	Tag    string
+	Reason string
+	Cause  error
+}
+
+// Error implements the error interface, preserving the message shapes that
+// preceded this typed error.
+func (e *TagError) Error() string {
+	switch {
+	case e.Cause != nil:
+		return fmt.Sprintf("tagging artifact %q: %v", e.Tag, e.Cause)
+	case e.Reason != "":
+		return "building tag: " + e.Reason
+	default:
+		return "tagging artifact"
+	}
+}
+
+// Unwrap returns the underlying tagger error so callers can inspect the cause.
+func (e *TagError) Unwrap() error {
+	return e.Cause
 }
 
 // AuthDegradedError indicates that stored credentials for a registry were

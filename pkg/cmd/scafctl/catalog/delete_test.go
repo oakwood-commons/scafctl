@@ -6,6 +6,8 @@ package catalog
 import (
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -20,7 +22,7 @@ func TestCommandDelete(t *testing.T) {
 	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
 
 	require.NotNil(t, cmd)
-	assert.Equal(t, "delete <name@version>", cmd.Use)
+	assert.Equal(t, "delete <reference>", cmd.Use)
 	assert.Contains(t, cmd.Aliases, "rm")
 	assert.Contains(t, cmd.Aliases, "remove")
 	assert.NotEmpty(t, cmd.Short)
@@ -37,11 +39,8 @@ func TestCommandDelete_Flags(t *testing.T) {
 	flagTests := []struct {
 		name string
 	}{
-		{"catalog"},
-		{"kind"},
-		{"insecure"},
+		{"all"},
 		{"force"},
-		{"dry-run"},
 	}
 
 	for _, tt := range flagTests {
@@ -53,16 +52,44 @@ func TestCommandDelete_Flags(t *testing.T) {
 	}
 }
 
-func TestCommandDelete_CatalogFlagShorthand(t *testing.T) {
+func TestCommandDelete_PersistentFlags(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
 
-	f := cmd.Flags().ShorthandLookup("c")
-	require.NotNil(t, f, "shorthand -c should exist")
-	assert.Equal(t, "catalog", f.Name)
+	for _, name := range []string{"dry-run", "insecure"} {
+		flag := cmd.PersistentFlags().Lookup(name)
+		require.NotNil(t, flag, "persistent flag %q should exist", name)
+	}
+}
+
+// The root command is remote-only (like pull), so --catalog and --kind live on
+// the kind subcommands; --force only guards --all and is not on them.
+func TestCommandDelete_RootAndKindFlagSplit(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
+
+	assert.Nil(t, cmd.Flags().Lookup("catalog"))
+	assert.Nil(t, cmd.Flags().Lookup("kind"))
+	assert.NotNil(t, cmd.PersistentFlags().Lookup("dry-run"))
+	assert.NotNil(t, cmd.PersistentFlags().Lookup("insecure"))
+
+	sub, _, err := cmd.Find([]string{"solution"})
+	require.NoError(t, err)
+	assert.NotNil(t, sub.Flags().Lookup("catalog"))
+	assert.NotNil(t, sub.Flags().Lookup("origin"))
+	assert.NotNil(t, sub.InheritedFlags().Lookup("dry-run"))
+	assert.NotNil(t, sub.InheritedFlags().Lookup("insecure"))
+	assert.Nil(t, sub.Flags().Lookup("force"))
+	assert.Nil(t, sub.Flags().Lookup("all"))
+	c := sub.Flags().ShorthandLookup("c")
+	require.NotNil(t, c, "shorthand -c should exist on kind commands")
+	assert.Equal(t, "catalog", c.Name)
 }
 
 func TestCommandDelete_RequiresExactlyOneArg(t *testing.T) {
@@ -71,98 +98,107 @@ func TestCommandDelete_RequiresExactlyOneArg(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
+	ctx, out := newCapturingCtx(t)
+	cmd.SetContext(ctx)
 	cmd.SetArgs([]string{})
 
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requires exactly 1 argument")
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	// The entry point does not print errors carrying an exit code.
+	assert.Contains(t, out.String(), "requires exactly 1 argument")
 }
 
-func TestCommandDelete_VersionRequired(t *testing.T) {
+func TestCommandDelete_ShortReferenceRejected(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
 	cmd.SetContext(newCatalogTestCtx(t))
-	cmd.SetArgs([]string{"my-solution"})
+	cmd.SetArgs([]string{"my-solution@1.0.0"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRemoteReferenceRequired)
+	assert.Contains(t, err.Error(), cliParams.BinaryName+" catalog delete <kind> <name@version>")
+}
+
+func TestCommandDelete_RemoteReferenceVersionRequired(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"ghcr.io/myorg/scafctl/solutions/my-solution"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "version required")
 }
 
-func TestCommandDelete_InvalidKind(t *testing.T) {
+func TestCommandDelete_RemoteReferenceDryRun(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
 	cmd.SetContext(newCatalogTestCtx(t))
-	cmd.SetArgs([]string{"my-solution@1.0.0", "--kind", "bogus"})
+	cmd.SetArgs([]string{"ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0", "--dry-run"})
 
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid kind")
+	require.NoError(t, cmd.Execute())
 }
 
-func TestLooksLikeRemoteReference(t *testing.T) {
+func TestValidateDeleteRoot_CustomBinaryName(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name     string
-		ref      string
-		expected bool
-	}{
-		{
-			name:     "simple name is local",
-			ref:      "my-solution@1.0.0",
-			expected: false,
-		},
-		{
-			name:     "localhost prefix is remote",
-			ref:      "localhost:5000/solutions/my-solution@1.0.0",
-			expected: true,
-		},
-		{
-			name:     "host with dot is remote",
-			ref:      "ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0",
-			expected: true,
-		},
-		{
-			name:     "host with port is remote",
-			ref:      "registry:5000/solutions/my-solution@1.0.0",
-			expected: true,
-		},
-		{
-			name:     "oci scheme prefix is remote",
-			ref:      "oci://ghcr.io/myorg/solutions/my-solution@1.0.0",
-			expected: true,
-		},
-		{
-			name:     "docker registry is remote",
-			ref:      "docker.io/myorg/my-solution@1.0.0",
-			expected: true,
-		},
-		{
-			name:     "no slash is local",
-			ref:      "my-solution",
-			expected: false,
-		},
-		{
-			name:     "path without dot host is local",
-			ref:      "myorg/my-solution",
-			expected: false,
-		},
-	}
+	custom := settings.NewCliParams()
+	custom.BinaryName = "mycli"
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := looksLikeRemoteReference(tt.ref)
-			assert.Equal(t, tt.expected, result, "looksLikeRemoteReference(%q)", tt.ref)
-		})
-	}
+	err := validateDeleteRoot(&DeleteOptions{Reference: "my-solution@1.0.0", CliParams: custom})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mycli catalog delete <kind> <name@version>")
+	assert.NotContains(t, err.Error(), "scafctl catalog delete")
+}
+
+func TestBuildDeleteRemoteReference(t *testing.T) {
+	t.Parallel()
+
+	build, err := buildDeleteRemoteReference(newCatalogTestCtx(t), &DeleteOptions{
+		Reference: "ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "my-solution", build.Reference.Name)
+	assert.Equal(t, "ghcr.io", build.Registry)
+	assert.NotEmpty(t, build.Repository)
+	assert.Equal(t, catalog.SourceAny, build.Source.Kind)
+}
+
+func TestBuildDeleteRemoteReference_Invalid(t *testing.T) {
+	t.Parallel()
+
+	_, err := buildDeleteRemoteReference(newCatalogTestCtx(t), &DeleteOptions{Reference: "not a reference"})
+
+	require.Error(t, err)
+}
+
+func TestCommandDelete_ValidationFailureExitCode(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"my-solution@1.0.0"})
+
+	err := cmd.Execute()
+
+	require.Error(t, err)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
 }
 
 func TestCommandDelete_AllFlag(t *testing.T) {
@@ -185,26 +221,15 @@ func TestCommandDelete_AllWithArgs(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
-	cmd.SetContext(newCatalogTestCtx(t))
+	ctx, out := newCapturingCtx(t)
+	cmd.SetContext(ctx)
 	cmd.SetArgs([]string{"--all", "my-solution@1.0.0"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--all cannot be used with positional arguments")
-}
-
-func TestCommandDelete_AllWithCatalog(t *testing.T) {
-	t.Parallel()
-
-	cliParams := settings.NewCliParams()
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
-	cmd.SetContext(newCatalogTestCtx(t))
-	cmd.SetArgs([]string{"--all", "--catalog", "myregistry"})
-
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--all only applies to the local catalog; cannot be combined with --catalog")
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	assert.Contains(t, out.String(), "--all cannot be used with positional arguments")
 }
 
 func TestRunDeleteAll_EmptyCatalog(t *testing.T) {

@@ -344,8 +344,8 @@ func (c *AuthHandlerGRPCClient) GetAuthHandlers(ctx context.Context) ([]AuthHand
 			flows[j] = auth.Flow(f)
 		}
 		caps := make([]auth.Capability, len(h.Capabilities))
-		for j, cap := range h.Capabilities {
-			caps[j] = auth.Capability(cap)
+		for j, cp := range h.Capabilities {
+			caps[j] = auth.Capability(cp)
 		}
 		handlers[i] = AuthHandlerInfo{
 			Name:         h.Name,

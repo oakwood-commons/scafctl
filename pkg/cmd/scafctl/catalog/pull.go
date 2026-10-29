@@ -55,185 +55,89 @@ func CommandPull(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		Long: heredoc.Docf(`
 			Pull a catalog artifact from a remote OCI registry to the local catalog.
 
-			References can be:
-			  - Short name:    my-solution@1.0.0  (requires --catalog or default catalog)
-			  - Full remote:   ghcr.io/myorg/solutions/my-solution@1.0.0
+			The root pull command only accepts full remote OCI references.
+			Use kind subcommands for short references:
+			  - %[1]s catalog pull solution <name[@version]>
+			  - %[1]s catalog pull provider <name[@version]>
+			  - %[1]s catalog pull auth-handler <name[@version]>
+
+			When using --as, the target must be a concrete name@version.
+			Bare names, the latest alias, and digest pins are rejected.
 
 			If no version is specified, the latest version is pulled.
 
-			When using a short name, the source registry is resolved in this order:
-			  1. --catalog flag (URL or configured catalog name)
-			  2. Default catalog from config
-
 			Examples:
-			  # Pull using the configured default catalog
-			  %[1]s catalog pull my-solution
-
-			  # Pull a specific version from the default catalog
-			  %[1]s catalog pull my-solution@1.0.0
-
-			  # Pull from a named catalog
-			  %[1]s catalog pull my-solution --catalog myregistry
-
 			  # Pull using a full remote reference
 			  %[1]s catalog pull ghcr.io/myorg/solutions/my-solution@1.0.0
 
 			  # Pull with a different local name
-			  %[1]s catalog pull my-solution@1.0.0 --as local-solution
+			  %[1]s catalog pull ghcr.io/myorg/solutions/my-solution@1.0.0 --as local-solution@1.0.0
 
 			  # Force overwrite existing
-			  %[1]s catalog pull my-solution@1.0.0 --force
+			  %[1]s catalog pull ghcr.io/myorg/solutions/my-solution@1.0.0 --force
 		`, cliParams.BinaryName),
-		Args:         cobra.ExactArgs(1),
+		Args:         rootArgs("pull", cliParams.BinaryName, cobra.ExactArgs(1)),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := reportUnknownKind(cmd, "pull", cliParams.BinaryName, args); err != nil {
+				return err
+			}
 			options.Reference = args[0]
 			return runPull(cmd.Context(), options)
 		},
 	}
 
-	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
-	cmd.Flags().StringVar(&options.TargetName, "as", "", "Store with a different local name")
-	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
-	cmd.Flags().StringVar(&options.VersionConstraint, "version", "", "Semver version constraint (e.g., ^1.0.0, ~2.1, >=1.0 <3.0)")
-	cmd.Flags().BoolVarP(&options.Force, "force", "f", false, "Overwrite existing local artifact")
-	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be pulled without actually pulling")
-	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
-	cmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Invalidate the artifact cache for this artifact after pulling")
+	cmd.PersistentFlags().StringVar(&options.TargetName, "as", "", "Store with a different local name@version")
+	cmd.PersistentFlags().StringVar(&options.VersionConstraint, "version", "", "Semver version constraint (e.g., ^1.0.0, ~2.1, >=1.0 <3.0)")
+	cmd.PersistentFlags().BoolVarP(&options.Force, "force", "f", false, "Overwrite existing local artifact")
+	cmd.PersistentFlags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be pulled without actually pulling")
+	cmd.PersistentFlags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
+	cmd.PersistentFlags().BoolVar(&options.NoCache, "no-cache", false, "Invalidate the artifact cache for this artifact after pulling")
 	cmd.Flags().BoolVar(&options.Strict, "strict", false, "Fail if the pulled bundle is incomplete")
 	cmd.Flags().BoolVar(&options.NoVerify, "no-verify", false, "Skip pulled-bundle completeness verification")
+	addPullKindCommands(cmd, cliParams, ioStreams, options)
 
 	return cmd
 }
 
 func runPull(ctx context.Context, opts *PullOptions) error {
+	return runKind(ctx, "pull", opts.Reference, opts,
+		validatePullInternal,
+		buildPullRemoteReference,
+		runPullResolvedBuiltReference)
+}
+
+func buildPullRemoteReference(ctx context.Context, opts *PullOptions) (pullReferenceBuild, error) {
+	w := writer.FromContext(ctx)
+	w.Verbose("Pulling from full OCI reference")
+
+	build, err := newPullReferenceBuilder(ctx, opts).
+		parseRemoteReference().
+		Build()
+	if err != nil {
+		return pullReferenceBuild{}, err
+	}
+
+	verboseRefInfo(w, build.Reference.Name, string(build.Reference.Kind), build.Tag)
+
+	return build, nil
+}
+
+func runPullResolvedBuiltReference(ctx context.Context, opts *PullOptions, build pullReferenceBuild) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
+	ref := build.Reference
+	registry := build.Registry
+	repository := build.Repository
 
-	// Validate --version constraint vs @version in reference
-	if err := validateVersionConstraint(opts.Reference, opts.VersionConstraint); err != nil {
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
-	}
-
-	var ref catalog.Reference
-	var registry, repository string
-	var err error
-
-	// Validate --kind early (used for local tagging after pull)
-	if opts.Kind != "" {
-		if _, ok := catalog.ParseArtifactKind(opts.Kind); !ok {
-			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
-			return exitcode.Errorf("invalid kind")
-		}
-	}
-
-	if looksLikeRemoteReference(opts.Reference) {
-		// Full remote reference: ghcr.io/myorg/solutions/my-solution@1.0.0
-		w.Verbose("Pulling from full OCI reference")
-
-		remoteRef, parseErr := catalog.ParseRemoteReference(opts.Reference)
-		if parseErr != nil {
-			w.Errorf("invalid reference: %v", parseErr)
-			return exitcode.WithCode(parseErr, exitcode.InvalidInput)
-		}
-
-		ref, err = remoteRef.ToReference()
-		if err != nil {
-			w.Errorf("invalid reference: %v", err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-
-		registry = remoteRef.Registry
-		repository = remoteRef.Repository
-
-		verboseRefInfo(w, remoteRef.Name, string(remoteRef.Kind), remoteRef.Tag)
-
-		if opts.Catalog != "" {
-			w.Errorf("cannot use --catalog with a full remote reference")
-			return exitcode.Errorf("conflicting options")
-		}
-	} else {
-		// Short name: my-solution or my-solution@1.0.0
-		w.Verbosef("Pulling from catalog %q", opts.Catalog)
-
-		name, version := catalog.ParseNameVersion(opts.Reference)
-
-		var artifactKind catalog.ArtifactKind
-		if opts.Kind != "" {
-			artifactKind, _ = catalog.ParseArtifactKind(opts.Kind) // already validated above
-		}
-
-		ref = catalog.Reference{
-			Kind: artifactKind,
-			Name: name,
-		}
-
-		if version != "" {
-			ref, err = catalog.ParseReference(ref.Kind, opts.Reference)
-			if err != nil {
-				w.Errorf("invalid reference: %v", err)
-				return exitcode.WithCode(err, exitcode.InvalidInput)
-			}
-		}
-
-		// Resolve catalog URL from flag, config name, or default
-		catalogURL, resolveErr := catalog.ResolveCatalogURL(ctx, opts.Catalog)
-		if resolveErr != nil {
-			w.Errorf("%v", resolveErr)
-			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
-		}
-
-		registry, repository = catalog.ParseCatalogURL(catalogURL)
-		if registry == "" {
-			resolveErr = fmt.Errorf("invalid catalog URL: %s", catalogURL)
-			w.Errorf("%v", resolveErr)
-			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
-		}
-	}
-
-	// Create credential store
-	credStore, err := catalog.NewCredentialStore(*lgr)
+	remoteCatalog, err := newPullRemoteCatalog(ctx, opts, registry, repository)
 	if err != nil {
-		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
-	}
-
-	// Resolve auth provider for automatic token bridging
-	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
-	authScope := resolveAuthScope(ctx, opts.Catalog)
-
-	verboseRemoteInfo(ctx, w, registry, repository, authHandlerName(authHandler), authScope)
-
-	// Create remote catalog
-	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
-		Name:            registry,
-		Registry:        registry,
-		Repository:      repository,
-		CredentialStore: credStore,
-		AuthHandler:     authHandler,
-		AuthScope:       authScope,
-		Insecure:        opts.Insecure,
-		Logger:          *lgr,
-	})
-	if err != nil {
-		err = fmt.Errorf("failed to create remote catalog: %w", err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	// When --version constraint is set, resolve the best matching version
-	if opts.VersionConstraint != "" {
-		resolved, constraintErr := resolveVersionConstraint(ctx, remoteCatalog, ref, opts.VersionConstraint)
-		if constraintErr != nil {
-			w.Errorf("%v", constraintErr)
-			return exitcode.WithCode(constraintErr, exitcode.InvalidInput)
-		}
-		w.Verbosef("Version constraint %q resolved to %s", opts.VersionConstraint, resolved.Version.Original())
-		ref = resolved
-	}
-
-	// Resolve to get actual version if not specified
-	info, err := remoteCatalog.Resolve(ctx, ref)
+	// Resolve the final concrete remote reference to fetch.
+	ref, err = resolvePullFetchReference(ctx, opts, remoteCatalog, ref)
 	if err != nil {
 		if catalog.IsNotFound(err) {
 			w.Errorf("artifact %q not found in remote registry", opts.Reference)
@@ -243,16 +147,10 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
-	ref = info.Reference
 
 	// Dry-run mode: show what would be pulled and return
 	if opts.DryRun {
-		targetName := ref.Name
-		if opts.TargetName != "" {
-			targetName = opts.TargetName
-		}
-		src := fmt.Sprintf("%s/%s/%s/%s", registry, repository, ref.Kind.Plural(), ref.Name)
-		w.Infof("Would pull %s@%s from %s to local catalog as %s", ref.Name, ref.VersionOrDigest(), src, targetName)
+		writePullDryRun(w, opts, ref, registry, repository)
 		return nil
 	}
 
@@ -264,8 +162,28 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	// Prepare copy options
-	copyOpts := catalog.CopyOptions{
+	copyOpts := newPullCopyOptions(lgr, opts)
+
+	if ref.Kind == "" {
+		err = fmt.Errorf("artifact kind is required after pull reference resolution")
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	// Pull from remote
+	repoPath := remoteCatalog.RepositoryPath(ref)
+	w.Infof("Pulling %s@%s from %s...", ref.Name, ref.VersionOrDigest(), repoPath)
+
+	result, err := remoteCatalog.CopyToLocal(ctx, ref, localCatalog, copyOpts)
+	if err != nil {
+		return handlePullCopyError(w, err)
+	}
+
+	return postPull(ctx, opts, ref, result, localCatalog, remoteCatalog)
+}
+
+func newPullCopyOptions(lgr *logr.Logger, opts *PullOptions) catalog.CopyOptions {
+	return catalog.CopyOptions{
 		TargetName: opts.TargetName,
 		Force:      opts.Force,
 		OnProgress: func(desc ocispec.Descriptor) {
@@ -274,41 +192,35 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 				"size", desc.Size)
 		},
 	}
+}
 
-	// Apply kind BEFORE CopyTo so the local catalog tag includes the kind
-	// prefix (e.g., "solution/name:1.0.0" instead of "/name:1.0.0").
-	// --kind overrides, otherwise default kindless refs to "solution".
-	if opts.Kind != "" && ref.Kind == "" {
-		ref.Kind, _ = catalog.ParseArtifactKind(opts.Kind) // already validated above
-	}
-	if ref.Kind == "" {
-		ref.Kind = catalog.ArtifactKindSolution
-	}
-
-	// Pull from remote
-	repoPath := remoteCatalog.RepositoryPath(ref)
-	w.Infof("Pulling %s@%s from %s...", ref.Name, ref.VersionOrDigest(), repoPath)
-
-	result, err := remoteCatalog.CopyTo(ctx, ref, localCatalog, copyOpts)
-	if err != nil {
-		if catalog.IsExists(err) {
-			w.Errorf("artifact already exists locally (use --force to overwrite)")
-			return exitcode.WithCode(err, exitcode.CatalogError)
-		}
-		err = fmt.Errorf("failed to pull artifact: %w", err)
-		w.Errorf("%v", err)
+func handlePullCopyError(w *writer.Writer, err error) error {
+	if catalog.IsExists(err) {
+		w.Errorf("artifact already exists locally (use --force to overwrite)")
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
+	err = fmt.Errorf("failed to pull artifact: %w", err)
+	w.Errorf("%v", err)
+	return exitcode.WithCode(err, exitcode.CatalogError)
+}
 
-	// Build display name
-	displayName := ref.Name
-	if opts.TargetName != "" {
-		displayName = opts.TargetName
-	}
+func postPull(
+	ctx context.Context,
+	opts *PullOptions,
+	ref catalog.Reference,
+	result catalog.ArtifactInfo,
+	localCatalog *catalog.LocalCatalog,
+	remoteCatalog *catalog.RemoteCatalog,
+) error {
+	w := writer.FromContext(ctx)
+	lgr := logger.FromContext(ctx)
+	// The reference that was actually stored locally: with --as the artifact
+	// lives under the renamed target (name and version), not the source ref.
+	storedRef := result.Reference
 
 	w.Successf("Pulled %s@%s (%s)",
-		displayName,
-		ref.VersionOrDigest(),
+		storedRef.Name,
+		storedRef.VersionOrDigest(),
 		format.Bytes(result.Size))
 
 	// Warn about stale credentials if anonymous fallback was used.
@@ -321,10 +233,8 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	// FetchWithBundle (avoids a second network round-trip). Consumer policy is
 	// warn-by-default; only --strict makes incompleteness fatal.
 	if !opts.NoVerify && ref.Kind == catalog.ArtifactKindSolution {
-		// Verify against the reference that was actually stored locally: with
-		// --as the artifact lives under the renamed target ref, and the source
-		// ref may not exist in the local catalog at all.
-		storedRef := result.Reference
+		// Verify against the stored ref: the source ref may not exist in the
+		// local catalog at all.
 		if verr := verifyPulledBundle(ctx, localCatalog, storedRef, opts, w, lgr); verr != nil {
 			return verr
 		}
@@ -334,13 +244,10 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	// subsequent run/render/get commands fetch the freshly pulled artifact from
 	// the local catalog rather than a cached copy.
 	if opts.NoCache {
-		targetName := ref.Name
-		if opts.TargetName != "" {
-			targetName = opts.TargetName
-		}
+		targetName := storedRef.Name
 		version := ""
-		if ref.Version != nil {
-			version = ref.Version.String()
+		if storedRef.Version != nil {
+			version = storedRef.Version.String()
 		}
 		if err := cache.InvalidateArtifact(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL, string(ref.Kind), targetName, version); err != nil {
 			lgr.V(1).Info("failed to invalidate artifact cache (ignoring)", "error", err)
@@ -350,6 +257,15 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	}
 
 	return nil
+}
+
+func writePullDryRun(w *writer.Writer, opts *PullOptions, ref catalog.Reference, registry, repository string) {
+	targetName := ref.Name
+	if opts.TargetName != "" {
+		targetName = opts.TargetName
+	}
+	src := fmt.Sprintf("%s/%s/%s/%s", registry, repository, ref.Kind.Plural(), ref.Name)
+	w.Infof("Would pull %s@%s from %s to local catalog as %s", ref.Name, ref.VersionOrDigest(), src, targetName)
 }
 
 // verifyPulledBundle fetches the pulled bundle from the local catalog, verifies
@@ -418,4 +334,30 @@ func pullVerifyDecision(vr *bundler.VerifyResult, strict bool) (warnMsg string, 
 		return "", exitcode.Errorf("pulled bundle has %d warning(s) (strict)", len(vr.Warnings))
 	}
 	return "", nil
+}
+
+func validatePullInternal(opts *PullOptions) error {
+	if err := validateVersionConstraint(opts.Reference, opts.VersionConstraint); err != nil {
+		return err
+	}
+
+	if !looksLikeRemoteReference(opts.Reference) {
+		return fmt.Errorf("%w; use 'catalog pull <kind> <name[@version]>' for short references", ErrRemoteReferenceRequired)
+	}
+
+	remoteRef, err := catalog.ParseRemoteReference(opts.Reference)
+	if err != nil {
+		return fmt.Errorf("invalid reference: %w", err)
+	}
+
+	parsedRef, err := remoteRef.ToReference()
+	if err != nil {
+		return fmt.Errorf("invalid reference: %w", err)
+	}
+
+	if err := validateTargetName(parsedRef, opts.TargetName); err != nil {
+		return err
+	}
+
+	return nil
 }

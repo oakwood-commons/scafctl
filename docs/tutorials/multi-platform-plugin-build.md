@@ -112,12 +112,12 @@ Push the multi-platform artifact to an OCI registry:
 {{< tabs "multi-platform-plugin-build-cmd-2" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl catalog push my-provider@1.0.0 --catalog ghcr.io/myorg/scafctl
+scafctl catalog push provider my-provider@1.0.0 --catalog ghcr.io/myorg/scafctl
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl catalog push my-provider@1.0.0 --catalog ghcr.io/myorg/scafctl
+scafctl catalog push provider my-provider@1.0.0 --catalog ghcr.io/myorg/scafctl
 ```
 {{% /tab %}}
 {{< /tabs >}}

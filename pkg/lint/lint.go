@@ -608,8 +608,8 @@ func lintResolvers(sol *solution.Solution, result *Result, registry providerLook
 					if p, exists := registry.Get(step.Provider); exists {
 						desc := p.Descriptor()
 						hasValidation := false
-						for _, cap := range desc.Capabilities {
-							if cap == provider.CapabilityValidation {
+						for _, cp := range desc.Capabilities {
+							if cp == provider.CapabilityValidation {
 								hasValidation = true
 								break
 							}

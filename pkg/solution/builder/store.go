@@ -9,198 +9,199 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"oras.land/oras-go/v2/content/memory"
+
 	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 )
 
-// StoreOptions configures how a solution artifact is stored.
-type StoreOptions struct {
-	// Force overwrites an existing version in the catalog.
-	Force bool `json:"force,omitempty" yaml:"force,omitempty" doc:"Overwrite existing version"`
-
-	// Source is the origin of the solution (repository URL or file path), stored as org.opencontainers.image.source.
-	Source string `json:"source,omitempty" yaml:"source,omitempty" doc:"Source repository URL or file path"`
-
-	// DisplayName is the human-readable name, stored as an OCI annotation.
-	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable display name"`
-
-	// Description is the solution description, stored as an OCI annotation.
-	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Solution description"`
-
-	// Category classifies the solution, stored as an OCI annotation.
-	Category string `json:"category,omitempty" yaml:"category,omitempty" doc:"Solution category"`
-
-	// Tags are searchable keywords, stored as a comma-separated OCI annotation.
-	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Searchable tags"`
-
-	// Annotations is a free-form map merged into OCI annotations.
-	// Engine-set annotations take precedence over user-supplied ones.
-	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty" doc:"User-supplied annotations"`
-
-	// ArtifactCacheDir is the path to the artifact cache directory.
-	// When non-empty, the corresponding artifact cache entry is invalidated
-	// after a successful store to prevent stale reads on subsequent runs.
-	ArtifactCacheDir string `json:"-" yaml:"-" doc:"Artifact cache directory path"`
-
-	// ArtifactCacheTTL is the TTL for the artifact cache.
-	// Required when ArtifactCacheDir is set.
-	ArtifactCacheTTL time.Duration `json:"-" yaml:"-" doc:"Artifact cache TTL"`
-
-	// DeferBuildCache, when true, skips writing the build-cache entry during the
-	// store. The caller is expected to call WriteBuildCacheEntry only after any
-	// post-store verification passes, so a failed verification does not leave a
-	// build-cache entry that would let a rerun hit a cached broken artifact and
-	// exit 0 without re-verifying.
-	DeferBuildCache bool `json:"-" yaml:"-" doc:"Skip writing the build cache entry during store"`
-}
-
-// StoreResult holds the outcome of a store operation.
+// StoreResult holds the outcome of publishing a built solution.
 type StoreResult struct {
 	// Info is the catalog artifact info returned after storing.
 	Info catalog.ArtifactInfo `json:"info" yaml:"info" doc:"Artifact info from the catalog"`
 
 	// CacheWritten indicates whether a build cache entry was written.
 	CacheWritten bool `json:"cacheWritten,omitempty" yaml:"cacheWritten,omitempty" doc:"Whether the build cache entry was written"`
-
-	// cache holds just the metadata needed to write a deferred build-cache
-	// entry after the caller has verified the stored artifact. It deliberately
-	// does NOT retain the full *BuildResult, whose TarData/Dedup payload can be
-	// large and is not needed once the artifact is stored.
-	cache deferredCacheInfo
 }
 
-// deferredCacheInfo carries the minimal fields WriteBuildCacheEntry needs to
-// construct a build-cache entry without retaining the whole build result.
-type deferredCacheInfo struct {
-	fingerprint    string
-	cacheDir       string
-	inputFileCount int
+// builtStore publishes a built artifact. *catalog.LocalCatalog satisfies it.
+type builtStore interface {
+	StoreBuilt(ctx context.Context, builder catalog.ArtifactBuilder, force bool) (catalog.ArtifactInfo, error)
 }
 
-// StoreSolutionArtifact stores a built solution artifact in the local catalog,
-// choosing between dedup (v2) and traditional (v1) storage based on the build
-// result. It also writes a build cache entry when applicable.
-func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatalog, name string, version *semver.Version, content []byte, br *BuildResult, opts StoreOptions) (*StoreResult, error) {
-	if version == nil {
-		return nil, fmt.Errorf("version is required")
-	}
+// builtResolver resolves an artifact reference. *catalog.LocalCatalog
+// satisfies it.
+type builtResolver interface {
+	Resolve(ctx context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error)
+}
 
-	lgr := logger.FromContext(ctx)
-
-	ref := catalog.Reference{
+// BuiltSolutionRef returns the full-identity reference of a solution built
+// into the local catalog. Built pins the origin, so lookups are a direct tag
+// lookup that never matches (or becomes ambiguous with) a pulled copy of the
+// same name@version.
+func BuiltSolutionRef(name string, version *semver.Version) catalog.Reference {
+	return catalog.Reference{
 		Kind:    catalog.ArtifactKindSolution,
 		Name:    name,
 		Version: version,
+		Built:   true,
 	}
-
-	annotations := catalog.NewAnnotationBuilder().
-		SetMap(opts.Annotations).
-		Set(catalog.AnnotationSource, opts.Source).
-		Set(catalog.AnnotationDisplayName, opts.DisplayName).
-		Set(catalog.AnnotationDescription, opts.Description).
-		Set(catalog.AnnotationCategory, opts.Category).
-		SetTags(opts.Tags).
-		Build()
-
-	var info catalog.ArtifactInfo
-	var err error
-
-	if br != nil && br.Dedup != nil {
-		blobLayers := make([][]byte, 0, len(br.Dedup.LargeBlobs))
-		for _, blob := range br.Dedup.LargeBlobs {
-			blobLayers = append(blobLayers, blob.Content)
-		}
-		info, err = localCatalog.StoreDedup(ctx, ref, content, br.Dedup.ManifestJSON, br.Dedup.SmallBlobsTar, blobLayers, annotations, opts.Force, lockLayers(br)...)
-	} else {
-		var bundleData []byte
-		if br != nil {
-			bundleData = br.TarData
-		}
-		info, err = localCatalog.Store(ctx, ref, content, bundleData, annotations, opts.Force, lockLayers(br)...)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	result := &StoreResult{Info: info}
-	if br != nil {
-		result.cache = deferredCacheInfo{
-			fingerprint:    br.BuildFingerprint,
-			cacheDir:       br.BuildCacheDir,
-			inputFileCount: br.InputFileCount,
-		}
-	}
-
-	lgr.V(1).Info("built solution",
-		"name", info.Reference.Name,
-		"version", info.Reference.Version.String(),
-		"digest", info.Digest)
-
-	// Invalidate the artifact cache entry so subsequent runs fetch the
-	// freshly built artifact instead of a stale cached version.
-	if opts.ArtifactCacheDir != "" {
-		versionStr := version.String()
-		if cacheErr := cache.InvalidateArtifact(opts.ArtifactCacheDir, opts.ArtifactCacheTTL, string(catalog.ArtifactKindSolution), name, versionStr); cacheErr != nil {
-			lgr.V(1).Info("failed to invalidate artifact cache (non-fatal)", "error", cacheErr)
-		} else {
-			lgr.V(1).Info("invalidated artifact cache entry", "name", name, "version", versionStr)
-		}
-	}
-
-	// Write build cache entry after successful store (unless deferred to the
-	// caller, which writes it only after post-store verification passes).
-	// WriteBuildCacheEntry sets result.CacheWritten on success.
-	if !opts.DeferBuildCache {
-		WriteBuildCacheEntry(ctx, result)
-	}
-
-	return result, nil
 }
 
-// lockLayers returns the optional lock layer(s) to attach to a stored solution
-// artifact. It yields a single MediaTypeSolutionLock layer when the build
-// produced lock data, and nothing otherwise, so an empty lock never adds a
-// layer. The catalog store skips empty layers, but returning none here also
-// avoids allocating a descriptor for the common no-lock case.
-func lockLayers(br *BuildResult) []catalog.Layer {
-	if br == nil || len(br.LockData) == 0 {
+// ResolveBuiltSolution returns the built copy of name@version from the local
+// catalog, ignoring any pulled copies. It returns a not-found error when no
+// built copy exists.
+func ResolveBuiltSolution(ctx context.Context, resolver builtResolver, name string, version *semver.Version) (catalog.ArtifactInfo, error) {
+	if version == nil {
+		return catalog.ArtifactInfo{}, fmt.Errorf("version is required")
+	}
+	return resolver.Resolve(ctx, BuiltSolutionRef(name, version))
+}
+
+// solutionAnnotations returns the OCI annotations recorded for sol.
+// fallbackSource is recorded when metadata.source is empty, so OCI
+// provenance is never blank. Engine-set annotations take precedence over
+// metadata.annotations.
+func solutionAnnotations(sol *solution.Solution, fallbackSource string) map[string]string {
+	meta := sol.Metadata
+	src := meta.Source
+	if src == "" {
+		src = fallbackSource
+	}
+	return catalog.NewAnnotationBuilder().
+		SetMap(meta.Annotations).
+		Set(catalog.AnnotationSource, src).
+		Set(catalog.AnnotationDisplayName, meta.DisplayName).
+		Set(catalog.AnnotationDescription, meta.Description).
+		Set(catalog.AnnotationCategory, meta.Category).
+		SetTags(meta.Tags).
+		Build()
+}
+
+// solutionArtifact assembles the OCI manifest for a built solution.
+// Layer order is a positional contract read back by the catalog:
+//
+//	v1 (tar):   content, [bundle tar], [lock]
+//	v2 (dedup): content, bundle manifest, [small-files tar], large blobs..., [lock]
+//
+// The lock layer always comes last and is located by media type, so it never
+// shifts the dedup manifest's layer indices. A nil build stores the document
+// only.
+func solutionArtifact(ref catalog.Reference, content []byte, build *BuildResult, annotations map[string]string) *catalog.ManifestBuilder {
+	layers := []catalog.Layer{{MediaType: catalog.MediaTypeSolutionContent, Data: content}}
+	if build != nil {
+		layers = append(layers, bundleLayers(build)...)
+		layers = append(layers, lockLayers(build.LockData)...)
+	}
+	return catalog.NewManifestBuilder(ref).
+		Layers(layers...).
+		Annotations(annotations)
+}
+
+// bundleLayers returns the bundle layers of a build: the dedup layout when
+// deduplicated, else the single tar, else nothing.
+func bundleLayers(build *BuildResult) []catalog.Layer {
+	switch {
+	case build.Dedup != nil:
+		return dedupLayers(build.Dedup)
+	case len(build.TarData) > 0:
+		return []catalog.Layer{{MediaType: catalog.MediaTypeSolutionBundle, Data: build.TarData}}
+	default:
 		return nil
 	}
-	return []catalog.Layer{{MediaType: catalog.MediaTypeSolutionLock, Data: br.LockData}}
 }
 
-// WriteBuildCacheEntry writes the build-cache entry for a stored artifact. It is
-// separated from StoreSolutionArtifact so callers can defer the cache write
-// until after post-store verification passes (see StoreOptions.DeferBuildCache):
-// a build-cache entry must only exist for artifacts that verified successfully,
-// otherwise a rerun would hit the cache and exit 0 without re-verifying a broken
-// artifact. It returns true when an entry was written.
-func WriteBuildCacheEntry(ctx context.Context, result *StoreResult) bool {
+// dedupLayers returns the content-addressable bundle layers.
+func dedupLayers(dedup *bundler.DedupeResult) []catalog.Layer {
+	layers := []catalog.Layer{{MediaType: catalog.MediaTypeSolutionBundleManifest, Data: dedup.ManifestJSON}}
+	if len(dedup.SmallBlobsTar) > 0 {
+		layers = append(layers, catalog.Layer{MediaType: catalog.MediaTypeSolutionBundleSmallTar, Data: dedup.SmallBlobsTar})
+	}
+	for _, blob := range dedup.LargeBlobs {
+		layers = append(layers, catalog.Layer{MediaType: catalog.MediaTypeSolutionBundleBlob, Data: blob.Content})
+	}
+	return layers
+}
+
+// lockLayers returns the lock layer, or nothing when there is no lock.
+func lockLayers(lockData []byte) []catalog.Layer {
+	if len(lockData) == 0 {
+		return nil
+	}
+	return []catalog.Layer{{MediaType: catalog.MediaTypeSolutionLock, Data: lockData}}
+}
+
+// stagedArtifact is a built artifact held in memory, so it can be read back
+// and verified before anything is written to the catalog.
+type stagedArtifact struct {
+	builder *catalog.ManifestBuilder
+	store   *memory.Store
+	desc    ocispec.Descriptor
+}
+
+// stageArtifact pushes the artifact into an in-memory store.
+func stageArtifact(ctx context.Context, builder *catalog.ManifestBuilder) (*stagedArtifact, error) {
+	store := memory.New()
+	desc, err := builder.Push(ctx, store)
+	if err != nil {
+		return nil, fmt.Errorf("staging artifact: %w", err)
+	}
+	return &stagedArtifact{builder: builder, store: store, desc: desc}, nil
+}
+
+// read returns the staged solution document and its reassembled bundle
+// (nil when the artifact has no bundle), as the catalog would serve them.
+func (a *stagedArtifact) read(ctx context.Context) (doc, bundle []byte, err error) {
+	return catalog.ReadSolutionArtifact(ctx, a.store, a.desc)
+}
+
+// publishArtifact stores the staged artifact in the catalog. The reported
+// size is the solution document size, matching the catalog's Store contract.
+func publishArtifact(ctx context.Context, store builtStore, staged *stagedArtifact, contentSize int, force bool) (catalog.ArtifactInfo, error) {
+	info, err := store.StoreBuilt(ctx, staged.builder, force)
+	if err != nil {
+		return catalog.ArtifactInfo{}, err
+	}
+	info.Size = int64(contentSize)
+	return info, nil
+}
+
+// invalidateArtifactCache drops the artifact cache entry for ref, so later
+// runs read the freshly built artifact. Failures are logged, not returned.
+func invalidateArtifactCache(ctx context.Context, ref catalog.Reference) {
 	lgr := logger.FromContext(ctx)
-	if result == nil {
-		return false
+	version := ref.Version.String()
+	err := cache.InvalidateArtifact(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL, string(ref.Kind), ref.Name, version)
+	if err != nil {
+		lgr.V(1).Info("failed to invalidate artifact cache (non-fatal)", "error", err)
+		return
 	}
-	ci := result.cache
-	if ci.fingerprint == "" || ci.cacheDir == "" {
-		return false
-	}
-	info := result.Info
-	cacheEntry := &bundler.BuildCacheEntry{
-		Fingerprint:     ci.fingerprint,
+	lgr.V(1).Info("invalidated artifact cache entry", "name", ref.Name, "version", version)
+}
+
+// writeBuildCacheEntry records info in the build cache in dir under the
+// build's fingerprint, so an unchanged rebuild is a cache hit. It returns
+// whether an entry was written; failures are logged.
+func writeBuildCacheEntry(ctx context.Context, dir string, build *BuildResult, info catalog.ArtifactInfo) bool {
+	lgr := logger.FromContext(ctx)
+	entry := &bundler.BuildCacheEntry{
+		Fingerprint:     build.BuildFingerprint,
 		ArtifactName:    info.Reference.Name,
 		ArtifactVersion: info.Reference.Version.String(),
 		ArtifactDigest:  info.Digest,
 		CreatedAt:       time.Now(),
-		InputFiles:      ci.inputFileCount,
+		InputFiles:      build.InputFileCount,
 	}
-	if cacheErr := bundler.WriteBuildCache(ci.cacheDir, ci.fingerprint, cacheEntry); cacheErr != nil {
-		lgr.V(1).Info("failed to write build cache (non-fatal)", "error", cacheErr)
+	if err := bundler.WriteBuildCache(dir, build.BuildFingerprint, entry); err != nil {
+		lgr.V(1).Info("failed to write build cache (non-fatal)", "error", err)
 		return false
 	}
-	lgr.V(1).Info("wrote build cache entry", "fingerprint", ci.fingerprint)
-	result.CacheWritten = true
+	lgr.V(1).Info("wrote build cache entry", "fingerprint", build.BuildFingerprint)
 	return true
 }

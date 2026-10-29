@@ -170,8 +170,8 @@ func (s *Server) handleAuthStatus(ctx context.Context, req mcp.CallToolRequest) 
 		}
 
 		// Get capabilities
-		for _, cap := range handler.Capabilities() {
-			status.Capabilities = append(status.Capabilities, string(cap))
+		for _, cp := range handler.Capabilities() {
+			status.Capabilities = append(status.Capabilities, string(cp))
 		}
 
 		// Check status
@@ -242,8 +242,8 @@ func (s *Server) handleListAuthHandlers(_ context.Context, _ mcp.CallToolRequest
 		for _, flow := range h.SupportedFlows() {
 			info.Flows = append(info.Flows, string(flow))
 		}
-		for _, cap := range h.Capabilities() {
-			info.Capabilities = append(info.Capabilities, string(cap))
+		for _, cp := range h.Capabilities() {
+			info.Capabilities = append(info.Capabilities, string(cp))
 		}
 
 		handlers = append(handlers, info)

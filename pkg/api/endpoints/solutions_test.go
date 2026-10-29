@@ -23,7 +23,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 )
 
 // fakeEnsureAndAcquire satisfies the ensureAndAcquire interface for exercising
@@ -105,9 +107,10 @@ func TestRegisterSolutionEndpoints_RunInvalidPath(t *testing.T) {
 	hctx := newTestHandlerContext(t)
 	RegisterSolutionEndpoints(testAPI, hctx, "/v1")
 
-	// Absolute path must be rejected by rejectUnsafePath, not the file loader.
-	resp := testAPI.Post("/v1/solutions/run", `{"path": "/nonexistent/solution.yaml"}`)
+	// The default solution loader does not read local files.
+	resp := testAPI.Post("/v1/solutions/run", map[string]any{"path": "/nonexistent/solution.yaml"})
 	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "sources are not enabled")
 }
 
 func TestRegisterSolutionEndpoints_RenderInvalidPath(t *testing.T) {
@@ -115,8 +118,9 @@ func TestRegisterSolutionEndpoints_RenderInvalidPath(t *testing.T) {
 	hctx := newTestHandlerContext(t)
 	RegisterSolutionEndpoints(testAPI, hctx, "/v1")
 
-	resp := testAPI.Post("/v1/solutions/render", `{"path": "/nonexistent/solution.yaml"}`)
+	resp := testAPI.Post("/v1/solutions/render", map[string]any{"path": "/nonexistent/solution.yaml"})
 	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "sources are not enabled")
 }
 
 func TestRegisterSolutionEndpoints_TestInvalidPath(t *testing.T) {
@@ -124,8 +128,9 @@ func TestRegisterSolutionEndpoints_TestInvalidPath(t *testing.T) {
 	hctx := newTestHandlerContext(t)
 	RegisterSolutionEndpoints(testAPI, hctx, "/v1")
 
-	resp := testAPI.Post("/v1/solutions/test", `{"path": "/nonexistent/solution.yaml"}`)
+	resp := testAPI.Post("/v1/solutions/test", map[string]any{"path": "/nonexistent/solution.yaml"})
 	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "sources are not enabled")
 }
 
 // ── Path safety tests ──
@@ -220,7 +225,7 @@ func BenchmarkSolutionLintEndpoint(b *testing.B) {
 	}
 	RegisterSolutionEndpoints(testAPI, hctx, "/v1")
 	for b.Loop() {
-		testAPI.Post("/v1/solutions/lint", `{"path": "/nonexistent.yaml"}`)
+		testAPI.Post("/v1/solutions/lint", map[string]any{"path": "/nonexistent.yaml"})
 	}
 }
 
@@ -234,7 +239,7 @@ func BenchmarkSolutionRunEndpoint(b *testing.B) {
 	}
 	RegisterSolutionEndpoints(testAPI, hctx, "/v1")
 	for b.Loop() {
-		testAPI.Post("/v1/solutions/run", `{"path": "/nonexistent.yaml"}`)
+		testAPI.Post("/v1/solutions/run", map[string]any{"path": "/nonexistent.yaml"})
 	}
 }
 
@@ -267,94 +272,292 @@ func TestRejectUnsafePath_Direct(t *testing.T) {
 	}
 }
 
-// TestSolutionRun_UnsafeOutputDir_ViaURL passes a valid HTTP URL for path so that
-// requireRemotePath succeeds, then verifies rejectUnsafePath blocks the unsafe outputDir.
+// TestSolutionRun_UnsafeOutputDir_ViaURL passes a valid HTTP URL for path and
+// verifies rejectUnsafePath blocks the unsafe outputDir before anything loads.
 func TestSolutionRun_UnsafeOutputDir_ViaURL(t *testing.T) {
 	unsafe := []string{"/etc/passwd", "../secret", "~/evil"}
 	for _, tc := range unsafe {
 		t.Run(tc, func(t *testing.T) {
 			_, testAPI := humatest.New(t)
 			hctx := newTestHandlerContext(t)
+			loader := &recordingLoader{err: errors.New("must not load")}
+			hctx.NewSolutionLoader = loader.factory()
 			RegisterSolutionEndpoints(testAPI, hctx, "/v1")
 
 			body := strings.NewReader(`{"path":"https://example.com/solution.yaml","outputDir":"` + tc + `"}`)
 			resp := testAPI.Post("/v1/solutions/run", body, "Content-Type: application/json")
 			assert.Equal(t, http.StatusBadRequest, resp.Code, "expected 400 for unsafe outputDir %q", tc)
+			assert.Empty(t, loader.got, "outputDir must be validated before the solution loads")
 		})
 	}
 }
 
-// ── requireRemotePath tests ──
+// ── loadSolution tests ──
 
-func TestRequireRemotePath_AllowedPaths(t *testing.T) {
+const endpointTestSolutionYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: endpoint-loader-test
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+// recordingLoader is a load.Loader that records every classification it is
+// asked to load and returns a fixed result.
+type recordingLoader struct {
+	ms   *load.MaterializedSolution
+	err  error
+	got  []source.Classification
+	opts []load.RouterOption
+}
+
+func (l *recordingLoader) Load(_ context.Context, c source.Classification) (*load.MaterializedSolution, error) {
+	l.got = append(l.got, c)
+	if l.err != nil {
+		return nil, l.err
+	}
+	return l.ms, nil
+}
+
+// factory returns a SolutionLoaderFactory that records the caller's options
+// and always returns l.
+func (l *recordingLoader) factory() api.SolutionLoaderFactory {
+	return func(_ context.Context, opts ...load.RouterOption) load.Loader {
+		l.opts = opts
+		return l
+	}
+}
+
+// testMaterialized returns a MaterializedSolution holding a valid solution.
+func testMaterialized(t *testing.T) *load.MaterializedSolution {
+	t.Helper()
+	sol := &solution.Solution{}
+	require.NoError(t, sol.FromYAML([]byte(endpointTestSolutionYAML)))
+	return &load.MaterializedSolution{Solution: sol}
+}
+
+// requireStatus asserts err is a Huma error with the given status and returns
+// its message.
+func requireStatus(t *testing.T, err error, status int) string {
+	t.Helper()
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, status, statusErr.GetStatus())
+	return err.Error()
+}
+
+func TestLoadSolution_DefaultLoaderRejectsLocalSources(t *testing.T) {
+	t.Parallel()
+
+	paths := []string{
+		"/etc/solution.yaml",
+		"./solution.yaml",
+		"../solution.yaml",
+		"~/solutions/my-app.yaml",
+		"dir\\solution.yaml",
+		"C:\\solutions\\app.yaml",
+		"solution.yaml",
+		"config.json",
+		"configs/secret",
+		"dir/../../etc/passwd",
+		"a/b/c/solution",
+		"",
+		"-",
+	}
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			t.Parallel()
+			ms, err := loadSolution(t.Context(), newTestHandlerContext(t), p, "test-op")
+			assert.Nil(t, ms)
+			msg := requireStatus(t, err, http.StatusBadRequest)
+			assert.Contains(t, msg, "sources are not enabled on this server")
+		})
+	}
+}
+
+func TestLoadSolution_InvalidReference(t *testing.T) {
+	t.Parallel()
+
+	paths := []string{
+		"file:///etc/passwd",
+		"FILE:///etc/passwd",
+		"ftp://example.com/solution",
+		"ghcr.io/../../etc/passwd",
+		"oci://ghcr.io/org/../name",
+		"a@b@c",
+	}
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			t.Parallel()
+			loader := &recordingLoader{ms: testMaterialized(t)}
+			hctx := newTestHandlerContext(t)
+			hctx.NewSolutionLoader = loader.factory()
+
+			ms, err := loadSolution(t.Context(), hctx, p, "test-op")
+			assert.Nil(t, ms)
+			msg := requireStatus(t, err, http.StatusBadRequest)
+			assert.Contains(t, msg, "invalid solution reference")
+			assert.Empty(t, loader.got, "an invalid reference must not reach the loader")
+		})
+	}
+}
+
+func TestLoadSolution_RemoteSourcesReachLoader(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
 		path string
+		want source.Kind
 	}{
-		{name: "https URL", path: "https://example.com/solution.yaml"},
-		{name: "http URL", path: "http://example.com/solution.yaml"},
-		{name: "catalog name", path: "my-solution"},
-		{name: "versioned catalog ref", path: "my-solution@1.0.0"},
-		{name: "registry ref", path: "ghcr.io/org/solution"},
-		{name: "registry ref with port", path: "localhost:5000/solution"},
+		{"https://example.com/solution.yaml", source.KindURL},
+		{"http://example.com/solution.yaml", source.KindURL},
+		{"my-solution", source.KindBareName},
+		{"my-solution@1.0.0", source.KindBareName},
+		{"ghcr.io/org/solution", source.KindRemoteRef},
+		{"localhost:5000/solution", source.KindRemoteRef},
+		{"oci://ghcr.io/org/solution:1.0.0", source.KindRemoteRef},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+			want := testMaterialized(t)
+			loader := &recordingLoader{ms: want}
+			hctx := newTestHandlerContext(t)
+			hctx.NewSolutionLoader = loader.factory()
+
+			got, err := loadSolution(t.Context(), hctx, tt.path, "test-op")
+			require.NoError(t, err)
+			assert.Same(t, want, got)
+			require.Len(t, loader.got, 1)
+			assert.Equal(t, tt.want, loader.got[0].Kind)
+			assert.Equal(t, tt.path, loader.got[0].Ref)
+		})
+	}
+}
+
+func TestLoadSolution_LoaderErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		err     error
+		wantMsg string
+	}{
+		{
+			name:    "fetch failure hides the raw error",
+			err:     errors.New("dial tcp 10.0.0.1:443: internal detail"),
+			wantMsg: "failed to load solution",
+		},
+		{
+			name:    "source not enabled names the kind",
+			err:     fmt.Errorf("%w: url", load.ErrSourceNotEnabled),
+			wantMsg: "test-op: url sources are not enabled on this server",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := requireRemotePath(tt.path, "test-op")
-			assert.NoError(t, err, "path %q should be allowed", tt.path)
+			loader := &recordingLoader{err: tt.err}
+			hctx := newTestHandlerContext(t)
+			hctx.NewSolutionLoader = loader.factory()
+
+			ms, err := loadSolution(t.Context(), hctx, "https://example.com/solution.yaml", "test-op")
+			assert.Nil(t, ms)
+			msg := requireStatus(t, err, http.StatusBadRequest)
+			assert.Contains(t, msg, tt.wantMsg)
+			assert.NotContains(t, msg, "internal detail")
 		})
 	}
 }
 
-func TestRequireRemotePath_BlockedPaths(t *testing.T) {
+func TestSolutionEndpoints_UseHandlerLoader(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		path string
+		endpoint string
+		wantOpts int
 	}{
-		{name: "absolute unix path", path: "/etc/solution.yaml"},
-		{name: "relative dot path", path: "./solution.yaml"},
-		{name: "parent dir path", path: "../solution.yaml"},
-		{name: "home tilde", path: "~/solutions/my-app.yaml"},
-		{name: "windows backslash", path: "dir\\solution.yaml"},
-		{name: "windows drive", path: "C:\\solutions\\app.yaml"},
-		{name: "bare yaml file", path: "solution.yaml"},
-		{name: "bare yml file", path: "solution.yml"},
-		{name: "bare json file", path: "config.json"},
-		{name: "empty string", path: ""},
-		{name: "file scheme", path: "file:///etc/passwd"},
-		{name: "file scheme uppercase", path: "FILE:///etc/passwd"},
-		{name: "oci scheme", path: "oci://ghcr.io/org/solution:1.0.0"},
-		{name: "relative dir path", path: "configs/secret"},
-		{name: "path traversal", path: "dir/../../etc/passwd"},
-		{name: "path traversal via hostname", path: "ghcr.io/../../etc/passwd"},
-		{name: "path traversal in https URL", path: "https://example.com/../etc/passwd"},
-		{name: "nested relative", path: "a/b/c/solution"},
+		{"/v1/solutions/lint", 1}, // load.WithLenient
+		{"/v1/solutions/inspect", 0},
+		{"/v1/solutions/test", 0},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.endpoint, func(t *testing.T) {
 			t.Parallel()
-			err := requireRemotePath(tt.path, "test-op")
-			assert.Error(t, err, "path %q should be blocked", tt.path)
+			_, testAPI := humatest.New(t)
+			loader := &recordingLoader{ms: testMaterialized(t)}
+			hctx := newTestHandlerContext(t)
+			hctx.ProviderRegistry = provider.NewRegistry()
+			hctx.NewSolutionLoader = loader.factory()
+			RegisterSolutionEndpoints(testAPI, hctx, "/v1")
+
+			resp := testAPI.Post(tt.endpoint, map[string]any{"path": "my-solution@1.0.0"})
+			assert.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+			require.Len(t, loader.got, 1)
+			assert.Equal(t, source.KindBareName, loader.got[0].Kind)
+			assert.Len(t, loader.opts, tt.wantOpts)
 		})
 	}
 }
 
-func TestRequireRemotePath_CatalogNameViaRunEndpoint(t *testing.T) {
+func TestSolutionRun_CatalogNameReachesLoader(t *testing.T) {
+	t.Parallel()
+
 	_, testAPI := humatest.New(t)
+	loader := &recordingLoader{err: errors.New("not in catalog")}
 	hctx := newTestHandlerContext(t)
+	hctx.NewSolutionLoader = loader.factory()
 	RegisterSolutionEndpoints(testAPI, hctx, "/v1")
 
-	// Catalog name should pass validation (will fail later at resolution, not here)
-	resp := testAPI.Post("/v1/solutions/run", `{"path": "entra-user-groups"}`)
-	// Should NOT be 400 "path must be a URL" — any non-400 or a different 400 is acceptable
-	if resp.Code == http.StatusBadRequest {
-		assert.NotContains(t, resp.Body.String(), "not a local file path",
-			"catalog name should not be rejected as a local file path")
+	resp := testAPI.Post("/v1/solutions/run", map[string]any{"path": "entra-user-groups"})
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Len(t, loader.got, 1)
+	assert.Equal(t, source.KindBareName, loader.got[0].Kind)
+}
+
+func TestLoadAndPrepareSolution_Lock(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		lock       []byte
+		wantStatus int
+		wantMsg    string
+	}{
+		{
+			name:       "malformed lock is a client error",
+			lock:       []byte("{not json"),
+			wantStatus: http.StatusBadRequest,
+			wantMsg:    "failed to parse solution lock",
+		},
+		{
+			// A valid lock parses and the request proceeds to dependency
+			// resolution, which fails here only because no composite
+			// registry is wired.
+			name:       "valid lock proceeds to dependency resolution",
+			lock:       []byte(`{"version":1}`),
+			wantStatus: http.StatusBadGateway,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ms := testMaterialized(t)
+			ms.Lock = tt.lock
+			loader := &recordingLoader{ms: ms}
+			hctx := newTestHandlerContext(t)
+			hctx.NewSolutionLoader = loader.factory()
+
+			sol, reg, release, err := loadAndPrepareSolution(t.Context(), hctx, "my-solution", "", "solution-dryrun")
+			releaseFunc(release)
+			assert.Nil(t, sol)
+			assert.Nil(t, reg)
+			msg := requireStatus(t, err, tt.wantStatus)
+			if tt.wantMsg != "" {
+				assert.Contains(t, msg, tt.wantMsg)
+			}
+		})
 	}
 }
 

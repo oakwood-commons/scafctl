@@ -59,28 +59,65 @@ func testContext() context.Context {
 	return logger.WithLogger(context.Background(), logger.Get(-1))
 }
 
-func TestVendorDependencies_NilSolution(t *testing.T) {
+// persistOptions configures resolveAndPersist.
+type persistOptions struct {
+	BundleRoot     string
+	LockPath       string
+	CatalogFetcher CatalogFetcher
+}
+
+// resolveAndPersist runs the full vendoring round trip a build performs:
+// load the lock at LockPath, resolve dependencies, then write the fetched
+// files and the lock.
+func resolveAndPersist(ctx context.Context, sol *solution.Solution, refs []CatalogRefEntry, opts persistOptions) (*VendorResult, error) {
+	var existing *LockFile
+	if opts.LockPath != "" {
+		lf, err := LoadLockFile(opts.LockPath)
+		if err != nil {
+			return nil, err
+		}
+		existing = lf
+	}
+	result, err := ResolveDependencies(ctx, sol, refs, VendorOptions{
+		BundleRoot:     opts.BundleRoot,
+		ExistingLock:   existing,
+		CatalogFetcher: opts.CatalogFetcher,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := result.WriteFiles(opts.BundleRoot); err != nil {
+		return nil, err
+	}
+	if opts.LockPath != "" && len(result.Lock.Dependencies) > 0 {
+		if err := WriteLockFile(opts.LockPath, result.Lock); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func TestResolveDependencies_NilSolution(t *testing.T) {
 	ctx := testContext()
-	_, err := VendorDependencies(ctx, nil, nil, VendorOptions{})
+	_, err := ResolveDependencies(ctx, nil, nil, VendorOptions{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "solution is nil")
 }
 
-func TestVendorDependencies_NoRefs(t *testing.T) {
+func TestResolveDependencies_NoRefs(t *testing.T) {
 	ctx := testContext()
 	dir := t.TempDir()
 
 	sol := &solution.Solution{}
-	result, err := VendorDependencies(ctx, sol, nil, VendorOptions{
+	result, err := resolveAndPersist(ctx, sol, nil, persistOptions{
 		BundleRoot: dir,
-		VendorDir:  filepath.Join(dir, ".scafctl", "vendor"),
 	})
 	require.NoError(t, err)
 	assert.Empty(t, result.VendoredFiles)
 	assert.Empty(t, result.Lock.Dependencies)
 }
 
-func TestVendorDependencies_NoCatalogFetcher(t *testing.T) {
+func TestResolveDependencies_NoCatalogFetcher(t *testing.T) {
 	ctx := testContext()
 	dir := t.TempDir()
 
@@ -89,15 +126,14 @@ func TestVendorDependencies_NoCatalogFetcher(t *testing.T) {
 		{Ref: "deploy-to-k8s@2.0.0"},
 	}
 
-	_, err := VendorDependencies(ctx, sol, refs, VendorOptions{
+	_, err := resolveAndPersist(ctx, sol, refs, persistOptions{
 		BundleRoot: dir,
-		VendorDir:  filepath.Join(dir, ".scafctl", "vendor"),
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no catalog fetcher configured")
 }
 
-func TestVendorDependencies_FetchAndStore(t *testing.T) {
+func TestResolveDependencies_FetchAndStore(t *testing.T) {
 	ctx := testContext()
 	dir := t.TempDir()
 
@@ -134,11 +170,9 @@ func TestVendorDependencies_FetchAndStore(t *testing.T) {
 	}
 
 	lockPath := filepath.Join(dir, "solution.lock")
-	vendorDir := filepath.Join(dir, ".scafctl", "vendor")
 
-	result, err := VendorDependencies(ctx, sol, refs, VendorOptions{
+	result, err := resolveAndPersist(ctx, sol, refs, persistOptions{
 		BundleRoot:     dir,
-		VendorDir:      vendorDir,
 		LockPath:       lockPath,
 		CatalogFetcher: fetcher,
 	})
@@ -166,7 +200,55 @@ func TestVendorDependencies_FetchAndStore(t *testing.T) {
 	assert.Equal(t, result.VendoredFiles[0], src.Literal)
 }
 
-func TestVendorDependencies_LockFileReplay(t *testing.T) {
+func TestResolveDependencies_WritesNothing(t *testing.T) {
+	ctx := testContext()
+	dir := t.TempDir()
+
+	content := []byte("apiVersion: scafctl/v1\nkind: Solution\nmetadata:\n  name: dep\n")
+	fetcher := &mockCatalogFetcher{solutions: map[string]mockFetchResult{
+		"dep@1.0.0": {content: content, info: catalog.ArtifactInfo{Reference: catalog.Reference{Name: "dep"}, Catalog: "default"}},
+	}}
+	sol := &solution.Solution{Spec: solution.Spec{Workflow: &actionpkg.Workflow{Actions: map[string]*actionpkg.Action{
+		"run": {Provider: "solution", Inputs: map[string]*spec.ValueRef{"source": {Literal: "dep@1.0.0"}}},
+	}}}}
+
+	result, err := ResolveDependencies(ctx, sol, []CatalogRefEntry{{Ref: "dep@1.0.0"}}, VendorOptions{BundleRoot: dir, CatalogFetcher: fetcher})
+	require.NoError(t, err)
+
+	const relPath = ".scafctl/vendor/dep@1.0.0.yaml"
+	assert.Equal(t, map[string][]byte{relPath: content}, result.Fetched)
+	assert.NoDirExists(t, filepath.Join(dir, ".scafctl"), "resolution must not touch disk")
+
+	require.NoError(t, result.WriteFiles(dir))
+	data, err := os.ReadFile(filepath.Join(dir, relPath))
+	require.NoError(t, err)
+	assert.Equal(t, content, data)
+}
+
+func TestVendorResult_WriteFiles_Error(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
+
+	result := &VendorResult{Fetched: map[string][]byte{"blocker/dep.yaml": []byte("x")}}
+
+	err := result.WriteFiles(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocker/dep.yaml")
+}
+
+func TestVendorResult_Contents(t *testing.T) {
+	t.Parallel()
+
+	result := &VendorResult{
+		Fetched:  map[string][]byte{"a.yaml": []byte("a")},
+		Replayed: map[string][]byte{"b.yaml": []byte("b")},
+	}
+	assert.Equal(t, map[string][]byte{"a.yaml": []byte("a"), "b.yaml": []byte("b")}, result.Contents())
+	assert.Empty(t, (&VendorResult{}).Contents())
+}
+
+func TestResolveDependencies_LockFileReplay(t *testing.T) {
 	ctx := testContext()
 	dir := t.TempDir()
 
@@ -213,21 +295,23 @@ func TestVendorDependencies_LockFileReplay(t *testing.T) {
 	}
 
 	// No CatalogFetcher needed — should replay from lock
-	result, err := VendorDependencies(ctx, sol, refs, VendorOptions{
+	result, err := resolveAndPersist(ctx, sol, refs, persistOptions{
 		BundleRoot: dir,
-		VendorDir:  filepath.Join(dir, ".scafctl", "vendor"),
 		LockPath:   lockPath,
 	})
 	require.NoError(t, err)
 	require.Len(t, result.VendoredFiles, 1)
 	assert.Equal(t, vendorRelPath, result.VendoredFiles[0])
+	assert.Empty(t, result.Fetched, "replayed dependencies are already on disk")
+	assert.Equal(t, map[string][]byte{vendorRelPath: solutionContent}, result.Replayed, "replayed content is kept so it is not read again")
+	assert.Equal(t, map[string][]byte{vendorRelPath: solutionContent}, result.Contents())
 
 	// Verify source was rewritten
 	src := sol.Spec.Workflow.Actions["deploy"].Inputs["source"]
 	assert.Equal(t, vendorRelPath, src.Literal)
 }
 
-func TestVendorDependencies_CircularDetection(t *testing.T) {
+func TestResolveDependencies_CircularDetection(t *testing.T) {
 	ctx := testContext()
 	dir := t.TempDir()
 
@@ -274,9 +358,8 @@ spec:
 
 	refs := []CatalogRefEntry{{Ref: "circular@1.0.0"}}
 
-	result, err := VendorDependencies(ctx, sol, refs, VendorOptions{
+	result, err := resolveAndPersist(ctx, sol, refs, persistOptions{
 		BundleRoot:     dir,
-		VendorDir:      filepath.Join(dir, ".scafctl", "vendor"),
 		CatalogFetcher: fetcher,
 	})
 
@@ -580,7 +663,7 @@ func TestParseAndResolveRef_ConstraintFallsBackToPreRelease(t *testing.T) {
 
 // --- Tests for version conflict detection ---
 
-func TestVendorDependencies_VersionConflict(t *testing.T) {
+func TestResolveDependencies_VersionConflict(t *testing.T) {
 	ctx := testContext()
 	dir := t.TempDir()
 
@@ -627,9 +710,8 @@ func TestVendorDependencies_VersionConflict(t *testing.T) {
 		{Ref: "deploy-to-k8s@2.0.0"},
 	}
 
-	_, err := VendorDependencies(ctx, sol, refs, VendorOptions{
+	_, err := resolveAndPersist(ctx, sol, refs, persistOptions{
 		BundleRoot:     dir,
-		VendorDir:      filepath.Join(dir, ".scafctl", "vendor"),
 		CatalogFetcher: fetcher,
 	})
 	require.Error(t, err)
@@ -638,7 +720,7 @@ func TestVendorDependencies_VersionConflict(t *testing.T) {
 
 // --- Tests for constraint-based vendoring end-to-end ---
 
-func TestVendorDependencies_ConstraintResolution(t *testing.T) {
+func TestResolveDependencies_ConstraintResolution(t *testing.T) {
 	ctx := testContext()
 	dir := t.TempDir()
 
@@ -684,9 +766,8 @@ func TestVendorDependencies_ConstraintResolution(t *testing.T) {
 	}
 
 	lockPath := filepath.Join(dir, "solution.lock")
-	result, err := VendorDependencies(ctx, sol, refs, VendorOptions{
+	result, err := resolveAndPersist(ctx, sol, refs, persistOptions{
 		BundleRoot:     dir,
-		VendorDir:      filepath.Join(dir, ".scafctl", "vendor"),
 		LockPath:       lockPath,
 		CatalogFetcher: fetcher,
 	})
@@ -708,7 +789,7 @@ func TestVendorDependencies_ConstraintResolution(t *testing.T) {
 
 // --- Tests for lock replay with constraints ---
 
-func TestVendorDependencies_LockReplayConstraintSatisfied(t *testing.T) {
+func TestResolveDependencies_LockReplayConstraintSatisfied(t *testing.T) {
 	ctx := testContext()
 	dir := t.TempDir()
 
@@ -757,9 +838,8 @@ func TestVendorDependencies_LockReplayConstraintSatisfied(t *testing.T) {
 	}
 
 	// No CatalogFetcher needed — lock replay should work since constraint is satisfied
-	result, err := VendorDependencies(ctx, sol, refs, VendorOptions{
+	result, err := resolveAndPersist(ctx, sol, refs, persistOptions{
 		BundleRoot: dir,
-		VendorDir:  filepath.Join(dir, ".scafctl", "vendor"),
 		LockPath:   lockPath,
 	})
 	require.NoError(t, err)
@@ -771,7 +851,7 @@ func TestVendorDependencies_LockReplayConstraintSatisfied(t *testing.T) {
 	assert.Equal(t, vendorRelPath, src.Literal)
 }
 
-func TestVendorDependencies_LockReplayConstraintStale(t *testing.T) {
+func TestResolveDependencies_LockReplayConstraintStale(t *testing.T) {
 	ctx := testContext()
 	dir := t.TempDir()
 
@@ -836,9 +916,8 @@ func TestVendorDependencies_LockReplayConstraintStale(t *testing.T) {
 		},
 	}
 
-	result, err := VendorDependencies(ctx, sol, refs, VendorOptions{
+	result, err := resolveAndPersist(ctx, sol, refs, persistOptions{
 		BundleRoot:     dir,
-		VendorDir:      filepath.Join(dir, ".scafctl", "vendor"),
 		LockPath:       lockPath,
 		CatalogFetcher: fetcher,
 	})
@@ -855,7 +934,7 @@ func TestVendorDependencies_LockReplayConstraintStale(t *testing.T) {
 
 // --- Tests for dedup with different constraint strings resolving to same version ---
 
-func TestVendorDependencies_DedupSameResolvedVersion(t *testing.T) {
+func TestResolveDependencies_DedupSameResolvedVersion(t *testing.T) {
 	ctx := testContext()
 	dir := t.TempDir()
 
@@ -902,9 +981,8 @@ func TestVendorDependencies_DedupSameResolvedVersion(t *testing.T) {
 		{Ref: "deploy-to-k8s@^1.5.0"}, // resolves to same 1.5.2 — should dedup
 	}
 
-	result, err := VendorDependencies(ctx, sol, refs, VendorOptions{
+	result, err := resolveAndPersist(ctx, sol, refs, persistOptions{
 		BundleRoot:     dir,
-		VendorDir:      filepath.Join(dir, ".scafctl", "vendor"),
 		CatalogFetcher: fetcher,
 	})
 	require.NoError(t, err)

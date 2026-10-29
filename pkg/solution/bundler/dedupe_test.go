@@ -31,7 +31,7 @@ func TestCreateDeduplicatedBundle_BasicPartitioning(t *testing.T) {
 		{RelPath: "large.txt"},
 	}
 
-	result, err := CreateDeduplicatedBundle(dir, files, nil)
+	result, err := CreateDeduplicatedBundle(snapshotOf(t, dir, files), nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -69,7 +69,7 @@ func TestCreateDeduplicatedBundle_Deduplication(t *testing.T) {
 		{RelPath: "b.txt"},
 	}
 
-	result, err := CreateDeduplicatedBundle(dir, files, nil)
+	result, err := CreateDeduplicatedBundle(snapshotOf(t, dir, files), nil)
 	require.NoError(t, err)
 
 	// Should have only 1 unique large blob despite 2 files
@@ -91,7 +91,7 @@ func TestCreateDeduplicatedBundle_AllSmallFiles(t *testing.T) {
 		{RelPath: "b.txt"},
 	}
 
-	result, err := CreateDeduplicatedBundle(dir, files, nil)
+	result, err := CreateDeduplicatedBundle(snapshotOf(t, dir, files), nil)
 	require.NoError(t, err)
 
 	assert.Empty(t, result.LargeBlobs, "all files are small")
@@ -116,7 +116,7 @@ func TestCreateDeduplicatedBundle_AllLargeFiles(t *testing.T) {
 		{RelPath: "b.bin"},
 	}
 
-	result, err := CreateDeduplicatedBundle(dir, files, nil)
+	result, err := CreateDeduplicatedBundle(snapshotOf(t, dir, files), nil)
 	require.NoError(t, err)
 
 	assert.Nil(t, result.SmallBlobsTar, "no small files => no small tar")
@@ -140,35 +140,26 @@ func TestCreateDeduplicatedBundle_WithPlugins(t *testing.T) {
 		{Name: "myplugin", Kind: "exec", Version: "1.0.0"},
 	}
 
-	result, err := CreateDeduplicatedBundle(dir, []FileEntry{{RelPath: "f.txt"}}, plugins)
+	result, err := CreateDeduplicatedBundle(snapshotOf(t, dir, []FileEntry{{RelPath: "f.txt"}}), plugins)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, len(result.Manifest.Plugins))
 	assert.Equal(t, "myplugin", result.Manifest.Plugins[0].Name)
 }
 
-func TestCreateDeduplicatedBundle_ExceedsMaxSize(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "big.bin"), []byte(strings.Repeat("x", 100)), 0o644))
-
-	_, err := CreateDeduplicatedBundle(dir, []FileEntry{{RelPath: "big.bin"}}, nil,
-		WithDedupeMaxSize(50))
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "exceeds maximum size limit")
-}
-
 func TestCreateDeduplicatedBundle_CustomThreshold(t *testing.T) {
 	dir := t.TempDir()
 	content := []byte("small-ish data") // 14 bytes
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "f.txt"), content, 0o644))
+	files := snapshotOf(t, dir, []FileEntry{{RelPath: "f.txt"}})
 
 	// Default threshold (4KB) → small file → no large blobs
-	result1, err := CreateDeduplicatedBundle(dir, []FileEntry{{RelPath: "f.txt"}}, nil)
+	result1, err := CreateDeduplicatedBundle(files, nil)
 	require.NoError(t, err)
 	assert.Empty(t, result1.LargeBlobs)
 
 	// Threshold = 10 bytes → file is "large"
-	result2, err := CreateDeduplicatedBundle(dir, []FileEntry{{RelPath: "f.txt"}}, nil,
+	result2, err := CreateDeduplicatedBundle(files, nil,
 		WithDedupeThreshold(10))
 	require.NoError(t, err)
 	assert.Equal(t, 1, len(result2.LargeBlobs))
@@ -178,7 +169,7 @@ func TestCreateDeduplicatedBundle_ManifestJSON(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "data.txt"), []byte("hello"), 0o644))
 
-	result, err := CreateDeduplicatedBundle(dir, []FileEntry{{RelPath: "data.txt"}}, nil)
+	result, err := CreateDeduplicatedBundle(snapshotOf(t, dir, []FileEntry{{RelPath: "data.txt"}}), nil)
 	require.NoError(t, err)
 
 	// ManifestJSON should be valid JSON and roundtrip
@@ -196,35 +187,59 @@ func TestCreateDeduplicatedBundle_DigestConsistency(t *testing.T) {
 
 	expected := fmt.Sprintf("sha256:%x", sha256.Sum256(content))
 
-	result, err := CreateDeduplicatedBundle(dir, []FileEntry{{RelPath: "f.txt"}}, nil)
+	result, err := CreateDeduplicatedBundle(snapshotOf(t, dir, []FileEntry{{RelPath: "f.txt"}}), nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, expected, result.Manifest.Files[0].Digest)
 }
 
-func TestCreateDeduplicatedBundle_FileReadError(t *testing.T) {
-	_, err := CreateDeduplicatedBundle("/nonexistent", []FileEntry{{RelPath: "missing.txt"}}, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to read")
+func TestCreateDeduplicatedBundle_NilSnapshot(t *testing.T) {
+	result, err := CreateDeduplicatedBundle(nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, result.Manifest.Files)
+	assert.Nil(t, result.SmallBlobsTar)
+	assert.Zero(t, result.TotalSize)
 }
 
-func TestCreateDeduplicatedBundle_WithReadFileFunc(t *testing.T) {
-	mockFiles := map[string][]byte{
-		"a.txt": []byte(strings.Repeat("a", 5000)),
-	}
+func TestExtractDeduplicatedBundle_RawBlobPathTraversal(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir()
+	dest := filepath.Join(parent, "dest")
+	require.NoError(t, os.MkdirAll(dest, 0o755))
 
-	readFn := func(path string) ([]byte, error) {
-		name := filepath.Base(path)
-		if data, ok := mockFiles[name]; ok {
-			return data, nil
-		}
-		return nil, fmt.Errorf("file not found: %s", path)
+	manifest := &BundleManifest{
+		Version: BundleManifestVersion2,
+		Files:   []BundleFileEntry{{Path: "../escaped.txt", Layer: 0}},
 	}
+	err := ExtractDeduplicatedBundle(manifest, dest, func(int) ([]byte, error) {
+		return []byte("raw blob, not a tar"), nil
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+	assert.NoFileExists(t, filepath.Join(parent, "escaped.txt"))
+}
 
-	result, err := CreateDeduplicatedBundle("/fake", []FileEntry{{RelPath: "a.txt"}}, nil,
-		WithDedupeReadFileFunc(readFn))
-	require.NoError(t, err)
-	assert.Equal(t, 1, len(result.LargeBlobs))
+func TestExtractDeduplicatedBundle_TarLayerPathTraversal(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	tw := newTarWriter(&buf)
+	require.NoError(t, writeToTarWriter(tw, "../escaped.txt", []byte("evil")))
+	require.NoError(t, tw.Close())
+
+	parent := t.TempDir()
+	dest := filepath.Join(parent, "dest")
+	require.NoError(t, os.MkdirAll(dest, 0o755))
+
+	manifest := &BundleManifest{
+		Version: BundleManifestVersion2,
+		Files:   []BundleFileEntry{{Path: "ok.txt", Layer: 0}},
+	}
+	err := ExtractDeduplicatedBundle(manifest, dest, func(int) ([]byte, error) {
+		return buf.Bytes(), nil
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+	assert.NoFileExists(t, filepath.Join(parent, "escaped.txt"))
 }
 
 func TestExtractDeduplicatedBundle_RoundTrip(t *testing.T) {
@@ -240,7 +255,7 @@ func TestExtractDeduplicatedBundle_RoundTrip(t *testing.T) {
 		{RelPath: "large.bin"},
 	}
 
-	result, err := CreateDeduplicatedBundle(srcDir, files, nil)
+	result, err := CreateDeduplicatedBundle(snapshotOf(t, srcDir, files), nil)
 	require.NoError(t, err)
 
 	// Build a layer map for the fetcher
@@ -325,21 +340,10 @@ func TestIsTarData(t *testing.T) {
 }
 
 func TestDedupeOptions(t *testing.T) {
-	cfg := &dedupeConfig{
-		threshold: DefaultDedupeThreshold,
-		maxSize:   DefaultMaxBundleSize,
-		readFile:  os.ReadFile,
-	}
+	cfg := &dedupeConfig{threshold: DefaultDedupeThreshold}
 
 	WithDedupeThreshold(1024)(cfg)
 	assert.Equal(t, int64(1024), cfg.threshold)
-
-	WithDedupeMaxSize(2048)(cfg)
-	assert.Equal(t, int64(2048), cfg.maxSize)
-
-	customRead := func(path string) ([]byte, error) { return nil, nil }
-	WithDedupeReadFileFunc(customRead)(cfg)
-	assert.NotNil(t, cfg.readFile)
 }
 
 func TestExtractBundleTarFromReader_ErrorOnBadData(t *testing.T) {

@@ -12,9 +12,12 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
@@ -471,29 +474,56 @@ spec:
 func TestLoadSolution_NotFound(t *testing.T) {
 	_, err := LoadSolution(context.Background(), filepath.Join(t.TempDir(), "missing.yaml"))
 	require.Error(t, err)
+	assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+	assert.Contains(t, err.Error(), "failed to load solution")
 }
 
-func TestLoadSolutionWithLock_LocalFileNoLock(t *testing.T) {
+func TestLoadSolution_InvalidRef(t *testing.T) {
+	_, err := LoadSolution(context.Background(), "ftp://example.com/sol.yaml")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, source.ErrInvalidRef)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+}
+
+func TestLoadSolution_StdinNotEnabled(t *testing.T) {
+	_, err := LoadSolution(context.Background(), "-")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, load.ErrSourceNotEnabled)
+	assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+}
+
+func TestLoadSolution_StrictValidation(t *testing.T) {
+	// Parses, but dependsOn names an undefined resolver: strict loading fails.
+	const solJSON = `{
+	"apiVersion": "scafctl.io/v1",
+	"kind": "Solution",
+	"metadata": {"name": "strict", "version": "1.0.0"},
+	"spec": {"resolvers": {"app": {
+		"dependsOn": ["doesNotExist"],
+		"resolve": {"with": [{"provider": "static", "inputs": {"value": "x"}}]}
+	}}}
+}`
+	path := filepath.Join(t.TempDir(), "solution.json")
+	require.NoError(t, os.WriteFile(path, []byte(solJSON), 0o600))
+
+	_, err := LoadSolution(context.Background(), path)
+	require.Error(t, err)
+	assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+}
+
+func TestLoadSolution_AutoDiscover(t *testing.T) {
 	const solYAML = `apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
-  name: lock-inspect
+  name: discovered
   version: 1.0.0
 spec:
   resolvers: {}
 `
 	dir := t.TempDir()
-	path := filepath.Join(dir, "solution.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(solYAML), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "solution.yaml"), []byte(solYAML), 0o600))
 
-	sol, lock, err := LoadSolutionWithLock(context.Background(), path)
+	sol, err := LoadSolution(provider.WithWorkingDirectory(context.Background(), dir), "")
 	require.NoError(t, err)
-	require.NotNil(t, sol)
-	assert.Equal(t, "lock-inspect", sol.Metadata.Name)
-	assert.Nil(t, lock) // local files carry no lock layer
-}
-
-func TestLoadSolutionWithLock_NotFound(t *testing.T) {
-	_, _, err := LoadSolutionWithLock(context.Background(), filepath.Join(t.TempDir(), "missing.yaml"))
-	require.Error(t, err)
+	assert.Equal(t, "discovered", sol.Metadata.Name)
 }

@@ -614,8 +614,8 @@ func (m *Manager) getStateProvider(name string) (provider.Provider, error) {
 	// Verify it has CapabilityState
 	desc := prov.Descriptor()
 	hasState := false
-	for _, cap := range desc.Capabilities {
-		if cap == provider.CapabilityState {
+	for _, cp := range desc.Capabilities {
+		if cp == provider.CapabilityState {
 			hasState = true
 			break
 		}

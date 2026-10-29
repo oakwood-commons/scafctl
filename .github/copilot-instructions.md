@@ -173,14 +173,15 @@ Go coding conventions (struct tags, error handling, design patterns), testing ru
 
 ## Auto-Discovery and Resolution
 
-When no `-f` flag is provided, all CLI commands use the unified `Resolve()` function from `pkg/solution/get` which:
+CLI commands pick the solution source with `load.Router.Select()` from `pkg/solution/load` (load it with `Router.SelectionLoader()` so discovery is not repeated), which:
 
-1. Returns the explicit `-f` path if provided.
-2. Returns the positional argument if provided (catalog reference).
-3. Auto-discovers solution files by searching folder prefixes (`scafctl/`, `.scafctl/`, `.`) combined with file names (`solution.yaml`, `solution.yml`, `scafctl.yaml`, `scafctl.yml`, `solution.json`, `scafctl.json`, `taskfile.yaml`, `taskfile.yml`). Action file names (`actions.yaml`, `actions.yml`) are only searched in `DiscoveryModeAction` (used by `run action`).
+1. Uses the explicit `-f` value if provided.
+2. Uses the first positional argument when it is unambiguously a source (URL, registry reference, or versioned name `app@1.2.3`).
+3. Auto-discovers solution files (`load.DiscoverLoader`) by searching folder prefixes (`scafctl/`, `.scafctl/`, `.`) combined with file names (`solution.yaml`, `solution.yml`, `scafctl.yaml`, `scafctl.yml`, `solution.json`, `scafctl.json`, `taskfile.yaml`, `taskfile.yml`). Action file names (`actions.yaml`, `actions.yml`) are only searched in `DiscoveryModeAction` (used by `run action`).
+4. With `ArgsAreNamesOrCatalog`, falls back to a bare positional name as a catalog reference when nothing is discovered.
 
 **Multi-match ambiguity handling** uses risk levels:
 - **Low-risk** (`DiscoveryRiskLow`): uses first match, emits a warning about other matches. Used by `run`, `lint`, `test`.
-- **High-risk** (`DiscoveryRiskHigh`): returns an error requiring `-f`. Used by `build`.
+- **High-risk** (`DiscoveryRiskHigh`): returns `load.ErrAmbiguousSolution`, requiring `-f`. Used by `build`.
 
-The MCP server's `list_solutions` tool also uses `FindAllSolutions()` and returns all discovered paths.
+The MCP server's `list_solutions` tool uses `findSolutionFiles()` (`DiscoverLoader.Discover()` over the working directory and client workspace roots) and returns all discovered paths.

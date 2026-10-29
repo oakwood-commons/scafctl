@@ -42,9 +42,9 @@ func TestFetchLayerContent_Success(t *testing.T) {
 	assert.Equal(t, data, got)
 }
 
-func TestFetchLayerContent_BypassesOras32MiBCap(t *testing.T) {
-	// oras-go's content.FetchAll/ReadAll caps reads at 32 MiB. fetchLayerContent
-	// must read larger layers. Use 33 MiB to prove the cap is bypassed.
+func TestFetchLayerContent_ReadsAboveOrasInitialBuffer(t *testing.T) {
+	// oras-go's content.ReadAll caps its initial buffer at 32 MiB. Layers
+	// larger than that must still be read in full; use 33 MiB to prove it.
 	data := make([]byte, 33<<20)
 	for i := range data {
 		data[i] = byte(i % 251)

@@ -17,11 +17,15 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+// defaultSolutionPath is used when -f is not set and auto-discovery finds no
+// solution file.
+const defaultSolutionPath = "./solution.yaml"
 
 // UpdateOptions holds options for the vendor update command.
 type UpdateOptions struct {
@@ -76,11 +80,11 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if opts.SolutionPath == "" {
-				getter := get.NewGetterFromContext(cmd.Context())
-				opts.SolutionPath = getter.FindSolution()
-				if opts.SolutionPath == "" {
-					opts.SolutionPath = "./solution.yaml"
+				path, err := load.DiscoverPath(cmd.Context(), load.DiscoveryRiskLow)
+				if err != nil {
+					path = defaultSolutionPath
 				}
+				opts.SolutionPath = path
 			}
 			opts.BinaryName = cliParams.BinaryName
 			return runVendorUpdate(cmd.Context(), opts)

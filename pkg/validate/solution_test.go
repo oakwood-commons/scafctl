@@ -4,13 +4,19 @@
 package validate
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/lint"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,7 +119,43 @@ spec:
 func TestValidateSolution_MissingFile(t *testing.T) {
 	res, err := Solution(context.Background(), filepath.Join(t.TempDir(), "nope.yaml"), nil)
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading solution")
 	assert.Nil(t, res)
+}
+
+func TestValidateSolution_InvalidRef(t *testing.T) {
+	res, err := Solution(context.Background(), "ftp://example.com/sol.yaml", nil)
+	require.ErrorIs(t, err, source.ErrInvalidRef)
+	assert.Contains(t, err.Error(), "resolving solution path")
+	assert.Nil(t, res)
+}
+
+func TestValidateSolution_AutoDiscover(t *testing.T) {
+	dir := t.TempDir()
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: discovered
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+	for _, name := range []string{"solution.yaml", "scafctl.yaml"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
+	}
+
+	errOut := &bytes.Buffer{}
+	cliParams := settings.NewCliParams()
+	cliParams.Verbose = true
+	cliParams.NoColor = true
+	w := writer.New(&terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: errOut}, cliParams)
+	ctx := writer.WithWriter(provider.WithWorkingDirectory(context.Background(), dir), w)
+
+	res, err := Solution(ctx, "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, "solution.yaml"), res.File, "lint reports the discovered path")
+	assert.Contains(t, errOut.String(), "Multiple solution files found")
+	assert.Contains(t, errOut.String(), "Using "+filepath.Join(dir, "solution.yaml"))
 }
 
 func TestValidateSolution_UndefinedDependencyAggregates(t *testing.T) {

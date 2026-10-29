@@ -14,8 +14,12 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
@@ -155,43 +159,22 @@ func TestCommandSolution(t *testing.T) {
 	}
 }
 
-// mockGetter implements get.Interface for testing
-type mockGetter struct {
+// mockLoader implements load.Loader for testing. It records the
+// classification it was asked to load.
+type mockLoader struct {
 	sol *solution.Solution
 	err error
+	got source.Classification
 }
 
-func (m *mockGetter) Get(_ context.Context, _ string) (*solution.Solution, error) {
+var _ load.Loader = (*mockLoader)(nil)
+
+func (m *mockLoader) Load(_ context.Context, c source.Classification) (*load.MaterializedSolution, error) {
+	m.got = c
 	if m.err != nil {
 		return nil, m.err
 	}
-	return m.sol, nil
-}
-
-func (m *mockGetter) FromLocalFileSystem(_ context.Context, _ string) (*solution.Solution, error) {
-	return m.Get(context.Background(), "")
-}
-
-func (m *mockGetter) FromURL(_ context.Context, _ string) (*solution.Solution, error) {
-	return m.Get(context.Background(), "")
-}
-
-func (m *mockGetter) GetWithBundle(_ context.Context, _ string) (*solution.Solution, []byte, error) {
-	if m.err != nil {
-		return nil, nil, m.err
-	}
-	return m.sol, nil, nil
-}
-
-func (m *mockGetter) GetWithLayers(_ context.Context, _ string, _ ...string) (*solution.Solution, map[string][]byte, error) {
-	if m.err != nil {
-		return nil, nil, m.err
-	}
-	return m.sol, nil, nil
-}
-
-func (m *mockGetter) FindSolution() string {
-	return ""
+	return &load.MaterializedSolution{Solution: m.sol, Source: c}, nil
 }
 
 // nopCloser wraps an io.Reader to add a Close method for io.ReadCloser
@@ -210,13 +193,13 @@ func TestSolutionOptions_loadSolution(t *testing.T) {
 		checkResult func(t *testing.T, sol *solution.Solution)
 	}{
 		{
-			name: "loads_solution_from_getter",
+			name: "loads_solution_from_loader",
 			options: func() *SolutionOptions {
 				ioStreams, _, _ := terminal.NewTestIOStreams()
 				return &SolutionOptions{
 					IOStreams: ioStreams,
 					File:      "test.yaml",
-					getter: &mockGetter{
+					loader: &mockLoader{
 						sol: &solution.Solution{
 							Metadata: solution.Metadata{
 								Name: "test-solution",
@@ -231,13 +214,13 @@ func TestSolutionOptions_loadSolution(t *testing.T) {
 			},
 		},
 		{
-			name: "returns_error_when_getter_fails",
+			name: "returns_error_when_loader_fails",
 			options: func() *SolutionOptions {
 				ioStreams, _, _ := terminal.NewTestIOStreams()
 				return &SolutionOptions{
 					IOStreams: ioStreams,
 					File:      "nonexistent.yaml",
-					getter: &mockGetter{
+					loader: &mockLoader{
 						err: fmt.Errorf("file not found"),
 					},
 				}
@@ -551,4 +534,120 @@ func TestCommandSolution_InvalidOutputFormat(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid-format")
+}
+
+const loaderTestSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: discovered
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+
+// verboseRenderContext returns a context with a verbose, colorless writer
+// over errBuf, a discard logger, and dir as the working directory.
+func verboseRenderContext(dir string, ioStreams *terminal.IOStreams) context.Context {
+	cliParams := &settings.Run{Verbose: true, NoColor: true}
+	ctx := writer.WithWriter(context.Background(), writer.New(ioStreams, cliParams))
+	ctx = logger.WithLogger(ctx, logger.GetNoopLogger())
+	if dir != "" {
+		ctx = provider.WithWorkingDirectory(ctx, dir)
+	}
+	return ctx
+}
+
+func TestSolutionOptions_CatalogFlag(t *testing.T) {
+	t.Parallel()
+
+	t.Run("scopes a bare name", func(t *testing.T) {
+		t.Parallel()
+		ml := &mockLoader{sol: effectiveTestSolution(t)}
+		opts, _, ctx := newEffectiveOptions(nil, nil, "yaml", "all")
+		opts.loader = ml
+		opts.File = "my-app"
+		opts.Catalog = "corp"
+
+		require.NoError(t, opts.Run(ctx))
+		assert.Equal(t, source.KindCatalogQualified, ml.got.Kind)
+		assert.Equal(t, "corp", ml.got.Catalog)
+	})
+
+	t.Run("rejected for a local file", func(t *testing.T) {
+		t.Parallel()
+		opts, _, ctx := newEffectiveOptions(effectiveTestSolution(t), nil, "yaml", "all")
+		opts.File = "./solution.yaml"
+		opts.Catalog = "corp"
+
+		err := opts.Run(ctx)
+		require.ErrorIs(t, err, source.ErrInvalidRef)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	})
+}
+
+func TestSolutionOptions_loadSolution_AutoDiscover(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	for _, name := range []string{"solution.yaml", "scafctl.yaml"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(loaderTestSolution), 0o600))
+	}
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	opts := &SolutionOptions{IOStreams: ioStreams, CliParams: &settings.Run{}}
+
+	sol, err := opts.loadSolution(verboseRenderContext(dir, ioStreams))
+	require.NoError(t, err)
+	assert.Equal(t, "discovered", sol.Metadata.Name)
+	want := filepath.Join(dir, "solution.yaml")
+	assert.Equal(t, want, opts.File, "discovered path is recorded for -o test")
+	assert.Contains(t, errBuf.String(), "Multiple solution files found")
+	assert.Contains(t, errBuf.String(), "Using "+want)
+}
+
+func TestSolutionOptions_Run_LoadErrorCodes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		file string
+		want int
+	}{
+		{name: "missing file", file: filepath.Join(t.TempDir(), "missing.yaml"), want: exitcode.FileNotFound},
+		{name: "invalid reference", file: "ftp://example.com/sol.yaml", want: exitcode.InvalidInput},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ioStreams, _, _ := terminal.NewTestIOStreams()
+			opts := &SolutionOptions{IOStreams: ioStreams, CliParams: &settings.Run{}, File: tc.file}
+
+			err := opts.Run(verboseRenderContext("", ioStreams))
+			require.Error(t, err)
+			assert.Equal(t, tc.want, exitcode.GetCode(err))
+		})
+	}
+}
+
+func TestSolutionOptions_prepareForExecution_Verbose(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(loaderTestSolution), 0o600))
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	opts := &SolutionOptions{IOStreams: ioStreams, CliParams: &settings.Run{}, File: path}
+
+	_, sol, _, cleanup, err := opts.prepareForExecution(verboseRenderContext(dir, ioStreams))
+	require.NoError(t, err)
+	defer cleanup()
+	assert.Equal(t, "discovered", sol.Metadata.Name)
+	assert.Contains(t, errBuf.String(), "Loading solution from: "+path)
+	assert.Contains(t, errBuf.String(), "Solution loaded: discovered (version=1.0.0")
 }

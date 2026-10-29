@@ -2537,7 +2537,7 @@ func serveBuiltinSolutionYAML(t *testing.T, content string) string {
 
 // lockModeEndpoint describes one solution endpoint that accepts the lockMode
 // field. run, render, and dryrun all share the same
-// parseLockMode -> LoadSolutionWithLock -> ensureProviderDependencies ->
+// parseLockMode -> load -> ensureProviderDependencies ->
 // handleEnsureError pipeline, so the lock-mode policy tests exercise every
 // endpoint from a single table instead of duplicating per-endpoint cases.
 // assertGreetingOK validates the endpoint-specific 200 body for the builtin
@@ -2575,7 +2575,7 @@ func TestAPI_SolutionLockMode_InvalidValue(t *testing.T) {
 	e, ts := setupExpect(t)
 	defer ts.Close()
 
-	// Any valid remote path passes requireRemotePath; enum validation fails first.
+	// Any valid remote path would load; enum validation fails first.
 	solURL := serveBuiltinSolutionYAML(t, `apiVersion: scafctl.io/v1
 kind: Solution
 metadata:

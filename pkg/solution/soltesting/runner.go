@@ -57,6 +57,9 @@ type Runner struct {
 	// DryRun validates tests without executing commands.
 	DryRun bool
 	// IOStreams provides input/output streams.
+	//
+	// TODO: unused (pre-existing); Runner never reads it -- each test captures
+	// its output in its own buffer. Remove it and its callers' assignments.
 	IOStreams *terminal.IOStreams
 	// Filter contains filter options to apply.
 	Filter FilterOptions

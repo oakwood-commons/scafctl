@@ -52,8 +52,8 @@ func BuildProviderDetail(desc provider.Descriptor) map[string]any {
 	// Add output schemas
 	if len(desc.OutputSchemas) > 0 {
 		outputSchemas := make(map[string]any)
-		for cap, schema := range desc.OutputSchemas {
-			outputSchemas[string(cap)] = BuildSchemaOutput(schema)
+		for cp, schema := range desc.OutputSchemas {
+			outputSchemas[string(cp)] = BuildSchemaOutput(schema)
 		}
 		output["outputSchemas"] = outputSchemas
 	}
@@ -150,12 +150,12 @@ func GenerateCLIExamples(desc *provider.Descriptor) []string {
 
 	// If multiple capabilities, show an example with --capability for non-first capabilities
 	if len(desc.Capabilities) > 1 {
-		for _, cap := range desc.Capabilities[1:] {
+		for _, cp := range desc.Capabilities[1:] {
 			baseCmdParts := []string{fmt.Sprintf("%s run provider %s", binName, desc.Name)}
 			if len(inputFlags) > 0 {
 				baseCmdParts = append(baseCmdParts, inputFlags...)
 			}
-			baseCmdParts = append(baseCmdParts, fmt.Sprintf("--capability %s", cap))
+			baseCmdParts = append(baseCmdParts, fmt.Sprintf("--capability %s", cp))
 			examples = append(examples, strings.Join(baseCmdParts, " "))
 		}
 	}
@@ -242,8 +242,8 @@ func BuildSchemaOutput(schema *jsonschema.Schema) map[string]any {
 // CapabilitiesToStrings converts []Capability to []string.
 func CapabilitiesToStrings(caps []provider.Capability) []string {
 	result := make([]string, 0, len(caps))
-	for _, cap := range caps {
-		result = append(result, string(cap))
+	for _, cp := range caps {
+		result = append(result, string(cp))
 	}
 	return result
 }

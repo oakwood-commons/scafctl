@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
-	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -29,62 +29,13 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// mockGetter implements get.Interface for testing
-type mockGetter struct {
-	sol      *solution.Solution
-	bundle   []byte
-	lock     []byte
-	err      error
-	findPath string
-}
-
-func (m *mockGetter) FromLocalFileSystem(_ context.Context, _ string) (*solution.Solution, error) {
-	return m.sol, m.err
-}
-
-func (m *mockGetter) FromURL(_ context.Context, _ string) (*solution.Solution, error) {
-	return m.sol, m.err
-}
-
-func (m *mockGetter) Get(_ context.Context, _ string) (*solution.Solution, error) {
-	return m.sol, m.err
-}
-
-func (m *mockGetter) GetWithBundle(_ context.Context, _ string) (*solution.Solution, []byte, error) {
-	return m.sol, m.bundle, m.err
-}
-
-func (m *mockGetter) GetWithLayers(_ context.Context, _ string, mediaTypes ...string) (*solution.Solution, map[string][]byte, error) {
-	var layers map[string][]byte
-	set := func(mt string, data []byte) {
-		if len(data) == 0 {
-			return
-		}
-		for _, want := range mediaTypes {
-			if want == mt {
-				if layers == nil {
-					layers = make(map[string][]byte, 2)
-				}
-				layers[mt] = data
-				return
-			}
-		}
-	}
-	set(catalog.MediaTypeSolutionBundle, m.bundle)
-	set(catalog.MediaTypeSolutionLock, m.lock)
-	return m.sol, layers, m.err
-}
-
-func (m *mockGetter) FindSolution() string {
-	return m.findPath
-}
-
-var _ get.Interface = (*mockGetter)(nil)
 
 func minimalSolution() *solution.Solution {
 	sol := &solution.Solution{}
@@ -93,14 +44,14 @@ func minimalSolution() *solution.Solution {
 	return sol
 }
 
-func TestSolution(t *testing.T) {
-	t.Run("loads solution from mock getter", func(t *testing.T) {
-		sol := minimalSolution()
-		getter := &mockGetter{sol: sol}
+// localFile is the classification of a local solution file at ref.
+func localFile(ref string) source.Classification {
+	return source.Classification{Kind: source.KindLocalFile, Ref: ref}
+}
 
-		result, err := Solution(context.Background(), "test.yaml",
-			WithGetter(getter),
-		)
+func TestSolutionFromLoader(t *testing.T) {
+	t.Run("loads solution from loader", func(t *testing.T) {
+		result, err := SolutionFromLoader(context.Background(), &fakeLoader{sol: minimalSolution()}, localFile("test.yaml"))
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		assert.Equal(t, "test-solution", result.Solution.Metadata.Name)
@@ -118,15 +69,12 @@ func TestSolution(t *testing.T) {
 	})
 
 	t.Run("ProviderCtx injects optional plugin deps", func(t *testing.T) {
-		sol := minimalSolution()
-		getter := &mockGetter{sol: sol}
 		offProviders := official.NewRegistry()
 		pluginFetcher := &plugin.Fetcher{}
 		pluginCfg := &plugin.ProviderConfig{}
 		clientOpt := plugin.WithDebugLogging()
 
-		result, err := Solution(context.Background(), "test.yaml",
-			WithGetter(getter),
+		result, err := SolutionFromLoader(context.Background(), &fakeLoader{sol: minimalSolution()}, localFile("test.yaml"),
 			WithOfficialProviders(offProviders),
 			WithPluginFetcher(pluginFetcher),
 			WithPluginConfig(pluginCfg),
@@ -145,13 +93,10 @@ func TestSolution(t *testing.T) {
 	})
 
 	t.Run("ProviderCtx non-nil and carries execution settings without solution provider", func(t *testing.T) {
-		sol := minimalSolution()
-		getter := &mockGetter{sol: sol}
 		// Empty registry with no solution provider registered.
 		emptyReg := provider.NewRegistry()
 
-		result, err := Solution(context.Background(), "test.yaml",
-			WithGetter(getter),
+		result, err := SolutionFromLoader(context.Background(), &fakeLoader{sol: minimalSolution()}, localFile("test.yaml"),
 			WithRegistry(emptyReg),
 		)
 		require.NoError(t, err)
@@ -170,64 +115,23 @@ func TestSolution(t *testing.T) {
 	})
 
 	t.Run("loads with logger context", func(t *testing.T) {
-		sol := minimalSolution()
-		getter := &mockGetter{sol: sol}
-
 		lgr := logr.Discard()
 		ctx := logger.WithLogger(context.Background(), &lgr)
-		result, err := Solution(ctx, "test.yaml",
-			WithGetter(getter),
-		)
+		result, err := SolutionFromLoader(ctx, &fakeLoader{sol: minimalSolution()}, localFile("test.yaml"))
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		assert.Equal(t, "test-solution", result.Solution.Metadata.Name)
 		result.Cleanup()
 	})
 
-	t.Run("returns error when getter fails", func(t *testing.T) {
-		getter := &mockGetter{err: assert.AnError}
-
-		result, err := Solution(context.Background(), "test.yaml",
-			WithGetter(getter),
-		)
-		assert.Error(t, err)
-		assert.Nil(t, result)
-	})
-
-	t.Run("loads from stdin when path is dash", func(t *testing.T) {
-		yamlContent := `apiVersion: scafctl.io/v1
-kind: Solution
-metadata:
-  name: stdin-solution
-  version: "1.0.0"
-`
-		stdinReader := strings.NewReader(yamlContent)
-
-		result, err := Solution(context.Background(), "-",
-			WithStdin(stdinReader),
-		)
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		assert.Equal(t, "stdin-solution", result.Solution.Metadata.Name)
-		result.Cleanup()
-	})
-
-	t.Run("returns error when stdin requested but nil", func(t *testing.T) {
-		result, err := Solution(context.Background(), "-",
-			WithGetter(&mockGetter{}),
-		)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "stdin requested but no reader provided")
+	t.Run("returns error when loader fails", func(t *testing.T) {
+		result, err := SolutionFromLoader(context.Background(), &fakeLoader{err: assert.AnError}, localFile("test.yaml"))
+		require.ErrorIs(t, err, assert.AnError)
 		assert.Nil(t, result)
 	})
 
 	t.Run("cleanup function is always callable", func(t *testing.T) {
-		sol := minimalSolution()
-		getter := &mockGetter{sol: sol}
-
-		result, err := Solution(context.Background(), "test.yaml",
-			WithGetter(getter),
-		)
+		result, err := SolutionFromLoader(context.Background(), &fakeLoader{sol: minimalSolution()}, localFile("test.yaml"))
 		require.NoError(t, err)
 
 		result.Cleanup()
@@ -235,11 +139,8 @@ metadata:
 	})
 
 	t.Run("with custom registry", func(t *testing.T) {
-		sol := minimalSolution()
-		getter := &mockGetter{sol: sol}
-
-		result, err := Solution(context.Background(), "test.yaml",
-			WithGetter(getter),
+		result, err := SolutionFromLoader(context.Background(), &fakeLoader{sol: minimalSolution()}, localFile("test.yaml"),
+			WithRegistry(provider.NewRegistry()),
 		)
 		require.NoError(t, err)
 		assert.NotNil(t, result.Registry)
@@ -247,59 +148,32 @@ metadata:
 	})
 
 	t.Run("sets SolutionDir from file path", func(t *testing.T) {
-		sol := minimalSolution()
-		getter := &mockGetter{sol: sol}
-
 		// Use an absolute path to simulate -f /some/dir/solution.yaml
 		tmpDir := t.TempDir()
 		filePath := filepath.Join(tmpDir, "solution.yaml")
 
-		result, err := Solution(context.Background(), filePath,
-			WithGetter(getter),
-		)
+		result, err := SolutionFromLoader(context.Background(), &fakeLoader{sol: minimalSolution()}, localFile(filePath))
 		require.NoError(t, err)
 		assert.Equal(t, tmpDir, result.SolutionDir)
 		result.Cleanup()
 	})
 
-	t.Run("SolutionDir empty for stdin", func(t *testing.T) {
-		yamlContent := `apiVersion: scafctl.io/v1
-kind: Solution
-metadata:
-  name: stdin-sol
-  version: "1.0.0"
-`
-		result, err := Solution(context.Background(), "-",
-			WithStdin(strings.NewReader(yamlContent)),
-		)
-		require.NoError(t, err)
-		assert.Empty(t, result.SolutionDir)
-		result.Cleanup()
-	})
-
 	t.Run("SolutionDir respects context working directory", func(t *testing.T) {
-		sol := minimalSolution()
-		getter := &mockGetter{sol: sol}
-
 		// Simulate --cwd /custom/dir with a relative file path
 		ctx := provider.WithWorkingDirectory(context.Background(), "/custom/dir")
-		result, err := Solution(ctx, "subdir/solution.yaml",
-			WithGetter(getter),
-		)
+		result, err := SolutionFromLoader(ctx, &fakeLoader{sol: minimalSolution()}, localFile("subdir/solution.yaml"))
 		require.NoError(t, err)
 		assert.Equal(t, filepath.FromSlash("/custom/dir/subdir"), result.SolutionDir)
 		result.Cleanup()
 	})
 
+	catalogRef := source.Classification{Kind: source.KindBareName, Ref: "starter-kit@1.0.0"}
+
 	t.Run("SolutionDir empty for catalog reference without bundle", func(t *testing.T) {
 		sol := minimalSolution()
-		// Simulate what get.Getter.fromCatalogWithBundle does: set a catalog: path
 		sol.SetPath("catalog:starter-kit@1.0.0")
-		getter := &mockGetter{sol: sol}
 
-		result, err := Solution(context.Background(), "starter-kit@1.0.0",
-			WithGetter(getter),
-		)
+		result, err := SolutionFromLoader(context.Background(), &fakeLoader{sol: sol}, catalogRef)
 		require.NoError(t, err)
 		assert.Empty(t, result.SolutionDir, "catalog references must not derive solutionDir from CWD")
 		result.Cleanup()
@@ -312,53 +186,55 @@ metadata:
 		// Create a minimal bundle tar with one file
 		bundleRoot := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(bundleRoot, "template.txt"), []byte("hello"), 0o600))
-		bundleData, _, err := bundler.CreateBundleTar(bundleRoot, []bundler.FileEntry{
+		files, err := bundler.ReadFileSnapshot(bundleRoot, []bundler.FileEntry{
 			{RelPath: "template.txt"},
-		}, nil)
+		})
+		require.NoError(t, err)
+		bundleData, _, err := bundler.CreateBundleTar(files, nil)
 		require.NoError(t, err)
 
-		getter := &mockGetter{sol: sol, bundle: bundleData}
+		// The bundle directory becomes the working directory until cleanup.
+		origDir, err := os.Getwd()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.Chdir(origDir) })
 
-		result, err := Solution(context.Background(), "starter-kit@1.0.0",
-			WithGetter(getter),
-		)
+		result, err := SolutionFromLoader(context.Background(), &fakeLoader{sol: sol, bundle: bundleData}, catalogRef)
 		require.NoError(t, err)
 		assert.NotEmpty(t, result.SolutionDir, "bundled catalog solutions must set solutionDir to extraction dir")
 		assert.FileExists(t, filepath.Join(result.SolutionDir, "template.txt"))
 		result.Cleanup()
+		assert.NoDirExists(t, result.SolutionDir, "cleanup must remove the bundle dir")
 	})
-}
 
-func TestWithMetrics(t *testing.T) {
 	t.Run("metrics output is written on cleanup", func(t *testing.T) {
-		sol := minimalSolution()
-		getter := &mockGetter{sol: sol}
 		metricsOut := &bytes.Buffer{}
 
-		result, err := Solution(context.Background(), "test.yaml",
-			WithGetter(getter),
+		result, err := SolutionFromLoader(context.Background(), &fakeLoader{sol: minimalSolution()}, localFile("test.yaml"),
 			WithMetrics(metricsOut),
 		)
 		require.NoError(t, err)
+		// No provider executions, so metrics output may be empty.
 		result.Cleanup()
+	})
+
+	t.Run("plugin dependency without fetcher errors", func(t *testing.T) {
+		// A solution that references an external provider plugin needs a
+		// plugin fetcher. (Builtin-only / pure-CEL solutions do not.)
+		sol := minimalSolution()
+		sol.Bundle.Plugins = []solution.PluginDependency{
+			{Name: "test-plugin", Version: "1.0.0", Kind: solution.PluginKindProvider},
+		}
+		sol.Spec.Resolvers = map[string]*resolver.Resolver{
+			"r1": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "test-plugin"}}}},
+		}
+
+		_, err := SolutionFromLoader(context.Background(), &fakeLoader{sol: sol}, localFile("test.yaml"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "plugin fetcher")
 	})
 }
 
 func TestOptions(t *testing.T) {
-	t.Run("WithGetter sets getter", func(t *testing.T) {
-		cfg := &prepareConfig{}
-		g := &mockGetter{}
-		WithGetter(g)(cfg)
-		assert.Equal(t, g, cfg.getter)
-	})
-
-	t.Run("WithStdin sets stdin", func(t *testing.T) {
-		cfg := &prepareConfig{}
-		r := strings.NewReader("test")
-		WithStdin(r)(cfg)
-		assert.Equal(t, r, cfg.stdin)
-	})
-
 	t.Run("WithMetrics enables metrics", func(t *testing.T) {
 		cfg := &prepareConfig{}
 		out := &bytes.Buffer{}
@@ -388,62 +264,12 @@ func TestOptions(t *testing.T) {
 		assert.Equal(t, plugins, cfg.lockPlugins)
 	})
 
-	t.Run("WithNoCache disables cache", func(t *testing.T) {
-		cfg := &prepareConfig{}
-		WithNoCache()(cfg)
-		assert.True(t, cfg.noCache)
-	})
-
 	t.Run("WithPluginFetcher sets pluginFetcher", func(t *testing.T) {
 		cfg := &prepareConfig{}
 		f := plugin.NewFetcher(plugin.FetcherConfig{})
 		WithPluginFetcher(f)(cfg)
 		assert.Equal(t, f, cfg.pluginFetcher)
 	})
-
-	t.Run("WithDiscoveryMode sets discoveryMode", func(t *testing.T) {
-		cfg := &prepareConfig{}
-		WithDiscoveryMode(settings.DiscoveryModeAction)(cfg)
-		assert.Equal(t, settings.DiscoveryModeAction, cfg.discoveryMode)
-	})
-}
-
-func TestLoadSolutionWithBundle_Stdin_NilReader(t *testing.T) {
-	getter := &mockGetter{}
-	_, _, err := loadSolutionWithBundle(context.Background(), getter, "-", nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "stdin requested but no reader provided")
-}
-
-func TestLoadSolutionWithBundle_Stdin_ValidYAML(t *testing.T) {
-	getter := &mockGetter{}
-	yamlContent := `apiVersion: scafctl.io/v1
-kind: Solution
-metadata:
-  name: stdin-sol
-  version: "1.0.0"
-`
-	stdin := strings.NewReader(yamlContent)
-	sol, tmpDir, err := loadSolutionWithBundle(context.Background(), getter, "-", stdin)
-	require.NoError(t, err)
-	assert.Equal(t, "stdin-sol", sol.Metadata.Name)
-	assert.Empty(t, tmpDir)
-}
-
-func TestLoadSolutionWithBundle_NoBundle(t *testing.T) {
-	sol := minimalSolution()
-	getter := &mockGetter{sol: sol, bundle: nil}
-
-	result, tmpDir, err := loadSolutionWithBundle(context.Background(), getter, "test.yaml", nil)
-	require.NoError(t, err)
-	assert.Equal(t, "test-solution", result.Metadata.Name)
-	assert.Empty(t, tmpDir)
-}
-
-func TestLoadSolutionWithBundle_GetterError(t *testing.T) {
-	getter := &mockGetter{err: assert.AnError}
-	_, _, err := loadSolutionWithBundle(context.Background(), getter, "test.yaml", nil)
-	require.Error(t, err)
 }
 
 func TestWriteMetrics_Empty(t *testing.T) {
@@ -475,155 +301,6 @@ func TestWriteMetrics_WithData(t *testing.T) {
 	assert.Contains(t, output, "test-provider-b")
 	// Provider A: 2 total, 1 success, 1 failure
 	assert.Contains(t, output, "50.0%") // 1/2 success rate for provider A
-}
-
-func TestSolution_WithMetricsEnabled(t *testing.T) {
-	sol := minimalSolution()
-	getter := &mockGetter{sol: sol}
-	metricsOut := &bytes.Buffer{}
-
-	result, err := Solution(context.Background(), "test.yaml",
-		WithGetter(getter),
-		WithMetrics(metricsOut),
-	)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	// Cleanup should call writeMetrics
-	result.Cleanup()
-	// No provider executions, so metrics output may be empty
-}
-
-func TestSolution_WithCustomRegistry(t *testing.T) {
-	sol := minimalSolution()
-	getter := &mockGetter{sol: sol}
-	reg := provider.NewRegistry()
-
-	result, err := Solution(context.Background(), "test.yaml",
-		WithGetter(getter),
-		WithRegistry(reg),
-	)
-	require.NoError(t, err)
-	assert.NotNil(t, result.Registry)
-	result.Cleanup()
-}
-
-func TestSolution_InvalidStdin(t *testing.T) {
-	stdinReader := strings.NewReader("{{invalid yaml content here")
-
-	result, err := Solution(context.Background(), "-",
-		WithStdin(stdinReader),
-	)
-	assert.Error(t, err)
-	assert.Nil(t, result)
-}
-
-func TestSolution_WithPlugins_NoFetcher(t *testing.T) {
-	// Solution that references an external provider plugin but has no plugin
-	// fetcher — should error, since fetching the referenced provider requires
-	// one. (Builtin-only / pure-CEL solutions do not need a fetcher.)
-	sol := minimalSolution()
-	sol.Bundle.Plugins = []solution.PluginDependency{
-		{Name: "test-plugin", Version: "1.0.0", Kind: solution.PluginKindProvider},
-	}
-	sol.Spec.Resolvers = map[string]*resolver.Resolver{
-		"r1": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "test-plugin"}}}},
-	}
-	getter := &mockGetter{sol: sol}
-
-	_, err := Solution(context.Background(), "test.yaml",
-		WithGetter(getter),
-	)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "plugin fetcher")
-}
-
-func TestLoadSolutionWithBundle_InvalidStdin(t *testing.T) {
-	getter := &mockGetter{}
-	stdin := strings.NewReader("{{not valid")
-	_, _, err := loadSolutionWithBundle(context.Background(), getter, "-", stdin)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to parse solution from stdin")
-}
-
-func TestNewDefaultGetter_UsesContextBinaryName(t *testing.T) {
-	// Not parallel: os.Chdir is process-wide and would race with other tests.
-
-	// Create a temp directory with mycli/solution.yaml
-	tmpDir := t.TempDir()
-	mycliDir := filepath.Join(tmpDir, "mycli")
-	require.NoError(t, os.MkdirAll(mycliDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(mycliDir, "solution.yaml"), []byte("name: test\nversion: 1.0.0\n"), 0o644))
-
-	// Create a context with a custom binary name
-	run := &settings.Run{BinaryName: "mycli"}
-	ctx := settings.IntoContext(context.Background(), run)
-	lgr := logr.Discard()
-	ctx = logger.WithLogger(ctx, &lgr)
-
-	getter := NewDefaultGetter(ctx, false)
-	require.NotNil(t, getter, "getter should be created from context with custom binary name")
-
-	// chdir to tmpDir so FindSolution can discover mycli/solution.yaml
-	origDir, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(tmpDir))
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-
-	found := getter.FindSolution()
-	assert.Equal(t, filepath.ToSlash(filepath.Join("mycli", "solution.yaml")), found)
-}
-
-func TestNewDefaultGetter_DefaultBinaryName(t *testing.T) {
-	// Not parallel: os.Chdir is process-wide and would race with other tests.
-
-	// Create a temp directory with scafctl/solution.yaml
-	tmpDir := t.TempDir()
-	scafctlDir := filepath.Join(tmpDir, settings.CliBinaryName)
-	require.NoError(t, os.MkdirAll(scafctlDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(scafctlDir, "solution.yaml"), []byte("name: test\nversion: 1.0.0\n"), 0o644))
-
-	ctx := context.Background()
-	lgr := logr.Discard()
-	ctx = logger.WithLogger(ctx, &lgr)
-
-	getter := NewDefaultGetter(ctx, false)
-	require.NotNil(t, getter, "getter should be created with default binary name")
-
-	origDir, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(tmpDir))
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-
-	found := getter.FindSolution()
-	assert.Equal(t, filepath.ToSlash(filepath.Join(settings.CliBinaryName, "solution.yaml")), found)
-}
-
-func TestNewDefaultGetter_CustomBinaryDoesNotFindDefault(t *testing.T) {
-	// Not parallel: os.Chdir is process-wide and would race with other tests.
-
-	// Create a temp directory with only scafctl/solution.yaml (no mycli/)
-	tmpDir := t.TempDir()
-	scafctlDir := filepath.Join(tmpDir, settings.CliBinaryName)
-	require.NoError(t, os.MkdirAll(scafctlDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(scafctlDir, "solution.yaml"), []byte("name: test\nversion: 1.0.0\n"), 0o644))
-
-	run := &settings.Run{BinaryName: "mycli"}
-	ctx := settings.IntoContext(context.Background(), run)
-	lgr := logr.Discard()
-	ctx = logger.WithLogger(ctx, &lgr)
-
-	getter := NewDefaultGetter(ctx, false)
-	require.NotNil(t, getter)
-
-	origDir, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(tmpDir))
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-
-	// Should NOT find scafctl/solution.yaml when binary name is "mycli"
-	found := getter.FindSolution()
-	assert.Empty(t, found, "custom binary name getter should not discover default binary's solution folder")
 }
 
 // ── missingOfficialProviders tests ───────────────────────────────────────────
@@ -2226,5 +1903,282 @@ func TestApplyDefaultLockMode(t *testing.T) {
 		applyDefaultLockMode(cfg, "my-app@1.0.0", true, &lgr)
 		assert.Equal(t, LockModeBestEffort, cfg.lockMode)
 		assert.Contains(t, buf.String(), "no embedded lock layer")
+	})
+}
+
+// prepareFromRouter classifies path and prepares it through a load.Router
+// built from ctx with routerOpts, as the CLI does.
+func prepareFromRouter(ctx context.Context, path string, routerOpts ...load.RouterOption) (*Result, error) {
+	c, err := source.Classify(path)
+	if err != nil {
+		return nil, err
+	}
+	return SolutionFromLoader(ctx, load.NewRouterFromContext(ctx, logr.Discard(), routerOpts...), c)
+}
+
+func TestSolutionFromLoader_Router(t *testing.T) {
+	const solYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: v2-solution
+  version: 1.0.0
+`
+
+	t.Run("local file", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "solution.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(solYAML), 0o600))
+
+		result, err := prepareFromRouter(context.Background(), path)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		defer result.Cleanup()
+
+		assert.Equal(t, "v2-solution", result.Solution.Metadata.Name)
+		assert.Equal(t, path, result.Solution.GetPath())
+		assert.Equal(t, dir, result.SolutionDir)
+		assert.NotNil(t, result.Registry)
+		assert.NotNil(t, result.ProviderCtx)
+		assert.Empty(t, result.DiscoveredFrom.Path)
+	})
+
+	t.Run("stdin", func(t *testing.T) {
+		result, err := prepareFromRouter(context.Background(), "-",
+			load.WithStdin(strings.NewReader(solYAML)))
+		require.NoError(t, err)
+		defer result.Cleanup()
+
+		assert.Equal(t, "v2-solution", result.Solution.Metadata.Name)
+		assert.Empty(t, result.SolutionDir)
+	})
+
+	t.Run("stdin without reader is not enabled", func(t *testing.T) {
+		_, err := prepareFromRouter(context.Background(), "-")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, load.ErrSourceNotEnabled)
+	})
+
+	t.Run("missing local file", func(t *testing.T) {
+		_, err := prepareFromRouter(context.Background(), filepath.Join(t.TempDir(), "nope.yaml"))
+		require.Error(t, err)
+	})
+
+	t.Run("auto-discovery reports other matches and chosen path", func(t *testing.T) {
+		dir := t.TempDir()
+		primary := filepath.Join(dir, "scafctl", "solution.yaml")
+		other := filepath.Join(dir, "solution.yaml")
+		require.NoError(t, os.MkdirAll(filepath.Dir(primary), 0o755))
+		require.NoError(t, os.WriteFile(primary, []byte(solYAML), 0o600))
+		require.NoError(t, os.WriteFile(other, []byte(solYAML), 0o600))
+
+		ctx, errOut := verboseWriterCtx(provider.WithWorkingDirectory(context.Background(), dir))
+		result, err := prepareFromRouter(ctx, "")
+		require.NoError(t, err)
+		defer result.Cleanup()
+
+		assert.Equal(t, primary, result.DiscoveredFrom.Path)
+		assert.Contains(t, errOut.String(), "Multiple solution files found (also: "+other+"); using first match")
+		assert.Contains(t, errOut.String(), "Using "+primary)
+	})
+
+	t.Run("reports the source and the loaded solution", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "solution.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(solYAML), 0o600))
+
+		ctx, errOut := verboseWriterCtx(context.Background())
+		result, err := prepareFromRouter(ctx, path)
+		require.NoError(t, err)
+		defer result.Cleanup()
+
+		assert.Contains(t, errOut.String(), "Loading solution from: "+path)
+		assert.Contains(t, errOut.String(), "Solution loaded: v2-solution (version=1.0.0, dir="+dir+")")
+		assert.Contains(t, errOut.String(), "Solution: v2-solution@1.0.0 ("+path+")")
+	})
+
+	// The adjacent solution.lock is read by the loader against the context
+	// working directory, so it is honoured for relative paths under --cwd and
+	// for auto-discovered solutions. An unsupported lock version proves the
+	// lock was read rather than silently skipped.
+	for _, ref := range []string{"./solution.yaml", ""} {
+		t.Run("adjacent lock is read for "+strconv.Quote(ref), func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "solution.yaml"), []byte(solYAML), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, bundler.DefaultLockFileName), []byte("version: 99\nplugins: []\n"), 0o600))
+
+			_, err := prepareFromRouter(provider.WithWorkingDirectory(context.Background(), dir), ref)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "unsupported lock file version 99")
+		})
+	}
+}
+
+// verboseWriterCtx returns ctx with a verbose, colorless writer whose stderr
+// is captured in the returned buffer.
+func verboseWriterCtx(ctx context.Context) (context.Context, *bytes.Buffer) {
+	errOut := &bytes.Buffer{}
+	cliParams := settings.NewCliParams()
+	cliParams.Verbose = true
+	cliParams.NoColor = true
+	w := writer.New(&terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: errOut}, cliParams)
+	return writer.WithWriter(ctx, w), errOut
+}
+
+// fakeLoader is a load.Loader that records the classification it was asked
+// to load and returns sol (with bundle) or err.
+type fakeLoader struct {
+	sol    *solution.Solution
+	bundle []byte
+	err    error
+	got    source.Classification
+}
+
+func (f *fakeLoader) Load(_ context.Context, c source.Classification) (*load.MaterializedSolution, error) {
+	f.got = c
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &load.MaterializedSolution{Solution: f.sol, Bundle: f.bundle, Source: c}, nil
+}
+
+var _ load.Loader = (*fakeLoader)(nil)
+
+func TestSubSolutionLoader_Get(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		path     string
+		wantKind source.Kind
+	}{
+		{name: "absolute file", path: "/work/child.yaml", wantKind: source.KindLocalFile},
+		{name: "catalog name with version", path: "deploy-to-k8s@2.0.0", wantKind: source.KindBareName},
+		{name: "url", path: "https://example.com/solution.yaml", wantKind: source.KindURL},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fl := &fakeLoader{sol: minimalSolution()}
+			sol, err := subSolutionLoader{loader: fl}.Get(context.Background(), tt.path)
+			require.NoError(t, err)
+			assert.Equal(t, "test-solution", sol.Metadata.Name)
+			assert.Equal(t, tt.wantKind, fl.got.Kind)
+		})
+	}
+
+	t.Run("load error is returned", func(t *testing.T) {
+		t.Parallel()
+		fl := &fakeLoader{err: assert.AnError}
+		_, err := subSolutionLoader{loader: fl}.Get(context.Background(), "/work/child.yaml")
+		require.ErrorIs(t, err, assert.AnError)
+	})
+
+	t.Run("classify error is wrapped", func(t *testing.T) {
+		t.Parallel()
+		_, err := subSolutionLoader{loader: &fakeLoader{}}.Get(context.Background(), "foo://bar")
+		require.ErrorIs(t, err, source.ErrInvalidRef)
+		assert.Contains(t, err.Error(), "classifying sub-solution")
+	})
+
+	t.Run("stdin is rejected without loading", func(t *testing.T) {
+		t.Parallel()
+		fl := &fakeLoader{sol: minimalSolution()}
+		_, err := subSolutionLoader{loader: fl}.Get(context.Background(), "-")
+		require.ErrorIs(t, err, load.ErrSourceNotEnabled)
+		assert.Equal(t, source.KindUnknown, fl.got.Kind, "loader must not be called")
+	})
+}
+
+func TestSolutionFromLoader_ProviderCtxInjectsSubSolutionLoader(t *testing.T) {
+	fl := &fakeLoader{sol: minimalSolution()}
+	result, err := SolutionFromLoader(context.Background(), fl, source.Classification{Kind: source.KindLocalFile, Ref: "test.yaml"})
+	require.NoError(t, err)
+	defer result.Cleanup()
+	require.NotNil(t, result.ProviderCtx)
+
+	l := solutionprovider.LoaderFromContext(result.ProviderCtx(context.Background()))
+	require.IsType(t, subSolutionLoader{}, l)
+	assert.Same(t, fl, l.(subSolutionLoader).loader)
+}
+
+func TestIsCatalogSource(t *testing.T) {
+	tests := []struct {
+		kind source.Kind
+		want bool
+	}{
+		{source.KindUnknown, false},
+		{source.KindAutoDiscover, false},
+		{source.KindStdin, false},
+		{source.KindURL, false},
+		{source.KindLocalFile, false},
+		{source.KindRemoteRef, true},
+		{source.KindCatalogQualified, true},
+		{source.KindBareName, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind.String(), func(t *testing.T) {
+			assert.Equal(t, tt.want, isCatalogSource(tt.kind))
+		})
+	}
+}
+
+func TestExtractBundle(t *testing.T) {
+	newSol := func() *solution.Solution {
+		s := &solution.Solution{}
+		s.Metadata.Name = "test-solution"
+		return s
+	}
+
+	validBundle := func(t *testing.T) []byte {
+		t.Helper()
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "templates"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "templates", "a.txt"), []byte("hello"), 0o600))
+		files, err := bundler.ReadFileSnapshot(root, []bundler.FileEntry{{RelPath: "templates/a.txt"}})
+		require.NoError(t, err)
+		data, _, err := bundler.CreateBundleTar(files, nil)
+		require.NoError(t, err)
+		return data
+	}
+
+	t.Run("empty bundle returns noop", func(t *testing.T) {
+		dir, cleanup, err := extractBundle(context.Background(), newSol(), nil)
+		require.NoError(t, err)
+		assert.Empty(t, dir)
+		require.NotNil(t, cleanup)
+		cleanup()
+	})
+
+	t.Run("valid bundle extracts and cleanup removes", func(t *testing.T) {
+		lgr := logr.Discard()
+		ctx := logger.WithLogger(context.Background(), &lgr)
+		dir, cleanup, err := extractBundle(ctx, newSol(), validBundle(t))
+		require.NoError(t, err)
+		require.NotEmpty(t, dir)
+		t.Cleanup(cleanup)
+
+		assert.FileExists(t, filepath.Join(dir, bundleSolutionFileName))
+		got, rdErr := os.ReadFile(filepath.Join(dir, "templates", "a.txt"))
+		require.NoError(t, rdErr)
+		assert.Equal(t, "hello", string(got))
+
+		cleanup()
+		assert.NoDirExists(t, dir)
+	})
+
+	t.Run("invalid bundle errors and leaves no temp dir", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("TMPDIR", tmp)
+		t.Setenv("TMP", tmp)
+
+		dir, cleanup, err := extractBundle(context.Background(), newSol(), []byte("not a tar"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to extract bundle")
+		assert.Empty(t, dir)
+		require.NotNil(t, cleanup)
+
+		entries, rdErr := os.ReadDir(tmp)
+		require.NoError(t, rdErr)
+		assert.Empty(t, entries, "partially-created bundle dir must be removed on error")
 	})
 }

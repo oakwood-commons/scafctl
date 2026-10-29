@@ -23,7 +23,7 @@ import (
 )
 
 // effectiveTestSolution builds a solution with resolvers and a workflow that a
-// mockGetter can return (compose is assumed already applied on load).
+// mockLoader can return (compose is assumed already applied on load).
 func effectiveTestSolution(t *testing.T) *solution.Solution {
 	t.Helper()
 	sol := &solution.Solution{}
@@ -71,7 +71,7 @@ func newEffectiveOptionsRaw(sol *solution.Solution, err error, output, section s
 		Section:   section,
 		IOStreams: ioStreams,
 		CliParams: &settings.Run{},
-		getter:    &mockGetter{sol: sol, err: err},
+		loader:    &mockLoader{sol: sol, err: err},
 	}
 	w := writer.New(ioStreams, opts.CliParams)
 	ctx := writer.WithWriter(context.Background(), w)

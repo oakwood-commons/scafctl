@@ -16,7 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	pkgvalidate "github.com/oakwood-commons/scafctl/pkg/validate"
@@ -72,7 +72,7 @@ Examples:
 		Args: cobra.MaximumNArgs(1),
 		PreRunE: func(_ *cobra.Command, args []string) error {
 			if len(args) > 0 {
-				if err := get.ValidatePositionalRef(args[0], opts.File, binaryName+" validate solution"); err != nil {
+				if _, err := source.ValidatePositionalRef(args[0], opts.File, binaryName+" validate solution"); err != nil {
 					return err
 				}
 				opts.File = args[0]

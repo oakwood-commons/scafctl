@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -148,6 +149,44 @@ spec: {}
 // writeTestFile is a helper that writes content to a file path.
 func writeTestFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+func TestCommandUpdate_AutoDiscover(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		withSolution bool
+		wantReadErr  bool
+	}{
+		{name: "discovered solution is read", withSolution: true},
+		{name: "nothing discovered falls back to the default path", wantReadErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if tt.withSolution {
+				require.NoError(t, writeTestFile(filepath.Join(dir, "solution.yaml"), minimalSolutionYAML))
+			}
+
+			cliParams := settings.NewCliParams()
+			ioStreams, _, errOut := terminal.NewTestIOStreams()
+			cmd := CommandUpdate(cliParams, ioStreams, "scafctl/vendor")
+			cmd.SetArgs([]string{})
+			ctx := writer.WithWriter(context.Background(), writer.New(ioStreams, cliParams))
+			cmd.SetContext(provider.WithWorkingDirectory(ctx, dir))
+
+			_ = cmd.Execute()
+			if tt.wantReadErr {
+				assert.Contains(t, errOut.String(), "failed to read solution file")
+				assert.Contains(t, errOut.String(), defaultSolutionPath)
+				return
+			}
+			assert.NotContains(t, errOut.String(), "failed to read solution file")
+			assert.NotContains(t, errOut.String(), "failed to parse solution")
+		})
+	}
 }
 
 // --- mock and helpers for runVendorUpdateWithFetcher tests ---

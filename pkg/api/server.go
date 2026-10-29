@@ -58,6 +58,10 @@ type Server struct {
 	// catalogIndex is built once at server start from the configured catalogs
 	// and shared with every HandlerContext.
 	catalogIndex *catalogindex.Index
+
+	// solutionLoader builds per-request solution loaders; nil uses the
+	// remote-only default (see HandlerContext.SolutionLoader).
+	solutionLoader SolutionLoaderFactory
 }
 
 // serverConfig collects all configuration options before building the server.
@@ -75,6 +79,8 @@ type serverConfig struct {
 	ctx               context.Context
 
 	catalogIndex *catalogindex.Index
+
+	solutionLoader SolutionLoaderFactory
 }
 
 // ServerOption configures the API server.
@@ -175,6 +181,17 @@ func WithServerCatalogIndex(idx *catalogindex.Index) ServerOption {
 	}
 }
 
+// WithServerSolutionLoader sets the factory solution endpoints use to build a
+// per-request solution loader. Unset, endpoints use NewSolutionLoaderFactory,
+// which reads only remote sources (URLs and catalog references). A custom
+// factory owns the source policy: whatever its loaders accept, the endpoints
+// will load.
+func WithServerSolutionLoader(f SolutionLoaderFactory) ServerOption {
+	return func(c *serverConfig) {
+		c.solutionLoader = f
+	}
+}
+
 // NewServer creates a new API server with the given options.
 func NewServer(opts ...ServerOption) (*Server, error) {
 	sc := &serverConfig{}
@@ -230,7 +247,8 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		cancel:            cancel,
 		startTime:         time.Now(),
 
-		catalogIndex: sc.catalogIndex,
+		catalogIndex:   sc.catalogIndex,
+		solutionLoader: sc.solutionLoader,
 	}
 
 	// Attach the application config to every request context, matching what the
@@ -325,6 +343,7 @@ func (s *Server) HandlerCtx() *HandlerContext {
 	hctx.PluginPool = s.pluginPool
 	hctx.CompositeRegistry = s.compositeReg
 	hctx.CatalogIndex = s.catalogIndex
+	hctx.NewSolutionLoader = s.solutionLoader
 	return hctx
 }
 

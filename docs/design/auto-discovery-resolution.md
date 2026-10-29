@@ -29,29 +29,38 @@ handling and adds `taskfile.yaml`/`taskfile.yml` as discoverable file names.
 
 ### Unified Resolution Chain
 
-All commands use a single `Resolve()` function from `pkg/solution/get` that
-implements a three-step chain:
+All commands pick the solution source with `Router.Select()` from
+`pkg/solution/load`, which implements this chain:
 
 1. **Explicit flag** -- If `-f` is provided, use it directly (no discovery).
-2. **Positional argument** -- If a positional arg is given (catalog reference),
-   use it as-is.
+2. **Unambiguous positional argument** -- If the first positional arg is a URL,
+   registry reference, or versioned name (`app@1.2.3`), use it.
 3. **Auto-discovery** -- Search configured folders and file names in priority
    order, returning all matches.
+4. **Catalog fallback** -- With `ArgsAreNamesOrCatalog`, a bare positional name
+   is used as a catalog reference when nothing is discovered.
 
 ~~~go
-resolved, err := get.Resolve(ctx, getter, file, positionalArg, get.ResolveOptions{
-    Risk: get.DiscoveryRiskLow,
-})
+router := load.NewRouterFromContext(ctx, lgr,
+    load.CLIRouterOptions(stdin, noCache, settings.DiscoveryModeDefault)...)
+sel, err := router.Select(ctx, file, args, load.ArgsAreNamesOrCatalog)
+if err != nil {
+    return err
+}
+ms, err := router.SelectionLoader(sel).Load(ctx, sel.Source)
 ~~~
+
+`SelectionLoader` reuses the matches found by `Select`, so discovery runs once.
 
 ### Discovery Risk Levels
 
-The `DiscoveryRisk` type controls how multi-match ambiguity is handled:
+The `DiscoveryRisk` type (set with `load.WithDiscoveryRisk`, or passed to
+`Selection.DiscoveredPath`) controls how multi-match ambiguity is handled:
 
 | Risk Level | Behavior | Commands |
 |------------|----------|----------|
 | `DiscoveryRiskLow` | Use first match, emit warning about others to stderr | `run`, `lint`, `test`, `render` |
-| `DiscoveryRiskHigh` | Return an error listing all matches, require `-f` | `build` |
+| `DiscoveryRiskHigh` | Return `load.ErrAmbiguousSolution` listing all matches, require `-f` | `build` |
 
 This ensures read-only or easily-reversible commands remain convenient while
 destructive operations require explicit intent.
@@ -81,21 +90,22 @@ in the default search list.
 
 This produces 24 candidate paths checked in priority order (3 folders x 8 names).
 
-### FindAllSolutions vs FindSolution
+### Discover vs Load
 
-| Function | Behavior |
-|----------|----------|
-| `FindSolution()` | Returns the first match (backward compatible) |
-| `FindAllSolutions()` | Returns all matches in priority order with deduplication |
+| Method | Behavior |
+|--------|----------|
+| `DiscoverLoader.Discover()` | Returns all matches in priority order, or `ErrNoSolutionFound` |
+| `DiscoverLoader.Load()` | Discovers and loads one match, applying the risk level |
 
-`FindAllSolutions` uses canonical path resolution to deduplicate entries when
-different relative paths resolve to the same absolute file.
+Candidate paths are resolved against the context working directory (`--cwd`).
 
 ### MCP Server Integration
 
-The MCP server's `discoverSolutionFiles()` uses `FindAllSolutions()` to report
-all discoverable solutions to AI clients, enabling them to present the full set
-of available solutions in a workspace.
+The MCP server's `discoverSolutionFiles()` calls `findSolutionFiles()`, which
+runs `DiscoverLoader.Discover()` in the working directory and in each MCP client
+workspace root and deduplicates the results. This reports all discoverable
+solutions to AI clients, enabling them to present the full set of available
+solutions in a workspace.
 
 ## Behavior Examples
 
@@ -129,7 +139,7 @@ Error: multiple solution files found: solution.yaml, taskfile.yaml; use -f/--fil
 ## API
 
 ~~~go
-package get
+package load
 
 type DiscoveryRisk int
 
@@ -138,20 +148,28 @@ const (
     DiscoveryRiskHigh                       // error on ambiguity
 )
 
-type ResolveOptions struct {
-    Risk          DiscoveryRisk
-    DiscoveryMode settings.DiscoveryMode
+type Discovery struct {
+    Path          string
+    IsActionFile  bool
+    AlternatePath string
 }
 
-func Resolve(ctx context.Context, getter *Getter, file, positionalArg string, opts ResolveOptions) (string, error)
+func NewDiscoverLoader(files *FileLoader, binaryName string, opts ...DiscoverOption) *DiscoverLoader
+func WithDiscoveryMode(mode settings.DiscoveryMode) DiscoverOption
+func WithDiscoveryRisk(risk DiscoveryRisk) DiscoverOption
 
-func (o *Getter) FindAllSolutions() []DiscoveryResult
-func (o *Getter) SearchedPaths() []string
+func (l *DiscoverLoader) Discover(ctx context.Context) ([]Discovery, error)
+func (l *DiscoverLoader) Load(ctx context.Context, c source.Classification) (*MaterializedSolution, error)
+
+func (r *Router) Select(ctx context.Context, explicit string, args []string, policy ArgPolicy, opts ...source.Option) (Selection, error)
+func (r *Router) SelectionLoader(s Selection) Loader
+func (s Selection) DiscoveredPath(risk DiscoveryRisk) (string, error)
 ~~~
 
 ## Testing
 
-- Unit tests in `pkg/solution/get/resolve_test.go` cover the resolution chain,
-  risk levels, and edge cases (no files, single match, multi-match).
+- Unit tests in `pkg/solution/load/discover_test.go` and
+  `pkg/solution/load/select_test.go` cover the resolution chain, risk levels,
+  and edge cases (no files, single match, multi-match).
 - Integration tests in `tests/integration/cli_test.go` verify end-to-end
   discovery of `taskfile.yaml` and multi-match warning output.

@@ -21,11 +21,10 @@ This tutorial walks you through using scafctl's local catalog to build, version,
 4. [Managing Multiple Versions](#managing-multiple-versions)
 5. [Deleting and Pruning](#deleting-and-pruning)
 6. [Exporting and Importing](#exporting-and-importing)
-7. [Tagging Artifacts](#tagging-artifacts)
-8. [Remote Registries](#remote-registries)
-9. [Bundling File Dependencies](#bundling-file-dependencies)
-10. [Verifying and Extracting Bundles](#verifying-and-extracting-bundles)
-11. [Comparing Bundle Versions](#comparing-bundle-versions)
+7. [Remote Registries](#remote-registries)
+8. [Bundling File Dependencies](#bundling-file-dependencies)
+9. [Verifying and Extracting Bundles](#verifying-and-extracting-bundles)
+10. [Comparing Bundle Versions](#comparing-bundle-versions)
 
 ---
 
@@ -614,12 +613,12 @@ scafctl package solution -f greeting-v2.yaml --version 2.0.0 --force
 {{< tabs "catalog-tutorial-cmd-17" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl catalog delete greeting@1.0.1 --kind solution
+scafctl catalog delete solution greeting@1.0.1
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl catalog delete greeting@1.0.1 --kind solution
+scafctl catalog delete solution greeting@1.0.1
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -682,15 +681,15 @@ Clean up the remaining test artifacts:
 {{< tabs "catalog-tutorial-cmd-20" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl catalog delete greeting@1.0.0 --kind solution
-scafctl catalog delete greeting@2.0.0 --kind solution
+scafctl catalog delete solution greeting@1.0.0
+scafctl catalog delete solution greeting@2.0.0
 scafctl catalog prune
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl catalog delete greeting@1.0.0 --kind solution
-scafctl catalog delete greeting@2.0.0 --kind solution
+scafctl catalog delete solution greeting@1.0.0
+scafctl catalog delete solution greeting@2.0.0
 scafctl catalog prune
 ```
 {{% /tab %}}
@@ -698,7 +697,7 @@ scafctl catalog prune
 
 ### What You Learned
 
-- `scafctl catalog delete NAME@VERSION --kind solution` removes a single version
+- `scafctl catalog delete solution NAME@VERSION` removes a single version
 - You must specify the version -- this prevents accidental bulk deletion
 - `scafctl catalog prune` removes orphaned blobs and reclaims disk space
 - Always prune after deleting to free up storage
@@ -791,13 +790,13 @@ Simulate receiving the tar on a different machine by deleting the local version:
 {{< tabs "catalog-tutorial-cmd-23" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl catalog delete greeting@1.0.0 --kind solution
+scafctl catalog delete solution greeting@1.0.0
 scafctl catalog prune
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl catalog delete greeting@1.0.0 --kind solution
+scafctl catalog delete solution greeting@1.0.0
 scafctl catalog prune
 ```
 {{% /tab %}}
@@ -943,75 +942,6 @@ scafctl run resolver -f deploy -o yaml -r env=prod
 
 ---
 
-## Tagging Artifacts
-
-Tags let you create freeform aliases for specific versions. Common uses include marking a version as "stable", "latest", or "production".
-
-### Step 1: Tag a Version as Stable
-
-Make sure you have `greeting@1.0.0` in the catalog, then tag it:
-
-{{< tabs "catalog-tutorial-cmd-30" >}}
-{{% tab "Bash" %}}
-```bash
-scafctl catalog tag greeting@1.0.0 stable
-```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl catalog tag greeting@1.0.0 stable
-```
-{{% /tab %}}
-{{< /tabs >}}
-
-Expected output:
-
-```
- ✅ Tagged greeting@1.0.0 as "stable"
-```
-
-### Step 2: View the Tag in the Catalog
-
-{{< tabs "catalog-tutorial-cmd-31" >}}
-{{% tab "Bash" %}}
-```bash
-scafctl catalog list --name greeting -o yaml
-```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl catalog list --name greeting -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
-
-The tag creates an alias that points to the same digest as the original version.
-
-### Step 3: Tag for Different Environments
-
-{{< tabs "catalog-tutorial-cmd-32" >}}
-{{% tab "Bash" %}}
-```bash
-scafctl catalog tag greeting@1.0.0 production
-```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl catalog tag greeting@1.0.0 production
-```
-{{% /tab %}}
-{{< /tabs >}}
-
-You can create as many tags as needed. Tags are freeform strings -- they cannot be valid semver versions (use `scafctl package` for that).
-
-### What You Learned
-
-- `scafctl catalog tag NAME@VERSION ALIAS` creates a named alias pointing to a specific version
-- Tags are useful for marking releases as stable, production, etc.
-- Tags can also be created in remote registries with `--catalog`
-
----
-
 ## Remote Registries
 
 scafctl supports pushing and pulling artifacts to/from OCI-compliant container registries like GitHub Container Registry (ghcr.io), Docker Hub, Azure Container Registry, and others.
@@ -1145,12 +1075,12 @@ Make sure `greeting@1.0.0` is in your local catalog, then push it:
 {{< tabs "catalog-tutorial-cmd-33" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl catalog push greeting@1.0.0 --catalog ghcr.io/myorg/scafctl
+scafctl catalog push ghcr.io/myorg/scafctl/solutions/greeting@1.0.0
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl catalog push greeting@1.0.0 --catalog ghcr.io/myorg/scafctl
+scafctl catalog push ghcr.io/myorg/scafctl/solutions/greeting@1.0.0
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1170,17 +1100,17 @@ The path structure is: `<registry>/<repository>/solutions/<name>:<version>`
 {{< tabs "catalog-tutorial-cmd-34" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl catalog push greeting@1.0.0 --as hello-world --catalog ghcr.io/myorg/scafctl
+scafctl catalog push ghcr.io/myorg/scafctl/solutions/greeting@1.0.0 --as hello-world@1.0.0
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl catalog push greeting@1.0.0 --as hello-world --catalog ghcr.io/myorg/scafctl
+scafctl catalog push ghcr.io/myorg/scafctl/solutions/greeting@1.0.0 --as hello-world@1.0.0
 ```
 {{% /tab %}}
 {{< /tabs >}}
 
-This pushes the same artifact under a different name in the remote registry.
+This pushes the same artifact under a different name in the remote registry. The `--as` value must be a concrete `name@version`.
 
 ### Step 4: Pull from a Remote Registry
 
@@ -1263,13 +1193,13 @@ scafctl catalog delete ghcr.io/myorg/scafctl/solutions/greeting@1.0.0
 {{% tab "Bash" %}}
 ```bash
 # Enable debug logging to see which auth config is being used
-scafctl catalog push greeting@1.0.0 --catalog ghcr.io/myorg -d
+scafctl catalog push ghcr.io/myorg/solutions/greeting@1.0.0 -d
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # Enable debug logging to see which auth config is being used
-scafctl catalog push greeting@1.0.0 --catalog ghcr.io/myorg -d
+scafctl catalog push ghcr.io/myorg/solutions/greeting@1.0.0 -d
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1286,13 +1216,13 @@ For local testing with registries that don't use HTTPS:
 {{< tabs "catalog-tutorial-cmd-40" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl catalog push greeting@1.0.0 --catalog localhost:5000 --insecure
+scafctl catalog push localhost:5000/solutions/greeting@1.0.0 --insecure
 scafctl catalog pull localhost:5000/solutions/greeting@1.0.0 --insecure
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl catalog push greeting@1.0.0 --catalog localhost:5000 --insecure
+scafctl catalog push localhost:5000/solutions/greeting@1.0.0 --insecure
 scafctl catalog pull localhost:5000/solutions/greeting@1.0.0 --insecure
 ```
 {{% /tab %}}
@@ -1314,7 +1244,7 @@ scafctl works with any OCI-compliant registry:
 
 ### What You Learned
 
-- `scafctl catalog push NAME@VERSION --catalog REGISTRY` pushes to a remote registry
+- `scafctl catalog push REGISTRY/solutions/NAME@VERSION` pushes to a remote registry (use `scafctl catalog push solution NAME@VERSION --catalog REGISTRY` for short names)
 - `scafctl catalog pull REGISTRY/solutions/NAME@VERSION` pulls to your local catalog
 - `--as` lets you rename artifacts during push or pull
 - `--force` overwrites existing artifacts
@@ -2042,16 +1972,16 @@ scafctl diff bundle deploy-app@1.0.0 deploy-app@2.0.0 -o yaml
 {{< tabs "catalog-tutorial-cmd-56" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl catalog delete deploy-app@1.0.0 --kind solution
-scafctl catalog delete deploy-app@2.0.0 --kind solution
+scafctl catalog delete solution deploy-app@1.0.0
+scafctl catalog delete solution deploy-app@2.0.0
 scafctl catalog prune
 rm -rf deploy-app/
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl catalog delete deploy-app@1.0.0 --kind solution
-scafctl catalog delete deploy-app@2.0.0 --kind solution
+scafctl catalog delete solution deploy-app@1.0.0
+scafctl catalog delete solution deploy-app@2.0.0
 scafctl catalog prune
 rm -rf deploy-app/
 ```

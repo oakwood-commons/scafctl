@@ -31,7 +31,7 @@ scafctl package solution -f examples/resolver-demo.yaml --version 1.0.0
 scafctl catalog list
 
 # Push to remote registry
-scafctl catalog push resolver-demo@1.0.0 --catalog ghcr.io/YOUR_ORG/scafctl
+scafctl catalog push solution resolver-demo@1.0.0 --catalog ghcr.io/YOUR_ORG/scafctl
 ```
 
 ## Step 3: Pull and Run on Another Machine
@@ -85,7 +85,7 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           scafctl package solution -f solution.yaml --version $VERSION
-          scafctl catalog push my-solution@$VERSION --catalog ghcr.io/${{ github.repository_owner }}/scafctl
+          scafctl catalog push solution my-solution@$VERSION --catalog ghcr.io/${{ github.repository_owner }}/scafctl
 ```
 
 ### Consuming in Another Workflow
@@ -128,17 +128,17 @@ jobs:
 
 | Registry | Push Command |
 |----------|--------------|
-| GitHub | `scafctl catalog push my-solution@1.0.0 --catalog ghcr.io/myorg/scafctl` |
-| Docker Hub | `scafctl catalog push my-solution@1.0.0 --catalog docker.io/myorg/scafctl` |
-| Azure ACR | `scafctl catalog push my-solution@1.0.0 --catalog myregistry.azurecr.io/scafctl` |
-| Local | `scafctl catalog push my-solution@1.0.0 --catalog localhost:5000 --insecure` |
+| GitHub | `scafctl catalog push solution my-solution@1.0.0 --catalog ghcr.io/myorg/scafctl` |
+| Docker Hub | `scafctl catalog push solution my-solution@1.0.0 --catalog docker.io/myorg/scafctl` |
+| Azure ACR | `scafctl catalog push solution my-solution@1.0.0 --catalog myregistry.azurecr.io/scafctl` |
+| Local | `scafctl catalog push solution my-solution@1.0.0 --catalog localhost:5000 --insecure` |
 
 ## Troubleshooting
 
 ### View Debug Logs
 
 ```bash
-scafctl catalog push my-solution@1.0.0 --catalog ghcr.io/myorg --log-level -1
+scafctl catalog push solution my-solution@1.0.0 --catalog ghcr.io/myorg --log-level -1
 ```
 
 This shows which auth config file is being used and credential resolution details.

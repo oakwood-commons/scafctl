@@ -60,8 +60,8 @@ type HandlerContext struct {
 	OfficialProviders *official.Registry
 
 	// ServerContext carries the server's enriched context with config, auth,
-	// and logger wired. Used by endpoints that call prepare.Solution() and
-	// need these values in context. Reserved for solution test endpoint (planned).
+	// and logger wired. Used by endpoints that call prepare.SolutionFromLoader()
+	// and need these values in context. Reserved for solution test endpoint (planned).
 	ServerContext context.Context
 
 	// PluginPool manages shared, long-lived plugin processes with lazy
@@ -82,6 +82,12 @@ type HandlerContext struct {
 	// once at server start from the configured catalogs; its lookups miss for
 	// every origin when no remote catalogs are configured.
 	CatalogIndex *catalogindex.Index
+
+	// NewSolutionLoader builds the per-request loader solution endpoints use to
+	// fetch a solution. Nil means NewSolutionLoaderFactory(CatalogIndex), which
+	// reads only remote sources. Use SolutionLoader rather than calling this
+	// field directly so the nil default applies.
+	NewSolutionLoader SolutionLoaderFactory
 }
 
 // NewHandlerContext creates a new HandlerContext with the given dependencies.

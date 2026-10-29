@@ -12,9 +12,13 @@ import (
 	"testing"
 
 	"github.com/adrg/xdg"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
@@ -87,6 +91,27 @@ func TestCommandPackageSolution_RequiresArgs(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no solution path provided")
+}
+
+func TestCommandPackageSolution_AmbiguousDiscovery(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	for _, name := range []string{"solution.yaml", "scafctl.yaml"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("apiVersion: scafctl.io/v1\n"), 0o600))
+	}
+
+	ioStreams, _, errOut := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cmd := CommandPackageSolution(cliParams, ioStreams, "build")
+	ctx := writer.WithWriter(t.Context(), writer.New(ioStreams, cliParams))
+	cmd.SetContext(provider.WithWorkingDirectory(ctx, dir))
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	require.ErrorIs(t, err, load.ErrAmbiguousSolution)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	assert.Contains(t, errOut.String(), "use -f/--file")
 }
 
 func TestCommandPackageSolution_TagConflictsWithName(t *testing.T) {
@@ -191,13 +216,14 @@ spec: {}
 
 	opts := &SolutionOptions{
 		File:      solFile,
+		Version:   "0.0.0-dev",
 		IOStreams: ioStreams,
 		CliParams: settings.NewCliParams(),
 	}
 
 	err := runPackageSolution(ctx, opts)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "dev version not allowed")
+	require.ErrorIs(t, err, builder.ErrDevVersion)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
 }
 
 func TestRunPackageSolution_NoVersion_AllowDevVersion(t *testing.T) {
@@ -226,9 +252,12 @@ spec: {}
 		DryRun:          true, BundleMaxSize: "50MB",
 	}
 
-	// With AllowDevVersion + DryRun, the build should proceed past the version check
+	// A solution without a version is auto-incremented, so the dry run
+	// proceeds without --allow-dev-version.
 	err := runPackageSolution(ctx, opts)
 	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Auto-incremented version to 0.1.0")
+	assert.Contains(t, buf.String(), "Dry run: would build test-solution@0.1.0")
 }
 
 func TestRunPackageSolution_PreflightBlocked(t *testing.T) {
@@ -260,8 +289,8 @@ spec: {}
 	}
 
 	err := runPackageSolution(ctx, opts)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "pre-flight checks failed")
+	require.ErrorIs(t, err, builder.ErrPreflightBlocked)
+	assert.Contains(t, buf.String(), "--ignore-preflight to override")
 }
 
 func TestRunPackageSolution_PreflightSkipLint(t *testing.T) {
@@ -402,6 +431,7 @@ spec: {}
 
 	opts := &SolutionOptions{
 		File:      solFile,
+		Version:   "0.0.0-dev",
 		IOStreams: ioStreams,
 		CliParams: cliParams,
 	}
@@ -427,10 +457,7 @@ func TestPrintDryRunOutput_StaticFiles(t *testing.T) {
 		},
 	}
 
-	sol := &solution.Solution{}
-	opts := &SolutionOptions{File: "solution.yaml"}
-
-	printDryRunOutput(w, discovery, sol, opts)
+	printDryRunOutput(w, dryRunView{file: "solution.yaml", solution: &solution.Solution{}, discovery: discovery})
 
 	output := buf.String()
 	assert.Contains(t, output, "scripts/deploy.sh")
@@ -455,10 +482,7 @@ func TestPrintDryRunOutput_CatalogRefs(t *testing.T) {
 		},
 	}
 
-	sol := &solution.Solution{}
-	opts := &SolutionOptions{File: "solution.yaml"}
-
-	printDryRunOutput(w, discovery, sol, opts)
+	printDryRunOutput(w, dryRunView{file: "solution.yaml", solution: &solution.Solution{}, discovery: discovery})
 
 	output := buf.String()
 	assert.Contains(t, output, "my-dep@1.0.0")
@@ -479,10 +503,7 @@ func TestPrintDryRunOutput_CatalogRefsNotVendored(t *testing.T) {
 		},
 	}
 
-	sol := &solution.Solution{}
-	opts := &SolutionOptions{File: "solution.yaml", NoVendor: true}
-
-	printDryRunOutput(w, discovery, sol, opts)
+	printDryRunOutput(w, dryRunView{file: "solution.yaml", solution: &solution.Solution{}, discovery: discovery, noVendor: true})
 
 	output := buf.String()
 	assert.Contains(t, output, "not vendored")
@@ -495,12 +516,12 @@ func TestPrintDryRunOutput_ComposedFiles(t *testing.T) {
 	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
 	w := writer.New(ioStreams, settings.NewCliParams())
 
-	discovery := &bundler.DiscoveryResult{}
-	sol := &solution.Solution{}
-	sol.Compose = []string{"resolvers.yaml", "actions.yaml"}
-	opts := &SolutionOptions{File: "solution.yaml"}
-
-	printDryRunOutput(w, discovery, sol, opts)
+	printDryRunOutput(w, dryRunView{
+		file:      "solution.yaml",
+		solution:  &solution.Solution{},
+		compose:   []string{"resolvers.yaml", "actions.yaml"},
+		discovery: &bundler.DiscoveryResult{},
+	})
 
 	output := buf.String()
 	assert.Contains(t, output, "Composed files")
@@ -521,9 +542,8 @@ func TestPrintDryRunOutput_Plugins(t *testing.T) {
 	sol.Bundle.Plugins = []solution.PluginDependency{
 		{Name: "my-plugin", Kind: "provider", Version: "1.0.0"},
 	}
-	opts := &SolutionOptions{File: "solution.yaml"}
 
-	printDryRunOutput(w, discovery, sol, opts)
+	printDryRunOutput(w, dryRunView{file: "solution.yaml", solution: sol, discovery: discovery})
 
 	output := buf.String()
 	assert.Contains(t, output, "Plugin dependencies")
@@ -539,11 +559,7 @@ func TestPrintDryRunOutput_Empty(t *testing.T) {
 	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
 	w := writer.New(ioStreams, settings.NewCliParams())
 
-	discovery := &bundler.DiscoveryResult{}
-	sol := &solution.Solution{}
-	opts := &SolutionOptions{File: "solution.yaml"}
-
-	printDryRunOutput(w, discovery, sol, opts)
+	printDryRunOutput(w, dryRunView{file: "solution.yaml", solution: &solution.Solution{}, discovery: &bundler.DiscoveryResult{}})
 
 	output := buf.String()
 	assert.Contains(t, output, "0 bundled file(s)")
@@ -562,13 +578,12 @@ func BenchmarkPrintDryRunOutput(b *testing.B) {
 			{RelPath: "data/config.json", Source: bundler.ExplicitInclude},
 		},
 	}
-	sol := &solution.Solution{}
-	opts := &SolutionOptions{File: "solution.yaml"}
+	view := dryRunView{file: "solution.yaml", solution: &solution.Solution{}, discovery: discovery}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		buf.Reset()
-		printDryRunOutput(w, discovery, sol, opts)
+		printDryRunOutput(w, view)
 	}
 }
 

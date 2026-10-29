@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -35,12 +36,7 @@ func TestRunInstall_NoFileProvided_NoAutoDiscover(t *testing.T) {
 	t.Parallel()
 
 	// Use a temp dir with no solution files so auto-discovery fails
-	dir := t.TempDir()
-	oldWd, _ := os.Getwd()
-	_ = os.Chdir(dir)
-	defer func() { _ = os.Chdir(oldWd) }()
-
-	ctx := newInstallTestCtx(t)
+	ctx := provider.WithWorkingDirectory(newInstallTestCtx(t), t.TempDir())
 
 	opts := &InstallOptions{
 		CliParams: settings.NewCliParams(),
@@ -51,6 +47,20 @@ func TestRunInstall_NoFileProvided_NoAutoDiscover(t *testing.T) {
 	err := runInstall(ctx, opts, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no plugin names or solution file provided")
+}
+
+func TestLoadPluginsFromSolution_AutoDiscover(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: no-plugins\n  version: 1.0.0\nspec: {}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "solution.yaml"), []byte(sol), 0o600))
+	ctx := provider.WithWorkingDirectory(newInstallTestCtx(t), dir)
+
+	plugins, lockPlugins, err := loadPluginsFromSolution(ctx, &InstallOptions{CliParams: settings.NewCliParams()})
+	require.NoError(t, err)
+	assert.Empty(t, plugins)
+	assert.Empty(t, lockPlugins)
 }
 
 func TestRunInstall_FileNotFound(t *testing.T) {

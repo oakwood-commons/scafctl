@@ -147,7 +147,7 @@ func runTags(ctx context.Context, opts *TagsOptions, outputOpts *kvx.OutputOptio
 
 	// Resolve auth provider
 	authHandler := resolveAuthHandler(ctx, remoteRef.Registry, "")
-	authScope := resolveAuthScope(ctx, remoteRef.Registry)
+	authScope := resolveAuthScope(ctx, remoteRef.Registry, "")
 
 	// Create remote catalog
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{

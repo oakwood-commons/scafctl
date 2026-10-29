@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -445,132 +446,6 @@ func TestLocalCatalog_Delete(t *testing.T) {
 	})
 }
 
-func TestLocalCatalog_Tag(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("tags artifact with alias", func(t *testing.T) {
-		cat := newTestCatalog(t)
-
-		ref := Reference{
-			Kind:    ArtifactKindSolution,
-			Name:    "my-solution",
-			Version: semver.MustParse("1.0.0"),
-		}
-		_, err := cat.Store(ctx, ref, []byte("content"), nil, nil, false)
-		require.NoError(t, err)
-
-		// Tag as stable
-		_, err = cat.Tag(ctx, ref, "stable")
-		require.NoError(t, err)
-
-		// The alias should resolve to the same digest as the original
-		origTag := "solution/my-solution:1.0.0"
-		aliasTag := "solution/my-solution:stable"
-		origDesc, err := cat.store.Resolve(ctx, origTag)
-		require.NoError(t, err)
-		aliasDesc, err := cat.store.Resolve(ctx, aliasTag)
-		require.NoError(t, err)
-		assert.Equal(t, origDesc.Digest, aliasDesc.Digest)
-	})
-
-	t.Run("tags with multiple aliases", func(t *testing.T) {
-		cat := newTestCatalog(t)
-
-		ref := Reference{
-			Kind:    ArtifactKindSolution,
-			Name:    "my-solution",
-			Version: semver.MustParse("2.0.0"),
-		}
-		_, err := cat.Store(ctx, ref, []byte("content-v2"), nil, nil, false)
-		require.NoError(t, err)
-
-		// Tag with multiple aliases
-		_, err = cat.Tag(ctx, ref, "dev")
-		require.NoError(t, err)
-		_, err = cat.Tag(ctx, ref, "production")
-		require.NoError(t, err)
-
-		// Both should resolve
-		devDesc, err := cat.store.Resolve(ctx, "solution/my-solution:dev")
-		require.NoError(t, err)
-		prodDesc, err := cat.store.Resolve(ctx, "solution/my-solution:production")
-		require.NoError(t, err)
-		assert.Equal(t, devDesc.Digest, prodDesc.Digest)
-	})
-
-	t.Run("moves alias to new version", func(t *testing.T) {
-		cat := newTestCatalog(t)
-
-		// Store v1.0.0
-		ref1 := Reference{
-			Kind:    ArtifactKindSolution,
-			Name:    "my-solution",
-			Version: semver.MustParse("1.0.0"),
-		}
-		_, err := cat.Store(ctx, ref1, []byte("v1-content"), nil, nil, false)
-		require.NoError(t, err)
-		_, err = cat.Tag(ctx, ref1, "stable")
-		require.NoError(t, err)
-
-		// Store v2.0.0
-		ref2 := Reference{
-			Kind:    ArtifactKindSolution,
-			Name:    "my-solution",
-			Version: semver.MustParse("2.0.0"),
-		}
-		_, err = cat.Store(ctx, ref2, []byte("v2-content"), nil, nil, false)
-		require.NoError(t, err)
-
-		// Re-tag stable to v2
-		oldVersion, err := cat.Tag(ctx, ref2, "stable")
-		require.NoError(t, err)
-		assert.Equal(t, "1.0.0", oldVersion)
-
-		// Stable should now point to v2's digest
-		v2Desc, err := cat.store.Resolve(ctx, "solution/my-solution:2.0.0")
-		require.NoError(t, err)
-		stableDesc, err := cat.store.Resolve(ctx, "solution/my-solution:stable")
-		require.NoError(t, err)
-		assert.Equal(t, v2Desc.Digest, stableDesc.Digest)
-	})
-
-	t.Run("returns error for non-existent artifact", func(t *testing.T) {
-		cat := newTestCatalog(t)
-
-		ref := Reference{
-			Kind:    ArtifactKindSolution,
-			Name:    "non-existent",
-			Version: semver.MustParse("1.0.0"),
-		}
-
-		_, err := cat.Tag(ctx, ref, "stable")
-		require.Error(t, err)
-		assert.True(t, IsNotFound(err))
-	})
-
-	t.Run("tags provider artifact", func(t *testing.T) {
-		cat := newTestCatalog(t)
-
-		ref := Reference{
-			Kind:    ArtifactKindProvider,
-			Name:    "echo",
-			Version: semver.MustParse("1.0.0"),
-		}
-		_, err := cat.Store(ctx, ref, []byte("binary"), nil, nil, false)
-		require.NoError(t, err)
-
-		_, err = cat.Tag(ctx, ref, "stable")
-		require.NoError(t, err)
-
-		// Verify
-		aliasDesc, err := cat.store.Resolve(ctx, "provider/echo:stable")
-		require.NoError(t, err)
-		origDesc, err := cat.store.Resolve(ctx, "provider/echo:1.0.0")
-		require.NoError(t, err)
-		assert.Equal(t, origDesc.Digest, aliasDesc.Digest)
-	})
-}
-
 func TestLocalCatalog_Save(t *testing.T) {
 	ctx := context.Background()
 
@@ -915,6 +790,11 @@ func TestLocalCatalog_TagForRef(t *testing.T) {
 			want: "solution/my-sol:1.0.0",
 		},
 		{
+			name: "version wins over digest",
+			ref:  Reference{Kind: ArtifactKindSolution, Name: "my-sol", Version: semVer, Digest: "sha256:abc123"},
+			want: "solution/my-sol:1.0.0",
+		},
+		{
 			name: "with digest",
 			ref:  Reference{Kind: ArtifactKindSolution, Name: "my-sol", Digest: "sha256:abc123"},
 			want: "solution/my-sol@sha256:abc123",
@@ -1225,6 +1105,33 @@ func TestLocalCatalog_List_IncludesOrigin(t *testing.T) {
 	assert.Equal(t, "built", artifacts[0].Annotations[AnnotationOrigin])
 }
 
+func TestLocalCatalog_List_ReferenceProvenance(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	cat := newTestCatalog(t)
+
+	built := Reference{Kind: ArtifactKindSolution, Name: "list-provenance", Version: semver.MustParse("1.0.0")}
+	_, err := cat.Store(ctx, built, []byte("name: list-provenance"), nil, nil, false)
+	require.NoError(t, err)
+	pulled := Reference{Kind: ArtifactKindSolution, Name: "list-provenance", Version: semver.MustParse("2.0.0")}
+	_, err = cat.Store(ctx, pulled, []byte("name: list-provenance"), nil,
+		map[string]string{AnnotationSourceCanonical: "ghcr.io/org"}, false)
+	require.NoError(t, err)
+
+	artifacts, err := cat.List(ctx, ArtifactKindSolution, "list-provenance")
+	require.NoError(t, err)
+	require.Len(t, artifacts, 2)
+
+	byVersion := make(map[string]Reference, len(artifacts))
+	for _, a := range artifacts {
+		byVersion[a.Reference.Version.String()] = a.Reference
+	}
+	assert.True(t, byVersion["1.0.0"].Built)
+	assert.Empty(t, byVersion["1.0.0"].Remote)
+	assert.False(t, byVersion["2.0.0"].Built, "a pulled copy must not be reported as built")
+	assert.Equal(t, "ghcr.io/org", byVersion["2.0.0"].Remote)
+}
+
 func TestStore_ExcludesSourceCanonicalFromManifestBlob(t *testing.T) {
 	ctx := context.Background()
 	cat := newTestCatalog(t)
@@ -1253,4 +1160,853 @@ func TestStore_ExcludesSourceCanonicalFromManifestBlob(t *testing.T) {
 
 	_, found := manifest.Annotations[AnnotationSourceCanonical]
 	assert.False(t, found, "AnnotationSourceCanonical must not appear in the manifest blob")
+}
+
+// newStoreInternalBuilder returns a fresh ManifestBuilder for ref carrying
+// body as its single content layer, suitable for exercising storeInternal.
+func newStoreInternalBuilder(ref Reference, body string) *ManifestBuilder {
+	return NewManifestBuilder(ref).
+		Layers(Layer{MediaType: MediaTypeSolutionContent, Data: []byte(body)})
+}
+
+func TestLocalCatalog_tagExists(t *testing.T) {
+	ctx := context.Background()
+	cat := newTestCatalog(t)
+
+	_, err := cat.storeInternal(ctx, newStoreInternalBuilder(solutionRef("demo", "1.0.0"), "x"), false)
+	require.NoError(t, err)
+
+	t.Run("present tag", func(t *testing.T) {
+		exists, err := cat.tagExists(ctx, "solution/demo:1.0.0")
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
+
+	t.Run("absent tag is not an error", func(t *testing.T) {
+		exists, err := cat.tagExists(ctx, "solution/missing:1.0.0")
+		require.NoError(t, err)
+		assert.False(t, exists)
+	})
+
+	t.Run("other resolve failures are surfaced", func(t *testing.T) {
+		exists, err := cat.tagExists(ctx, "")
+		require.Error(t, err, "a failure other than not-found must not read as a free tag")
+		assert.False(t, exists)
+		assert.Contains(t, err.Error(), "resolving tag")
+	})
+}
+
+func TestLocalCatalog_StoreInternal(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("single-platform manifest is pushed and tagged", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse("1.0.0")}
+		builder := newStoreInternalBuilder(ref, "name: demo")
+
+		desc, err := cat.storeInternal(ctx, builder, false)
+		require.NoError(t, err)
+		assert.Equal(t, ocispec.MediaTypeImageManifest, desc.MediaType)
+
+		resolved, err := cat.store.Resolve(ctx, "solution/demo:1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, desc.Digest, resolved.Digest)
+	})
+
+	t.Run("multi-platform index is pushed and tagged with remote repo path", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{
+			Kind:    ArtifactKindProvider,
+			Name:    "demo",
+			Version: semver.MustParse("2.0.0"),
+			Remote:  "example.com",
+		}
+		builder := NewIndexBuilder(ref).
+			Platform("linux/amd64", platformManifestBuilder([]byte("amd64"))).
+			Platform("darwin/arm64", platformManifestBuilder([]byte("arm64")))
+
+		desc, err := cat.storeInternal(ctx, builder, false)
+		require.NoError(t, err)
+		assert.Equal(t, ocispec.MediaTypeImageIndex, desc.MediaType)
+		assert.Equal(t, "example.com", desc.Annotations[AnnotationSourceCanonical])
+
+		resolved, err := cat.store.Resolve(ctx, "example.com/providers/demo:2.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, desc.Digest, resolved.Digest)
+	})
+
+	t.Run("nil builder is rejected", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		_, err := cat.storeInternal(ctx, nil, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "nil builder")
+	})
+
+	t.Run("reference without version or digest is rejected before push", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		builder := newStoreInternalBuilder(Reference{Kind: ArtifactKindSolution, Name: "demo"}, "x")
+
+		_, err := cat.storeInternal(ctx, builder, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no version or digest")
+	})
+
+	t.Run("reference without kind or name is rejected before push", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		builder := newStoreInternalBuilder(Reference{Name: "demo", Version: semver.MustParse("1.0.0")}, "x")
+
+		_, err := cat.storeInternal(ctx, builder, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "kind and name")
+	})
+
+	t.Run("existing artifact is rejected without force", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse("1.0.0")}
+
+		_, err := cat.storeInternal(ctx, newStoreInternalBuilder(ref, "name: demo"), false)
+		require.NoError(t, err)
+
+		_, err = cat.storeInternal(ctx, newStoreInternalBuilder(ref, "name: demo v2"), false)
+		require.Error(t, err)
+		var existsErr *ArtifactExistsError
+		require.ErrorAs(t, err, &existsErr)
+		assert.True(t, IsExists(err))
+	})
+
+	t.Run("force overwrites an existing artifact", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse("1.0.0")}
+
+		first, err := cat.storeInternal(ctx, newStoreInternalBuilder(ref, "name: demo"), false)
+		require.NoError(t, err)
+
+		second, err := cat.storeInternal(ctx, newStoreInternalBuilder(ref, "name: demo v2"), true)
+		require.NoError(t, err)
+		assert.NotEqual(t, first.Digest, second.Digest)
+
+		resolved, err := cat.store.Resolve(ctx, "solution/demo:1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, second.Digest, resolved.Digest)
+	})
+
+	t.Run("builder push failure is wrapped", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse("1.0.0")}
+		// An IndexBuilder with no platforms fails to build, surfacing a Push error.
+		builder := NewIndexBuilder(ref)
+
+		_, err := cat.storeInternal(ctx, builder, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "pushing artifact")
+	})
+
+	t.Run("stored artifact carries reference annotations", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{Kind: ArtifactKindProvider, Name: "demo", Version: semver.MustParse("1.0.0")}
+		desc, err := cat.storeInternal(ctx, newStoreInternalBuilder(ref, "name: demo"), false)
+		require.NoError(t, err)
+
+		tagged, err := cat.store.Resolve(ctx, "provider/demo:1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, tagged.Annotations, desc.Annotations,
+			"storeInternal returns the descriptor as tagged")
+
+		assert.Equal(t, "demo", tagged.Annotations[AnnotationArtifactName])
+		assert.Equal(t, ArtifactKindProvider.String(), tagged.Annotations[AnnotationArtifactType])
+		assert.Equal(t, "1.0.0", tagged.Annotations[AnnotationVersion])
+		_, hasCanonical := tagged.Annotations[AnnotationSourceCanonical]
+		assert.False(t, hasCanonical, "built artifact must not carry AnnotationSourceCanonical")
+	})
+
+	t.Run("remote reference carries AnnotationSourceCanonical only on the descriptor", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{Kind: ArtifactKindProvider, Name: "demo", Version: semver.MustParse("1.0.0"), Remote: "example.com"}
+		_, err := cat.storeInternal(ctx, newStoreInternalBuilder(ref, "name: demo"), false)
+		require.NoError(t, err)
+
+		tagged, err := cat.store.Resolve(ctx, "example.com/providers/demo:1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, "example.com", tagged.Annotations[AnnotationSourceCanonical])
+
+		blob, err := cat.fetchBlob(ctx, tagged)
+		require.NoError(t, err)
+		var manifest ocispec.Manifest
+		require.NoError(t, json.Unmarshal(blob, &manifest))
+		assert.NotContains(t, manifest.Annotations, AnnotationSourceCanonical,
+			"provenance must not enter the manifest blob")
+	})
+}
+
+func putSolutionLocal(t *testing.T, cat *LocalCatalog, ref Reference, _ bool) {
+	t.Helper()
+	_, err := cat.storeArtifact(context.Background(), remoteSolutionBuilder(ref), false)
+	require.NoError(t, err)
+}
+
+func TestLocalCatalog_Find(t *testing.T) {
+	ctx := context.Background()
+	built := func(name, version string) Reference {
+		return Reference{Kind: ArtifactKindSolution, Name: name, Version: semver.MustParse(version), Built: true}
+	}
+	remote := func(name, version, origin string) Reference {
+		return Reference{Kind: ArtifactKindSolution, Name: name, Version: semver.MustParse(version), Remote: origin}
+	}
+
+	t.Run("latest built version wins when source pinned", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("demo", "1.0.0"), false)
+		putSolutionLocal(t, cat, built("demo", "2.0.0"), false)
+
+		got, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Source: SourceSelector{Kind: SourceBuilt}})
+		require.NoError(t, err)
+		assert.Equal(t, "2.0.0", got.Reference.Version.String())
+		assert.True(t, got.Reference.Built)
+	})
+
+	t.Run("single origin different versions picks latest without a selector", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+		putSolutionLocal(t, cat, remote("demo", "2.0.0", "ghcr.io/a"), false)
+
+		got, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution})
+		require.NoError(t, err)
+		assert.Equal(t, "2.0.0", got.Reference.Version.String())
+		assert.Equal(t, "ghcr.io/a", got.Reference.Remote)
+		assert.False(t, got.Reference.Built)
+	})
+
+	t.Run("built and remote same version is ambiguous", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("demo", "1.0.0"), false)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+
+		_, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Version: "1.0.0"})
+		var ambErr *AmbiguousArtifactError
+		require.ErrorAs(t, err, &ambErr)
+	})
+
+	t.Run("two remotes same version resolves when narrowed", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/b"), false)
+
+		_, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Version: "1.0.0"})
+		var ambErr *AmbiguousArtifactError
+		require.ErrorAs(t, err, &ambErr)
+
+		got, err := cat.Find(ctx, ArtifactQuery{
+			Name: "demo", Kind: ArtifactKindSolution, Version: "1.0.0",
+			Source: SourceSelector{Kind: SourceRemote, Remote: "ghcr.io/b"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "ghcr.io/b", got.Reference.Remote)
+	})
+
+	t.Run("source built excludes remote artifact", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+
+		_, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Source: SourceSelector{Kind: SourceBuilt}})
+		var nfErr *ArtifactNotFoundError
+		require.ErrorAs(t, err, &nfErr)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		_, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution})
+		var nfErr *ArtifactNotFoundError
+		require.ErrorAs(t, err, &nfErr)
+	})
+
+	t.Run("invalid query without kind", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		_, err := cat.Find(ctx, ArtifactQuery{Name: "demo"})
+		var iqErr *InvalidQueryError
+		require.ErrorAs(t, err, &iqErr)
+	})
+
+	t.Run("latest prefers stable over a newer pre-release", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+		putSolutionLocal(t, cat, remote("demo", "2.0.0-rc.1", "ghcr.io/a"), false)
+
+		got, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution})
+		require.NoError(t, err)
+		assert.Equal(t, "1.0.0", got.Reference.Version.String())
+
+		got, err = cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Version: "latest"})
+		require.NoError(t, err)
+		assert.Equal(t, "1.0.0", got.Reference.Version.String())
+	})
+
+	t.Run("latest falls back to pre-release when no stable exists", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("demo", "2.0.0-rc.1", "ghcr.io/a"), false)
+		putSolutionLocal(t, cat, remote("demo", "2.0.0-rc.2", "ghcr.io/a"), false)
+
+		got, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution})
+		require.NoError(t, err)
+		assert.Equal(t, "2.0.0-rc.2", got.Reference.Version.String())
+	})
+
+	t.Run("include pre-release context picks the newest pre-release", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+		putSolutionLocal(t, cat, remote("demo", "2.0.0-rc.1", "ghcr.io/a"), false)
+
+		got, err := cat.Find(WithIncludePreRelease(ctx), ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution})
+		require.NoError(t, err)
+		assert.Equal(t, "2.0.0-rc.1", got.Reference.Version.String())
+	})
+
+	t.Run("exact pre-release version is not filtered", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+		putSolutionLocal(t, cat, remote("demo", "2.0.0-rc.1", "ghcr.io/a"), false)
+
+		got, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Version: "2.0.0-rc.1"})
+		require.NoError(t, err)
+		assert.Equal(t, "2.0.0-rc.1", got.Reference.Version.String())
+	})
+
+	t.Run("built stable and remote pre-release is ambiguous", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("demo", "1.0.0"), false)
+		putSolutionLocal(t, cat, remote("demo", "2.0.0-rc.1", "ghcr.io/a"), false)
+
+		_, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution})
+		var ambErr *AmbiguousArtifactError
+		require.ErrorAs(t, err, &ambErr)
+		assert.Len(t, ambErr.Matches, 2, "ambiguity is reported against every match, not the stable subset")
+	})
+
+	t.Run("built pre-release and remote stable is ambiguous", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("demo", "2.0.0-rc.1"), false)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+
+		_, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution})
+		var ambErr *AmbiguousArtifactError
+		require.ErrorAs(t, err, &ambErr)
+		assert.Equal(t, "2.0.0-rc.1", ambErr.Matches[0].Reference.Version.String(), "matches are ordered newest first")
+	})
+
+	t.Run("remotes where one has only pre-releases are ambiguous", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+		putSolutionLocal(t, cat, remote("demo", "2.0.0-rc.1", "ghcr.io/b"), false)
+
+		_, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Version: "latest"})
+		var ambErr *AmbiguousArtifactError
+		require.ErrorAs(t, err, &ambErr)
+	})
+
+	t.Run("source selector applies stable-first within the selected origin", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("demo", "2.0.0-rc.1"), false)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+
+		got, err := cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Source: SourceSelector{Kind: SourceBuilt}})
+		require.NoError(t, err)
+		assert.True(t, got.Reference.Built)
+		assert.Equal(t, "2.0.0-rc.1", got.Reference.Version.String())
+
+		got, err = cat.Find(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Source: SourceSelector{Kind: SourceRemote, Remote: "ghcr.io/a"}})
+		require.NoError(t, err)
+		assert.Equal(t, "ghcr.io/a", got.Reference.Remote)
+		assert.Equal(t, "1.0.0", got.Reference.Version.String())
+	})
+}
+
+func TestLocalCatalog_FindStrict(t *testing.T) {
+	ctx := context.Background()
+	built := func(name, version string) Reference {
+		return Reference{Kind: ArtifactKindSolution, Name: name, Version: semver.MustParse(version), Built: true}
+	}
+	remote := func(name, version, origin string) Reference {
+		return Reference{Kind: ArtifactKindSolution, Name: name, Version: semver.MustParse(version), Remote: origin}
+	}
+
+	t.Run("returns a single match", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("demo", "1.0.0"), false)
+
+		got, err := cat.FindStrict(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution})
+		require.NoError(t, err)
+		assert.Equal(t, "1.0.0", got.Reference.Version.String())
+		assert.True(t, got.Reference.Built)
+	})
+
+	t.Run("rejects multiple matches even when source is pinned", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("demo", "1.0.0"), false)
+		putSolutionLocal(t, cat, built("demo", "2.0.0"), false)
+
+		_, err := cat.FindStrict(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Source: SourceSelector{Kind: SourceBuilt}})
+		var ambErr *AmbiguousArtifactError
+		require.ErrorAs(t, err, &ambErr)
+		assert.Len(t, ambErr.Matches, 2)
+	})
+
+	t.Run("does not filter pre-releases", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+		putSolutionLocal(t, cat, remote("demo", "2.0.0-rc.1", "ghcr.io/a"), false)
+
+		_, err := cat.FindStrict(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution})
+		var ambErr *AmbiguousArtifactError
+		require.ErrorAs(t, err, &ambErr)
+		assert.Len(t, ambErr.Matches, 2)
+	})
+
+	t.Run("rejects multiple origins", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("demo", "1.0.0"), false)
+		putSolutionLocal(t, cat, remote("demo", "1.0.0", "ghcr.io/a"), false)
+
+		_, err := cat.FindStrict(ctx, ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Version: "1.0.0"})
+		var ambErr *AmbiguousArtifactError
+		require.ErrorAs(t, err, &ambErr)
+		assert.Len(t, ambErr.Matches, 2)
+	})
+}
+
+func TestLocalCatalog_resolveLocked(t *testing.T) {
+	ctx := context.Background()
+	built := func(version string) Reference {
+		return Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse(version), Built: true}
+	}
+	remote := func(version, origin string) Reference {
+		return Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse(version), Remote: origin}
+	}
+	anyOrigin := func(version string) Reference {
+		return Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse(version)}
+	}
+	// retag moves an artifact to a tag that no longer matches its annotations.
+	retag := func(t *testing.T, cat *LocalCatalog, from, to string) {
+		t.Helper()
+		desc, err := cat.store.Resolve(ctx, from)
+		require.NoError(t, err)
+		require.NoError(t, cat.store.Tag(ctx, desc, to))
+		require.NoError(t, cat.store.Untag(ctx, from))
+	}
+	requireNotFound := func(t *testing.T, err error) {
+		t.Helper()
+		var nfErr *ArtifactNotFoundError
+		require.ErrorAs(t, err, &nfErr)
+	}
+
+	t.Run("full identity built ref resolves by tag", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+
+		got, err := cat.Resolve(ctx, built("1.0.0"))
+		require.NoError(t, err)
+		assert.Equal(t, "1.0.0", got.Reference.Version.String())
+		assert.True(t, got.Reference.Built)
+		assert.Equal(t, "1.0.0", got.Tag)
+	})
+
+	t.Run("full identity remote ref resolves by tag", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("1.0.0", "ghcr.io/a"), false)
+
+		got, err := cat.Resolve(ctx, remote("1.0.0", "ghcr.io/a"))
+		require.NoError(t, err)
+		assert.Equal(t, "ghcr.io/a", got.Reference.Remote)
+		assert.False(t, got.Reference.Built)
+	})
+
+	t.Run("remote ref does not return the built copy", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+
+		_, err := cat.Resolve(ctx, remote("1.0.0", "ghcr.io/a"))
+		requireNotFound(t, err)
+	})
+
+	t.Run("built ref does not return the remote copy", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("1.0.0", "ghcr.io/a"), false)
+
+		_, err := cat.Resolve(ctx, built("1.0.0"))
+		requireNotFound(t, err)
+	})
+
+	t.Run("different remote origin is not found", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("1.0.0", "ghcr.io/a"), false)
+
+		_, err := cat.Resolve(ctx, remote("1.0.0", "ghcr.io/b"))
+		requireNotFound(t, err)
+	})
+
+	t.Run("origin-less ref resolves a built-only artifact", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+
+		got, err := cat.Resolve(ctx, anyOrigin("1.0.0"))
+		require.NoError(t, err)
+		assert.True(t, got.Reference.Built)
+	})
+
+	t.Run("origin-less ref resolves a remote-only artifact", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("1.0.0", "ghcr.io/a"), false)
+
+		got, err := cat.Resolve(ctx, anyOrigin("1.0.0"))
+		require.NoError(t, err)
+		assert.Equal(t, "ghcr.io/a", got.Reference.Remote)
+	})
+
+	t.Run("origin-less ref is ambiguous across built and remote copies", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		putSolutionLocal(t, cat, remote("1.0.0", "ghcr.io/a"), false)
+
+		_, err := cat.Resolve(ctx, anyOrigin("1.0.0"))
+		var ambErr *AmbiguousArtifactError
+		require.ErrorAs(t, err, &ambErr)
+
+		// An explicit origin disambiguates.
+		got, err := cat.Resolve(ctx, built("1.0.0"))
+		require.NoError(t, err)
+		assert.True(t, got.Reference.Built)
+	})
+
+	t.Run("full identity tag miss is not found without scanning", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		retag(t, cat, "solution/demo:1.0.0", "/demo:1.0.0")
+
+		_, err := cat.Resolve(ctx, built("1.0.0"))
+		requireNotFound(t, err)
+
+		// The same artifact is still reachable when the origin is left open.
+		got, err := cat.Resolve(ctx, anyOrigin("1.0.0"))
+		require.NoError(t, err)
+		assert.Equal(t, "demo", got.Reference.Name)
+	})
+
+	t.Run("bare name resolves latest version", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		putSolutionLocal(t, cat, built("2.0.0"), false)
+
+		got, err := cat.Resolve(ctx, Reference{Kind: ArtifactKindSolution, Name: "demo", Built: true})
+		require.NoError(t, err)
+		assert.Equal(t, "2.0.0", got.Reference.Version.String())
+	})
+
+	t.Run("latest across a built release and a remote pre-release is ambiguous", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		putSolutionLocal(t, cat, remote("2.0.0-rc.1", "ghcr.io/a"), false)
+
+		_, err := cat.Resolve(ctx, Reference{Kind: ArtifactKindSolution, Name: "demo"})
+		var ambErr *AmbiguousArtifactError
+		require.ErrorAs(t, err, &ambErr)
+
+		got, err := cat.Resolve(ctx, Reference{Kind: ArtifactKindSolution, Name: "demo", Built: true})
+		require.NoError(t, err)
+		assert.Equal(t, "1.0.0", got.Reference.Version.String())
+		assert.True(t, got.Reference.Built)
+	})
+
+	t.Run("exact pre-release version resolves", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("2.0.0-rc.1"), false)
+
+		got, err := cat.Resolve(ctx, built("2.0.0-rc.1"))
+		require.NoError(t, err)
+		assert.Equal(t, "2.0.0-rc.1", got.Reference.Version.String())
+	})
+
+	t.Run("digest-only ref resolves by annotation search", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		stored, err := cat.Resolve(ctx, built("1.0.0"))
+		require.NoError(t, err)
+
+		got, err := cat.Resolve(ctx, Reference{Kind: ArtifactKindSolution, Name: "demo", Digest: stored.Digest})
+		require.NoError(t, err)
+		assert.Equal(t, stored.Digest, got.Digest)
+		assert.Equal(t, "1.0.0", got.Reference.Version.String())
+	})
+
+	t.Run("unknown digest is not found", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+
+		_, err := cat.Resolve(ctx, Reference{Kind: ArtifactKindSolution, Name: "demo", Digest: digest.FromString("absent").String()})
+		requireNotFound(t, err)
+	})
+
+	t.Run("version and matching digest resolves", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		stored, err := cat.Resolve(ctx, built("1.0.0"))
+		require.NoError(t, err)
+
+		ref := built("1.0.0")
+		ref.Digest = stored.Digest
+		got, err := cat.Resolve(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, stored.Digest, got.Digest)
+	})
+
+	t.Run("version and mismatched digest is not found", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+
+		ref := built("1.0.0")
+		ref.Digest = digest.FromString("absent").String()
+		_, err := cat.Resolve(ctx, ref)
+		requireNotFound(t, err)
+	})
+
+	t.Run("version and digest resolves despite a mismatched tag", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		stored, err := cat.Resolve(ctx, built("1.0.0"))
+		require.NoError(t, err)
+		retag(t, cat, "solution/demo:1.0.0", "/demo:1.0.0")
+
+		ref := built("1.0.0")
+		ref.Digest = stored.Digest
+		got, err := cat.Resolve(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, stored.Digest, got.Digest)
+	})
+
+	t.Run("ref without kind is an invalid query", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+
+		_, err := cat.Resolve(ctx, Reference{Name: "demo", Version: semver.MustParse("1.0.0"), Built: true})
+		var qErr *InvalidQueryError
+		require.ErrorAs(t, err, &qErr)
+	})
+
+	t.Run("miss reports the caller's reference", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		ref := Reference{Kind: ArtifactKindSolution, Name: "demo"}
+		_, err := cat.Resolve(ctx, ref)
+		var nfErr *ArtifactNotFoundError
+		require.ErrorAs(t, err, &nfErr)
+		assert.Equal(t, ref, nfErr.Reference)
+		assert.Equal(t, LocalCatalogName, nfErr.Catalog)
+	})
+
+	t.Run("origin-less resolve matches find on the equivalent query", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("1.0.0", "ghcr.io/a"), false)
+		putSolutionLocal(t, cat, remote("2.0.0", "ghcr.io/a"), false)
+
+		ref := Reference{Kind: ArtifactKindSolution, Name: "demo"}
+		resolved, err := cat.Resolve(ctx, ref)
+		require.NoError(t, err)
+		found, err := cat.Find(ctx, queryFromRef(ref))
+		require.NoError(t, err)
+		assert.Equal(t, found.Digest, resolved.Digest)
+		assert.Equal(t, found.Tag, resolved.Tag)
+	})
+}
+
+func TestLocalCatalog_existsLocked(t *testing.T) {
+	ctx := context.Background()
+	built := func(version string) Reference {
+		return Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse(version), Built: true}
+	}
+	remote := func(version, origin string) Reference {
+		return Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse(version), Remote: origin}
+	}
+	anyOrigin := func(version string) Reference {
+		return Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse(version)}
+	}
+	exists := func(t *testing.T, cat *LocalCatalog, ref Reference) bool {
+		t.Helper()
+		got, err := cat.Exists(ctx, ref)
+		require.NoError(t, err)
+		return got
+	}
+
+	t.Run("full identity is an exact tag lookup", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		putSolutionLocal(t, cat, remote("1.0.0", "ghcr.io/a"), false)
+
+		assert.True(t, exists(t, cat, built("1.0.0")))
+		assert.True(t, exists(t, cat, remote("1.0.0", "ghcr.io/a")))
+		assert.False(t, exists(t, cat, built("2.0.0")), "other version")
+		assert.False(t, exists(t, cat, remote("1.0.0", "ghcr.io/b")), "other origin")
+	})
+
+	t.Run("a built ref is not satisfied by a remote copy", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, remote("1.0.0", "ghcr.io/a"), false)
+
+		assert.False(t, exists(t, cat, built("1.0.0")))
+	})
+
+	t.Run("a remote ref is not satisfied by the built copy", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+
+		assert.False(t, exists(t, cat, remote("1.0.0", "ghcr.io/a")))
+	})
+
+	t.Run("full identity miss does not scan annotations", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		desc, err := cat.store.Resolve(ctx, "solution/demo:1.0.0")
+		require.NoError(t, err)
+		require.NoError(t, cat.store.Tag(ctx, desc, "/demo:1.0.0"))
+		require.NoError(t, cat.store.Untag(ctx, "solution/demo:1.0.0"))
+
+		assert.False(t, exists(t, cat, built("1.0.0")), "tag is the contract for a full identity")
+		assert.True(t, exists(t, cat, anyOrigin("1.0.0")), "an open origin is a search and finds it by annotation")
+	})
+
+	t.Run("open origin matches any origin", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		putSolutionLocal(t, cat, remote("2.0.0", "ghcr.io/a"), false)
+
+		assert.True(t, exists(t, cat, anyOrigin("1.0.0")), "built copy")
+		assert.True(t, exists(t, cat, anyOrigin("2.0.0")), "remote copy")
+		assert.False(t, exists(t, cat, anyOrigin("3.0.0")))
+	})
+
+	t.Run("ambiguous match still exists", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		putSolutionLocal(t, cat, remote("1.0.0", "ghcr.io/a"), false)
+
+		assert.True(t, exists(t, cat, anyOrigin("1.0.0")))
+	})
+
+	t.Run("open version matches any version", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		versionless := Reference{Kind: ArtifactKindSolution, Name: "demo"}
+		assert.False(t, exists(t, cat, versionless), "empty catalog")
+
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		assert.True(t, exists(t, cat, versionless))
+		assert.True(t, exists(t, cat, Reference{Kind: ArtifactKindSolution, Name: "demo", Built: true}))
+		assert.False(t, exists(t, cat, Reference{Kind: ArtifactKindSolution, Name: "demo", Remote: "ghcr.io/a"}))
+		assert.False(t, exists(t, cat, Reference{Kind: ArtifactKindProvider, Name: "demo"}), "other kind")
+	})
+
+	t.Run("digest is checked against the stored artifact", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		stored, err := cat.Resolve(ctx, built("1.0.0"))
+		require.NoError(t, err)
+
+		withDigest := built("1.0.0")
+		withDigest.Digest = stored.Digest
+		assert.True(t, exists(t, cat, withDigest))
+
+		wrongDigest := built("1.0.0")
+		wrongDigest.Digest = "sha256:" + strings.Repeat("0", 64)
+		assert.False(t, exists(t, cat, wrongDigest), "the version tag exists but holds a different digest")
+	})
+
+	t.Run("invalid query is an error not a miss", func(t *testing.T) {
+		cat := newTestCatalog(t)
+
+		_, err := cat.Exists(ctx, Reference{Name: "demo"})
+		var invalid *InvalidQueryError
+		require.ErrorAs(t, err, &invalid)
+	})
+
+	t.Run("deleted artifact no longer exists", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		putSolutionLocal(t, cat, built("1.0.0"), false)
+		require.NoError(t, cat.Delete(ctx, built("1.0.0")))
+
+		assert.False(t, exists(t, cat, built("1.0.0")))
+	})
+}
+
+func TestLocalCatalog_Store_RejectsInvalidRefOnGuard(t *testing.T) {
+	cat := newTestCatalog(t)
+
+	_, err := cat.Store(context.Background(), Reference{Name: "demo", Version: semver.MustParse("1.0.0")}, []byte("x"), nil, nil, false)
+	var invalid *InvalidQueryError
+	require.ErrorAs(t, err, &invalid)
+}
+
+// An origin-less write is stored as built, so its existence guard must check
+// the built tag only: a pulled copy of the same name@version lives under its
+// own tag and must not block the build, while a prior build still must.
+func TestLocalCatalog_StoreOriginlessIgnoresPulledCopy(t *testing.T) {
+	ctx := context.Background()
+	const pulledOrigin = "ghcr.io/org"
+
+	tests := []struct {
+		name  string
+		kind  ArtifactKind
+		store func(cat *LocalCatalog, ref Reference) (ArtifactInfo, error)
+	}{
+		{
+			name: "Store",
+			kind: ArtifactKindProvider,
+			store: func(cat *LocalCatalog, ref Reference) (ArtifactInfo, error) {
+				return cat.Store(ctx, ref, []byte("x"), nil, nil, false)
+			},
+		},
+		{
+			name: "StoreDedup",
+			kind: ArtifactKindSolution,
+			store: func(cat *LocalCatalog, ref Reference) (ArtifactInfo, error) {
+				return cat.StoreDedup(ctx, ref, []byte("sol"), []byte("{}"), nil, nil, nil, false)
+			},
+		},
+		{
+			name: "StoreMultiPlatform",
+			kind: ArtifactKindProvider,
+			store: func(cat *LocalCatalog, ref Reference) (ArtifactInfo, error) {
+				return cat.StoreMultiPlatform(ctx, ref, []PlatformBinary{{Platform: "linux/amd64", Data: []byte("bin")}}, nil, false)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cat := newTestCatalog(t)
+			pulled := Reference{Kind: tt.kind, Name: "foo", Version: semver.MustParse("1.0.0"), Remote: pulledOrigin}
+			_, err := tt.store(cat, pulled)
+			require.NoError(t, err)
+
+			originless := Reference{Kind: tt.kind, Name: "foo", Version: semver.MustParse("1.0.0")}
+			info, err := tt.store(cat, originless)
+			require.NoError(t, err, "a pulled copy must not block an origin-less (built) write")
+			assert.True(t, info.Reference.Built)
+
+			builtExists, err := cat.Exists(ctx, Reference{Kind: tt.kind, Name: "foo", Version: semver.MustParse("1.0.0"), Built: true})
+			require.NoError(t, err)
+			assert.True(t, builtExists)
+			pulledExists, err := cat.Exists(ctx, pulled)
+			require.NoError(t, err)
+			assert.True(t, pulledExists, "the pulled copy must be kept")
+
+			_, err = tt.store(cat, originless)
+			var existsErr *ArtifactExistsError
+			require.ErrorAs(t, err, &existsErr, "a prior build must still block the write")
+		})
+	}
 }
