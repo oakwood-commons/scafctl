@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adrg/xdg"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 )
 
 const (
@@ -106,7 +106,7 @@ const (
 // An empty binaryName defaults to CliBinaryName.
 func HTTPCacheDirFor(binaryName string) string {
 	binaryName = SanitizeBinaryName(binaryName)
-	return filepath.Join(xdg.CacheHome, binaryName, "http-cache")
+	return filepath.Join(paths.CacheHome(), binaryName, "http-cache")
 }
 
 // DefaultHTTPCacheDir returns the default directory for HTTP cache.
@@ -408,7 +408,7 @@ const (
 // An empty binaryName defaults to CliBinaryName.
 func BuildCacheDirFor(binaryName string) string {
 	binaryName = SanitizeBinaryName(binaryName)
-	return filepath.Join(xdg.CacheHome, binaryName, "build-cache")
+	return filepath.Join(paths.CacheHome(), binaryName, "build-cache")
 }
 
 // DefaultBuildCacheDir returns the default directory for build cache.
@@ -424,7 +424,7 @@ func DefaultBuildCacheDir() string {
 // An empty binaryName defaults to CliBinaryName.
 func PluginCacheDirFor(binaryName string) string {
 	binaryName = SanitizeBinaryName(binaryName)
-	return filepath.Join(xdg.CacheHome, binaryName, "plugins")
+	return filepath.Join(paths.CacheHome(), binaryName, "plugins")
 }
 
 // DefaultPluginCacheDir returns the default directory for cached plugin binaries.

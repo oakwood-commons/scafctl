@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/adrg/xdg"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -75,12 +74,8 @@ func TestCommandHandlersInstall_AlreadyCached(t *testing.T) {
 	})
 	ctx = authofficial.WithRegistry(ctx, officialReg)
 
-	// Override xdg.CacheHome directly (t.Setenv doesn't work because
-	// the xdg package reads the env var at init-time).
 	xdgCache := t.TempDir()
-	origCacheHome := xdg.CacheHome
-	xdg.CacheHome = xdgCache
-	t.Cleanup(func() { xdg.CacheHome = origCacheHome })
+	t.Setenv("XDG_CACHE_HOME", xdgCache)
 
 	cliParams := settings.NewCliParams()
 	cliParams.BinaryName = "testcli"
@@ -128,9 +123,7 @@ func TestCommandHandlersInstall_ForceBypassesCache(t *testing.T) {
 
 	// Set up a cached binary.
 	xdgCache := t.TempDir()
-	origCacheHome := xdg.CacheHome
-	xdg.CacheHome = xdgCache
-	t.Cleanup(func() { xdg.CacheHome = origCacheHome })
+	t.Setenv("XDG_CACHE_HOME", xdgCache)
 
 	cliParams := settings.NewCliParams()
 	cliParams.BinaryName = "testcli"
