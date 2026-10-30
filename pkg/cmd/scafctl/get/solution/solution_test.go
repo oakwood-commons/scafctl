@@ -9,11 +9,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/adrg/xdg"
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -27,9 +25,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// xdgMu serialises tests that mutate the global xdg.DataHome variable.
-var xdgMu sync.Mutex
 
 // mockLoader implements load.Loader for testing. It records the
 // classification it was asked to load.
@@ -427,15 +422,8 @@ func TestListSolutions_OutputFormat(t *testing.T) {
 }
 
 func TestListSolutions_WithLocalArtifacts(t *testing.T) {
-	// Cannot be parallel: temporarily redirects xdg.DataHome.
-	xdgMu.Lock()
 	tmpDir := t.TempDir()
-	origDataHome := xdg.DataHome
-	xdg.DataHome = tmpDir
-	t.Cleanup(func() {
-		xdg.DataHome = origDataHome
-		xdgMu.Unlock()
-	})
+	t.Setenv("XDG_DATA_HOME", tmpDir)
 
 	// Pre-populate a local catalog with a solution.
 	lgr := logr.Discard()
@@ -478,14 +466,8 @@ func TestListSolutions_WithLocalArtifacts(t *testing.T) {
 }
 
 func TestListSolutions_WithMultipleArtifacts(t *testing.T) {
-	xdgMu.Lock()
 	tmpDir := t.TempDir()
-	origDataHome := xdg.DataHome
-	xdg.DataHome = tmpDir
-	t.Cleanup(func() {
-		xdg.DataHome = origDataHome
-		xdgMu.Unlock()
-	})
+	t.Setenv("XDG_DATA_HOME", tmpDir)
 
 	lgr := logr.Discard()
 	localCat, err := catalog.NewLocalCatalogAt(
@@ -598,18 +580,10 @@ func TestDeduplicateAndFormatSolutions(t *testing.T) {
 }
 
 func TestCommandSolution_NoArgsCallsListSolutions(t *testing.T) {
-	// Cannot be parallel: temporarily redirects xdg.DataHome to an empty
-	// catalog so this test is not polluted by solutions already present in
-	// the machine's real local catalog (e.g. from prior `scafctl build`/`run`
-	// invocations).
-	xdgMu.Lock()
-	tmpDir := t.TempDir()
-	origDataHome := xdg.DataHome
-	xdg.DataHome = tmpDir
-	t.Cleanup(func() {
-		xdg.DataHome = origDataHome
-		xdgMu.Unlock()
-	})
+	// Redirect the data home to an empty catalog so this test is not polluted
+	// by solutions already present in the machine's real local catalog (e.g.
+	// from prior `scafctl build`/`run` invocations).
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	outBuf := &bytes.Buffer{}
 	errBuf := &bytes.Buffer{}

@@ -154,6 +154,15 @@ func TestPluginCacheDirFor(t *testing.T) {
 	assert.NotContains(t, parts, "scafctl")
 }
 
+func TestCacheDirFor_HonorsEnvWithoutReload(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheHome)
+
+	assert.Equal(t, filepath.Join(cacheHome, "mycli", "http-cache"), HTTPCacheDirFor("mycli"))
+	assert.Equal(t, filepath.Join(cacheHome, "mycli", "build-cache"), BuildCacheDirFor("mycli"))
+	assert.Equal(t, filepath.Join(cacheHome, "mycli", "plugins"), PluginCacheDirFor("mycli"))
+}
+
 func TestSanitizeBinaryName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
