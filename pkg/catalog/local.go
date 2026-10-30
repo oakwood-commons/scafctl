@@ -24,6 +24,7 @@ import (
 	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
+	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/errdef"
 )
@@ -735,12 +736,23 @@ type taggedArtifact struct {
 
 // scanByAnnotation is the single annotation-identity scan behind
 // findByAnnotation and Delete. Caller must hold a lock.
+//
+// A tag that cannot be read or verified is skipped only when its name shows it
+// cannot match query (see isCandidateTag). For a candidate the error is
+// returned: reporting a corrupt local copy as absent would let a strict source
+// chain silently serve a same-named artifact from a lower-priority catalog.
 func (c *LocalCatalog) scanByAnnotation(ctx context.Context, query ArtifactQuery) ([]taggedArtifact, error) {
 	var artifacts []taggedArtifact
 	err := c.store.Tags(ctx, "", func(tags []string) error {
 		for _, tag := range tags {
 			desc, err := c.store.Resolve(ctx, tag)
+			if errors.Is(err, errdef.ErrNotFound) {
+				continue
+			}
 			if err != nil {
+				if isCandidateTag(tag, query) {
+					return fmt.Errorf("resolving %q in the local catalog: %w", tag, err)
+				}
 				continue
 			}
 
@@ -749,6 +761,9 @@ func (c *LocalCatalog) scanByAnnotation(ctx context.Context, query ArtifactQuery
 			// version and provenance even when the query left them open.
 			info, err := c.infoForTag(ctx, tag, desc)
 			if err != nil {
+				if isCandidateTag(tag, query) {
+					return fmt.Errorf("reading %q in the local catalog: %w", tag, err)
+				}
 				continue
 			}
 			if !query.matches(info) {
@@ -774,6 +789,43 @@ func tagLabel(tag string) string {
 		return tag[idx+1:]
 	}
 	return tag
+}
+
+// isCandidateTag reports whether the artifact stored under tag could match
+// query, judged from the tag text alone (see buildLocalTag): the repository
+// must name query's kind and name, in the built form or the pulled form that
+// the source selector allows, and a semver label must satisfy query's
+// version. Any other label (a digest) is a candidate, so unreadable artifacts
+// are never ruled out on a guess.
+func isCandidateTag(tag string, query ArtifactQuery) bool {
+	repo := tag
+	if idx := strings.LastIndex(repo, "@"); idx >= 0 {
+		repo = repo[:idx]
+	} else if idx := strings.LastIndex(repo, ":"); idx > strings.LastIndex(repo, "/") {
+		repo = repo[:idx]
+	}
+
+	built := query.Kind.String() + "/" + query.Name
+	pulled := "/" + query.Kind.Plural() + "/" + query.Name
+	var named bool
+	switch query.Source.Kind {
+	case SourceBuilt:
+		named = repo == built
+	case SourceRemote:
+		named = repo == query.Source.Remote+pulled
+	case SourceAny:
+		named = repo == built || strings.HasSuffix(repo, pulled)
+	}
+	if !named {
+		return false
+	}
+
+	if v, err := semver.NewVersion(tagLabel(tag)); err == nil {
+		var want VersionOrConstraint
+		want.Set(query.Version)
+		return want.satisfiesVersion(v)
+	}
+	return true
 }
 
 // Exists checks if an artifact exists in the catalog.
@@ -1009,12 +1061,37 @@ func (c *LocalCatalog) fetchBlob(ctx context.Context, desc ocispec.Descriptor) (
 	}
 	defer rc.Close()
 
-	buf := new(bytes.Buffer)
-	if _, err := buf.ReadFrom(rc); err != nil {
+	if desc.Size > 0 {
+		// Bounded by the descriptor size and verified against its digest.
+		data, err := content.ReadAll(rc, desc)
+		if err != nil {
+			return nil, fmt.Errorf("blob %s: %w", desc.Digest, err)
+		}
+		return data, nil
+	}
+	data, err := io.ReadAll(rc)
+	if err != nil {
 		return nil, err
 	}
+	if err := verifyBlob(desc, data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
 
-	return buf.Bytes(), nil
+// verifyBlob checks data against the digest desc describes, for a descriptor
+// with no known size (sized blobs are read with content.ReadAll, which bounds
+// and verifies them). The OCI store reads blobs straight off disk without
+// checking them, so a blob edited in place would otherwise be served under a
+// digest that was verified (or signed) elsewhere.
+func verifyBlob(desc ocispec.Descriptor, data []byte) error {
+	if err := desc.Digest.Validate(); err != nil {
+		return fmt.Errorf("blob %s: %w", desc.Digest, err)
+	}
+	if got := desc.Digest.Algorithm().FromBytes(data); got != desc.Digest {
+		return fmt.Errorf("blob %s: content digest is %s: %w", desc.Digest, got, content.ErrMismatchedDigest)
+	}
+	return nil
 }
 
 // fetchManifestByDigest fetches and unmarshals an OCI manifest using its

@@ -646,6 +646,29 @@ func TestHandleEnsureError_MissingLockFileMapsTo400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
 }
 
+func TestHandleEnsureError_PluginSourceErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "invalid source", err: fmt.Errorf("resolving: %w", solution.ErrInvalidPluginSource), want: http.StatusBadRequest},
+		{name: "unconfigured catalog", err: &prepare.UnconfiguredCatalogError{Registries: []string{"registry.example.com"}}, want: http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := handleEnsureError(context.Background(), tt.err, "solution-run")
+
+			var statusErr huma.StatusError
+			require.ErrorAs(t, err, &statusErr)
+			assert.Equal(t, tt.want, statusErr.GetStatus())
+		})
+	}
+}
+
 func TestHandleEnsureError_GenericFallsThroughToPoolMapping(t *testing.T) {
 	t.Parallel()
 

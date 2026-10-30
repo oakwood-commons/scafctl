@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
@@ -80,7 +79,7 @@ func PluginKindFromCacheKey(cacheKey string) (name string, kind solution.PluginK
 //
 // If catalogFetcher is nil, all plugins that require catalog resolution are
 // reported as failed with a "no remote catalogs configured" error.
-func PlanUpdates(ctx context.Context, cache *Cache, catalogFetcher *catalog.PluginFetcher, opts UpdateOptions) (*UpdatePlan, error) {
+func PlanUpdates(ctx context.Context, cache *Cache, catalogFetcher CatalogFetcher, opts UpdateOptions) (*UpdatePlan, error) {
 	if len(opts.Names) == 0 && !opts.All {
 		return nil, fmt.Errorf("no plugin names specified; use positional args or --all")
 	}

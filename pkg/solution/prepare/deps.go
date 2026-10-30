@@ -233,6 +233,37 @@ func resolveRemoteRegistry(deps []providerDependency, resolver RegistryAliasReso
 	return deps, nil
 }
 
+// resolveBuiltCatalog binds source.built provider dependencies to the local
+// catalog. A built plugin only exists in the local catalog (a local build
+// published it there), and the local catalog's alias is reserved and pinned
+// first in the runtime chain by catalog.BuildCatalogChain, so no topology lookup
+// is needed. Binding here means a built dep never reaches a catalog binder
+// catalogless (where it would be resolved across the whole chain). A source that
+// also names a registry is rejected: the two origins are mutually exclusive.
+func resolveBuiltCatalog(deps []providerDependency) ([]providerDependency, error) {
+	for i, dep := range deps {
+		if !dep.HasBuilt() {
+			continue
+		}
+		if err := dep.ValidateSource(); err != nil {
+			return nil, err
+		}
+		deps[i].Catalog = catalog.LocalCatalogName
+	}
+	return deps, nil
+}
+
+// lockEntryCatalog derives the catalog alias a lock entry resolved from. Built
+// entries (see bundler.LockPlugin.IsBuilt) map to the local catalog; every
+// other entry maps its rename-proof canonical origin through the resolver. The
+// bool is false when the canonical names no configured catalog.
+func lockEntryCatalog(lp *bundler.LockPlugin, resolver RegistryAliasResolver) (string, bool) {
+	if lp.IsBuilt() {
+		return catalog.LocalCatalogName, true
+	}
+	return resolver.AliasForRegistry(lp.ResolvedCanonical)
+}
+
 func resolveLockMode(deps []providerDependency, lock *bundler.LockFile, mode LockMode, resolver RegistryAliasResolver) ([]providerDependency, error) {
 	for i, dep := range deps {
 		resolved, err := resolveByLockModeInternal(dep.PluginDependency, lock, mode, resolver)
@@ -293,7 +324,7 @@ func resolveStrict(dep solution.PluginDependency, lock *bundler.LockFile, resolv
 				"cannot pin in strict mode", dep.ArtifactName(),
 		)
 	}
-	catalog, ok := resolver.AliasForRegistry(lp.ResolvedCanonical)
+	catalog, ok := lockEntryCatalog(lp, resolver)
 	if !ok {
 		return solution.PluginDependency{}, fmt.Errorf(
 			"provider %q: lock entry resolved to registry %q, which is not a configured catalog",
@@ -320,7 +351,7 @@ func resolveConstrained(dep solution.PluginDependency, lock *bundler.LockFile, r
 				"cannot resolve in constrained mode", dep.ArtifactName(),
 		)
 	}
-	catalog, ok := resolver.AliasForRegistry(lp.ResolvedCanonical)
+	catalog, ok := lockEntryCatalog(lp, resolver)
 	if !ok {
 		return solution.PluginDependency{}, fmt.Errorf(
 			"provider %q: lock entry resolved to registry %q, which is not a configured catalog",
@@ -342,7 +373,7 @@ func resolveBestEffort(dep solution.PluginDependency, lock *bundler.LockFile, re
 				version = dep.Version
 			}
 			dep.Version = version
-			catalog, ok := resolver.AliasForRegistry(lp.ResolvedCanonical)
+			catalog, ok := lockEntryCatalog(lp, resolver)
 			if ok {
 				dep.Catalog = catalog
 			}
@@ -373,14 +404,19 @@ func resolveProviderDependencies(ctx context.Context, sol *solution.Solution, mo
 	if err != nil {
 		return nil, err
 	}
+	dependencies, err = resolveBuiltCatalog(dependencies)
+	if err != nil {
+		return nil, err
+	}
 	dependencies, err = resolveLockMode(dependencies, lock, mode, resolver)
 	if err != nil {
 		return nil, err
 	}
 	// Bind each catalogless dep to a concrete catalog per the injected strategy
 	// (noop for the fetch path, registry resolution for the pool path). Only
-	// best-effort deps reach here still catalogless; strict/constrained already
-	// resolved catalog and version from the lock file.
+	// best-effort short-name deps reach here still catalogless: registry and
+	// built deps were bound above, and strict/constrained already resolved
+	// catalog and version from the lock file.
 	dependencies, err = strategy.bindCatalogs(ctx, dependencies)
 	if err != nil {
 		return nil, err

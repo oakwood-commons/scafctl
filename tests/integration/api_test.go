@@ -2239,6 +2239,13 @@ func TestAPI_OpenAPISpec_ErrorCodesPresent(t *testing.T) {
 // setupTestServerWithPool creates a test server with a versioned plugin pool configured.
 func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.Option) *httptest.Server {
 	t.Helper()
+	return setupTestServerWithFetcherConfig(t, nil, poolOpts...)
+}
+
+// setupTestServerWithFetcherConfig is setupTestServerWithPool with a hook to
+// adjust the plugin fetcher's configuration before it is built.
+func setupTestServerWithFetcherConfig(t testing.TB, configure func(*plugin.FetcherConfig), poolOpts ...plugin.Option) *httptest.Server {
+	t.Helper()
 
 	cfg := &config.Config{
 		HTTPClient: loopbackHTTPClientConfig(),
@@ -2253,7 +2260,7 @@ func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.Option) *httptest.
 
 	compositeReg := provider.NewCompositeRegistryFromBase(reg)
 
-	mockCat := catalog.NewMockCatalog(
+	catalogFetcher, err := catalog.NewPluginFetcher(logr.Discard(), nil, catalog.NewMockPluginSource(
 		"test-catalog",
 		catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
 			ref.Version = semver.MustParse("1.0.0")
@@ -2262,13 +2269,18 @@ func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.Option) *httptest.
 				Catalog:   "test-catalog",
 			}, nil
 		}),
-	)
-	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		Catalog:  mockCat,
-		Cache:    plugin.NewCache(t.TempDir()),
-		Platform: plugin.CurrentPlatform(),
-		Logger:   logr.Discard(),
-	})
+	))
+	require.NoError(t, err)
+	fetcherCfg := plugin.FetcherConfig{
+		CatalogFetcher: catalogFetcher,
+		Cache:          plugin.NewCache(t.TempDir()),
+		Platform:       plugin.CurrentPlatform(),
+		Logger:         logr.Discard(),
+	}
+	if configure != nil {
+		configure(&fetcherCfg)
+	}
+	fetcher := plugin.NewFetcher(fetcherCfg)
 
 	pool := plugin.NewVersionPool(context.Background(), fetcher, compositeReg, poolOpts...)
 	t.Cleanup(pool.Shutdown)
@@ -2343,6 +2355,60 @@ func TestAPI_SolutionDryRun_PluginExternalDisabled(t *testing.T) {
 		Body().Contains("external plugins disabled")
 }
 
+// TestAPI_SolutionRun_PluginSourceRejected verifies the status codes for plugin
+// sources a server refuses: a local build (source.built) on a server that only
+// runs published plugins, and a registry with no configured catalog, are both
+// refused with 403.
+func TestAPI_SolutionRun_PluginSourceRejected(t *testing.T) {
+	ts := setupTestServerWithFetcherConfig(t,
+		func(cfg *plugin.FetcherConfig) { cfg.DisallowLocalBuilds = true },
+		plugin.WithVersionPoolIdleTimeout(0),
+	)
+	defer ts.Close()
+
+	tests := []struct {
+		name       string
+		source     string
+		wantStatus int
+		wantBody   string
+	}{
+		{name: "local build", source: "built: true", wantStatus: http.StatusForbidden, wantBody: "locally built plugins are not allowed"},
+		{name: "unconfigured registry", source: "registry: registry.example.com/plugins", wantStatus: http.StatusForbidden, wantBody: "are not configured catalogs"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			solURL := serveBuiltinSolutionYAML(t, `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: plugin-source-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: external-plugin
+            inputs:
+              message: hello
+bundle:
+  plugins:
+    - name: external-plugin
+      kind: provider
+      source:
+        artifact: external-plugin
+        `+tt.source+`
+`)
+
+			httpexpect.Default(t, ts.URL).POST("/v1/solutions/run").
+				WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
+				Expect().
+				Status(tt.wantStatus).
+				HasContentType("application/problem+json").
+				Body().Contains(tt.wantBody)
+		})
+	}
+}
+
 // TestAPI_SolutionRun_PluginNotAllowed verifies that the run endpoint
 // returns 403 when a plugin is not on the allowlist.
 func TestAPI_SolutionRun_PluginNotAllowed(t *testing.T) {
@@ -2380,7 +2446,7 @@ func TestAPI_SolutionRender_PluginPoolFull(t *testing.T) {
 
 	compositeReg := provider.NewCompositeRegistryFromBase(reg)
 
-	mockCat := catalog.NewMockCatalog(
+	catalogFetcher, err := catalog.NewPluginFetcher(logr.Discard(), nil, catalog.NewMockPluginSource(
 		"test-catalog",
 		catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
 			ref.Version = semver.MustParse("1.0.0")
@@ -2389,12 +2455,13 @@ func TestAPI_SolutionRender_PluginPoolFull(t *testing.T) {
 				Catalog:   "test-catalog",
 			}, nil
 		}),
-	)
+	))
+	require.NoError(t, err)
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		Catalog:  mockCat,
-		Cache:    plugin.NewCache(t.TempDir()),
-		Platform: plugin.CurrentPlatform(),
-		Logger:   logr.Discard(),
+		CatalogFetcher: catalogFetcher,
+		Cache:          plugin.NewCache(t.TempDir()),
+		Platform:       plugin.CurrentPlatform(),
+		Logger:         logr.Discard(),
 	})
 
 	pool := plugin.NewVersionPool(
@@ -2459,17 +2526,19 @@ func TestAPI_SolutionRun_AllowedCatalogs_Rejected(t *testing.T) {
 	// Create a fake executable so the cache recognizes it.
 	require.NoError(t, os.WriteFile(pluginBinDir+"/"+pluginName, []byte("#!/bin/sh\n"), 0o755))
 
+	catalogFetcher, err := catalog.NewPluginFetcher(logr.Discard(), nil, catalog.NewMockPluginSource(
+		"untrusted-registry",
+		catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
+			ref.Version = semver.MustParse("1.0.0")
+			return catalog.ArtifactInfo{
+				Reference: ref,
+				Catalog:   "untrusted-registry",
+			}, nil
+		}),
+	))
+	require.NoError(t, err)
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		Catalog: catalog.NewMockCatalog(
-			"untrusted-registry",
-			catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
-				ref.Version = semver.MustParse("1.0.0")
-				return catalog.ArtifactInfo{
-					Reference: ref,
-					Catalog:   "untrusted-registry",
-				}, nil
-			}),
-		),
+		CatalogFetcher:  catalogFetcher,
 		Cache:           plugin.NewCache(cacheDir),
 		Platform:        platform,
 		AllowedCatalogs: []string{"approved-only"},

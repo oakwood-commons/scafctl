@@ -194,6 +194,8 @@ func runServe(ctx context.Context, opts *Options) error {
 		PerCatalogArtifacts:  perCatalog,
 		Cache:                pluginCache,
 		NoCache:              cfg.APIServer.Plugins.DisableDiskCache,
+		// The server only runs published plugins, never ones built on its host.
+		DisallowLocalBuilds: true,
 	}); fetchErr == nil {
 		pluginFetcher = fetcher
 	} else if errors.As(fetchErr, new(*catalog.CatalogBuildError)) {

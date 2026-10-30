@@ -20,19 +20,15 @@ var _ PlatformAwareCatalog = (*RemoteCatalog)(nil)
 // remote OCI registry. It transparently handles both single-platform
 // manifests and multi-platform image indexes.
 func (c *RemoteCatalog) FetchByPlatform(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error) {
-	data, info, err := c.fetchByPlatformInternal(ctx, ref, platform)
-	if err != nil && isOCIAuthError(err) {
-		c.logger.V(1).Info("platform fetch rejected by registry, retrying anonymously",
-			"kind", ref.Kind, "name", ref.Name, "platform", platform, "error", err.Error())
-		c.switchToAnonymous()
-		var retryErr error
-		data, info, retryErr = c.fetchByPlatformInternal(ctx, ref, platform)
-		if retryErr != nil {
-			return nil, ArtifactInfo{}, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
-		}
-		return data, info, nil
+	type fetched struct {
+		data []byte
+		info ArtifactInfo
 	}
-	return data, info, err
+	r, err := retryAnonymously(ctx, c, "platform fetch", ref, func() (fetched, error) {
+		data, info, err := c.fetchByPlatformInternal(ctx, ref, platform)
+		return fetched{data: data, info: info}, err
+	})
+	return r.data, r.info, err
 }
 
 func (c *RemoteCatalog) fetchByPlatformInternal(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error) {
@@ -53,7 +49,7 @@ func (c *RemoteCatalog) fetchByPlatformInternal(ctx context.Context, ref Referen
 	tag := c.tagForRef(ref)
 	topDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		return nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+		return nil, ArtifactInfo{}, c.manifestResolveError(ctx, ref, err)
 	}
 
 	topData, err := content.FetchAll(ctx, repo, topDesc)
@@ -125,14 +121,15 @@ func (c *RemoteCatalog) extractLayerContent(
 	}
 
 	info := ArtifactInfo{
-		Reference:   ref,
-		Digest:      manifest.Layers[0].Digest.String(),
-		ImageRef:    c.buildRepositoryPath(ref) + "@" + manifestDigest,
-		CreatedAt:   createdAt,
-		Size:        int64(len(contentData)),
-		Annotations: annotations,
-		Catalog:     c.name,
-		Canonical:   c.canonicalID(),
+		Reference:      ref,
+		Digest:         manifest.Layers[0].Digest.String(),
+		ManifestDigest: manifestDigest,
+		ImageRef:       c.buildRepositoryPath(ref) + "@" + manifestDigest,
+		CreatedAt:      createdAt,
+		Size:           int64(len(contentData)),
+		Annotations:    annotations,
+		Catalog:        c.name,
+		Canonical:      c.canonicalID(),
 	}
 
 	return contentData, info, nil
@@ -141,19 +138,9 @@ func (c *RemoteCatalog) extractLayerContent(
 // ListPlatforms returns the platforms available for a multi-platform artifact.
 // Returns nil if the artifact is single-platform.
 func (c *RemoteCatalog) ListPlatforms(ctx context.Context, ref Reference) ([]string, error) {
-	platforms, err := c.listPlatformsInternal(ctx, ref)
-	if err != nil && isOCIAuthError(err) {
-		c.logger.V(1).Info("list platforms rejected by registry, retrying anonymously",
-			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
-		c.switchToAnonymous()
-		var retryErr error
-		platforms, retryErr = c.listPlatformsInternal(ctx, ref)
-		if retryErr != nil {
-			return nil, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
-		}
-		return platforms, nil
-	}
-	return platforms, err
+	return retryAnonymously(ctx, c, "list platforms", ref, func() ([]string, error) {
+		return c.listPlatformsInternal(ctx, ref)
+	})
 }
 
 func (c *RemoteCatalog) listPlatformsInternal(ctx context.Context, ref Reference) ([]string, error) {
@@ -203,18 +190,9 @@ func (c *RemoteCatalog) listPlatformsInternal(ctx context.Context, ref Reference
 // platform-specific manifest; for a single-platform manifest the platform
 // argument is ignored.
 func (c *RemoteCatalog) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
-	info, err := c.resolveContentDigestInternal(ctx, ref, platform, mediaType)
-	if err != nil && isOCIAuthError(err) {
-		c.logger.V(1).Info("resolve content digest rejected by registry, retrying anonymously",
-			"kind", ref.Kind, "name", ref.Name, "platform", platform, "error", err.Error())
-		c.switchToAnonymous()
-		info, retryErr := c.resolveContentDigestInternal(ctx, ref, platform, mediaType)
-		if retryErr != nil {
-			return ContentDigestInfo{}, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
-		}
-		return info, nil
-	}
-	return info, err
+	return retryAnonymously(ctx, c, "resolve content digest", ref, func() (ContentDigestInfo, error) {
+		return c.resolveContentDigestInternal(ctx, ref, platform, mediaType)
+	})
 }
 
 func (c *RemoteCatalog) resolveContentDigestInternal(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
@@ -235,10 +213,7 @@ func (c *RemoteCatalog) resolveContentDigestInternal(ctx context.Context, ref Re
 	tag := c.tagForRef(ref)
 	topDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		if isNetworkError(err) {
-			return ContentDigestInfo{}, &UnreachableError{Catalog: c.name, Cause: err}
-		}
-		return ContentDigestInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+		return ContentDigestInfo{}, c.manifestResolveError(ctx, ref, err)
 	}
 
 	topData, err := content.FetchAll(ctx, repo, topDesc)

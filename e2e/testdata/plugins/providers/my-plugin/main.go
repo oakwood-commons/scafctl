@@ -14,6 +14,10 @@ import (
 	sdkhelper "github.com/oakwood-commons/scafctl-plugin-sdk/provider/schemahelper"
 )
 
+// flavor is set at build time (-ldflags "-X main.flavor=...") so tests can
+// tell which copy of the plugin executed.
+var flavor = "default"
+
 type MyPlugin struct {
 	cfg sdkplugin.ProviderConfig
 }
@@ -65,7 +69,7 @@ func (p *MyPlugin) ExecuteProvider(ctx context.Context, name string, input map[s
 			}, nil
 		}
 		return &sdkprovider.Output{
-			Data: map[string]any{"output": "Processed: " + value},
+			Data: map[string]any{"output": fmt.Sprintf("Processed (%s): %s", flavor, value)},
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", name)

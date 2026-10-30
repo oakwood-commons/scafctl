@@ -5,13 +5,27 @@ package catalog
 
 import (
 	"context"
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"oras.land/oras-go/v2/content"
 )
+
+func mustVersion(s string) *semver.Version {
+	v, err := semver.NewVersion(s)
+	if err != nil {
+		panic("bad test version: " + err.Error())
+	}
+	return v
+}
 
 func newTestLocalCatalog(t *testing.T) *LocalCatalog {
 	t.Helper()
@@ -267,4 +281,187 @@ func TestLocalCatalog_StoreMultiPlatform_AuthHandler(t *testing.T) {
 	data, _, err := cat.FetchByPlatform(ctx, ref, "darwin/arm64")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("auth-darwin"), data)
+}
+
+func TestVerifyBlob(t *testing.T) {
+	t.Parallel()
+	data := []byte("blob-content")
+	good := ocispec.Descriptor{Digest: digest.FromBytes(data)}
+
+	tests := []struct {
+		name    string
+		desc    ocispec.Descriptor
+		wantErr error
+	}{
+		{name: "matching digest", desc: good},
+		{name: "digest mismatch", desc: ocispec.Descriptor{Digest: digest.FromString("other")}, wantErr: content.ErrMismatchedDigest},
+		{name: "invalid digest", desc: ocispec.Descriptor{Digest: "sha256:nothex"}, wantErr: digest.ErrDigestInvalidLength},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := verifyBlob(tt.desc, data)
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestLocalCatalog_FetchByPlatform_ManifestDigest(t *testing.T) {
+	t.Parallel()
+	cat := newTestLocalCatalog(t)
+	ctx := t.Context()
+
+	multi := testPluginRef("multi", "1.0.0")
+	index, err := cat.StoreMultiPlatform(ctx, multi, []PlatformBinary{
+		{Platform: "linux/amd64", Data: []byte("linux")},
+		{Platform: "darwin/arm64", Data: []byte("darwin")},
+	}, nil, false)
+	require.NoError(t, err)
+
+	_, linux, err := cat.FetchByPlatform(ctx, multi, "linux/amd64")
+	require.NoError(t, err)
+	_, darwin, err := cat.FetchByPlatform(ctx, multi, "darwin/arm64")
+	require.NoError(t, err)
+
+	// An index records the platform manifest, not the index itself.
+	assert.NotEmpty(t, linux.ManifestDigest)
+	assert.NotEqual(t, index.Digest, linux.ManifestDigest)
+	assert.NotEqual(t, linux.ManifestDigest, darwin.ManifestDigest)
+	assert.Empty(t, linux.ImageRef, "a local build has no registry image")
+
+	single := testPluginRef("single", "1.0.0")
+	stored, err := cat.Store(ctx, single, []byte("single"), nil, nil, false)
+	require.NoError(t, err)
+	_, info, err := cat.FetchByPlatform(ctx, single, "linux/amd64")
+	require.NoError(t, err)
+	assert.Equal(t, stored.Digest, info.ManifestDigest)
+}
+
+func TestLocalCatalog_FetchByPlatform_RejectsTamperedBlob(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		tampered []byte
+		wantErr  error
+	}{
+		{name: "same length", tampered: []byte("tampered"), wantErr: content.ErrMismatchedDigest},
+		{name: "longer", tampered: []byte("original-plus-more"), wantErr: content.ErrTrailingData},
+		{name: "shorter", tampered: []byte("orig"), wantErr: io.ErrUnexpectedEOF},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cat := newTestLocalCatalog(t)
+			ctx := t.Context()
+			ref := testPluginRef("tampered", "1.0.0")
+			binary := []byte("original")
+			_, err := cat.StoreMultiPlatform(ctx, ref, []PlatformBinary{{Platform: "linux/amd64", Data: binary}}, nil, false)
+			require.NoError(t, err)
+
+			// Replace the binary's blob in place.
+			blob := filepath.Join(cat.Path(), "blobs", "sha256", digest.FromBytes(binary).Encoded())
+			require.FileExists(t, blob)
+			require.NoError(t, os.Remove(blob))
+			require.NoError(t, os.WriteFile(blob, tt.tampered, 0o600))
+
+			_, _, err = cat.FetchByPlatform(ctx, ref, "linux/amd64")
+			require.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+// storeCorruptPlugin stores provider name@version in cat and overwrites its
+// manifest blob with same-length garbage, so reading it fails verification.
+func storeCorruptPlugin(t *testing.T, cat *LocalCatalog, name, version string) {
+	t.Helper()
+	info, err := cat.StoreMultiPlatform(t.Context(), testPluginRef(name, version),
+		[]PlatformBinary{{Platform: "linux/amd64", Data: []byte(name)}}, nil, false)
+	require.NoError(t, err)
+
+	blob := filepath.Join(cat.Path(), "blobs", "sha256", digest.Digest(info.Digest).Encoded())
+	data, err := os.ReadFile(blob)
+	require.NoError(t, err)
+	for i := range data {
+		data[i] = 'x'
+	}
+	require.NoError(t, os.Remove(blob))
+	require.NoError(t, os.WriteFile(blob, data, 0o600))
+}
+
+func TestLocalCatalog_Find_CorruptCandidateIsAnError(t *testing.T) {
+	t.Parallel()
+	cat := newTestLocalCatalog(t)
+	ctx := t.Context()
+	storeCorruptPlugin(t, cat, "p", "1.0.0")
+	_, err := cat.StoreMultiPlatform(ctx, testPluginRef("q", "1.0.0"),
+		[]PlatformBinary{{Platform: "linux/amd64", Data: []byte("q")}}, nil, false)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name         string
+		query        ArtifactQuery
+		wantNotFound bool
+	}{
+		{name: "latest of the corrupt name", query: ArtifactQuery{Name: "p", Kind: ArtifactKindProvider}},
+		{name: "corrupt version", query: ArtifactQuery{Name: "p", Kind: ArtifactKindProvider, Version: "1.0.0"}},
+		{name: "built source", query: ArtifactQuery{Name: "p", Kind: ArtifactKindProvider, Source: SourceSelector{Kind: SourceBuilt}}},
+		{name: "another version is not blocked", query: ArtifactQuery{Name: "p", Kind: ArtifactKindProvider, Version: "2.0.0"}, wantNotFound: true},
+		{name: "pulled source is not blocked by a build", query: ArtifactQuery{Name: "p", Kind: ArtifactKindProvider, Source: SourceSelector{Kind: SourceRemote, Remote: "ghcr.io/org"}}, wantNotFound: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := cat.Find(ctx, tt.query)
+			require.Error(t, err)
+			assert.Equal(t, tt.wantNotFound, IsNotFound(err), "err: %v", err)
+			if !tt.wantNotFound {
+				assert.ErrorIs(t, err, content.ErrMismatchedDigest)
+			}
+		})
+	}
+
+	t.Run("other names still resolve", func(t *testing.T) {
+		t.Parallel()
+		info, err := cat.Find(ctx, ArtifactQuery{Name: "q", Kind: ArtifactKindProvider})
+		require.NoError(t, err)
+		assert.Equal(t, "q", info.Reference.Name)
+	})
+}
+
+func TestIsCandidateTag(t *testing.T) {
+	t.Parallel()
+	query := func(version string, source SourceSelector) ArtifactQuery {
+		return ArtifactQuery{Name: "p", Kind: ArtifactKindProvider, Version: version, Source: source}
+	}
+	built := SourceSelector{Kind: SourceBuilt}
+	remote := SourceSelector{Kind: SourceRemote, Remote: "127.0.0.1:5000/org"}
+
+	tests := []struct {
+		name  string
+		tag   string
+		query ArtifactQuery
+		want  bool
+	}{
+		{name: "built tag", tag: "provider/p:1.0.0", query: query("", SourceSelector{}), want: true},
+		{name: "pulled tag", tag: "ghcr.io/org/providers/p:1.0.0", query: query("", SourceSelector{}), want: true},
+		{name: "pulled tag with port", tag: "127.0.0.1:5000/org/providers/p:1.0.0", query: query("", remote), want: true},
+		{name: "digest tag", tag: "provider/p@sha256:abc", query: query("1.0.0", SourceSelector{}), want: true},
+		{name: "other name", tag: "provider/pp:1.0.0", query: query("", SourceSelector{}), want: false},
+		{name: "other kind", tag: "solution/p:1.0.0", query: query("", SourceSelector{}), want: false},
+		{name: "other version", tag: "provider/p:2.0.0", query: query("1.0.0", SourceSelector{}), want: false},
+		{name: "constraint match", tag: "provider/p:1.2.0", query: query("^1.0.0", SourceSelector{}), want: true},
+		{name: "built source skips pulled", tag: "ghcr.io/org/providers/p:1.0.0", query: query("", built), want: false},
+		{name: "remote source skips built", tag: "provider/p:1.0.0", query: query("", remote), want: false},
+		{name: "remote source skips other remote", tag: "ghcr.io/org/providers/p:1.0.0", query: query("", remote), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isCandidateTag(tt.tag, tt.query))
+		})
+	}
 }

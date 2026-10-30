@@ -559,6 +559,7 @@ func TestPluginDependency_ValidateSource(t *testing.T) {
 			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.ErrorIs(t, err, ErrInvalidPluginSource)
 		})
 	}
 }

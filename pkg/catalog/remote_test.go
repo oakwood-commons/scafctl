@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"sort"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	orasauth "oras.land/oras-go/v2/registry/remote/auth"
+	"oras.land/oras-go/v2/registry/remote/errcode"
 )
 
 // configureAuthRegistry registers the given mock handler in an
@@ -844,9 +846,13 @@ func TestIsOCIAuthError(t *testing.T) {
 		{"generic error", fmt.Errorf("network timeout"), false},
 		{"401 status", fmt.Errorf("response status code 401: Unauthorized"), true},
 		{"403 status", fmt.Errorf("response status code 403: denied"), true},
-		{"unauthorized keyword", fmt.Errorf("unauthorized access to resource"), true},
-		{"denied keyword", fmt.Errorf("token exchange denied"), true},
 		{"nested 403", fmt.Errorf("failed to fetch: %w", fmt.Errorf("GET /token: response status code 403: denied: denied")), true},
+		{"structured 401", &errcode.ErrorResponse{StatusCode: http.StatusUnauthorized}, true},
+		{"wrapped structured 403", fmt.Errorf("listing: %w", &errcode.ErrorResponse{StatusCode: http.StatusForbidden}), true},
+		{"structured 404", &errcode.ErrorResponse{StatusCode: http.StatusNotFound}, false},
+		{"404 on port 56403", fmt.Errorf(`HEAD "https://127.0.0.1:56403/v2/p/manifests/1.0.0": response status code 404: Not Found`), false},
+		{"404 on port 40100", fmt.Errorf(`HEAD "https://127.0.0.1:40100/v2/p/manifests/1.0.0": response status code 404: Not Found`), false},
+		{"artifact named denied", fmt.Errorf(`HEAD "https://r/v2/providers/denied/manifests/1.0.0": response status code 404: Not Found`), false},
 	}
 
 	for _, tt := range tests {

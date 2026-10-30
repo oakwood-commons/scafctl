@@ -226,9 +226,14 @@ type ArtifactInfo struct {
 	// Digest is the content digest (sha256:...).
 	Digest string `json:"digest" yaml:"digest" doc:"Content digest"`
 
+	// ManifestDigest is the digest of the (platform) manifest the content was
+	// read from. Set by FetchByPlatform.
+	ManifestDigest string `json:"manifestDigest,omitempty" yaml:"manifestDigest,omitempty" doc:"Digest of the manifest the content was read from"`
+
 	// ImageRef is the full OCI image reference suitable for cosign verification
 	// (e.g., "ghcr.io/org/plugins/providers/name@sha256:abc123...").
-	// Populated only by remote catalogs; empty for local catalogs.
+	// Populated by remote catalogs, including for copies they serve from the
+	// local cache; empty for local builds, which have no registry signature.
 	ImageRef string `json:"imageRef,omitempty" yaml:"imageRef,omitempty" doc:"Full OCI image reference for signature verification"`
 
 	// CreatedAt is when the artifact was stored.

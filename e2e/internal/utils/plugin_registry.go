@@ -106,7 +106,8 @@ func NewLocalOCIRegistry() string {
 
 // BuildPluginBinaryForPlatform cross-compiles a plugin fixture for the given
 // platform string (for example "linux/amd64") into the destination file path.
-func BuildPluginBinaryForPlatform(outputPath, pluginDir, platform string) {
+// Any ldflags are passed to go build (for example "-X main.flavor=built").
+func BuildPluginBinaryForPlatform(outputPath, pluginDir, platform string, ldflags ...string) {
 	parts := strings.SplitN(platform, "/", 2)
 	gomega.Expect(parts).To(gomega.HaveLen(2), "platform must be GOOS/GOARCH, got %q", platform)
 
@@ -127,7 +128,13 @@ func BuildPluginBinaryForPlatform(outputPath, pluginDir, platform string) {
 		pluginBuildArg = "." + string(filepath.Separator) + filepath.Clean(relPath)
 	}
 
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", outputPath, pluginBuildArg)
+	args := []string{"build", "-o", outputPath}
+	if len(ldflags) > 0 {
+		args = append(args, "-ldflags", strings.Join(ldflags, " "))
+	}
+	args = append(args, pluginBuildArg)
+
+	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = cmdDir
 	cmd.Env = append(os.Environ(),
 		"CGO_ENABLED=0",
