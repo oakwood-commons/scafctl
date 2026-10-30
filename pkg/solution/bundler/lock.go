@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"gopkg.in/yaml.v3"
 )
@@ -119,6 +120,20 @@ type LockPlugin struct {
 	Signature *LockPluginSignature `json:"signature,omitempty" yaml:"signature,omitempty" doc:"Signature verification metadata"`
 
 	Source *LockPluginSource `json:"source,omitempty" yaml:"source,omitempty" doc:"Resolved source (registry or built plugins only)"`
+}
+
+// IsBuilt reports whether the entry was locked from a locally built copy in
+// the local catalog: either a source.built entry, or a short-name entry
+// resolved from the local catalog with no portable origin (a pulled copy keeps
+// its remote ResolvedCanonical).
+func (lp *LockPlugin) IsBuilt() bool {
+	if lp == nil {
+		return false
+	}
+	if lp.Source != nil && lp.Source.Built {
+		return true
+	}
+	return lp.ResolvedCanonical == "" && strings.EqualFold(lp.ResolvedFrom, catalog.LocalCatalogName)
 }
 
 // LockPluginSignature records cosign signature metadata captured during the

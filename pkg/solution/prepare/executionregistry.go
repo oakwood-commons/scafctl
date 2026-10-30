@@ -113,6 +113,7 @@ func fetchAndRegisterIntoComposite(
 	return fetchResults, vClients, nil
 }
 
+// TODO: dead code
 // autoResolveOfficialVersioned resolves official providers that are referenced
 // in the solution but missing from the composite registry. Unlike
 // autoResolveOfficialProviders (which registers into the flat *Registry), this

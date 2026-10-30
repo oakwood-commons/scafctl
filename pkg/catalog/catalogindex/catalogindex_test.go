@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -294,6 +295,28 @@ func TestFromChain_SingleCatalog(t *testing.T) {
 
 func TestFromChain_Nil(t *testing.T) {
 	idx := FromChain(nil)
+	assert.NotNil(t, idx)
+	assert.Empty(t, idx.All())
+}
+
+func TestFromCatalogs(t *testing.T) {
+	idx := FromCatalogs([]catalog.Catalog{
+		fakeRemoteCatalog{name: "prod", registry: "ghcr.io", repository: "acme"},
+		nil,
+		fakeLocalCatalog{name: "local", path: "/catalog"},
+	})
+
+	got := idx.All()
+	require.Len(t, got, 2, "nil catalogs are skipped")
+	assert.Equal(t, []string{"prod", "local"}, []string{got[0].Alias, got[1].Alias})
+
+	alias, ok := idx.AliasForRegistry("ghcr.io/acme")
+	assert.True(t, ok)
+	assert.Equal(t, "prod", alias)
+}
+
+func TestFromCatalogs_Empty(t *testing.T) {
+	idx := FromCatalogs(nil)
 	assert.NotNil(t, idx)
 	assert.Empty(t, idx.All())
 }

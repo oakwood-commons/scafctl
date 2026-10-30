@@ -316,6 +316,28 @@ func TestCache_GetLatestCached_SemverBeatsLexicographic(t *testing.T) {
 	assert.Equal(t, "0.10.0", version, "should pick 0.10.0 (semver) not 0.9.0 (lexicographic)")
 }
 
+func TestCache_GetLatestCached_FlatLayoutOnly(t *testing.T) {
+	cache := NewCache(t.TempDir())
+	const hash = "0123456789abcdef"
+	_, err := cache.Put("myplugin", "2.0.0", "linux/amd64", []byte("hashed"), WithRegistryHash(hash))
+	require.NoError(t, err)
+
+	// A hashless lookup scans every registry-hash layout by default...
+	_, version, ok := cache.GetLatestCached("myplugin", "linux/amd64")
+	require.True(t, ok)
+	assert.Equal(t, "2.0.0", version)
+
+	// ...but WithFlatLayoutOnly ignores them.
+	_, _, ok = cache.GetLatestCached("myplugin", "linux/amd64", WithFlatLayoutOnly())
+	assert.False(t, ok)
+
+	_, err = cache.Put("myplugin", "1.0.0", "linux/amd64", []byte("flat"))
+	require.NoError(t, err)
+	_, version, ok = cache.GetLatestCached("myplugin", "linux/amd64", WithFlatLayoutOnly())
+	require.True(t, ok)
+	assert.Equal(t, "1.0.0", version)
+}
+
 func TestSortAndDedupeLatest_DefaultKeepsOnlyLatestPerNamePlatform(t *testing.T) {
 	cached := []CachedPlugin{
 		{Name: "myplugin", Version: "0.9.0", Platform: "linux/amd64"},

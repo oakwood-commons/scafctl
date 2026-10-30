@@ -33,14 +33,24 @@ var ErrDedupTimeout = errors.New("operation timed out while waiting for concurre
 // catalog.
 var ErrBuiltinProvider = errors.New("built-in provider cannot be fetched from a catalog")
 
-// ErrBuiltPluginUnsupported is returned when a source.built plugin dependency
-// reaches the runtime fetcher. Built deps can be locked and vendored at build
-// time, but the fetcher cannot yet select the locally built copy, so it fails
-// closed rather than serving a pulled or cached copy of the same name@version.
-// See TODO(built-plugins) in doFetchOne.
-var ErrBuiltPluginUnsupported = errors.New("source.built plugin dependencies are not supported at runtime yet; use source.registry or a short name")
+// ErrCatalogConflict is returned when a plugin dependency's source requires one
+// catalog but the dependency is already bound to another, or its source names
+// both a registry and the locally built copy.
+var ErrCatalogConflict = errors.New("plugin dependency is bound to a catalog its source does not allow")
+
+// ErrUnconfiguredRegistry is returned when a source.registry plugin dependency
+// names a registry that is not one of the fetcher's configured catalogs. It is
+// rejected rather than resolved by name from an unintended catalog.
+var ErrUnconfiguredRegistry = errors.New("plugin registry is not a configured catalog")
+
+// ErrLocalBuildNotAllowed is returned when a fetcher configured with
+// DisallowLocalBuilds is asked for a locally built plugin: a source.built
+// dependency, a lock entry locked from a local build, or a resolution that
+// lands on a local-catalog artifact with no published origin.
+var ErrLocalBuildNotAllowed = errors.New("locally built plugins are not allowed")
 
 type resolver interface {
+	bindCatalog(dep pluginArtifact) (pluginArtifact, error)
 	resolvePlugin(ctx context.Context, kind catalog.ArtifactKind, name, version, catalogName string) (catalog.ArtifactInfo, error)
 }
 
@@ -81,29 +91,12 @@ var _ pluginArtifact = solution.PluginDependency{}
 // Fetcher resolves, downloads, caches, and loads plugin binaries at runtime.
 // It checks a local cache first, then falls back to fetching from catalogs.
 //
-// TODO(plugin-fetcher-origin): this fetcher predates origin-aware local
-// catalog storage (built vs. pulled copies keyed by Reference.Built /
-// Reference.Remote) and has not been migrated. Known breakage:
-//   - Lookups: catalog.PluginFetcher builds origin-less name@version refs, so
-//     against the local catalog they are annotation searches that fail with
-//     AmbiguousArtifactError when a built copy and a pulled copy (or copies
-//     from several remotes) coexist. dep.Registry()/HasBuilt() are never
-//     passed down as a catalog.SourceSelector.
-//   - Binary cache: entries are keyed by the registry hash of the catalog
-//     alias that served the fetch (resolvedFrom / fetchInfo.Catalog, e.g. the
-//     local catalog), not by the artifact's origin. A built plugin and a
-//     pulled copy of the same name@version share one cache slot and can serve
-//     each other, while a pulled copy served from the local catalog is cached
-//     under a different hash than the same artifact fetched from its remote,
-//     so tryCachedAcrossCatalogs misses it.
-//
-// Needed: thread the dep's origin through resolve/fetch as a SourceSelector,
-// and key the binary cache (and lock ResolvedFrom) on the served artifact's
-// origin (Reference.Remote, or a dedicated "built" key) instead of the
-// serving catalog alias.
+// Sourced deps are bound to the catalog their source requires before any
+// cache, lock, or catalog lookup (see bindCatalog): source.built to the local
+// catalog, source.registry to the configured catalog for that registry.
 type Fetcher struct {
 	binaryName     string
-	catalogFetcher *catalog.PluginFetcher
+	catalogFetcher CatalogFetcher
 	cache          *Cache
 	platform       string
 	noCache        bool
@@ -115,16 +108,41 @@ type Fetcher struct {
 	// catalogIndex is the catalog topology (alias <-> canonical, registry hash)
 	// plus the allowlist gate, built once from the fetcher's own catalog chain.
 	catalogIndex *catalogindex.Index
+	// disallowLocalBuilds rejects every plugin that would be served from a
+	// local build (see FetcherConfig.DisallowLocalBuilds).
+	disallowLocalBuilds bool
 }
 type pluginFetchResult struct {
 	bytes []byte
 	info  catalog.ArtifactInfo
 }
 
+// CatalogFetcher resolves and fetches plugin artifacts from catalogs. Every
+// method honors catalog.WithCatalog to scope the call to one named catalog.
+// catalog.BuildPluginFetcher returns the standard implementation.
+type CatalogFetcher interface {
+	ResolvePlugin(ctx context.Context, name string, kind catalog.ArtifactKind, versionConstraint string, opts ...catalog.Option) (catalog.ArtifactInfo, error)
+	FetchPlugin(ctx context.Context, name string, kind catalog.ArtifactKind, version, platform string, opts ...catalog.Option) ([]byte, catalog.ArtifactInfo, error)
+	ResolveContentDigest(ctx context.Context, name string, kind catalog.ArtifactKind, version, platform, mediaType string, opts ...catalog.Option) (catalog.ContentDigestInfo, error)
+}
+
+// catalogsLister is implemented by CatalogFetchers that can report the
+// catalogs they read from, so the Fetcher can derive its catalog index.
+type catalogsLister interface {
+	Catalogs() []catalog.Catalog
+}
+
+var (
+	_ CatalogFetcher = (*catalog.PluginFetcher)(nil)
+	_ catalogsLister = (*catalog.PluginFetcher)(nil)
+)
+
 // FetcherConfig configures a Fetcher.
 type FetcherConfig struct {
-	// Catalog is the catalog (or chain) to fetch plugins from.
-	Catalog catalog.Catalog
+	// CatalogFetcher resolves and fetches plugins from catalogs. When it also
+	// implements Catalogs() []catalog.CatalogFetcher, those catalogs define the
+	// catalog index (alias <-> canonical origin).
+	CatalogFetcher CatalogFetcher
 
 	// Cache is the local plugin binary cache. If nil, a default cache is created.
 	Cache *Cache
@@ -161,6 +179,14 @@ type FetcherConfig struct {
 	// "cosign" tag, otherwise a no-op stub).
 	SignatureVerifier SignatureVerifier
 
+	// DisallowLocalBuilds rejects plugins served from a local build: artifacts
+	// in a local catalog with no published (remote) origin. Plugins resolved
+	// from a remote catalog, including its locally cached copies, remain
+	// allowed. Long-lived hosts such as the API server set it so they only run
+	// published plugins, never whatever happens to be built on the host. Fails
+	// with ErrLocalBuildNotAllowed.
+	DisallowLocalBuilds bool
+
 	// Logger for logging operations.
 	Logger logr.Logger
 }
@@ -187,17 +213,21 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 		sigVerifier = NewSignatureVerifier()
 	}
 
-	// Build the catalog topology from the fetcher's own catalog chain so the
-	// index describes exactly the catalogs this fetcher can reach, then layer the
+	// Build the catalog topology from the fetcher's own catalogs so the index
+	// describes exactly the catalogs this fetcher can reach, then layer the
 	// allowlist and per-catalog plugin policy gates on top (copy-on-write,
 	// leaving the base topology shared).
-	catalogIndex := catalogindex.FromChain(cfg.Catalog).
+	var cats []catalog.Catalog
+	if lister, ok := cfg.CatalogFetcher.(catalogsLister); ok {
+		cats = lister.Catalogs()
+	}
+	catalogIndex := catalogindex.FromCatalogs(cats).
 		WithAllowed(cfg.AllowedCatalogs).
 		WithPluginPolicies(cfg.PerCatalogArtifacts)
 
 	return &Fetcher{
 		binaryName:     binaryName,
-		catalogFetcher: catalog.NewPluginFetcher(cfg.Catalog, cfg.Logger),
+		catalogFetcher: cfg.CatalogFetcher,
 		cache:          cache,
 		platform:       platform,
 		noCache:        cfg.NoCache,
@@ -205,7 +235,44 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 		sigPolicy:      cfg.SignaturePolicy,
 		sigVerifier:    sigVerifier,
 		catalogIndex:   catalogIndex,
+
+		disallowLocalBuilds: cfg.DisallowLocalBuilds,
 	}
+}
+
+// errLocalBuild is the error returned for a local build when
+// disallowLocalBuilds is set.
+func errLocalBuild(reason string) error {
+	return fmt.Errorf("%s; publish the plugin to a registry and reference it from there: %w", reason, ErrLocalBuildNotAllowed)
+}
+
+// checkLocalBuild rejects a resolved artifact that is a local build when
+// disallowLocalBuilds is set. A local build has no published origin; remote
+// catalogs (and their cached copies) always report one. An artifact from an
+// unknown catalog with no origin is treated as a local build (fail closed).
+func (f *Fetcher) checkLocalBuild(info catalog.ArtifactInfo) error {
+	if !f.disallowLocalBuilds || info.Canonical != "" {
+		return nil
+	}
+	if f.resolveCatalogIdentity(info.Catalog).IsRemote() {
+		return nil
+	}
+	return errLocalBuild(fmt.Sprintf("resolved to a local build in catalog %q", info.Catalog))
+}
+
+// errUnverifiable is the error for a fetched plugin that has no registry image
+// to verify a signature against. Signature verification fails closed on it.
+//
+// TODO(built-plugins): exempt local builds (no Canonical) once 'catalog load'
+// can no longer import origin-less archives that look like local builds; until
+// then an exemption would let any loaded tarball skip enforcement.
+func errUnverifiable(dep pluginArtifact, version string, info catalog.ArtifactInfo) error {
+	if info.Canonical == "" {
+		return fmt.Errorf("plugin %s@%s from catalog %q has no published origin (as for a local build), so it has no registry signature: %w",
+			dep.ArtifactName(), version, info.Catalog, ErrSignatureUnverifiable)
+	}
+	return fmt.Errorf("plugin %s@%s from catalog %q: %w",
+		dep.ArtifactName(), version, info.Catalog, ErrSignatureUnverifiable)
 }
 
 // resolveCatalogIdentity resolves a catalog alias (from ArtifactInfo.Catalog or
@@ -245,17 +312,58 @@ func (s *Fetcher) ResolvePlugins(ctx context.Context, deps []solution.PluginDepe
 func resolvePlugins[T pluginArtifact](ctx context.Context, s resolver, deps []T) ([]catalog.ArtifactInfo, error) {
 	infos, err := mapConcurrent(ctx, settings.DefaultResolveConcurrency, deps,
 		func(ctx context.Context, dep T) (catalog.ArtifactInfo, error) {
-			if dep.HasBuilt() {
-				return catalog.ArtifactInfo{}, fmt.Errorf("plugin %s (%s): %w", dep.DisplayName(), dep.PluginKind(), ErrBuiltPluginUnsupported)
+			bound, err := s.bindCatalog(dep)
+			if err != nil {
+				return catalog.ArtifactInfo{}, fmt.Errorf("plugin %s (%s): %w", dep.DisplayName(), dep.PluginKind(), err)
 			}
-			return s.resolvePlugin(ctx, catalog.ArtifactKind(dep.PluginKind()),
-				dep.ArtifactName(), dep.VersionConstraint(), dep.CatalogName())
+			return s.resolvePlugin(ctx, catalog.ArtifactKind(bound.PluginKind()),
+				bound.ArtifactName(), bound.VersionConstraint(), bound.CatalogName())
 		})
 	if err != nil {
 		// Preserve the existing contract: return nil (not partial) on error.
 		return nil, err
 	}
 	return infos, nil
+}
+
+// boundArtifact overrides a dependency's catalog with the one it must be
+// served from, so every downstream lookup sees it through CatalogName().
+type boundArtifact struct {
+	pluginArtifact
+	catalog string
+}
+
+func (b boundArtifact) CatalogName() string { return b.catalog }
+
+// bindCatalog returns dep scoped to the catalog its source requires.
+// source.built deps are bound to the local catalog, the only catalog that
+// serves built artifacts; source.registry deps are bound to the configured
+// catalog for that registry, and an unconfigured registry fails closed. A dep
+// already bound to a different catalog, or whose source names both a registry
+// and built, fails closed. Short-name deps are returned unchanged.
+func (f *Fetcher) bindCatalog(dep pluginArtifact) (pluginArtifact, error) {
+	var target string
+	switch {
+	case dep.HasBuilt() && dep.HasRegistry():
+		return nil, fmt.Errorf("source names both a registry and built: %w", ErrCatalogConflict)
+	case dep.HasBuilt():
+		if f.disallowLocalBuilds {
+			return nil, errLocalBuild("source.built plugins are local builds")
+		}
+		target = catalog.LocalCatalogName
+	case dep.HasRegistry():
+		alias, ok := f.catalogIndex.AliasForRegistry(dep.Registry())
+		if !ok {
+			return nil, fmt.Errorf("registry %q: %w", dep.Registry(), ErrUnconfiguredRegistry)
+		}
+		target = alias
+	default:
+		return dep, nil
+	}
+	if c := dep.CatalogName(); c != "" && !strings.EqualFold(c, target) {
+		return nil, fmt.Errorf("bound to catalog %q but its source requires catalog %q: %w", c, target, ErrCatalogConflict)
+	}
+	return boundArtifact{pluginArtifact: dep, catalog: target}, nil
 }
 
 // mapConcurrent applies fn to every item concurrently, bounded by limit, and
@@ -289,6 +397,20 @@ func (s *Fetcher) resolvePlugin(ctx context.Context, kind catalog.ArtifactKind, 
 	if err := s.catalogIndex.CheckPluginAllowed(catalogName, name); err != nil {
 		return catalog.ArtifactInfo{}, err
 	}
+	info, err := s.resolveCatalogPlugin(ctx, kind, name, version, catalogName)
+	if err != nil {
+		return catalog.ArtifactInfo{}, err
+	}
+	if err := s.checkLocalBuild(info); err != nil {
+		return catalog.ArtifactInfo{}, err
+	}
+	return info, nil
+}
+
+// resolveCatalogPlugin resolves a version selector against the catalogs,
+// optionally scoped to one named catalog, without applying catalog policy.
+// Concurrent identical requests are deduplicated.
+func (s *Fetcher) resolveCatalogPlugin(ctx context.Context, kind catalog.ArtifactKind, name, version, catalogName string) (catalog.ArtifactInfo, error) {
 	key := name + "/" + string(kind) + "/" + version + "/" + catalogName
 	return dedupeRequest(ctx, &s.sfResolver, key, settings.DefaultPluginResolveTimeout, func(ctx context.Context) (catalog.ArtifactInfo, error) {
 		var opts []catalog.Option
@@ -351,21 +473,6 @@ func dedupeRequest[T any](ctx context.Context, g *singleflight.Group, key string
 	}
 }
 
-// catalogLister adapts the Fetcher's PluginFetcher to bundler.VersionLister,
-// optionally scoping the listing to a single named catalog.
-type catalogLister struct {
-	fetcher     *catalog.PluginFetcher
-	catalogName string
-}
-
-func (l *catalogLister) List(ctx context.Context, kind catalog.ArtifactKind, name string) ([]catalog.ArtifactInfo, error) {
-	var opts []catalog.Option
-	if l.catalogName != "" {
-		opts = append(opts, catalog.WithCatalog(l.catalogName))
-	}
-	return l.fetcher.List(ctx, kind, name, opts...)
-}
-
 // resolveContentDigest resolves the content-layer digest for a plugin binary
 // without downloading the blob. It delegates to PluginFetcher.ResolveContentDigest
 // which type-asserts the backing catalog to PlatformAwareCatalog. Concurrent
@@ -386,11 +493,22 @@ func (s *Fetcher) resolveContentDigest(ctx context.Context, kind catalog.Artifac
 // don't yet know which catalog the plugin came from. Returns the first hit.
 // Identities are iterated in config-definition order (via the catalog index) to
 // ensure deterministic plugin selection across runs.
+// When the dep names a catalog, only that catalog's cache is consulted; the
+// legacy flat layout (unknown origin) is never used for a scoped dep.
+//
+// Filesystem catalogs (the local catalog of built plugins) are skipped: their
+// artifacts can be rebuilt in place at the same version, so the newest cached
+// binary may be stale. Those deps resolve their digest from disk (no network)
+// and fetchAndVerify's digest-checked cache lookup still reuses a matching
+// binary.
 func (f *Fetcher) tryCachedAcrossCatalogs(dep pluginArtifact) (FetchResult, bool) {
 	cacheName := PluginCacheKey(dep.ArtifactName(), dep.PluginKind())
 	catalogName := dep.CatalogName()
 	for _, id := range f.catalogIndex.All() {
-		if catalogName != "" && catalogName != id.Alias {
+		if id.IsLocal() {
+			continue
+		}
+		if catalogName != "" && !strings.EqualFold(catalogName, id.Alias) {
 			continue
 		}
 		pinPath, cachedVer, release, ok := f.cache.GetLatestCachedPin(cacheName, f.platform, WithRegistryHash(id.RegistryHash()))
@@ -428,8 +546,15 @@ func (f *Fetcher) tryCachedAcrossCatalogs(dep pluginArtifact) (FetchResult, bool
 			Release:   release,
 		}, true
 	}
-	// Also try with zero identity (legacy / no catalog info).
-	pinPath, cachedVer, release, ok := f.cache.GetLatestCachedPin(cacheName, f.platform)
+	// Legacy / no-catalog-info pass. Entries in the flat (no registry hash)
+	// layout have an unknown origin, so they can only satisfy an unscoped dep.
+	// A dep bound to a catalog (registry alias, or local for built plugins)
+	// must be served from that catalog's cache or fail closed via resolution.
+	// An unknown origin cannot be proven not to be a local build either.
+	if catalogName != "" || f.disallowLocalBuilds {
+		return FetchResult{}, false
+	}
+	pinPath, cachedVer, release, ok := f.cache.GetLatestCachedPin(cacheName, f.platform, WithFlatLayoutOnly())
 	if !ok {
 		return FetchResult{}, false
 	}
@@ -596,18 +721,16 @@ type resolvedPlugin struct {
 // locked is the dependency's pre-resolved lock entry (nil when the dependency is
 // not pinned), so this path never re-derives it from the raw dep.
 func (f *Fetcher) doFetchOne(ctx context.Context, dep pluginArtifact, locked *bundler.LockPlugin) (FetchResult, error) {
-	// TODO(built-plugins): there is no fetch path for source.built deps yet.
-	// The lock lookup now returns built entries (Source.Built), but
-	// resolveFromLock/resolveFromCatalog/fetchAndVerify only know remote and
-	// short-name catalogs, and a built entry has no ResolvedCanonical to map
-	// back to a catalog. Needed: resolve built deps against the local catalog
-	// (catalog.SourceBuilt selector) and verify against the lock digest; and
-	// decide what happens when the bundle runs on a machine without that local
-	// build (embed the binary in the bundle, or fail with a clear error).
-	// Until then built deps fail closed here, before the origin-less cache and
-	// catalog lookups could serve a pulled copy of the same name@version.
-	if dep.HasBuilt() {
-		return FetchResult{}, ErrBuiltPluginUnsupported
+	// Bind sourced deps to their required catalog before any cache, lock, or
+	// catalog lookup, so a same-named artifact from another catalog is never
+	// served.
+	//
+	// TODO(built-plugins): a bundle run on a machine without the local build
+	// fails with a plain not-found from the local catalog; decide whether to
+	// embed built binaries in the bundle or surface a dedicated error.
+	dep, err := f.bindCatalog(dep)
+	if err != nil {
+		return FetchResult{}, err
 	}
 	kind := pluginKindToArtifactKind(dep.PluginKind())
 
@@ -616,7 +739,7 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep pluginArtifact, locked *bu
 	//   locked.Version == constraint  → strict mode, use lock
 	//   locked.Constraint == constraint → constrained mode, re-resolve
 	//   neither matches               → stale lock, error
-	locked, err := f.disposeLock(dep, locked)
+	locked, err = f.disposeLock(dep, locked)
 	if err != nil {
 		return FetchResult{}, err
 	}
@@ -680,8 +803,16 @@ func (f *Fetcher) disposeLock(dep pluginArtifact, locked *bundler.LockPlugin) (*
 // resolveFromLock resolves a plugin using its lock file entry. It derives the
 // catalog identity, selects the per-platform digest, and enforces allowlists.
 func (f *Fetcher) resolveFromLock(dep pluginArtifact, locked *bundler.LockPlugin) (resolvedPlugin, error) {
+	if f.disallowLocalBuilds && locked.IsBuilt() {
+		return resolvedPlugin{}, errLocalBuild("the lock entry was locked from a local build")
+	}
 	version := locked.Version
-	resolvedFrom := f.aliasForCanonical(locked.ResolvedCanonical)
+	// A built entry has no portable origin; it is served by the local catalog
+	// by definition.
+	resolvedFrom := catalog.LocalCatalogName
+	if !locked.IsBuilt() {
+		resolvedFrom = f.aliasForCanonical(locked.ResolvedCanonical)
+	}
 	if resolvedFrom == "" {
 		resolvedFrom = locked.ResolvedFrom
 		f.logger.V(1).Info("lock file catalog alias is stale or missing; using stored alias, which may differ from the current catalog configuration and cause digest verification to fail",
@@ -689,6 +820,15 @@ func (f *Fetcher) resolveFromLock(dep pluginArtifact, locked *bundler.LockPlugin
 			"version", version,
 			"storedAlias", locked.ResolvedFrom,
 			"resolvedCanonical", locked.ResolvedCanonical)
+	}
+	// A dep bound to a catalog must be served from it; a lock entry recorded
+	// from another catalog (e.g. the source changed since the build) is stale.
+	if bound := dep.CatalogName(); bound != "" && !strings.EqualFold(bound, resolvedFrom) {
+		return resolvedPlugin{}, fmt.Errorf(
+			"plugin %s@%s: lock entry was resolved from catalog %q but the dependency requires catalog %q; "+
+				"run '%s build solution' to refresh the lock: %w",
+			dep.ArtifactName(), version, resolvedFrom, bound, f.binaryName, ErrLockStale,
+		)
 	}
 
 	d, ok := lockDigestForPlatform(locked, f.platform)
@@ -721,13 +861,23 @@ func (f *Fetcher) resolveFromLock(dep pluginArtifact, locked *bundler.LockPlugin
 	}, nil
 }
 
+// cacheReadsAllowed reports whether cached plugin binaries may be served. In
+// enforce mode, cache reads are skipped so every execution performs a fresh
+// fetch with signature verification.
+func (f *Fetcher) cacheReadsAllowed() bool {
+	return !f.noCache && (f.sigPolicy == nil || f.sigPolicy.Mode != SignatureModeEnforce)
+}
+
 // resolveFromCatalog resolves a plugin without a lock file. It checks the cache
 // first, then resolves the version constraint against the catalog and retrieves
 // the content digest. Returns (FetchResult, nil, nil) for an early cache hit,
 // or (zero, &resolvedPlugin, nil) when resolution succeeded and a fetch is needed.
 func (f *Fetcher) resolveFromCatalog(ctx context.Context, dep pluginArtifact, kind catalog.ArtifactKind) (FetchResult, *resolvedPlugin, error) {
-	// Prefer cached version to avoid network latency.
-	if !f.noCache {
+	// Prefer cached version to avoid network latency. The shortcut only covers
+	// remote catalogs; see tryCachedAcrossCatalogs. Enforce mode disables it
+	// (including the offline fallback below) so every binary is signature-checked.
+	useCache := f.cacheReadsAllowed()
+	if useCache {
 		if result, ok := f.tryCachedAcrossCatalogs(dep); ok {
 			return result, nil, nil
 		}
@@ -738,37 +888,14 @@ func (f *Fetcher) resolveFromCatalog(ctx context.Context, dep pluginArtifact, ki
 		"constraint", dep.VersionConstraint(),
 		"hint", fmt.Sprintf("Run '%s build solution' to pin plugin versions", f.binaryName))
 
-	// Resolve version constraints to a concrete version before calling
-	// resolveContentDigest, which only accepts exact versions or "".
-	resolvedVersion := ""
+	// Resolve the version selector (exact, constraint, or ""/"latest") to a
+	// concrete artifact, then resolve its content-layer digest from the same
+	// catalog. resolveContentDigest selects the correct platform manifest from
+	// the OCI image index -- this is where platform selection happens.
 	constraint := dep.VersionConstraint()
-	if constraint != "" && !strings.EqualFold(constraint, "latest") {
-		lister := &catalogLister{fetcher: f.catalogFetcher, catalogName: dep.CatalogName()}
-		v, resolveErr := bundler.ResolveVersionConstraint(ctx, lister, kind, dep.ArtifactName(), constraint)
-		if resolveErr != nil {
-			if !f.noCache {
-				if result, ok := f.tryCachedAcrossCatalogs(dep); ok {
-					f.logger.V(0).Info("constraint resolution failed, using cached version",
-						"name", dep.ArtifactName(),
-						"version", result.Version,
-						"error", resolveErr)
-					return result, nil, nil
-				}
-			}
-			return FetchResult{}, nil, fmt.Errorf("resolving version constraint: %w", resolveErr)
-		}
-		if v != nil {
-			resolvedVersion = v.String()
-		}
-	}
-
-	// Resolve the content-layer digest using the concrete version.
-	// resolveContentDigest selects the correct platform manifest from the
-	// OCI image index — this is where platform selection happens.
-	mediaType := catalog.MediaTypeForKind(kind)
-	cdInfo, err := f.resolveContentDigest(ctx, kind, dep.ArtifactName(), resolvedVersion, f.platform, mediaType, dep.CatalogName())
+	cdInfo, err := f.resolveCatalogDigest(ctx, dep, kind)
 	if err != nil {
-		if !f.noCache {
+		if useCache {
 			if result, ok := f.tryCachedAcrossCatalogs(dep); ok {
 				f.logger.V(0).Info("catalog resolution failed, using cached version",
 					"name", dep.ArtifactName(),
@@ -778,7 +905,7 @@ func (f *Fetcher) resolveFromCatalog(ctx context.Context, dep pluginArtifact, ki
 				return result, nil, nil
 			}
 		}
-		return FetchResult{}, nil, fmt.Errorf("resolving version: %w", err)
+		return FetchResult{}, nil, err
 	}
 
 	var version string
@@ -813,6 +940,31 @@ func (f *Fetcher) resolveFromCatalog(ctx context.Context, dep pluginArtifact, ki
 	}, nil
 }
 
+// resolveCatalogDigest resolves dep's version selector to a concrete artifact
+// (scoped to dep's catalog when named) and then resolves that artifact's
+// content-layer digest for the target platform from the catalog that served
+// it, so the version and digest always come from the same source.
+func (f *Fetcher) resolveCatalogDigest(ctx context.Context, dep pluginArtifact, kind catalog.ArtifactKind) (catalog.ContentDigestInfo, error) {
+	info, err := f.resolveCatalogPlugin(ctx, kind, dep.ArtifactName(), dep.VersionConstraint(), dep.CatalogName())
+	if err != nil {
+		return catalog.ContentDigestInfo{}, fmt.Errorf("resolving version: %w", err)
+	}
+	if err := f.checkLocalBuild(info); err != nil {
+		return catalog.ContentDigestInfo{}, err
+	}
+	var version string
+	if info.Reference.Version != nil {
+		version = info.Reference.Version.String()
+	}
+
+	mediaType := catalog.MediaTypeForKind(kind)
+	cdInfo, err := f.resolveContentDigest(ctx, kind, dep.ArtifactName(), version, f.platform, mediaType, info.Catalog)
+	if err != nil {
+		return catalog.ContentDigestInfo{}, fmt.Errorf("resolving content digest: %w", err)
+	}
+	return cdInfo, nil
+}
+
 // fetchAndVerify performs the shared fetch path: checks the local cache,
 // downloads the binary, verifies the digest and signature, and writes to cache.
 func (f *Fetcher) fetchAndVerify(ctx context.Context, dep pluginArtifact, locked *bundler.LockPlugin, kind catalog.ArtifactKind, resolved resolvedPlugin) (FetchResult, error) {
@@ -826,10 +978,7 @@ func (f *Fetcher) fetchAndVerify(ctx context.Context, dep pluginArtifact, locked
 	cacheName := PluginCacheKey(dep.ArtifactName(), dep.PluginKind())
 
 	// Check local cache.
-	// In enforce mode, cache reads are skipped so every execution performs a
-	// fresh fetch with signature verification.
-	skipCache := f.noCache || (f.sigPolicy != nil && f.sigPolicy.Mode == SignatureModeEnforce)
-	if !skipCache {
+	if f.cacheReadsAllowed() {
 		if cachedPath, release, ok := f.cache.GetPin(cacheName, version, f.platform, expectedDigest, WithRegistryHash(registryHash)); ok {
 			f.logger.V(1).Info("plugin found in cache",
 				"name", dep.ArtifactName(),
@@ -875,6 +1024,13 @@ func (f *Fetcher) fetchAndVerify(ctx context.Context, dep pluginArtifact, locked
 		)
 	}
 	actualDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+	if actualDigest != expectedDigest && locked != nil && (dep.HasBuilt() || locked.IsBuilt()) {
+		return FetchResult{}, fmt.Errorf(
+			"built plugin %s@%s does not match the lock file: expected %s, got %s; "+
+				"it was rebuilt after the lock was written -- run '%s build solution' to refresh the lock",
+			dep.ArtifactName(), version, expectedDigest, actualDigest, f.binaryName,
+		)
+	}
 	if actualDigest != expectedDigest {
 		return FetchResult{}, fmt.Errorf(
 			"plugin binary digest mismatch for %s@%s: expected %s, got %s (possible supply chain attack or corrupted download)",
@@ -884,10 +1040,17 @@ func (f *Fetcher) fetchAndVerify(ctx context.Context, dep pluginArtifact, locked
 
 	// Signature verification (after digest passes, before caching).
 	var sigResult *SignatureResult
-	if f.sigPolicy.IsEnabled() && fetchInfo.ImageRef != "" {
-		sigResult, err = f.verifySignature(ctx, dep.ArtifactName(), version, fetchInfo.ImageRef)
-		if err != nil {
-			return FetchResult{}, err
+	if f.sigPolicy.IsEnabled() {
+		if fetchInfo.ImageRef == "" {
+			if err := HandleVerificationError(f.sigPolicy, errUnverifiable(dep, version, fetchInfo), f.logger,
+				"name", dep.ArtifactName(), "version", version); err != nil {
+				return FetchResult{}, err
+			}
+		} else {
+			sigResult, err = f.verifySignature(ctx, dep.ArtifactName(), version, fetchInfo.ImageRef)
+			if err != nil {
+				return FetchResult{}, err
+			}
 		}
 	}
 

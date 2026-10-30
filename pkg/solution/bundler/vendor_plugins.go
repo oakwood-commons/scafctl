@@ -233,11 +233,8 @@ func VendorAllPlugins(ctx context.Context, plugins []solution.PluginDependency, 
 		default:
 			// Built and short-name plugins both resolve from the local catalog
 			// and are never replayed. They differ only in selector and lock
-			// Source, which resolveDependency derives from p.
-			//
-			// TODO: source.built plugins are locked and published here, but the
-			// runtime rejects them (plugin.ErrBuiltPluginUnsupported in
-			// pkg/plugin/fetcher.go), we will address that in future work. For now, we vendor them so the lock file is complete
+			// Source, which resolveDependency derives from p. At runtime the
+			// plugin fetcher binds built deps back to the local catalog.
 			if opts.Local == nil {
 				return nil, fmt.Errorf("plugin %q: no local catalog configured", p.DisplayName())
 			}

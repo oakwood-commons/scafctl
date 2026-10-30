@@ -125,14 +125,15 @@ func (c *RemoteCatalog) extractLayerContent(
 	}
 
 	info := ArtifactInfo{
-		Reference:   ref,
-		Digest:      manifest.Layers[0].Digest.String(),
-		ImageRef:    c.buildRepositoryPath(ref) + "@" + manifestDigest,
-		CreatedAt:   createdAt,
-		Size:        int64(len(contentData)),
-		Annotations: annotations,
-		Catalog:     c.name,
-		Canonical:   c.canonicalID(),
+		Reference:      ref,
+		Digest:         manifest.Layers[0].Digest.String(),
+		ManifestDigest: manifestDigest,
+		ImageRef:       c.buildRepositoryPath(ref) + "@" + manifestDigest,
+		CreatedAt:      createdAt,
+		Size:           int64(len(contentData)),
+		Annotations:    annotations,
+		Catalog:        c.name,
+		Canonical:      c.canonicalID(),
 	}
 
 	return contentData, info, nil

@@ -1423,15 +1423,17 @@ func TestAutoResolveChildProviders_FetchFails(t *testing.T) {
 	// Create a fetcher with an empty local catalog — resolution will fail.
 	local, err := catalog.NewLocalCatalogAt(t.TempDir(), logr.Discard())
 	require.NoError(t, err)
+	catalogFetcher, err := catalog.NewPluginFetcher(logr.Discard(), local)
+	require.NoError(t, err)
 
 	p := New(
 		WithRegistry(reg),
 		WithOfficialProviders(officialReg),
 		WithPluginFetcher(plugin.NewFetcher(plugin.FetcherConfig{
-			Catalog:  local,
-			Cache:    plugin.NewCache(t.TempDir()),
-			Platform: "linux/amd64",
-			Logger:   logr.Discard(),
+			CatalogFetcher: catalogFetcher,
+			Cache:          plugin.NewCache(t.TempDir()),
+			Platform:       "linux/amd64",
+			Logger:         logr.Discard(),
 		})),
 	)
 	sol := &solution.Solution{
@@ -1456,14 +1458,19 @@ func TestAutoResolveChildProviders_WorkflowActions(t *testing.T) {
 		{Name: "git", CatalogRef: "git", DefaultVersion: "latest"},
 	})
 
+	local, err := catalog.NewLocalCatalogAt(t.TempDir(), logr.Discard())
+	require.NoError(t, err)
+	catalogFetcher, err := catalog.NewPluginFetcher(logr.Discard(), local)
+	require.NoError(t, err)
+
 	p := New(
 		WithRegistry(reg),
 		WithOfficialProviders(officialReg),
 		WithPluginFetcher(plugin.NewFetcher(plugin.FetcherConfig{
-			Catalog:  func() catalog.Catalog { c, _ := catalog.NewLocalCatalogAt(t.TempDir(), logr.Discard()); return c }(),
-			Cache:    plugin.NewCache(t.TempDir()),
-			Platform: "linux/amd64",
-			Logger:   logr.Discard(),
+			CatalogFetcher: catalogFetcher,
+			Cache:          plugin.NewCache(t.TempDir()),
+			Platform:       "linux/amd64",
+			Logger:         logr.Discard(),
 		})),
 	)
 
@@ -1482,7 +1489,7 @@ func TestAutoResolveChildProviders_WorkflowActions(t *testing.T) {
 	}
 
 	// "git" is official but not registered and not in any catalog — errors on fetch.
-	err := p.autoResolveChildProviders(context.Background(), sol, reg)
+	err = p.autoResolveChildProviders(context.Background(), sol, reg)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "auto-fetching child solution providers")
 }

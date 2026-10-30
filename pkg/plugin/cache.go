@@ -54,6 +54,7 @@ type CacheOption func(*cacheOpts)
 
 type cacheOpts struct {
 	registryHash string
+	flatOnly     bool
 }
 
 func applyCacheOpts(opts []CacheOption) cacheOpts {
@@ -69,6 +70,15 @@ func applyCacheOpts(opts []CacheOption) cacheOpts {
 func WithRegistryHash(hash string) CacheOption {
 	return func(o *cacheOpts) {
 		o.registryHash = hash
+	}
+}
+
+// WithFlatLayoutOnly restricts a hashless lookup to the flat (no-registry)
+// layout. Without it, a hashless GetLatestCached also scans every registry-hash
+// layout, i.e. binaries cached from any catalog.
+func WithFlatLayoutOnly() CacheOption {
+	return func(o *cacheOpts) {
+		o.flatOnly = true
 	}
 }
 
@@ -167,11 +177,11 @@ type versionDir struct {
 
 // enumerateVersionDirs returns every cached version directory for a plugin
 // name in an unmanaged cache. When registryHash is non-empty, only that
-// registry's versions are returned. When empty, both the flat layout and every
-// registry-hash layout are scanned. A directory whose name matches
-// registryHashPattern is treated as a registry-hash layer; anything else is a
-// direct version directory.
-func (c *Cache) enumerateVersionDirs(name, registryHash string) []versionDir {
+// registry's versions are returned. When empty, the flat layout is scanned,
+// plus every registry-hash layout unless flatOnly is set. A directory whose
+// name matches registryHashPattern is treated as a registry-hash layer;
+// anything else is a direct version directory.
+func (c *Cache) enumerateVersionDirs(name, registryHash string, flatOnly bool) []versionDir {
 	if registryHash != "" {
 		entries, err := os.ReadDir(filepath.Join(c.dir, name, registryHash))
 		if err != nil {
@@ -197,6 +207,9 @@ func (c *Cache) enumerateVersionDirs(name, registryHash string) []versionDir {
 		}
 		dirName := entry.Name()
 		if registryHashPattern.MatchString(dirName) {
+			if flatOnly {
+				continue
+			}
 			// Registry-hash layer — scan its version subdirectories.
 			subEntries, err := os.ReadDir(filepath.Join(c.dir, name, dirName))
 			if err != nil {
@@ -353,7 +366,7 @@ func (c *Cache) GetLatestCached(name, platform string, opts ...CacheOption) (str
 		return c.getLatestCachedManaged(name, platform, o.registryHash)
 	}
 
-	versionDirs := c.enumerateVersionDirs(name, o.registryHash)
+	versionDirs := c.enumerateVersionDirs(name, o.registryHash, o.flatOnly)
 
 	var bestSemver *semver.Version
 	var bestVersion string

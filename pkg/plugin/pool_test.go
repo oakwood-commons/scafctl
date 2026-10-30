@@ -1143,6 +1143,7 @@ func TestPoolErrorHTTPStatus(t *testing.T) {
 	}{
 		{"not allowed", fmt.Errorf("plugin %q: %w", "foo", ErrPluginNotAllowed), 403},
 		{"external disabled", fmt.Errorf("plugin %q: %w", "bar", ErrExternalDisabled), 403},
+		{"local build not allowed", fmt.Errorf("plugin %q: %w", "qux", ErrLocalBuildNotAllowed), 403},
 		{"pool full", fmt.Errorf("plugin %q: %w", "baz", ErrPoolFull), 503},
 		{"pool closed", ErrPoolClosed, 503},
 		{"context canceled", fmt.Errorf("fetching: %w", context.Canceled), 499},

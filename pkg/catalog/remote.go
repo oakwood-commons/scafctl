@@ -2173,3 +2173,201 @@ func ResolveLocalTarget(source Reference, targetName string) (Reference, error) 
 	}
 	return target, nil
 }
+
+// CachedRemoteCatalog serves a remote catalog through the local catalog's cache
+// of it. It backs plugin fetching only, so every ref and query it receives
+// carries an artifact kind.
+type CachedRemoteCatalog struct {
+	*RemoteCatalog
+	local *LocalCatalog
+}
+
+// NewCachedRemoteCatalog returns a CachedRemoteCatalog that serves remote
+// through local's cache of it. Both catalogs are required.
+func NewCachedRemoteCatalog(local *LocalCatalog, remote *RemoteCatalog) (*CachedRemoteCatalog, error) {
+	if local == nil {
+		return nil, errors.New("creating cached remote catalog: nil local catalog")
+	}
+	if remote == nil {
+		return nil, errors.New("creating cached remote catalog: nil remote catalog")
+	}
+	return &CachedRemoteCatalog{RemoteCatalog: remote, local: local}, nil
+}
+
+func (c *CachedRemoteCatalog) localRef(ref Reference) Reference {
+	return sanitizeRefForRemote(ref, c.canonicalID())
+}
+
+// Resolve resolves ref through the local cache of this remote, then the remote.
+// A pinned ref (version or digest) found in the cache is served without
+// contacting the remote, since a pinned identity cannot move. An unpinned ref
+// always asks the remote (a newer version may have been published) and falls
+// back to the newest cached copy only when the remote is unreachable.
+func (c *CachedRemoteCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	cachedRef := c.localRef(ref)
+
+	if isPinned(ref) {
+		if info, ok := c.cached(ref, func() (ArtifactInfo, error) {
+			return c.local.Resolve(ctx, cachedRef)
+		}); ok {
+			return info, nil
+		}
+		return c.RemoteCatalog.Resolve(ctx, ref)
+	}
+
+	info, err := c.RemoteCatalog.Resolve(ctx, ref)
+	if _, unreachable := IsCatalogUnreachable(err); !unreachable {
+		return info, err
+	}
+	return c.cachedFallback(ctx, queryFromRef(cachedRef), err)
+}
+
+// Find resolves query against this remote, using the local cache of it. The
+// query's source is pinned to this remote, so local builds and copies from
+// other remotes never match; a SourceBuilt selector or one naming another
+// remote is not-found, as for RemoteCatalog.Find. A pinned query (exact version
+// or digest) found in the cache is served without contacting the remote. An
+// open query or constraint always asks the remote and falls back to the newest
+// matching cached copy only when the remote is unreachable.
+func (c *CachedRemoteCatalog) Find(ctx context.Context, query ArtifactQuery) (ArtifactInfo, error) {
+	if err := query.Validate(); err != nil {
+		return ArtifactInfo{}, err
+	}
+	if !c.servesSource(query.Source) {
+		return ArtifactInfo{}, &ArtifactNotFoundError{
+			Reference: Reference{Kind: query.Kind, Name: query.Name},
+			Catalog:   c.Name(),
+		}
+	}
+	query.Source = SourceSelector{Kind: SourceRemote, Remote: c.canonicalID()}
+
+	if isPinnedQuery(query) {
+		if info, ok := c.cached(Reference{Kind: query.Kind, Name: query.Name}, func() (ArtifactInfo, error) {
+			return c.local.Find(ctx, query)
+		}); ok {
+			return info, nil
+		}
+	}
+
+	info, err := c.RemoteCatalog.Find(ctx, query)
+	if _, unreachable := IsCatalogUnreachable(err); !unreachable {
+		return info, err
+	}
+	return c.cachedFallback(ctx, query, err)
+}
+
+// cached runs a local cache lookup. A miss reports false; any other cache
+// failure is logged and also reports false, since the cache is best-effort and
+// must not block a lookup the remote can still answer.
+func (c *CachedRemoteCatalog) cached(ref Reference, lookup func() (ArtifactInfo, error)) (ArtifactInfo, bool) {
+	info, err := lookup()
+	if err == nil {
+		return c.fromCache(info), true
+	}
+	if !IsNotFound(err) {
+		c.logger.V(1).Info("local cache lookup failed; asking remote",
+			"ref", ref.String(), "error", err.Error())
+	}
+	return ArtifactInfo{}, false
+}
+
+// cachedFallback answers query from the local cache after the remote was
+// unreachable. When nothing cached matches, the remote's error is returned so
+// callers still see that the remote could not be reached.
+func (c *CachedRemoteCatalog) cachedFallback(ctx context.Context, query ArtifactQuery, remoteErr error) (ArtifactInfo, error) {
+	info, err := c.local.Find(ctx, query)
+	if err != nil {
+		return ArtifactInfo{}, remoteErr
+	}
+	c.logger.Info("remote unreachable; using newest locally cached version",
+		"query", query.String(),
+		"version", info.Reference.VersionOrDigest(), "error", remoteErr.Error())
+	return c.fromCache(info), nil
+}
+
+// fromCache presents a cached copy as served by this catalog, so callers see
+// the same catalog identity whether the answer came from the cache or the
+// registry.
+func (c *CachedRemoteCatalog) fromCache(info ArtifactInfo) ArtifactInfo {
+	info.Catalog = c.Name()
+	info.Canonical = c.canonicalID()
+	return info
+}
+
+// isPinnedQuery reports whether query names one exact artifact: a digest or an
+// exact version (not latest and not a constraint).
+func isPinnedQuery(query ArtifactQuery) bool {
+	if query.Digest != "" {
+		return true
+	}
+	var v VersionOrConstraint
+	v.Set(query.Version)
+	return v.Type() == IsVersion
+}
+
+// FetchByPlatform fetches the binary for platform from the local cache of this
+// remote, falling back to the remote. It never writes the cache. Only a pinned
+// ref (version or digest) is served from the cache; an unpinned ref goes
+// straight to the remote, which resolves it, so a stale cached version is never
+// served while the remote has a newer one. Callers such as the plugin fetcher
+// resolve the version before fetching.
+func (c *CachedRemoteCatalog) FetchByPlatform(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error) {
+	if !isPinned(ref) {
+		return c.RemoteCatalog.FetchByPlatform(ctx, ref, platform)
+	}
+
+	data, info, err := c.local.FetchByPlatform(ctx, c.localRef(ref), platform)
+	switch {
+	case err == nil:
+		return data, c.fromCachedFetch(ref, info), nil
+	case IsPlatformNotFound(err):
+		// The cached copy is a verbatim pull of this pinned artifact, so the
+		// remote does not have the platform either.
+		return nil, ArtifactInfo{}, err
+	case !IsNotFound(err):
+		c.logger.V(1).Info("local cache lookup failed; asking remote",
+			"ref", ref.String(), "platform", platform, "error", err.Error())
+	}
+
+	return c.RemoteCatalog.FetchByPlatform(ctx, ref, platform)
+}
+
+// fromCachedFetch presents fetched cached content as served by this catalog and
+// points ImageRef at the same manifest in the remote registry. A cached copy is
+// a verbatim pull, so the remote's signature for that manifest digest covers
+// it; a tampered or re-packaged copy has a different digest and fails
+// verification. Without a manifest digest ImageRef stays empty, which signature
+// enforcement rejects.
+func (c *CachedRemoteCatalog) fromCachedFetch(ref Reference, info ArtifactInfo) ArtifactInfo {
+	info = c.fromCache(info)
+	if info.ManifestDigest != "" {
+		info.ImageRef = c.buildRepositoryPath(ref) + "@" + info.ManifestDigest
+	}
+	return info
+}
+
+// ResolveContentDigest resolves the content-layer digest for platform from the
+// local cache of this remote, falling back to the remote. Like FetchByPlatform,
+// only a pinned ref is served from the cache; an unpinned ref goes straight to
+// the remote so a stale cached version is never reported.
+func (c *CachedRemoteCatalog) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
+	if !isPinned(ref) {
+		return c.RemoteCatalog.ResolveContentDigest(ctx, ref, platform, mediaType)
+	}
+
+	info, err := c.local.ResolveContentDigest(ctx, c.localRef(ref), platform, mediaType)
+	switch {
+	case err == nil:
+		info.ArtifactInfo = c.fromCache(info.ArtifactInfo)
+		return info, nil
+	case IsPlatformNotFound(err):
+		// The cached copy is a verbatim pull of this pinned artifact, so the
+		// remote does not have the platform either.
+		return ContentDigestInfo{}, err
+	case !IsNotFound(err):
+		c.logger.V(1).Info("local cache lookup failed; asking remote",
+			"ref", ref.String(), "platform", platform, "error", err.Error())
+	}
+
+	return c.RemoteCatalog.ResolveContentDigest(ctx, ref, platform, mediaType)
+}

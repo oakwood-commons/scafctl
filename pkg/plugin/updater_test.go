@@ -115,45 +115,24 @@ func TestPlanUpdates_NilFetcher_ReportsFailed(t *testing.T) {
 	assert.Contains(t, plan.Failed[0].Error, "no remote catalogs configured")
 }
 
-// mockCatalogForUpdater implements catalog.Catalog for updater tests.
+// mockCatalogForUpdater holds the lookup behavior for an updater test's
+// catalog; see newUpdaterFetcher.
 type mockCatalogForUpdater struct {
 	resolveFunc func(ctx context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error)
 }
 
-func (m *mockCatalogForUpdater) Name() string { return "mock" }
-
-func (m *mockCatalogForUpdater) Resolve(ctx context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
-	if m.resolveFunc != nil {
-		return m.resolveFunc(ctx, ref)
+// newUpdaterFetcher builds a plugin fetcher over a single mock source whose
+// lookups are answered by resolve (nil means every lookup is not-found).
+func newUpdaterFetcher(t *testing.T, resolve func(ctx context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error)) *catalog.PluginFetcher {
+	t.Helper()
+	var opts []catalog.MockOption
+	if resolve != nil {
+		opts = append(opts, catalog.WithResolveFunc(resolve))
 	}
-	return catalog.ArtifactInfo{}, fmt.Errorf("not found")
+	f, err := catalog.NewPluginFetcher(logr.Discard(), nil, catalog.NewMockPluginSource("mock", opts...))
+	require.NoError(t, err)
+	return f
 }
-
-func (m *mockCatalogForUpdater) Store(context.Context, catalog.Reference, []byte, []byte, map[string]string, bool, ...catalog.Layer) (catalog.ArtifactInfo, error) {
-	return catalog.ArtifactInfo{}, nil
-}
-
-func (m *mockCatalogForUpdater) Fetch(context.Context, catalog.Reference) ([]byte, catalog.ArtifactInfo, error) {
-	return nil, catalog.ArtifactInfo{}, nil
-}
-
-func (m *mockCatalogForUpdater) FetchWithBundle(context.Context, catalog.Reference) ([]byte, []byte, catalog.ArtifactInfo, error) {
-	return nil, nil, catalog.ArtifactInfo{}, nil
-}
-
-func (m *mockCatalogForUpdater) FetchWithLayer(context.Context, catalog.Reference, ...string) ([]byte, map[string][]byte, catalog.ArtifactInfo, error) {
-	return nil, nil, catalog.ArtifactInfo{}, nil
-}
-
-func (m *mockCatalogForUpdater) List(context.Context, catalog.ArtifactKind, string) ([]catalog.ArtifactInfo, error) {
-	return nil, nil
-}
-
-func (m *mockCatalogForUpdater) Exists(context.Context, catalog.Reference) (bool, error) {
-	return false, nil
-}
-
-func (m *mockCatalogForUpdater) Delete(context.Context, catalog.Reference) error { return nil }
 
 func seedUpdaterCache(t *testing.T, cacheDir, name, version string) {
 	t.Helper()
@@ -185,7 +164,7 @@ func TestPlanUpdates_AllWithCachedPlugins_UpdateAvailable(t *testing.T) {
 	}
 
 	cache := NewCache(cacheDir)
-	fetcher := catalog.NewPluginFetcher(mock, logr.Discard())
+	fetcher := newUpdaterFetcher(t, mock.resolveFunc)
 
 	plan, err := PlanUpdates(t.Context(), cache, fetcher, UpdateOptions{
 		All:    true,
@@ -217,7 +196,7 @@ func TestPlanUpdates_AllWithCachedPlugins_UpToDate(t *testing.T) {
 	}
 
 	cache := NewCache(cacheDir)
-	fetcher := catalog.NewPluginFetcher(mock, logr.Discard())
+	fetcher := newUpdaterFetcher(t, mock.resolveFunc)
 
 	plan, err := PlanUpdates(t.Context(), cache, fetcher, UpdateOptions{
 		All:    true,
@@ -241,7 +220,7 @@ func TestPlanUpdates_CatalogResolutionFails(t *testing.T) {
 	}
 
 	cache := NewCache(cacheDir)
-	fetcher := catalog.NewPluginFetcher(mock, logr.Discard())
+	fetcher := newUpdaterFetcher(t, mock.resolveFunc)
 
 	plan, err := PlanUpdates(t.Context(), cache, fetcher, UpdateOptions{
 		Names:  []string{"github"},
@@ -262,7 +241,7 @@ func TestPlanUpdates_PlatformFilter(t *testing.T) {
 	seedUpdaterCache(t, cacheDir, "github", "1.0.0")
 
 	cache := NewCache(cacheDir)
-	fetcher := catalog.NewPluginFetcher(&mockCatalogForUpdater{}, logr.Discard())
+	fetcher := newUpdaterFetcher(t, nil)
 
 	// Use a platform that doesn't match our cached binaries.
 	plan, err := PlanUpdates(t.Context(), cache, fetcher, UpdateOptions{
@@ -297,7 +276,7 @@ func TestPlanUpdates_AuthHandlerCacheKey(t *testing.T) {
 	}
 
 	cache := NewCache(cacheDir)
-	fetcher := catalog.NewPluginFetcher(mock, logr.Discard())
+	fetcher := newUpdaterFetcher(t, mock.resolveFunc)
 
 	plan, err := PlanUpdates(t.Context(), cache, fetcher, UpdateOptions{
 		Names:  []string{"auth-handler-github"},
@@ -327,7 +306,7 @@ func TestPlanUpdates_ResolvedVersionNotNewer(t *testing.T) {
 	}
 
 	cache := NewCache(cacheDir)
-	fetcher := catalog.NewPluginFetcher(mock, logr.Discard())
+	fetcher := newUpdaterFetcher(t, mock.resolveFunc)
 
 	plan, err := PlanUpdates(t.Context(), cache, fetcher, UpdateOptions{
 		Names:  []string{"exec"},
@@ -355,7 +334,7 @@ func TestPlanUpdates_EmptyResolvedVersion(t *testing.T) {
 	}
 
 	cache := NewCache(cacheDir)
-	fetcher := catalog.NewPluginFetcher(mock, logr.Discard())
+	fetcher := newUpdaterFetcher(t, mock.resolveFunc)
 
 	plan, err := PlanUpdates(t.Context(), cache, fetcher, UpdateOptions{
 		Names:  []string{"github"},
@@ -383,7 +362,7 @@ func TestPlanUpdates_DefaultTarget(t *testing.T) {
 	}
 
 	cache := NewCache(cacheDir)
-	fetcher := catalog.NewPluginFetcher(mock, logr.Discard())
+	fetcher := newUpdaterFetcher(t, mock.resolveFunc)
 
 	// Empty target should default to "latest".
 	plan, err := PlanUpdates(t.Context(), cache, fetcher, UpdateOptions{
