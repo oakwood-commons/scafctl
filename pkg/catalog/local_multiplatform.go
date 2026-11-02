@@ -24,8 +24,11 @@ import (
 //
 // This replaces any existing single-platform artifact at the same reference.
 func (c *LocalCatalog) StoreMultiPlatform(ctx context.Context, ref Reference, platformBinaries []PlatformBinary, annotations map[string]string, force bool) (ArtifactInfo, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock, err := c.lockWrite(ctx)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+	defer unlock()
 
 	if len(platformBinaries) == 0 {
 		return ArtifactInfo{}, fmt.Errorf("at least one platform binary is required")
@@ -161,8 +164,11 @@ func (c *LocalCatalog) StoreMultiPlatform(ctx context.Context, ref Reference, pl
 // artifact that may be stored as either a single-platform manifest or a
 // multi-platform image index. It transparently handles both cases.
 func (c *LocalCatalog) FetchByPlatform(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return nil, ArtifactInfo{}, err
+	}
+	defer unlock()
 
 	info, err := c.resolveLocked(ctx, ref)
 	if err != nil {
@@ -248,8 +254,11 @@ func (c *LocalCatalog) fetchFromManifest(ctx context.Context, manifestDesc ocisp
 // ListPlatforms returns the platforms available for a multi-platform artifact.
 // If the artifact is single-platform, returns nil.
 func (c *LocalCatalog) ListPlatforms(ctx context.Context, ref Reference) ([]string, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
 	info, err := c.resolveLocked(ctx, ref)
 	if err != nil {

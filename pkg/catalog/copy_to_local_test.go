@@ -5,7 +5,12 @@ package catalog
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
@@ -14,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"oras.land/oras-go/v2"
+	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/memory"
 )
 
@@ -113,9 +119,9 @@ func TestLocalCatalog_IngestVerbatim(t *testing.T) {
 	assert.Equal(t, info.Digest, resolved.Digest.String())
 
 	// Verbatim: digest and content are preserved unchanged (no rebuild).
-	content, _, err := cat.Fetch(ctx, localRef)
+	fetched, _, err := cat.Fetch(ctx, localRef)
 	require.NoError(t, err)
-	assert.Equal(t, "name: demo", string(content))
+	assert.Equal(t, "name: demo", string(fetched))
 }
 
 func TestLocalCatalog_IngestVerbatim_InvalidRef(t *testing.T) {
@@ -125,6 +131,115 @@ func TestLocalCatalog_IngestVerbatim_InvalidRef(t *testing.T) {
 	_, err := cat.IngestVerbatim(t.Context(), source, "1.0.0", Reference{Kind: ArtifactKindSolution}, oras.DefaultCopyOptions)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tagging local reference")
+}
+
+func TestLocalCatalog_IngestVerbatim_CopiesWithoutLock(t *testing.T) {
+	cat := newTestCatalog(t)
+	source := memSource(t, remoteSolutionBuilder(solutionRef("demo", "1.0.0")), "1.0.0")
+
+	// While blobs are being copied another writer must be able to take the
+	// lock. lockWrite is run on its own goroutine because, if the copy held
+	// the lock, it would block forever on the mutex rather than time out.
+	var copied atomic.Int32
+	opts := oras.DefaultCopyOptions
+	opts.PreCopy = func(ctx context.Context, _ ocispec.Descriptor) error {
+		copied.Add(1)
+		done := make(chan error, 1)
+		go func() {
+			unlock, err := cat.lockWrite(ctx)
+			if err == nil {
+				unlock()
+			}
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(5 * time.Second):
+			return errors.New("lockWrite blocked: the copy holds the catalog lock")
+		}
+	}
+
+	info, err := cat.IngestVerbatim(t.Context(), source, "1.0.0", localRefOf("ghcr.io/myorg/other"), opts)
+	require.NoError(t, err)
+	assert.Positive(t, copied.Load())
+	assert.Equal(t, "ghcr.io/myorg/other", info.Annotations[AnnotationSourceCanonical])
+}
+
+func TestLocalCatalog_IngestVerbatim_FailedCopyLeavesIndexUnchanged(t *testing.T) {
+	source := memSource(t, remoteSolutionBuilder(solutionRef("demo", "1.0.0")), "1.0.0")
+	errCopy := errors.New("copy failed")
+
+	tests := []struct {
+		name    string
+		srcTag  string
+		opts    func() oras.CopyOptions
+		wantErr string
+	}{
+		{
+			name:    "unknown source tag",
+			srcTag:  "9.9.9",
+			opts:    func() oras.CopyOptions { return oras.DefaultCopyOptions },
+			wantErr: "resolving",
+		},
+		{
+			name:   "map root fails",
+			srcTag: "1.0.0",
+			opts: func() oras.CopyOptions {
+				o := oras.DefaultCopyOptions
+				o.MapRoot = func(context.Context, content.ReadOnlyStorage, ocispec.Descriptor) (ocispec.Descriptor, error) {
+					return ocispec.Descriptor{}, errCopy
+				}
+				return o
+			},
+			wantErr: "mapping root",
+		},
+		{
+			name:   "blob copy fails",
+			srcTag: "1.0.0",
+			opts: func() oras.CopyOptions {
+				o := oras.DefaultCopyOptions
+				o.PreCopy = func(context.Context, ocispec.Descriptor) error { return errCopy }
+				return o
+			},
+			wantErr: errCopy.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cat := newTestCatalog(t)
+			indexPath := filepath.Join(cat.dir, "index.json")
+			before, err := os.ReadFile(indexPath)
+			require.NoError(t, err)
+
+			_, err = cat.IngestVerbatim(t.Context(), source, tt.srcTag, localRefOf("ghcr.io/myorg/scafctl"), tt.opts())
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "copying artifact")
+			assert.Contains(t, err.Error(), tt.wantErr)
+
+			after, err := os.ReadFile(indexPath)
+			require.NoError(t, err)
+			assert.Equal(t, string(before), string(after), "a failed copy must not tag anything")
+		})
+	}
+}
+
+func TestLocalCatalog_IngestVerbatim_MapRoot(t *testing.T) {
+	cat := newTestCatalog(t)
+	source := memSource(t, remoteSolutionBuilder(solutionRef("demo", "1.0.0")), "1.0.0")
+
+	var mapped bool
+	opts := oras.DefaultCopyOptions
+	opts.MapRoot = func(_ context.Context, _ content.ReadOnlyStorage, root ocispec.Descriptor) (ocispec.Descriptor, error) {
+		mapped = true
+		return root, nil
+	}
+
+	info, err := cat.IngestVerbatim(t.Context(), source, "1.0.0", localRefOf("ghcr.io/myorg/scafctl"), opts)
+	require.NoError(t, err)
+	assert.True(t, mapped)
+	assert.NotEmpty(t, info.Digest)
 }
 
 func TestRemoteCatalog_copyVerbatim(t *testing.T) {

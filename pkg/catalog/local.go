@@ -11,15 +11,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/gofrs/flock"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -31,25 +35,312 @@ import (
 const (
 	// LocalCatalogName is the name of the built-in local catalog.
 	LocalCatalogName = "local"
+
+	// catalogLockFile is the file in the catalog directory that processes lock
+	// to coordinate access to index.json.
+	catalogLockFile = ".lock"
 )
 
 // LocalCatalog implements Catalog using a local OCI layout store.
 //
-// TODO: concurrency across instances and processes. mu only serializes one
-// instance, but caching fetched remote solutions now writes the shared OCI
-// index.json, so concurrent run/build processes (or two LocalCatalog
-// instances on the same path) can lose tags. Follow up with:
-//   - a per-path singleton so all in-process users of a path share one store
-//     and lock (NewLocalCatalog/NewLocalCatalogAt return the same instance);
-//   - a cross-process file lock around index.json writes (and Prune);
-//   - IngestVerbatim no longer holding the write lock for the whole network
-//     copy: stage the blobs first, then take the lock only to tag.
+// Every LocalCatalog opened on the same directory in this process shares one
+// localStore (one in-memory OCI index and one lock), so in-process users never
+// overwrite each other's tags. Writes also lock the directory against other
+// processes; see localStore.
 type LocalCatalog struct {
-	store  *oci.Store
+	*localStore
+	// path is the directory as the caller spelled it; returned by Path().
 	path   string
 	logger logr.Logger
-	mu     sync.RWMutex
 }
+
+// localStore is the state every LocalCatalog on the same directory must share:
+// one in-memory OCI index and the locks that serialize access to it.
+//
+// Every access to store goes through lockRead or lockWrite; nothing takes mu
+// or fileLock directly.
+//
+// oci.Store loads index.json once and rewrites it wholesale from memory on
+// every tag, so a process writing from a stale copy would drop tags another
+// process added. lockWrite therefore also takes an exclusive file lock on the
+// directory and reloads store first if index.json changed since this process
+// last saw it. lockRead holds a shared file lock until it is released, so no
+// other process can retag or prune what the read is using, and reloads on the
+// same condition so long-running processes (MCP, serve, LSP) see other
+// processes' writes. Opening and reloading take the file lock, because
+// oci.Store writes index.json in place and a concurrent read could see half
+// of it.
+type localStore struct {
+	store *oci.Store
+	mu    sync.RWMutex
+
+	// dir is the canonical catalog directory.
+	dir string
+	// fileLock is the cross-process lock on dir's catalogLockFile.
+	fileLock *flock.Flock
+	// lockTimeout bounds how long taking fileLock waits.
+	lockTimeout time.Duration
+	// indexDigest is the digest of index.json as this process last saw it,
+	// or empty if it was absent or unreadable.
+	indexDigest digest.Digest
+	// stale is set when a reload failed, so store may not match index.json
+	// whatever indexDigest says. The next lock reloads unconditionally.
+	stale bool
+
+	// readMu guards readers and releaseRead. fileLock is one lock per
+	// process, so concurrent readers share one shared file lock: the first
+	// takes it and the last releases it.
+	readMu      sync.Mutex
+	readers     int
+	releaseRead func()
+}
+
+// openLocalStore opens the catalog directory dir, which must exist and be
+// canonical.
+func openLocalStore(dir string) (*localStore, error) {
+	s := &localStore{
+		dir:         dir,
+		fileLock:    flock.New(filepath.Join(dir, catalogLockFile)),
+		lockTimeout: settings.DefaultCatalogLockTimeout,
+	}
+
+	// Opening an initialized directory only reads it, so a shared lock is
+	// enough to keep writers out. Opening a fresh one writes oci-layout and
+	// index.json, which needs the exclusive lock.
+	tryLock := s.fileLock.TryRLockContext
+	if !layoutInitialized(dir) {
+		tryLock = s.fileLock.TryLockContext
+	}
+
+	// NewLocalCatalogAt has no context to pass down; lockTimeout bounds the wait.
+	ctx := context.Background()
+	release, err := s.lockFileForReload(ctx, tryLock)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	if err := s.reload(ctx); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// lockFileForReload takes fileLock with tryLock so index.json and the content
+// it references can be read without another process changing them, and
+// returns its release.
+//
+// If the lock file cannot be created because dir is read-only to this
+// process, it goes ahead without the lock: nobody can rewrite index.json in a
+// directory this process cannot even create the lock file in. If another user
+// can still write here, a concurrent write may fail the reload; that is no
+// worse than refusing to read at all. Writes never use this fallback.
+func (s *localStore) lockFileForReload(ctx context.Context, tryLock func(context.Context, time.Duration) (bool, error)) (release func(), err error) {
+	if err := s.acquireFileLock(ctx, tryLock); err != nil {
+		if lockFileUnwritable(err) {
+			return func() {}, nil
+		}
+		return nil, err
+	}
+	return func() { _ = s.fileLock.Unlock() }, nil
+}
+
+// lockFileUnwritable reports whether err means the lock file could not be
+// created because the catalog directory is read-only to this process.
+// EROFS needs its own check: Go does not map it to fs.ErrPermission.
+func lockFileUnwritable(err error) bool {
+	return errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EROFS)
+}
+
+// layoutInitialized reports whether dir already holds the files oci.New would
+// otherwise create.
+func layoutInitialized(dir string) bool {
+	for _, name := range []string{ocispec.ImageLayoutFile, ocispec.ImageIndexFile} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil { //nolint:gosec // G703: dir is the configured catalog directory
+			return false
+		}
+	}
+	return true
+}
+
+// lockRead takes the lock for reading store and returns its release. It holds
+// a shared file lock until released, waiting at most lockTimeout for a writer
+// in another process to finish, so no other process can retag or prune the
+// content being read. If index.json changed since this process last saw it,
+// lockRead first reloads store.
+func (s *localStore) lockRead(ctx context.Context) (unlock func(), err error) {
+	s.mu.RLock()
+	if err := s.acquireReadFileLock(ctx); err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
+	// The file lock keeps other processes from writing index.json, so this
+	// read is whole.
+	current, err := indexDigestOf(s.dir)
+	if err == nil && !s.stale && current == s.indexDigest {
+		return func() {
+			// Release the file lock before mu: a writer in this process
+			// takes fileLock exclusively only once it holds mu.
+			s.releaseReadFileLock()
+			s.mu.RUnlock()
+		}, nil
+	}
+	s.releaseReadFileLock()
+	s.mu.RUnlock()
+
+	// Replacing store needs mu exclusively. sync.RWMutex cannot downgrade, so
+	// this read keeps mu exclusively rather than reopen a window in which
+	// another process could change index.json again.
+	s.mu.Lock()
+	if err := s.acquireReadFileLock(ctx); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if err := s.reloadIfChanged(ctx); err != nil {
+		s.releaseReadFileLock()
+		s.mu.Unlock()
+		return nil, err
+	}
+	return func() {
+		s.releaseReadFileLock()
+		s.mu.Unlock()
+	}, nil
+}
+
+// acquireReadFileLock joins this process's shared file lock, taking it if no
+// other reader holds it. Caller must hold mu and pair it with
+// releaseReadFileLock before releasing mu.
+func (s *localStore) acquireReadFileLock(ctx context.Context) error {
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+	if s.readers == 0 {
+		release, err := s.lockFileForReload(ctx, s.fileLock.TryRLockContext)
+		if err != nil {
+			return err
+		}
+		s.releaseRead = release
+	}
+	s.readers++
+	return nil
+}
+
+// releaseReadFileLock leaves this process's shared file lock, releasing it if
+// this was the last reader.
+func (s *localStore) releaseReadFileLock() {
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+	s.readers--
+	if s.readers == 0 {
+		s.releaseRead()
+		s.releaseRead = nil
+	}
+}
+
+// lockWrite takes the lock for changing store, excluding writers in this and
+// other processes, and reloads store if another process changed index.json.
+// Callers defer the returned release. Hold it across any check-then-act (for
+// example an existence check followed by a tag).
+func (s *localStore) lockWrite(ctx context.Context) (unlock func(), err error) {
+	s.mu.Lock()
+	if err := s.acquireFileLock(ctx, s.fileLock.TryLockContext); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	release := func() {
+		_ = s.fileLock.Unlock()
+		s.mu.Unlock()
+	}
+
+	if err := s.reloadIfChanged(ctx); err != nil {
+		release()
+		return nil, err
+	}
+
+	return func() {
+		// Remember the index this write left behind, so the next write only
+		// reloads if another process has changed it since. If it cannot be
+		// read, forget it so the next write reloads. A failed reload during
+		// the write left stale set, so the next lock reloads regardless.
+		d, err := indexDigestOf(s.dir)
+		if err != nil {
+			d = ""
+		}
+		s.indexDigest = d
+		release()
+	}, nil
+}
+
+// acquireFileLock takes fileLock with tryLock, waiting at most lockTimeout.
+func (s *localStore) acquireFileLock(ctx context.Context, tryLock func(context.Context, time.Duration) (bool, error)) error {
+	ctx, cancel := context.WithTimeout(ctx, s.lockTimeout)
+	defer cancel()
+
+	// tryLock only returns without the lock alongside an error.
+	if _, err := tryLock(ctx, settings.DefaultCatalogLockRetryDelay); err != nil {
+		return fmt.Errorf("locking catalog %q (another process may be using it): %w", s.dir, err)
+	}
+	return nil
+}
+
+// reloadIfChanged reopens store if index.json no longer matches what this
+// process last saw, or if the last reload failed. Caller must hold mu and
+// fileLock.
+func (s *localStore) reloadIfChanged(ctx context.Context) error {
+	current, err := indexDigestOf(s.dir)
+	if err != nil {
+		return err
+	}
+	if !s.stale && current == s.indexDigest {
+		return nil
+	}
+	return s.reload(ctx)
+}
+
+// reload reopens store from disk. On failure it marks store stale, so no
+// later lock trusts it. Caller must hold mu for writing (or be the only one
+// with access to s) and fileLock.
+func (s *localStore) reload(ctx context.Context) error {
+	store, err := oci.NewWithContext(ctx, s.dir)
+	if err != nil {
+		s.stale = true
+		return fmt.Errorf("opening OCI store %q: %w", s.dir, err)
+	}
+	d, err := indexDigestOf(s.dir)
+	if err != nil {
+		s.stale = true
+		return err
+	}
+	s.store, s.indexDigest, s.stale = store, d, false
+	return nil
+}
+
+// indexDigestOf returns the digest of dir's index.json, or "" if it does not
+// exist.
+func indexDigestOf(dir string) (digest.Digest, error) {
+	data, err := os.ReadFile(filepath.Join(dir, ocispec.ImageIndexFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading catalog index: %w", err)
+	}
+	return digest.FromBytes(data), nil
+}
+
+// localStoreEntry lazily opens the shared store for one catalog directory.
+type localStoreEntry struct {
+	once  sync.Once
+	store *localStore
+	err   error
+}
+
+// localStores maps a canonical catalog directory to its *localStoreEntry.
+//
+// This is deliberately process-wide: it models a directory on disk that every
+// caller in the process shares. oci.Store loads index.json once and rewrites
+// it wholesale from memory on every tag, so two stores on the same directory
+// would each overwrite the other's tags.
+var localStores sync.Map
 
 // NewLocalCatalog creates a catalog at the XDG data path.
 // The path is determined by paths.CatalogDir().
@@ -62,21 +353,58 @@ func NewLocalCatalog(logger logr.Logger) (*LocalCatalog, error) {
 // Use this for testing or custom installations.
 func NewLocalCatalogAt(path string, logger logr.Logger) (*LocalCatalog, error) {
 	// Ensure directory exists
-	if err := os.MkdirAll(path, 0o755); err != nil {
+	if err := os.MkdirAll(path, 0o755); err != nil { //nolint:gosec // G703: path is the configured catalog directory
 		return nil, fmt.Errorf("failed to create catalog directory: %w", err)
 	}
 
-	// Create OCI store
-	store, err := oci.New(path)
+	shared, err := sharedLocalStore(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OCI store: %w", err)
+		return nil, err
 	}
 
 	return &LocalCatalog{
-		store:  store,
-		path:   path,
-		logger: logger.WithName("catalog").WithValues("catalog", LocalCatalogName),
+		localStore: shared,
+		path:       path,
+		logger:     logger.WithName("catalog").WithValues("catalog", LocalCatalogName),
 	}, nil
+}
+
+// sharedLocalStore returns the process-wide store for the catalog directory at
+// path, opening it on first use. A failed open is not cached, so a later call
+// can retry. path must already exist.
+func sharedLocalStore(path string) (*localStore, error) {
+	key, err := canonicalCatalogPath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	v, _ := localStores.LoadOrStore(key, &localStoreEntry{})
+	entry, ok := v.(*localStoreEntry)
+	if !ok {
+		return nil, fmt.Errorf("unexpected local store cache entry %T for %q", v, key)
+	}
+	entry.once.Do(func() {
+		entry.store, entry.err = openLocalStore(key)
+	})
+	if entry.err != nil {
+		localStores.CompareAndDelete(key, entry)
+		return nil, entry.err
+	}
+	return entry.store, nil
+}
+
+// canonicalCatalogPath returns the absolute, symlink-free form of path so that
+// different spellings of one directory share a store. path must exist.
+func canonicalCatalogPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving catalog path %q: %w", path, err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolving catalog path %q: %w", path, err)
+	}
+	return resolved, nil
 }
 
 // Name returns "local".
@@ -95,8 +423,11 @@ func (c *LocalCatalog) Path() string {
 // Optional extraLayers are pushed and appended last (empty layers skipped);
 // they are located on read by media type, not index.
 func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock, err := c.lockWrite(ctx)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+	defer unlock()
 
 	ref = writeRef(ref)
 
@@ -221,8 +552,11 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundle
 
 // Fetch retrieves an artifact from the catalog.
 func (c *LocalCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return nil, ArtifactInfo{}, err
+	}
+	defer unlock()
 
 	// Resolve to get the manifest descriptor
 	info, err := c.resolveLocked(ctx, ref)
@@ -255,8 +589,11 @@ func (c *LocalCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, Artifa
 // FetchWithBundle retrieves an artifact's primary content and bundle layer.
 // If the artifact has no bundle layer, bundleData is nil.
 func (c *LocalCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, err
+	}
+	defer unlock()
 
 	// Resolve to get the manifest descriptor
 	info, err := c.resolveLocked(ctx, ref)
@@ -290,8 +627,11 @@ func (c *LocalCatalog) FetchWithLayer(ctx context.Context, ref Reference, mediaT
 		}
 	}
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, err
+	}
+	defer unlock()
 
 	// Resolve to get the manifest descriptor
 	info, err := c.resolveLocked(ctx, ref)
@@ -391,8 +731,11 @@ func extractFileFromTar(tarData []byte, filePath string) ([]byte, error) {
 
 // Resolve finds the best matching version for a reference.
 func (c *LocalCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+	defer unlock()
 	return c.resolveLocked(ctx, ref)
 }
 
@@ -460,8 +803,11 @@ func (c *LocalCatalog) infoForTag(ctx context.Context, tag string, desc ocispec.
 
 // List returns all artifacts matching the criteria.
 func (c *LocalCatalog) List(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	return c.listLocked(ctx, kind, name)
 }
 
@@ -538,8 +884,11 @@ func (c *LocalCatalog) FindStrict(ctx context.Context, query ArtifactQuery) (Art
 }
 
 func (c *LocalCatalog) find(ctx context.Context, query ArtifactQuery, strict bool) (ArtifactInfo, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+	defer unlock()
 	return c.findLocked(ctx, query, strict)
 }
 
@@ -668,8 +1017,11 @@ func tagLabel(tag string) string {
 // open, or carries a digest, is answered by annotation identity and matches
 // an artifact from any origin.
 func (c *LocalCatalog) Exists(ctx context.Context, ref Reference) (bool, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	return c.existsLocked(ctx, ref)
 }
 
@@ -713,8 +1065,11 @@ func (c *LocalCatalog) existsLocked(ctx context.Context, ref Reference) (bool, e
 // artifact (for example the same version built and pulled) is ambiguous and
 // deletes nothing.
 func (c *LocalCatalog) Delete(ctx context.Context, ref Reference) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock, err := c.lockWrite(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	tag, desc, err := c.locateForDelete(ctx, ref)
 	if err != nil {
@@ -831,8 +1186,11 @@ func findLayerByMediaType(m ocispec.Manifest, mediaType string) (ocispec.Descrip
 // for a single-platform manifest the platform argument is ignored. The
 // mediaType selects which layer to read the digest from.
 func (c *LocalCatalog) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return ContentDigestInfo{}, err
+	}
+	defer unlock()
 
 	info, err := c.resolveLocked(ctx, ref)
 	if err != nil {
@@ -1018,16 +1376,29 @@ type PruneResult struct {
 
 // Prune removes orphaned blobs and manifests from the catalog.
 // Orphaned content is any blob or manifest not referenced by a tagged artifact.
+//
+// Prune edits index.json directly, behind the in-memory store's back, then
+// reloads the store so later writes do not put the pruned manifests back.
+//
+// Prune is NOT safe to run while a pull into the same catalog is in progress,
+// in this or another process. IngestVerbatim copies blobs before it takes the
+// lock to tag them, so until the tag is written those blobs look orphaned and
+// Prune deletes them. The pull then either fails to tag (root manifest gone)
+// or tags an artifact whose layers are missing. Run prune only when no pulls
+// are running.
 func (c *LocalCatalog) Prune(ctx context.Context) (PruneResult, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock, err := c.lockWrite(ctx)
+	if err != nil {
+		return PruneResult{}, err
+	}
+	defer unlock()
 
 	result := PruneResult{}
 
 	// Step 1: Collect all digests referenced by tags
 	referencedDigests := make(map[string]bool)
 
-	err := c.store.Tags(ctx, "", func(tags []string) error {
+	err = c.store.Tags(ctx, "", func(tags []string) error {
 		for _, tag := range tags {
 			desc, err := c.store.Resolve(ctx, tag)
 			if err != nil {
@@ -1089,6 +1460,9 @@ func (c *LocalCatalog) Prune(ctx context.Context) (PruneResult, error) {
 		if err := os.WriteFile(indexPath, updatedIndex, 0o600); err != nil {
 			return result, fmt.Errorf("failed to write updated index: %w", err)
 		}
+		if err := c.reload(ctx); err != nil {
+			return result, err
+		}
 	}
 
 	// Step 5: Clean up orphaned blobs in blobs/sha256/
@@ -1139,8 +1513,11 @@ type SaveResult struct {
 // Save exports an artifact to an OCI Image Layout tar archive.
 // If version is empty, exports the latest version.
 func (c *LocalCatalog) Save(ctx context.Context, name, version, outputPath string) (SaveResult, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return SaveResult{}, err
+	}
+	defer unlock()
 
 	// Build reference (kind is inferred from catalog lookup)
 	ref := Reference{
@@ -1306,8 +1683,11 @@ type LoadResult struct {
 // Load imports an artifact from an OCI Image Layout tar archive.
 // Returns ErrArtifactExists if artifact already exists and force is false.
 func (c *LocalCatalog) Load(ctx context.Context, inputPath string, force bool) (LoadResult, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock, err := c.lockWrite(ctx)
+	if err != nil {
+		return LoadResult{}, err
+	}
+	defer unlock()
 
 	// Open and parse the tar archive
 	file, err := os.Open(inputPath)
@@ -1472,8 +1852,11 @@ var _ Catalog = (*LocalCatalog)(nil)
 // Optional extraLayers (e.g. the solution lock) are appended AFTER the file
 // blobs so the deduplicated layers' positional indices remain valid.
 func (c *LocalCatalog) StoreDedup(ctx context.Context, ref Reference, solutionYAML, manifestJSON, smallTar []byte, blobLayers [][]byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock, err := c.lockWrite(ctx)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+	defer unlock()
 
 	ref = writeRef(ref)
 
@@ -1596,8 +1979,11 @@ func (c *LocalCatalog) StoreDedup(ctx context.Context, ref Reference, solutionYA
 // Returns the solution YAML, bundle manifest JSON, and a layer fetcher
 // that can retrieve individual layers by index.
 func (c *LocalCatalog) FetchDedup(ctx context.Context, ref Reference) (solutionYAML, manifestJSON []byte, layerFetcher func(layer int) ([]byte, error), info ArtifactInfo, err error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return nil, nil, nil, ArtifactInfo{}, err
+	}
+	defer unlock()
 
 	info, err = c.resolveLocked(ctx, ref)
 	if err != nil {
@@ -1636,7 +2022,8 @@ func (c *LocalCatalog) FetchDedup(ctx context.Context, ref Reference) (solutionY
 		return nil, nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch bundle manifest: %w", err)
 	}
 
-	// Capture layers for the fetcher closure
+	// Capture layers for the fetcher closure. It runs after FetchDedup has
+	// returned and released its lock, so it takes the read lock itself.
 	allLayers := ociManifest.Layers
 	store := c
 
@@ -1644,6 +2031,11 @@ func (c *LocalCatalog) FetchDedup(ctx context.Context, ref Reference) (solutionY
 		if layer < 0 || layer >= len(allLayers) {
 			return nil, fmt.Errorf("layer index %d out of range (0-%d)", layer, len(allLayers)-1)
 		}
+		unlock, err := store.lockRead(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
 		return store.fetchBlob(ctx, allLayers[layer])
 	}
 
@@ -1652,6 +2044,11 @@ func (c *LocalCatalog) FetchDedup(ctx context.Context, ref Reference) (solutionY
 
 // IngestVerbatim copies an artifact from src into the local catalog unchanged
 // and tags it under the local tag derived from localRef.
+//
+// The blobs are copied without the catalog lock, so a slow download does not
+// block other readers and writers; the lock is held only to tag the root.
+// Blobs are content-addressed and written by atomic rename, so concurrent
+// ingests of the same blob are safe. See Prune for the one unsafe overlap.
 func (c *LocalCatalog) IngestVerbatim(
 	ctx context.Context,
 	src oras.ReadOnlyTarget,
@@ -1664,24 +2061,58 @@ func (c *LocalCatalog) IngestVerbatim(
 		return ArtifactInfo{}, fmt.Errorf("tagging local reference %q: %w", localRef, err)
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	desc, err := oras.Copy(ctx, src, srcTag, c.store, tagger.Tag(), copyOpts)
+	desc, err := c.stageGraph(ctx, src, srcTag, copyOpts)
 	if err != nil {
 		return ArtifactInfo{}, fmt.Errorf("copying artifact %q: %w", localRef, err)
 	}
 
+	unlock, err := c.lockWrite(ctx)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+	defer unlock()
+
 	// The manifest blob is copied byte for byte — that is what preserves the
 	// digest — so the scafctl identity and provenance are layered onto the root
-	// descriptor that oras.Copy returned. Descriptor annotations live in
-	// index.json, not in the manifest, so this does not touch the content.
+	// descriptor. Descriptor annotations live in index.json, not in the
+	// manifest, so this does not touch the content.
 	tagged, err := tagger.Build(ctx, desc, c.store)
 	if err != nil {
 		return ArtifactInfo{}, err
 	}
 
 	return c.artifactInfo(tagger.Tag(), tagged, tagged.Annotations), nil
+}
+
+// stageGraph copies the graph rooted at srcTag into the catalog's blob
+// directory and returns the root descriptor. It writes blobs only, never
+// index.json, so it needs no lock: the blobs stay unreferenced, and invisible
+// to readers, until the root is tagged.
+func (s *localStore) stageGraph(
+	ctx context.Context,
+	src oras.ReadOnlyTarget,
+	srcTag string,
+	opts oras.CopyOptions,
+) (ocispec.Descriptor, error) {
+	blobs, err := oci.NewStorage(s.dir)
+	if err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("opening blob storage %q: %w", s.dir, err)
+	}
+
+	root, err := src.Resolve(ctx, srcTag)
+	if err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("resolving %q: %w", srcTag, err)
+	}
+	if opts.MapRoot != nil {
+		if root, err = opts.MapRoot(ctx, src, root); err != nil {
+			return ocispec.Descriptor{}, fmt.Errorf("mapping root of %q: %w", srcTag, err)
+		}
+	}
+
+	if err := oras.CopyGraph(ctx, src, blobs, root, opts.CopyGraphOptions); err != nil {
+		return ocispec.Descriptor{}, err
+	}
+	return root, nil
 }
 
 func (c *LocalCatalog) artifactInfo(tag string, desc ocispec.Descriptor, annotations map[string]string) ArtifactInfo {
@@ -1716,8 +2147,11 @@ func (c *LocalCatalog) ExportVerbatim(
 	dstTag string,
 	copyOpts oras.CopyOptions,
 ) (ocispec.Descriptor, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+	defer unlock()
 
 	desc, err := oras.Copy(ctx, c.store, srcTag, dst, dstTag, copyOpts)
 	if err != nil {
@@ -1745,8 +2179,11 @@ func (c *LocalCatalog) ExportRebuilt(
 	target.Remote = ""
 	target.Built = true
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	unlock, err := c.lockRead(ctx)
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+	defer unlock()
 
 	srcDesc, err := c.store.Resolve(ctx, srcTag)
 	if err != nil {
@@ -1768,7 +2205,7 @@ func (c *LocalCatalog) ExportRebuilt(
 
 // tagExists reports whether tag resolves in the local store. Only a
 // not-found result means absent; any other failure is returned so a broken
-// store is never mistaken for a free tag.
+// store is never mistaken for a free tag. Caller must hold a lock.
 func (c *LocalCatalog) tagExists(ctx context.Context, tag string) (bool, error) {
 	_, err := c.store.Resolve(ctx, tag)
 	switch {
@@ -1807,8 +2244,11 @@ func (c *LocalCatalog) storeInternalWith(ctx context.Context, builder ArtifactBu
 	}
 	tagger.Annotations(descAnnotations)
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	unlock, err := c.lockWrite(ctx)
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+	defer unlock()
 
 	if !force {
 		exists, err := c.tagExists(ctx, tagger.Tag())

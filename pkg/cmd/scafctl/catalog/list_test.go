@@ -1045,7 +1045,9 @@ func TestRunList_CatalogScope_SelectsNamedCatalog(t *testing.T) {
 // per-catalog diagnostics prove both OCI entries were iterated and the non-OCI
 // entry was not.
 func TestRunList_AllScope_SelectsEveryOCICatalog(t *testing.T) {
-	t.Parallel()
+	// Isolate the local catalog so artifacts on the host machine do not leak
+	// into the "No artifacts found" assertion. Cannot use t.Parallel with t.Setenv.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	cfg := &appconfig.Config{
 		Catalogs: []appconfig.CatalogConfig{

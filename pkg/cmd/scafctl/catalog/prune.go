@@ -65,6 +65,10 @@ func CommandPrune(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			catalog storage. This command removes any blobs that are no longer
 			referenced by a tagged artifact, reclaiming disk space.
 
+			Do not run prune while a pull into the same catalog is in progress:
+			a pull's blobs are unreferenced until it finishes, so prune can
+			delete them and leave the pulled artifact broken.
+
 			Examples:
 			  # Prune orphaned content
 			  scafctl catalog prune
