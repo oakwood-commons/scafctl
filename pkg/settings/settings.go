@@ -61,6 +61,16 @@ const (
 
 	// DefaultPluginResolveTimeout is the default timeout for plugin resolution
 	DefaultPluginResolveTimeout = 30 * time.Second
+
+	// DefaultCatalogLockTimeout bounds how long opening or writing the local
+	// catalog waits for the catalog's file lock while another process holds
+	// it. Writers hold the lock only to update index.json (blob downloads run
+	// outside it), so this only needs to cover a slow disk or a large prune.
+	DefaultCatalogLockTimeout = 5 * time.Minute
+
+	// DefaultCatalogLockRetryDelay is how often a wait for the local catalog's
+	// file lock retries.
+	DefaultCatalogLockRetryDelay = 50 * time.Millisecond
 )
 
 // File conflict defaults

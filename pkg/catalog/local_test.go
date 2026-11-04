@@ -13,14 +13,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/gofrs/flock"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"oras.land/oras-go/v2/content/oci"
 )
 
 func newTestCatalog(t *testing.T) *LocalCatalog {
@@ -50,6 +54,262 @@ func TestNewLocalCatalogAt(t *testing.T) {
 	t.Run("returns local as name", func(t *testing.T) {
 		catalog := newTestCatalog(t)
 		assert.Equal(t, LocalCatalogName, catalog.Name())
+	})
+}
+
+func TestNewLocalCatalogAt_SharesStorePerDirectory(t *testing.T) {
+	t.Run("same path shares one store", func(t *testing.T) {
+		dir := t.TempDir()
+		a, err := NewLocalCatalogAt(dir, logr.Discard())
+		require.NoError(t, err)
+		b, err := NewLocalCatalogAt(dir, logr.Discard())
+		require.NoError(t, err)
+
+		assert.NotSame(t, a, b)
+		assert.Same(t, a.localStore, b.localStore)
+	})
+
+	t.Run("different spellings share one store and keep their path", func(t *testing.T) {
+		parent := t.TempDir()
+		dir := filepath.Join(parent, "catalog")
+		base, err := NewLocalCatalogAt(dir, logr.Discard())
+		require.NoError(t, err)
+
+		link := filepath.Join(parent, "link")
+		require.NoError(t, os.Symlink(dir, link))
+
+		t.Chdir(parent)
+		spellings := []string{
+			parent + string(filepath.Separator) + "." + string(filepath.Separator) + "catalog",
+			dir + string(filepath.Separator),
+			link,
+			"catalog",
+		}
+		for _, spelling := range spellings {
+			cat, err := NewLocalCatalogAt(spelling, logr.Discard())
+			require.NoError(t, err, spelling)
+			assert.Same(t, base.localStore, cat.localStore, spelling)
+			assert.Equal(t, spelling, cat.Path())
+		}
+	})
+
+	t.Run("different directories get different stores", func(t *testing.T) {
+		a := newTestCatalog(t)
+		b := newTestCatalog(t)
+		assert.NotSame(t, a.localStore, b.localStore)
+	})
+}
+
+func TestNewLocalCatalogAt_ConcurrentOpenSharesStore(t *testing.T) {
+	dir := t.TempDir()
+	const workers = 16
+	cats := make([]*LocalCatalog, workers)
+	errs := make([]error, workers)
+
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Go(func() {
+			cats[i], errs[i] = NewLocalCatalogAt(dir, logr.Discard())
+		})
+	}
+	wg.Wait()
+
+	for i := range workers {
+		require.NoError(t, errs[i])
+		assert.Same(t, cats[0].localStore, cats[i].localStore)
+	}
+}
+
+func TestNewLocalCatalogAt_OpenErrorNotCached(t *testing.T) {
+	dir := t.TempDir()
+	layoutPath := filepath.Join(dir, ocispec.ImageLayoutFile)
+	require.NoError(t, os.WriteFile(layoutPath, []byte("not json"), 0o600))
+
+	_, err := NewLocalCatalogAt(dir, logr.Discard())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "opening OCI store")
+
+	// Once the directory is fixed, a retry must open it rather than return the
+	// cached failure.
+	require.NoError(t, os.Remove(layoutPath))
+	cat, err := NewLocalCatalogAt(dir, logr.Discard())
+	require.NoError(t, err)
+	assert.NotNil(t, cat.localStore)
+}
+
+func TestCanonicalCatalogPath(t *testing.T) {
+	t.Run("resolves symlinks", func(t *testing.T) {
+		dir := t.TempDir()
+		link := filepath.Join(t.TempDir(), "link")
+		require.NoError(t, os.Symlink(dir, link))
+
+		fromDir, err := canonicalCatalogPath(dir)
+		require.NoError(t, err)
+		fromLink, err := canonicalCatalogPath(link)
+		require.NoError(t, err)
+		assert.Equal(t, fromDir, fromLink)
+		assert.True(t, filepath.IsAbs(fromDir))
+	})
+
+	t.Run("missing path errors", func(t *testing.T) {
+		_, err := canonicalCatalogPath(filepath.Join(t.TempDir(), "missing"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "resolving catalog path")
+	})
+}
+
+// TestLocalCatalog_SharedStore_NoLostTags guards against two catalogs on the
+// same directory each rewriting index.json from their own in-memory copy and
+// dropping the other's tags.
+func TestLocalCatalog_SharedStore_NoLostTags(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	a, err := NewLocalCatalogAt(dir, logr.Discard())
+	require.NoError(t, err)
+	b, err := NewLocalCatalogAt(dir, logr.Discard())
+	require.NoError(t, err)
+
+	refA := Reference{Kind: ArtifactKindSolution, Name: "from-a", Version: semver.MustParse("1.0.0")}
+	refB := Reference{Kind: ArtifactKindSolution, Name: "from-b", Version: semver.MustParse("1.0.0")}
+	_, err = a.Store(ctx, refA, []byte("a"), nil, nil, false)
+	require.NoError(t, err)
+	_, err = b.Store(ctx, refB, []byte("b"), nil, nil, false)
+	require.NoError(t, err)
+
+	// Each instance sees the other's artifact.
+	got, _, err := b.Fetch(ctx, refA)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("a"), got)
+	got, _, err = a.Fetch(ctx, refB)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("b"), got)
+
+	// And both tags reached disk.
+	fresh, err := oci.New(dir)
+	require.NoError(t, err)
+	for _, ref := range []Reference{refA, refB} {
+		_, err := fresh.Resolve(ctx, a.tagForRef(writeRef(ref)))
+		assert.NoError(t, err, ref.Name)
+	}
+}
+
+func TestLocalStore_LockHelpers(t *testing.T) {
+	t.Run("lockWrite excludes readers and writers until released", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := openLocalStore(dir)
+		require.NoError(t, err)
+		unlock, err := s.lockWrite(context.Background())
+		require.NoError(t, err)
+		assert.False(t, s.mu.TryRLock())
+		assert.False(t, s.mu.TryLock())
+
+		// Another process (a separate lock on the same file) is excluded too.
+		other := flock.New(filepath.Join(dir, catalogLockFile))
+		locked, err := other.TryRLock()
+		require.NoError(t, err)
+		assert.False(t, locked)
+
+		unlock()
+		require.True(t, s.mu.TryLock())
+		s.mu.Unlock()
+		locked, err = other.TryLock()
+		require.NoError(t, err)
+		assert.True(t, locked)
+		require.NoError(t, other.Unlock())
+	})
+
+	t.Run("lockRead admits readers and excludes writers until released", func(t *testing.T) {
+		s, err := openLocalStore(t.TempDir())
+		require.NoError(t, err)
+		unlock, err := s.lockRead(context.Background())
+		require.NoError(t, err)
+		require.True(t, s.mu.TryRLock())
+		s.mu.RUnlock()
+		assert.False(t, s.mu.TryLock())
+
+		unlock()
+		require.True(t, s.mu.TryLock())
+		s.mu.Unlock()
+	})
+}
+
+func TestLocalCatalog_FetchDedup(t *testing.T) {
+	ctx := context.Background()
+	solutionYAML := []byte("name: dedup\n")
+	manifestJSON := []byte(`{"version":2,"root":".","files":[]}`)
+	smallTar := []byte("small-tar")
+
+	storeDedup := func(t *testing.T) (*LocalCatalog, Reference) {
+		t.Helper()
+		cat := newTestCatalog(t)
+		ref := Reference{Kind: ArtifactKindSolution, Name: "dedup", Version: semver.MustParse("1.0.0")}
+		_, err := cat.StoreDedup(ctx, ref, solutionYAML, manifestJSON, smallTar, nil, nil, false)
+		require.NoError(t, err)
+		return cat, ref
+	}
+
+	t.Run("returns content, manifest and a layer fetcher", func(t *testing.T) {
+		cat, ref := storeDedup(t)
+
+		gotYAML, gotManifest, fetchLayer, info, err := cat.FetchDedup(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, solutionYAML, gotYAML)
+		assert.Equal(t, manifestJSON, gotManifest)
+		assert.Equal(t, ref.Name, info.Reference.Name)
+
+		layer, err := fetchLayer(2)
+		require.NoError(t, err)
+		assert.Equal(t, smallTar, layer)
+
+		_, err = fetchLayer(3)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "out of range")
+		_, err = fetchLayer(-1)
+		require.Error(t, err)
+	})
+
+	// The fetcher runs after FetchDedup has released its lock, so it must take
+	// the read lock itself rather than read the store during a write.
+	t.Run("layer fetcher waits for an in-flight write", func(t *testing.T) {
+		cat, ref := storeDedup(t)
+		_, _, fetchLayer, _, err := cat.FetchDedup(ctx, ref)
+		require.NoError(t, err)
+
+		unlock, err := cat.lockWrite(ctx)
+		require.NoError(t, err)
+		done := make(chan error, 1)
+		go func() {
+			_, err := fetchLayer(0)
+			done <- err
+		}()
+
+		select {
+		case <-done:
+			unlock()
+			t.Fatal("layer fetcher read the store while the write lock was held")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		unlock()
+		require.NoError(t, <-done)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		ref := Reference{Kind: ArtifactKindSolution, Name: "missing", Version: semver.MustParse("1.0.0")}
+		_, _, _, _, err := cat.FetchDedup(ctx, ref)
+		assert.True(t, IsNotFound(err))
+	})
+
+	t.Run("rejects a non-dedup artifact", func(t *testing.T) {
+		cat := newTestCatalog(t)
+		ref := Reference{Kind: ArtifactKindSolution, Name: "plain", Version: semver.MustParse("1.0.0")}
+		_, err := cat.Store(ctx, ref, []byte("plain"), nil, nil, false)
+		require.NoError(t, err)
+
+		_, _, _, _, err = cat.FetchDedup(ctx, ref)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "insufficient layers")
 	})
 }
 
