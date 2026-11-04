@@ -72,13 +72,8 @@ func (l *lazyFetcher) FetchSolution(ctx context.Context, ref catalog.Reference, 
 // remotes configured in ctx. Unconfigured remotes are built on demand only
 // when cfg.onDemandRemotes is set.
 func newSolutionFetcher(ctx context.Context, lgr logr.Logger, localDir string, cfg fetcherConfig) (SolutionFetcher, error) {
-	// TODO: share one LocalCatalog per process instead of opening a new one
-	// here. Each instance wraps its own OCI store, which reads index.json once
-	// at creation, so a second instance in the same command (e.g. a pull
-	// followed by a load) won't see tags written through the first. Prefer a
-	// context-carried instance (catalog.WithLocalCatalog/LocalCatalogFromContext,
-	// set once at root) or catalogs.Set.Local() once catalogs are wired in.
-	// The same applies to the ~15 other catalog.NewLocalCatalog call sites.
+	// Instances opened on the same directory share one OCI store, so tags
+	// written through another instance in this process are visible here.
 	local, err := catalog.NewLocalCatalogAt(localDir, lgr)
 	if err != nil {
 		return nil, fmt.Errorf("opening local catalog: %w", err)

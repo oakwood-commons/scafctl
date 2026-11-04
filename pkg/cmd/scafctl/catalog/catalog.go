@@ -292,7 +292,7 @@ func verboseRemoteInfo(ctx context.Context, w *writer.Writer, registry, reposito
 
 // verboseCredentialSource logs the actual credential source that was resolved
 // during the most recent OCI operation. Call after the first OCI call (Fetch,
-// List, CopyTo, FetchIndex) so the lazy credential function has executed.
+// List, CopyToLocal, FetchIndex) so the lazy credential function has executed.
 func verboseCredentialSource(w *writer.Writer, rc *catalog.RemoteCatalog) {
 	if source := rc.CredentialSource(); source != "" {
 		w.Verbosef("Credential source: %s", source)

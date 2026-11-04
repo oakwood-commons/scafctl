@@ -73,7 +73,7 @@ const (
 	// AnnotationSourceCanonical is the stable, machine-readable canonical
 	// identity of the remote catalog this artifact was copied or auto-cached
 	// from (e.g. "ghcr.io/org/plugins"). Written at ingest time by
-	// RemoteCatalog.CopyTo and auto-cache paths; empty for locally built
+	// RemoteCatalog.CopyToLocal and auto-cache paths; empty for locally built
 	// artifacts. Use this for identity decisions; prefer AnnotationOrigin
 	// only for human-readable diagnostics.
 	AnnotationSourceCanonical = "dev.scafctl.source.canonical"
