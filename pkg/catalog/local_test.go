@@ -920,7 +920,7 @@ func TestLocalCatalog_Fetch_MismatchedTag(t *testing.T) {
 	require.NoError(t, err)
 
 	// Store the embedder artifact with correct kind so annotations are right,
-	// then manually re-tag with a wrong tag to simulate the CopyTo bug.
+	// then manually re-tag with a wrong tag to simulate the old CopyTo bug.
 	embedRef := Reference{
 		Kind:    ArtifactKindSolution,
 		Name:    "embedder-solution",

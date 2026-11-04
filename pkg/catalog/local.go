@@ -35,20 +35,136 @@ const (
 
 // LocalCatalog implements Catalog using a local OCI layout store.
 //
-// TODO: concurrency across instances and processes. mu only serializes one
-// instance, but caching fetched remote solutions now writes the shared OCI
-// index.json, so concurrent run/build processes (or two LocalCatalog
-// instances on the same path) can lose tags. Follow up with:
-//   - a per-path singleton so all in-process users of a path share one store
-//     and lock (NewLocalCatalog/NewLocalCatalogAt return the same instance);
-//   - a cross-process file lock around index.json writes (and Prune);
-//   - IngestVerbatim no longer holding the write lock for the whole network
-//     copy: stage the blobs first, then take the lock only to tag.
+// Every LocalCatalog opened on the same directory in this process shares one
+// localStore (OCI store and lock), so writes through one instance are seen by
+// the others and concurrent writers cannot overwrite each other's tags.
+//
+// TODO: concurrency across processes. index.json is still rewritten without
+// a file lock, so concurrent run/build processes on one catalog can lose tags.
 type LocalCatalog struct {
-	store  *oci.Store
+	*localStore
 	path   string
 	logger logr.Logger
-	mu     sync.RWMutex
+}
+
+// localStore is the OCI layout state shared by every LocalCatalog opened on
+// the same directory. oci.Store keeps index.json in memory and rewrites the
+// whole file on each tag, so two stores on one directory would each write
+// back their own stale view; sharing one store and one lock prevents that.
+type localStore struct {
+	// mu guards store and indexDigest. Writers that touch index.json hold it
+	// exclusively; readers hold it shared.
+	mu    sync.RWMutex
+	store *oci.Store
+	// dir is the canonical layout directory.
+	dir string
+	// indexDigest is the digest of index.json when store was last loaded. A
+	// mismatch on open means another process changed the file.
+	indexDigest digest.Digest
+}
+
+// localStores caches one localStore per canonical catalog directory so all
+// LocalCatalog instances in the process share it. Entries are never evicted;
+// a process opens a handful of catalog directories at most.
+var (
+	localStoresMu sync.Mutex
+	localStores   = map[string]*localStore{}
+)
+
+// sharedLocalStore returns the process-wide store for dir, creating it on
+// first use. dir must exist. An existing store is reloaded when index.json
+// changed on disk since it was loaded, so a newly opened catalog sees the
+// current state as it did before stores were shared.
+func sharedLocalStore(dir string) (*localStore, error) {
+	key, err := canonicalCatalogDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	localStoresMu.Lock()
+	s, ok := localStores[key]
+	if !ok {
+		s = &localStore{dir: key}
+		if err := s.loadLocked(); err != nil {
+			localStoresMu.Unlock()
+			return nil, err
+		}
+		localStores[key] = s
+	}
+	localStoresMu.Unlock()
+
+	if ok {
+		if err := s.reloadIfChanged(); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+// canonicalCatalogDir returns the absolute, symlink-free form of dir so every
+// spelling of one directory maps to the same shared store.
+func canonicalCatalogDir(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolving catalog directory %q: %w", dir, err)
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolving catalog directory %q: %w", dir, err)
+	}
+	return resolved, nil
+}
+
+// reloadIfChanged reloads the store when index.json no longer matches the
+// version it was loaded from. In-process writes are always flushed to disk,
+// so a reload never drops them; at worst it re-reads our own last write.
+func (s *localStore) reloadIfChanged() error {
+	current, err := indexFileDigest(s.dir)
+	if err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	unchanged := current == s.indexDigest
+	s.mu.RUnlock()
+	if unchanged {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadLocked()
+}
+
+// loadLocked (re)opens the OCI store from disk. The caller must hold mu
+// exclusively or own s before it is published. The digest is taken before
+// opening, so a concurrent external write can only cause an extra reload
+// later, never a missed one.
+func (s *localStore) loadLocked() error {
+	indexDigest, err := indexFileDigest(s.dir)
+	if err != nil {
+		return err
+	}
+	store, err := oci.New(s.dir)
+	if err != nil {
+		return fmt.Errorf("failed to create OCI store: %w", err)
+	}
+	s.store = store
+	s.indexDigest = indexDigest
+	return nil
+}
+
+// indexFileDigest returns the digest of dir's index.json, or "" when the file
+// does not exist yet.
+func indexFileDigest(dir string) (digest.Digest, error) {
+	data, err := os.ReadFile(filepath.Join(dir, ocispec.ImageIndexFile))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("reading catalog index: %w", err)
+	}
+	return digest.FromBytes(data), nil
 }
 
 // NewLocalCatalog creates a catalog at the XDG data path.
@@ -66,16 +182,15 @@ func NewLocalCatalogAt(path string, logger logr.Logger) (*LocalCatalog, error) {
 		return nil, fmt.Errorf("failed to create catalog directory: %w", err)
 	}
 
-	// Create OCI store
-	store, err := oci.New(path)
+	store, err := sharedLocalStore(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OCI store: %w", err)
+		return nil, err
 	}
 
 	return &LocalCatalog{
-		store:  store,
-		path:   path,
-		logger: logger.WithName("catalog").WithValues("catalog", LocalCatalogName),
+		localStore: store,
+		path:       path,
+		logger:     logger.WithName("catalog").WithValues("catalog", LocalCatalogName),
 	}, nil
 }
 
@@ -1089,6 +1204,11 @@ func (c *LocalCatalog) Prune(ctx context.Context) (PruneResult, error) {
 		if err := os.WriteFile(indexPath, updatedIndex, 0o600); err != nil {
 			return result, fmt.Errorf("failed to write updated index: %w", err)
 		}
+		// index.json was rewritten behind the shared store's back; reload so
+		// its next save does not resurrect the pruned manifests.
+		if err := c.loadLocked(); err != nil {
+			return result, fmt.Errorf("reloading catalog after prune: %w", err)
+		}
 	}
 
 	// Step 5: Clean up orphaned blobs in blobs/sha256/
@@ -1638,13 +1758,16 @@ func (c *LocalCatalog) FetchDedup(ctx context.Context, ref Reference) (solutionY
 
 	// Capture layers for the fetcher closure
 	allLayers := ociManifest.Layers
-	store := c
 
+	// The fetcher runs after FetchDedup returns and its read lock is released,
+	// so it takes its own: the shared store may be swapped by a reload.
 	layerFetcher = func(layer int) ([]byte, error) {
 		if layer < 0 || layer >= len(allLayers) {
 			return nil, fmt.Errorf("layer index %d out of range (0-%d)", layer, len(allLayers)-1)
 		}
-		return store.fetchBlob(ctx, allLayers[layer])
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+		return c.fetchBlob(ctx, allLayers[layer])
 	}
 
 	return solutionYAML, manifestJSON, layerFetcher, info, nil
@@ -1664,6 +1787,13 @@ func (c *LocalCatalog) IngestVerbatim(
 		return ArtifactInfo{}, fmt.Errorf("tagging local reference %q: %w", localRef, err)
 	}
 
+	// The copy runs under mu so Prune cannot delete copied blobs before the
+	// root is tagged. That is cheap because the concurrent caller (auto-cache
+	// in run and the API) copies from an in-memory source; the only network
+	// source is catalog pull, a one-shot process with no lock contention.
+	// If a long-lived process ever copies straight from a remote repository,
+	// stage the blobs with oras.CopyGraph outside mu and add a per-store lock
+	// that serializes Prune and Delete against staging.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

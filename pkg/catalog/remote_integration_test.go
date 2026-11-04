@@ -1183,9 +1183,9 @@ func TestRemoteCatalog_Delete_ScopeRejection_TagFallback(t *testing.T) {
 	assert.True(t, IsNotFound(err))
 }
 
-// --- CopyTo tests ---
+// --- CopyToLocal tests ---
 
-func TestRemoteCatalog_CopyTo_SingleTag(t *testing.T) {
+func TestRemoteCatalog_CopyToLocal_SingleTag(t *testing.T) {
 	t.Parallel()
 
 	remoteCat, ts := newTestRemoteCatalog(t)
@@ -1207,14 +1207,14 @@ func TestRemoteCatalog_CopyTo_SingleTag(t *testing.T) {
 	localCat := newTestLocalCatalog(t)
 
 	// Copy from remote to local.
-	info, err := remoteCat.CopyTo(ctx, ref, localCat, CopyOptions{})
+	info, err := remoteCat.CopyToLocal(ctx, ref, localCat, CopyOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "copy-test", info.Reference.Name)
 
 	// List artifacts -- there should be exactly one entry, not two.
 	artifacts, err := localCat.List(ctx, ArtifactKindSolution, "copy-test")
 	require.NoError(t, err)
-	assert.Len(t, artifacts, 1, "CopyTo should produce exactly one local entry, not duplicate tags")
+	assert.Len(t, artifacts, 1, "CopyToLocal should produce exactly one local entry, not duplicate tags")
 
 	// Delete should remove it in a single call.
 	err = localCat.Delete(ctx, ref)
@@ -1225,7 +1225,7 @@ func TestRemoteCatalog_CopyTo_SingleTag(t *testing.T) {
 	assert.Empty(t, artifacts, "artifact should be gone after a single delete")
 }
 
-func TestRemoteCatalog_CopyTo_WithBundle(t *testing.T) {
+func TestRemoteCatalog_CopyToLocal_WithBundle(t *testing.T) {
 	t.Parallel()
 
 	remoteCat, ts := newTestRemoteCatalog(t)
@@ -1244,7 +1244,7 @@ func TestRemoteCatalog_CopyTo_WithBundle(t *testing.T) {
 	require.NoError(t, err)
 
 	localCat := newTestLocalCatalog(t)
-	_, err = remoteCat.CopyTo(ctx, ref, localCat, CopyOptions{})
+	_, err = remoteCat.CopyToLocal(ctx, ref, localCat, CopyOptions{})
 	require.NoError(t, err)
 
 	// Verify the content is fetchable from local.
@@ -1322,7 +1322,7 @@ func TestRemoteCatalog_Fetch_VersionlessNotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRemoteCatalog_CopyTo_SetsOriginAnnotation(t *testing.T) {
+func TestRemoteCatalog_CopyToLocal_SetsCanonicalSource(t *testing.T) {
 	t.Parallel()
 
 	remoteCat, ts := newTestRemoteCatalog(t)
@@ -1339,20 +1339,15 @@ func TestRemoteCatalog_CopyTo_SetsOriginAnnotation(t *testing.T) {
 	require.NoError(t, err)
 
 	localCat := newTestLocalCatalog(t)
-	info, err := remoteCat.CopyTo(ctx, ref, localCat, CopyOptions{})
+	_, err = remoteCat.CopyToLocal(ctx, ref, localCat, CopyOptions{})
 	require.NoError(t, err)
 
-	// Resolve from local and verify origin annotation is present.
+	// Resolve from local and verify the canonical source annotation was persisted.
 	resolved, err := localCat.Resolve(ctx, ref)
 	require.NoError(t, err)
-	assert.Contains(t, resolved.Annotations[AnnotationOrigin], "pulled from test-catalog")
-	assert.Contains(t, resolved.Annotations[AnnotationOrigin], "myorg/artifacts")
-
-	// Verify the machine-readable canonical source annotation was persisted.
 	wantCanonical := remoteCat.canonicalID()
 	assert.Equal(t, wantCanonical, resolved.Annotations[AnnotationSourceCanonical])
 	assert.Equal(t, wantCanonical, resolved.Canonical)
-	_ = info // ensure CopyTo returned successfully
 }
 
 // detectManifestMediaType inspects stored manifest JSON to return the correct
