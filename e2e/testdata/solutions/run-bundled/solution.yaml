@@ -1,0 +1,39 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: run-bundled
+  version: 1.0.0
+  description: Reads bundled data files relative to the solution file.
+
+bundle:
+  include:
+    - "data/**/*.yaml"
+
+spec:
+  resolvers:
+    environment:
+      description: Selects which bundled data file to read
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            continueOnError: true
+            inputs:
+              key: environment
+          - provider: static
+            inputs:
+              value: dev
+
+    config:
+      description: Parsed bundled data file for the environment
+      type: any
+      dependsOn: [environment]
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              parse: yaml
+              path:
+                expr: "'data/' + _.environment + '.yaml'"

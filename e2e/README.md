@@ -55,7 +55,8 @@ and mirror an existing file.
 ## Directory layout
 
 - `e2e/suite/<area>/` -- Ginkgo specs, one Go package per CLI area (e.g.
-  `suite/package/` for `scafctl package`/`catalog` workflows). Each package
+  `suite/package/` for `scafctl package`/`catalog` workflows, `suite/run/` for
+  `scafctl run solution|resolver|action`). Each package
   has exactly one `TestXxx` + `BeforeSuite` file (the "suite entrypoint") and
   one or more `*_test.go` files with the actual `Describe` blocks.
 - `e2e/internal/utils/` -- shared helpers: building the binary, isolating the
@@ -78,6 +79,9 @@ and mirror an existing file.
 | `NewLocalOCIRegistry()` | Starts an `httptest`-backed OCI registry and returns its host:port. Use when a spec needs to push/pull/list against a "remote" catalog. Cleans itself up via `GinkgoT().Cleanup`. |
 | `BuildPluginBinaryForPlatform(out, pluginDir, platform)` | Cross-compiles a plugin fixture (e.g. `linux/amd64`) for multi-platform plugin packaging tests. |
 | `SolutionFixture(name)` | Resolves `e2e/testdata/solutions/<name>` to an absolute path, independent of the test's working directory. |
+| `(*ExecOption).ExecAnyExit()` + `ExpectExitCode(session, n)` | Runs the command without asserting the exit status, then pins an exact exit code. Use for exit-code matrices where `Exec()`'s zero-vs-nonzero check is too coarse. |
+| `NormalizeJSON(raw, masks...)` | Parses run output, drops volatile top-level timing keys (`__execution`, `duration`, `startTime`, `endTime`), sorts keys and masks values matching `UUIDMask`/`TimestampMask`. Equal strings mean equivalent output across runs. |
+| `SnapshotTree(root)` | Path to sha256 map of a directory tree; compare before/after to prove a command had no filesystem side effects. |
 
 ## Walkthrough: adding a new spec
 
