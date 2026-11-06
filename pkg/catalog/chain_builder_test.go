@@ -340,3 +340,137 @@ func TestDefaultListCatalogs(t *testing.T) {
 		})
 	}
 }
+
+// pluginFetcherTestConfig configures one embedder catalog plus the official
+// catalog; neither is contacted by the builders.
+func pluginFetcherTestConfig() *config.Config {
+	return &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{Name: "embedder", Type: config.CatalogTypeOCI, URL: "oci://registry.example.com/embedder"},
+			{Name: config.CatalogNameOfficial, Type: config.CatalogTypeOCI, URL: "oci://ghcr.io/oakwood-commons"},
+		},
+	}
+}
+
+func catalogNames(cats []Catalog) []string {
+	names := make([]string, len(cats))
+	for i, c := range cats {
+		names[i] = c.Name()
+	}
+	return names
+}
+
+func TestBuildPluginFetcher_OrderAndCachedRemotes(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	f, err := BuildPluginFetcher(pluginFetcherTestConfig(), nil, logr.Discard())
+	require.NoError(t, err)
+
+	cats := f.Catalogs()
+	assert.Equal(t, []string{LocalCatalogName, "embedder", config.CatalogNameOfficial}, catalogNames(cats))
+	assert.IsType(t, &LocalCatalog{}, cats[0])
+	for _, c := range cats[1:] {
+		assert.IsType(t, &CachedRemoteCatalog{}, c, "remotes are backed by the local cache")
+	}
+}
+
+func TestBuildPluginFetcher_LocalNotAllowedStillCaches(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	f, err := BuildPluginFetcher(pluginFetcherTestConfig(), nil, logr.Discard(),
+		WithAllowedCatalogs([]string{config.CatalogNameOfficial}))
+	require.NoError(t, err)
+
+	cats := f.Catalogs()
+	require.Equal(t, []string{config.CatalogNameOfficial}, catalogNames(cats))
+	assert.IsType(t, &CachedRemoteCatalog{}, cats[0])
+}
+
+func TestBuildPluginFetcher_PerCatalogArtifacts(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	f, err := BuildPluginFetcher(pluginFetcherTestConfig(), nil, logr.Discard(),
+		WithPerCatalogArtifacts(map[string]PluginPolicy{
+			config.CatalogNameOfficial: {Plugins: []string{"exec"}},
+		}))
+	require.NoError(t, err)
+
+	// A restricted local stays first in priority order.
+	assert.Equal(t, []string{LocalCatalogName, "embedder", config.CatalogNameOfficial}, catalogNames(f.Catalogs()))
+
+	// "git" is denied everywhere (local + embedder deny-all, official lists
+	// only exec), so the allowlists answer not-found without network access.
+	_, err = f.ResolvePlugin(t.Context(), "git", ArtifactKindProvider, "")
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+}
+
+func TestBuildPluginFetcher_NoSources(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	f, err := BuildPluginFetcher(pluginFetcherTestConfig(), nil, logr.Discard(),
+		WithAllowedCatalogs([]string{"nonexistent"}))
+	assert.Nil(t, f)
+	require.ErrorContains(t, err, "no catalogs available for plugin resolution")
+}
+
+func TestBuildRemotePluginFetcher(t *testing.T) {
+	t.Parallel()
+
+	f, err := BuildRemotePluginFetcher(pluginFetcherTestConfig(), nil, logr.Discard())
+	require.NoError(t, err)
+
+	cats := f.Catalogs()
+	assert.Equal(t, []string{"embedder", config.CatalogNameOfficial}, catalogNames(cats))
+	for _, c := range cats {
+		assert.IsType(t, &RemoteCatalog{}, c, "remote-only fetcher has no cache fallback")
+	}
+}
+
+func TestBuildRemotePluginFetcher_NoCatalogs(t *testing.T) {
+	t.Parallel()
+
+	f, err := BuildRemotePluginFetcher(nil, nil, logr.Discard())
+	assert.Nil(t, f)
+	require.ErrorContains(t, err, "no remote catalogs available")
+}
+
+func TestArtifactAllowlist(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		perCatalog   map[string]PluginPolicy
+		wantAllowed  []string
+		wantRestrict bool
+	}{
+		{name: "no policy map is unrestricted", perCatalog: nil},
+		{name: "AllowAll is unrestricted", perCatalog: map[string]PluginPolicy{"c": {AllowAll: true}}},
+		{
+			name:         "explicit list restricts to it",
+			perCatalog:   map[string]PluginPolicy{"c": {Plugins: []string{"exec"}}},
+			wantAllowed:  []string{"exec"},
+			wantRestrict: true,
+		},
+		{
+			name:         "policy without plugins denies all",
+			perCatalog:   map[string]PluginPolicy{"c": {}},
+			wantAllowed:  []string{},
+			wantRestrict: true,
+		},
+		{
+			name:         "catalog absent from active map denies all",
+			perCatalog:   map[string]PluginPolicy{"other": {AllowAll: true}},
+			wantAllowed:  []string{},
+			wantRestrict: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			allowed, restrict := artifactAllowlist("c", tc.perCatalog)
+			assert.Equal(t, tc.wantRestrict, restrict)
+			assert.Equal(t, tc.wantAllowed, allowed)
+		})
+	}
+}

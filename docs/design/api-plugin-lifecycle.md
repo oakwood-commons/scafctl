@@ -185,7 +185,7 @@ The first-loaded-wins behavior for version conflicts matches CLI semantics.
 ## Security
 
 Running external executables from HTTP requests introduces significant risk.
-The API server applies five layered mitigations, all configured under
+The API server applies six layered mitigations, most of them configured under
 `apiServer.plugins` in `config.yaml`:
 
 ~~~yaml
@@ -214,7 +214,17 @@ referencing unlisted plugins receive a `403 Forbidden` response. Adopted
 binaries from. If a solution references a plugin in an unlisted catalog, the
 fetch is rejected before any download occurs.
 
-### 4. Environment Variable Sanitization
+### 4. Locally Built Plugins Rejected
+
+The server's fetcher is built with `DisallowLocalBuilds`, so it only runs
+plugins published to a registry, never ones built on the server host (for
+example with `build plugin`). A solution that pins a `source.built` plugin, a
+lock entry locked from a local build, or a short name that resolves to a local
+build is rejected with `ErrLocalBuildNotAllowed` (`403 Forbidden`); publish the
+plugin to a registry and reference it from there. Cached binaries with no
+recorded origin are ignored for the same reason. This is not configurable.
+
+### 5. Environment Variable Sanitization
 
 Plugin processes spawned by the pool inherit only a fixed allowlist of
 environment variables: PATH, HOME, TMPDIR, USER, LANG, TZ, and the
@@ -224,7 +234,7 @@ This prevents credential leakage from the server environment into untrusted
 plugin binaries. Controlled by the `WithSanitizedEnv()` client option, applied
 automatically in `pool.spawn()`.
 
-### 5. Adopted Plugins Bypass Security Checks
+### 6. Adopted Plugins Bypass Security Checks
 
 Official providers adopted at startup (`pool.Adopt()`) are trusted and skip
 the allowlist/external checks. This ensures they always work regardless of
@@ -236,6 +246,6 @@ security policy configuration.
 |------|---------------|
 | `pkg/plugin/pool.go` | `WithDisableExternal`, `WithAllowedPlugins` options |
 | `pkg/plugin/client.go` | `WithSanitizedEnv`, `safePluginEnv`, `pluginCmdSanitized` |
-| `pkg/plugin/fetcher.go` | `AllowedCatalogs`, `checkCatalogAllowed` |
+| `pkg/plugin/fetcher.go` | `AllowedCatalogs`, `checkCatalogAllowed`, `DisallowLocalBuilds` |
 | `pkg/config/types.go` | `APIPluginConfig` struct |
 | `pkg/cmd/scafctl/serve/serve.go` | Wires config values into pool and fetcher |

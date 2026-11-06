@@ -168,20 +168,20 @@ func runInstall(ctx context.Context, opts *InstallOptions, args []string) error 
 		chainLogger = logr.Discard()
 	}
 
-	chain, err := catalog.BuildCatalogChain(appCfg, auth.RegistryFromContext(ctx), chainLogger)
+	catalogFetcher, err := catalog.BuildPluginFetcher(appCfg, auth.RegistryFromContext(ctx), chainLogger)
 	if err != nil {
-		w.Errorf("failed to build catalog chain: %v", err)
+		w.Errorf("failed to build plugin catalog fetcher: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	// Create the fetcher
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		Catalog:    chain,
-		Cache:      plugin.NewCache(opts.CacheDir),
-		Platform:   opts.Platform,
-		NoCache:    opts.NoCache,
-		BinaryName: settings.BinaryNameFromContext(ctx),
-		Logger:     chainLogger,
+		CatalogFetcher: catalogFetcher,
+		Cache:          plugin.NewCache(opts.CacheDir),
+		Platform:       opts.Platform,
+		NoCache:        opts.NoCache,
+		BinaryName:     settings.BinaryNameFromContext(ctx),
+		Logger:         chainLogger,
 	})
 
 	// Fetch all plugins

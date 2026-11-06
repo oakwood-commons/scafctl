@@ -1022,6 +1022,9 @@ type PluginFetcherOverrides struct {
 	// SignaturePolicy overrides the signature verification policy derived
 	// from config. When non-nil, takes precedence over config values.
 	SignaturePolicy *plugin.SignaturePolicy
+	// DisallowLocalBuilds rejects locally built plugins (see
+	// plugin.FetcherConfig.DisallowLocalBuilds).
+	DisallowLocalBuilds bool
 }
 
 // BuildPluginFetcherWithConfig creates a plugin.Fetcher from the context's
@@ -1046,20 +1049,21 @@ func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOve
 		chainOpts = append(chainOpts, catalog.WithPerCatalogArtifacts(override.PerCatalogArtifacts))
 	}
 
-	catalogChain, err := catalog.BuildCatalogChain(appCfg, authReg, fetcherLogger, chainOpts...)
+	catalogFetcher, err := catalog.BuildPluginFetcher(appCfg, authReg, fetcherLogger, chainOpts...)
 	if err != nil {
-		fetcherLogger.V(1).Info("catalog chain not available, plugin auto-fetch disabled", "error", err)
-		return nil, fmt.Errorf("building catalog chain: %w", err)
+		fetcherLogger.V(1).Info("plugin catalogs not available, plugin auto-fetch disabled", "error", err)
+		return nil, fmt.Errorf("building plugin catalog fetcher: %w", err)
 	}
 
 	cfg := plugin.FetcherConfig{
-		Catalog:             catalogChain,
+		CatalogFetcher:      catalogFetcher,
 		Cache:               override.Cache,
 		BinaryName:          settings.BinaryNameFromContext(ctx),
 		Logger:              fetcherLogger,
 		AllowedCatalogs:     override.AllowedCatalogs,
 		PerCatalogArtifacts: override.PerCatalogArtifacts,
 		SignaturePolicy:     override.SignaturePolicy,
+		DisallowLocalBuilds: override.DisallowLocalBuilds,
 	}
 	if cfg.SignaturePolicy == nil {
 		cfg.SignaturePolicy = plugin.SignaturePolicyFromContext(ctx)

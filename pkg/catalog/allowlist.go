@@ -153,3 +153,62 @@ func (c *AllowlistCatalog) ResolveContentDigest(ctx context.Context, ref Referen
 func (c *AllowlistCatalog) Inner() Catalog {
 	return c.inner
 }
+
+// allowlistPluginSource restricts a PluginSource to an artifact name
+// allowlist. Disallowed names report not-found so a strict chain falls
+// through to the next source. A nil allowlist permits every name; an empty
+// non-nil allowlist denies every name.
+type allowlistPluginSource struct {
+	inner   PluginSource
+	allowed map[string]bool
+}
+
+// newAllowlistPluginSource wraps inner with an artifact name allowlist (see
+// NewAllowlistCatalog for nil vs. empty semantics).
+func newAllowlistPluginSource(inner PluginSource, allowedArtifacts []string) *allowlistPluginSource {
+	var allowed map[string]bool
+	if allowedArtifacts != nil {
+		allowed = make(map[string]bool, len(allowedArtifacts))
+		for _, name := range allowedArtifacts {
+			allowed[name] = true
+		}
+	}
+	return &allowlistPluginSource{inner: inner, allowed: allowed}
+}
+
+func (s *allowlistPluginSource) isAllowed(name string) bool {
+	return s.allowed == nil || s.allowed[name]
+}
+
+func (s *allowlistPluginSource) notFound(ref Reference) error {
+	return &ArtifactNotFoundError{Reference: ref, Catalog: s.inner.Name()}
+}
+
+func (s *allowlistPluginSource) Name() string {
+	return s.inner.Name()
+}
+
+func (s *allowlistPluginSource) unwrapPluginSource() PluginSource {
+	return s.inner
+}
+
+func (s *allowlistPluginSource) FetchByPlatform(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error) {
+	if !s.isAllowed(ref.Name) {
+		return nil, ArtifactInfo{}, s.notFound(ref)
+	}
+	return s.inner.FetchByPlatform(ctx, ref, platform)
+}
+
+func (s *allowlistPluginSource) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
+	if !s.isAllowed(ref.Name) {
+		return ContentDigestInfo{}, s.notFound(ref)
+	}
+	return s.inner.ResolveContentDigest(ctx, ref, platform, mediaType)
+}
+
+func (s *allowlistPluginSource) Find(ctx context.Context, query ArtifactQuery) (ArtifactInfo, error) {
+	if !s.isAllowed(query.Name) {
+		return ArtifactInfo{}, s.notFound(Reference{Kind: query.Kind, Name: query.Name})
+	}
+	return s.inner.Find(ctx, query)
+}

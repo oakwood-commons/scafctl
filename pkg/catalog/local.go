@@ -24,6 +24,7 @@ import (
 	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
+	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/content/oci"
 	"oras.land/oras-go/v2/errdef"
 )
@@ -1009,12 +1010,33 @@ func (c *LocalCatalog) fetchBlob(ctx context.Context, desc ocispec.Descriptor) (
 	}
 	defer rc.Close()
 
-	buf := new(bytes.Buffer)
-	if _, err := buf.ReadFrom(rc); err != nil {
+	data, err := io.ReadAll(rc)
+	if err != nil {
 		return nil, err
 	}
+	if err := verifyBlob(desc, data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
 
-	return buf.Bytes(), nil
+// verifyBlob checks that data is the content desc describes. The OCI store
+// reads blobs straight off disk without checking them, so a blob edited in
+// place would otherwise be served under a digest that was verified (or signed)
+// elsewhere. A zero size means the caller does not know it, so only the digest
+// is checked.
+func verifyBlob(desc ocispec.Descriptor, data []byte) error {
+	if desc.Size > 0 && int64(len(data)) != desc.Size {
+		return fmt.Errorf("blob %s: size %d does not match descriptor size %d: %w",
+			desc.Digest, len(data), desc.Size, content.ErrMismatchedDigest)
+	}
+	if err := desc.Digest.Validate(); err != nil {
+		return fmt.Errorf("blob %s: %w", desc.Digest, err)
+	}
+	if got := desc.Digest.Algorithm().FromBytes(data); got != desc.Digest {
+		return fmt.Errorf("blob %s: content digest is %s: %w", desc.Digest, got, content.ErrMismatchedDigest)
+	}
+	return nil
 }
 
 // fetchManifestByDigest fetches and unmarshals an OCI manifest using its

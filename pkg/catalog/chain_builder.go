@@ -117,68 +117,24 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 	var catalogs []Catalog
 
 	// Apply options
-	var options ChainCatalogOptions
-	for _, opt := range opts {
-		opt(&options)
-	}
+	options := applyChainCatalogOptions(opts)
 
 	// 1. Local catalog always comes first.
-	localCat, err := NewLocalCatalog(logger)
-	switch {
-	case err != nil && isCatalogAllowed(config.CatalogNameLocal, options.allowedCatalogs):
-		return nil, &CatalogBuildError{Catalog: config.CatalogNameLocal, Err: err}
-	case err != nil:
-		logger.V(1).Info("local catalog not available", "error", err)
-	case !isCatalogAllowed(localCat.Name(), options.allowedCatalogs):
-		logger.V(1).Info("local catalog not in allowed list, skipping")
-	default:
+	localCat, localAllowed, err := buildLocalCatalog(logger, options.allowedCatalogs)
+	if err != nil {
+		return nil, err
+	}
+	if localCat != nil && localAllowed {
 		catalogs = append(catalogs, localCat)
 	}
 
-	// 2. Add embedder/user catalogs from config (skip reserved names).
-	var credStore *CredentialStore
-	if cfg != nil {
-		cs, credErr := NewCredentialStore(logger)
-		if credErr != nil {
-			logger.V(1).Info("credential store not available, remote catalogs will use anonymous auth", "error", credErr)
-		} else {
-			credStore = cs
-		}
-
-		for _, catCfg := range cfg.Catalogs {
-			// Skip reserved catalogs -- they are pinned in position.
-			if catCfg.Name == config.CatalogNameLocal || catCfg.Name == config.CatalogNameOfficial {
-				continue
-			}
-
-			if catCfg.Type != config.CatalogTypeOCI || catCfg.URL == "" {
-				continue
-			}
-
-			if !isCatalogAllowed(catCfg.Name, options.allowedCatalogs) {
-				logger.V(1).Info("catalog not in allowed list, skipping", "catalog", catCfg.Name)
-				continue
-			}
-
-			remoteCat, remoteCatErr := buildRemoteCatalog(catCfg, credStore, authRegistry, logger)
-			if remoteCatErr != nil {
-				return nil, &CatalogBuildError{Catalog: catCfg.Name, Err: remoteCatErr}
-			}
-			catalogs = append(catalogs, remoteCat)
-		}
-
-		// 3. Official catalog always comes last (unless disabled).
-		if !cfg.Settings.DisableOfficialCatalog {
-			if !isCatalogAllowed(config.CatalogNameOfficial, options.allowedCatalogs) {
-				logger.V(1).Info("official catalog not in allowed list, skipping")
-			} else if officialCfg, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok {
-				officialCat, officialErr := buildRemoteCatalog(*officialCfg, credStore, authRegistry, logger)
-				if officialErr != nil {
-					return nil, &CatalogBuildError{Catalog: config.CatalogNameOfficial, Err: officialErr}
-				}
-				catalogs = append(catalogs, officialCat)
-			}
-		}
+	// 2-3. Embedder/user catalogs from config, then the official catalog.
+	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, options.allowedCatalogs, true)
+	if err != nil {
+		return nil, err
+	}
+	for _, remote := range remotes {
+		catalogs = append(catalogs, remote)
 	}
 
 	if len(catalogs) == 0 {
@@ -186,22 +142,200 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 	}
 
 	// Wrap catalogs with per-catalog artifact allowlists when configured.
-	if options.perCatalogArtifacts != nil {
-		for i, cat := range catalogs {
-			policy, ok := options.perCatalogArtifacts[cat.Name()]
-			switch {
-			case ok && policy.AllowAll:
-				// Wildcard: no restriction needed
-			case ok:
-				catalogs[i] = NewAllowlistCatalog(cat, policy.Plugins)
-			default:
-				// Catalog not in policy map: deny all when restrictions are active
-				catalogs[i] = NewAllowlistCatalog(cat, []string{})
-			}
+	for i, cat := range catalogs {
+		if allowed, restrict := artifactAllowlist(cat.Name(), options.perCatalogArtifacts); restrict {
+			catalogs[i] = NewAllowlistCatalog(cat, allowed)
 		}
 	}
 
 	return NewChainCatalog(logger, catalogs...)
+}
+
+// BuildPluginFetcher creates a PluginFetcher from the application
+// configuration. Source order matches BuildCatalogChain: local built
+// artifacts first (when the local catalog is allowed), then embedder/user
+// catalogs, then the official catalog. Each remote is backed by the local
+// catalog as a pull-through cache, so pulled copies are attributed to the
+// remote that served them and remain usable when it is unreachable. The local
+// catalog serves as that cache even when it is not an allowed source itself.
+func BuildPluginFetcher(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger, opts ...ChainCatalogOption) (*PluginFetcher, error) {
+	options := applyChainCatalogOptions(opts)
+
+	localCat, localAllowed, err := buildLocalCatalog(logger, options.allowedCatalogs)
+	if err != nil {
+		return nil, err
+	}
+
+	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, options.allowedCatalogs, true)
+	if err != nil {
+		return nil, err
+	}
+
+	sources := make([]PluginSource, 0, len(remotes))
+	for _, remote := range remotes {
+		var src PluginSource = remote
+		if localCat != nil {
+			cached, cachedErr := NewCachedRemoteCatalog(localCat, remote)
+			if cachedErr != nil {
+				return nil, &CatalogBuildError{Catalog: remote.Name(), Err: cachedErr}
+			}
+			src = cached
+		}
+		if allowed, restrict := artifactAllowlist(remote.Name(), options.perCatalogArtifacts); restrict {
+			src = newAllowlistPluginSource(src, allowed)
+		}
+		sources = append(sources, src)
+	}
+
+	var local *LocalCatalog
+	if localCat != nil && localAllowed {
+		local = localCat
+		if allowed, restrict := artifactAllowlist(localCat.Name(), options.perCatalogArtifacts); restrict {
+			// The built-only filter must sit beneath the allowlist, so a
+			// restricted local source is passed as an ordinary source.
+			sources = append([]PluginSource{newAllowlistPluginSource(newLocalPlugin(localCat), allowed)}, sources...)
+			local = nil
+		}
+	}
+
+	if local == nil && len(sources) == 0 {
+		return nil, fmt.Errorf("no catalogs available for plugin resolution")
+	}
+
+	return NewPluginFetcher(logger, local, sources...)
+}
+
+// BuildRemotePluginFetcher creates a PluginFetcher over remote catalogs only
+// (user/embedder catalogs and the official catalog), with no local source and
+// no local cache fallback. Catalogs that fail to build are skipped.
+//
+// This is used by operations that must observe the live state of remote
+// registries (e.g. plugin update checks): a cache fallback would report a
+// stale version as current when a registry is unreachable.
+func BuildRemotePluginFetcher(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger) (*PluginFetcher, error) {
+	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(remotes) == 0 {
+		return nil, fmt.Errorf("no remote catalogs available")
+	}
+	sources := make([]PluginSource, 0, len(remotes))
+	for _, remote := range remotes {
+		sources = append(sources, remote)
+	}
+	return NewPluginFetcher(logger, nil, sources...)
+}
+
+func applyChainCatalogOptions(opts []ChainCatalogOption) ChainCatalogOptions {
+	var options ChainCatalogOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	return options
+}
+
+// buildLocalCatalog opens the local catalog and reports whether it is an
+// allowed source. A build failure is an error only when local is allowed;
+// otherwise it is logged and a nil catalog is returned.
+func buildLocalCatalog(logger logr.Logger, allowedCatalogs map[string]bool) (*LocalCatalog, bool, error) {
+	allowed := isCatalogAllowed(config.CatalogNameLocal, allowedCatalogs)
+	localCat, err := NewLocalCatalog(logger)
+	switch {
+	case err != nil && allowed:
+		return nil, false, &CatalogBuildError{Catalog: config.CatalogNameLocal, Err: err}
+	case err != nil:
+		logger.V(1).Info("local catalog not available", "error", err)
+		return nil, false, nil
+	}
+	allowed = isCatalogAllowed(localCat.Name(), allowedCatalogs)
+	if !allowed {
+		logger.V(1).Info("local catalog not in allowed list, skipping")
+	}
+	return localCat, allowed, nil
+}
+
+// buildConfiguredRemoteCatalogs builds the remote catalogs from cfg in chain
+// order: embedder/user OCI catalogs (config order, reserved names excluded),
+// then the official catalog unless disabled. Catalogs outside allowedCatalogs
+// are skipped. When strict is true a catalog that fails to build is a
+// CatalogBuildError; otherwise it is skipped.
+func buildConfiguredRemoteCatalogs(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger, allowedCatalogs map[string]bool, strict bool) ([]*RemoteCatalog, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+
+	var credStore *CredentialStore
+	cs, credErr := NewCredentialStore(logger)
+	if credErr != nil {
+		logger.V(1).Info("credential store not available, remote catalogs will use anonymous auth", "error", credErr)
+	} else {
+		credStore = cs
+	}
+
+	var remotes []*RemoteCatalog
+	add := func(catCfg config.CatalogConfig) error {
+		remoteCat, err := buildRemoteCatalog(catCfg, credStore, authRegistry, logger)
+		if err != nil {
+			if strict {
+				return &CatalogBuildError{Catalog: catCfg.Name, Err: err}
+			}
+			return nil
+		}
+		remotes = append(remotes, remoteCat)
+		return nil
+	}
+
+	for _, catCfg := range cfg.Catalogs {
+		// Skip reserved catalogs -- they are pinned in position.
+		if catCfg.Name == config.CatalogNameLocal || catCfg.Name == config.CatalogNameOfficial {
+			continue
+		}
+		if catCfg.Type != config.CatalogTypeOCI || catCfg.URL == "" {
+			continue
+		}
+		if !isCatalogAllowed(catCfg.Name, allowedCatalogs) {
+			logger.V(1).Info("catalog not in allowed list, skipping", "catalog", catCfg.Name)
+			continue
+		}
+		if err := add(catCfg); err != nil {
+			return nil, err
+		}
+	}
+
+	// Official catalog always comes last (unless disabled).
+	if cfg.Settings.DisableOfficialCatalog {
+		return remotes, nil
+	}
+	if !isCatalogAllowed(config.CatalogNameOfficial, allowedCatalogs) {
+		logger.V(1).Info("official catalog not in allowed list, skipping")
+		return remotes, nil
+	}
+	if officialCfg, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok {
+		if err := add(*officialCfg); err != nil {
+			return nil, err
+		}
+	}
+	return remotes, nil
+}
+
+// artifactAllowlist reports whether the catalog named catalogName must be
+// restricted under perCatalog and, if so, the artifact names it may serve.
+// No restriction applies when perCatalog is nil or the catalog's policy is
+// AllowAll; a catalog absent from an active policy map may serve nothing.
+func artifactAllowlist(catalogName string, perCatalog map[string]PluginPolicy) ([]string, bool) {
+	if perCatalog == nil {
+		return nil, false
+	}
+	policy, ok := perCatalog[catalogName]
+	switch {
+	case ok && policy.AllowAll:
+		return nil, false
+	case ok && policy.Plugins != nil:
+		return policy.Plugins, true
+	default:
+		return []string{}, true
+	}
 }
 
 // BuildRemoteCatalogChain creates a ChainCatalog containing only remote
@@ -212,45 +346,16 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 // versions without being shadowed by locally cached artifacts (e.g. plugin
 // update checks).
 func BuildRemoteCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger) (*ChainCatalog, error) {
-	var catalogs []Catalog
-
-	var credStore *CredentialStore
-	if cfg != nil {
-		cs, credErr := NewCredentialStore(logger)
-		if credErr != nil {
-			logger.V(1).Info("credential store not available, remote catalogs will use anonymous auth", "error", credErr)
-		} else {
-			credStore = cs
-		}
-
-		for _, catCfg := range cfg.Catalogs {
-			if catCfg.Name == config.CatalogNameLocal || catCfg.Name == config.CatalogNameOfficial {
-				continue
-			}
-
-			if catCfg.Type != config.CatalogTypeOCI || catCfg.URL == "" {
-				continue
-			}
-
-			remoteCat, remoteCatErr := buildRemoteCatalog(catCfg, credStore, authRegistry, logger)
-			if remoteCatErr != nil {
-				continue
-			}
-			catalogs = append(catalogs, remoteCat)
-		}
-
-		if !cfg.Settings.DisableOfficialCatalog {
-			if officialCfg, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok {
-				officialCat, officialErr := buildRemoteCatalog(*officialCfg, credStore, authRegistry, logger)
-				if officialErr == nil {
-					catalogs = append(catalogs, officialCat)
-				}
-			}
-		}
+	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, nil, false)
+	if err != nil {
+		return nil, err
 	}
-
-	if len(catalogs) == 0 {
+	if len(remotes) == 0 {
 		return nil, fmt.Errorf("no remote catalogs available")
+	}
+	catalogs := make([]Catalog, 0, len(remotes))
+	for _, remote := range remotes {
+		catalogs = append(catalogs, remote)
 	}
 	return NewChainCatalog(logger, catalogs...)
 }

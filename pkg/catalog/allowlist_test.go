@@ -199,3 +199,69 @@ func TestAllowlistCatalog_DeleteDelegatesToInner(t *testing.T) {
 	err := cat.Delete(ctx, ref)
 	assert.NoError(t, err)
 }
+
+// allowlistSourceOps exercises every PluginSource operation for name and
+// returns the serving catalog.
+var allowlistSourceOps = map[string]func(s PluginSource, name string) (string, error){
+	"FetchByPlatform": func(s PluginSource, name string) (string, error) {
+		_, info, err := s.FetchByPlatform(context.Background(), testRef(name, "1.0.0"), "linux/amd64")
+		return info.Catalog, err
+	},
+	"ResolveContentDigest": func(s PluginSource, name string) (string, error) {
+		info, err := s.ResolveContentDigest(context.Background(), testRef(name, "1.0.0"), "linux/amd64", MediaTypeProviderBinary)
+		return info.Catalog, err
+	},
+	"Find": func(s PluginSource, name string) (string, error) {
+		info, err := s.Find(context.Background(), ArtifactQuery{Name: name, Kind: ArtifactKindProvider})
+		return info.Catalog, err
+	},
+}
+
+func TestAllowlistPluginSource(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		allowed []string
+		plugin  string
+		want    bool
+	}{
+		{name: "nil allowlist permits all", allowed: nil, plugin: "anything", want: true},
+		{name: "empty allowlist denies all", allowed: []string{}, plugin: "exec", want: false},
+		{name: "listed plugin passes", allowed: []string{"exec"}, plugin: "exec", want: true},
+		{name: "unlisted plugin is not found", allowed: []string{"exec"}, plugin: "git", want: false},
+	}
+
+	for opName, op := range allowlistSourceOps {
+		for _, tc := range tests {
+			t.Run(opName+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				inner := okSource("inner")
+				src := newAllowlistPluginSource(inner, tc.allowed)
+
+				got, err := op(src, tc.plugin)
+				if tc.want {
+					require.NoError(t, err)
+					assert.Equal(t, "inner", got)
+					assert.Equal(t, 1, inner.calls)
+					return
+				}
+				require.ErrorIs(t, err, ErrArtifactNotFound, "a denied plugin must look not-found so the chain falls through")
+				var nf *ArtifactNotFoundError
+				require.ErrorAs(t, err, &nf)
+				assert.Equal(t, "inner", nf.Catalog)
+				assert.Equal(t, tc.plugin, nf.Reference.Name)
+				assert.Zero(t, inner.calls, "a denied plugin must not reach the inner source")
+			})
+		}
+	}
+}
+
+func TestAllowlistPluginSource_NameAndUnwrap(t *testing.T) {
+	t.Parallel()
+	inner := okSource("inner")
+	src := newAllowlistPluginSource(inner, nil)
+
+	assert.Equal(t, "inner", src.Name())
+	assert.Same(t, inner, src.unwrapPluginSource())
+}

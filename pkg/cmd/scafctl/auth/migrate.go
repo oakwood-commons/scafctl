@@ -38,15 +38,15 @@ func buildPluginFetchFunc(binaryName string) authmigrate.FetchFunc {
 			chainLogger = logr.Discard()
 		}
 
-		chain, err := catalog.BuildCatalogChain(appCfg, auth.RegistryFromContext(ctx), chainLogger)
+		catalogFetcher, err := catalog.BuildPluginFetcher(appCfg, auth.RegistryFromContext(ctx), chainLogger)
 		if err != nil {
-			return nil, fmt.Errorf("building catalog chain: %w", err)
+			return nil, fmt.Errorf("building plugin catalog fetcher: %w", err)
 		}
 
 		fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-			Catalog:    chain,
-			BinaryName: binaryName,
-			Logger:     chainLogger,
+			CatalogFetcher: catalogFetcher,
+			BinaryName:     binaryName,
+			Logger:         chainLogger,
 		})
 
 		return fetcher.FetchPlugins(ctx, deps, nil)

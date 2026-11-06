@@ -30,7 +30,7 @@ var (
 // Returns 0 if the error is not a recognized pool error.
 func PoolErrorHTTPStatus(err error) int {
 	switch {
-	case errors.Is(err, ErrPluginNotAllowed), errors.Is(err, ErrExternalDisabled):
+	case errors.Is(err, ErrPluginNotAllowed), errors.Is(err, ErrExternalDisabled), errors.Is(err, ErrLocalBuildNotAllowed):
 		return 403 // Forbidden — policy rejection
 	case errors.Is(err, ErrPoolFull):
 		return 503 // Service Unavailable — capacity exhaustion

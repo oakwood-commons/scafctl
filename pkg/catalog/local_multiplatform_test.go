@@ -5,13 +5,26 @@ package catalog
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"oras.land/oras-go/v2/content"
 )
+
+func mustVersion(s string) *semver.Version {
+	v, err := semver.NewVersion(s)
+	if err != nil {
+		panic("bad test version: " + err.Error())
+	}
+	return v
+}
 
 func newTestLocalCatalog(t *testing.T) *LocalCatalog {
 	t.Helper()
@@ -267,4 +280,83 @@ func TestLocalCatalog_StoreMultiPlatform_AuthHandler(t *testing.T) {
 	data, _, err := cat.FetchByPlatform(ctx, ref, "darwin/arm64")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("auth-darwin"), data)
+}
+
+func TestVerifyBlob(t *testing.T) {
+	t.Parallel()
+	data := []byte("blob-content")
+	good := ocispec.Descriptor{Digest: digest.FromBytes(data), Size: int64(len(data))}
+
+	tests := []struct {
+		name    string
+		desc    ocispec.Descriptor
+		wantErr error
+	}{
+		{name: "matching digest and size", desc: good},
+		{name: "unknown size checks digest only", desc: ocispec.Descriptor{Digest: good.Digest}},
+		{name: "size mismatch", desc: ocispec.Descriptor{Digest: good.Digest, Size: good.Size + 1}, wantErr: content.ErrMismatchedDigest},
+		{name: "digest mismatch", desc: ocispec.Descriptor{Digest: digest.FromString("other"), Size: good.Size}, wantErr: content.ErrMismatchedDigest},
+		{name: "invalid digest", desc: ocispec.Descriptor{Digest: "sha256:nothex", Size: good.Size}, wantErr: digest.ErrDigestInvalidLength},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := verifyBlob(tt.desc, data)
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestLocalCatalog_FetchByPlatform_ManifestDigest(t *testing.T) {
+	t.Parallel()
+	cat := newTestLocalCatalog(t)
+	ctx := t.Context()
+
+	multi := testPluginRef("multi", "1.0.0")
+	index, err := cat.StoreMultiPlatform(ctx, multi, []PlatformBinary{
+		{Platform: "linux/amd64", Data: []byte("linux")},
+		{Platform: "darwin/arm64", Data: []byte("darwin")},
+	}, nil, false)
+	require.NoError(t, err)
+
+	_, linux, err := cat.FetchByPlatform(ctx, multi, "linux/amd64")
+	require.NoError(t, err)
+	_, darwin, err := cat.FetchByPlatform(ctx, multi, "darwin/arm64")
+	require.NoError(t, err)
+
+	// An index records the platform manifest, not the index itself.
+	assert.NotEmpty(t, linux.ManifestDigest)
+	assert.NotEqual(t, index.Digest, linux.ManifestDigest)
+	assert.NotEqual(t, linux.ManifestDigest, darwin.ManifestDigest)
+	assert.Empty(t, linux.ImageRef, "a local build has no registry image")
+
+	single := testPluginRef("single", "1.0.0")
+	stored, err := cat.Store(ctx, single, []byte("single"), nil, nil, false)
+	require.NoError(t, err)
+	_, info, err := cat.FetchByPlatform(ctx, single, "linux/amd64")
+	require.NoError(t, err)
+	assert.Equal(t, stored.Digest, info.ManifestDigest)
+}
+
+func TestLocalCatalog_FetchByPlatform_RejectsTamperedBlob(t *testing.T) {
+	t.Parallel()
+	cat := newTestLocalCatalog(t)
+	ctx := t.Context()
+	ref := testPluginRef("tampered", "1.0.0")
+	binary := []byte("original")
+	_, err := cat.StoreMultiPlatform(ctx, ref, []PlatformBinary{{Platform: "linux/amd64", Data: binary}}, nil, false)
+	require.NoError(t, err)
+
+	// Replace the binary's blob in place with same-length content.
+	blob := filepath.Join(cat.Path(), "blobs", "sha256", digest.FromBytes(binary).Encoded())
+	require.FileExists(t, blob)
+	require.NoError(t, os.Remove(blob))
+	require.NoError(t, os.WriteFile(blob, []byte("tampered"), 0o600))
+
+	_, _, err = cat.FetchByPlatform(ctx, ref, "linux/amd64")
+	require.ErrorIs(t, err, content.ErrMismatchedDigest)
 }

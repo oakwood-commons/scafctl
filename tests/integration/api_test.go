@@ -2253,7 +2253,7 @@ func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.Option) *httptest.
 
 	compositeReg := provider.NewCompositeRegistryFromBase(reg)
 
-	mockCat := catalog.NewMockCatalog(
+	catalogFetcher, err := catalog.NewPluginFetcher(logr.Discard(), nil, catalog.NewMockPluginSource(
 		"test-catalog",
 		catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
 			ref.Version = semver.MustParse("1.0.0")
@@ -2262,12 +2262,13 @@ func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.Option) *httptest.
 				Catalog:   "test-catalog",
 			}, nil
 		}),
-	)
+	))
+	require.NoError(t, err)
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		Catalog:  mockCat,
-		Cache:    plugin.NewCache(t.TempDir()),
-		Platform: plugin.CurrentPlatform(),
-		Logger:   logr.Discard(),
+		CatalogFetcher: catalogFetcher,
+		Cache:          plugin.NewCache(t.TempDir()),
+		Platform:       plugin.CurrentPlatform(),
+		Logger:         logr.Discard(),
 	})
 
 	pool := plugin.NewVersionPool(context.Background(), fetcher, compositeReg, poolOpts...)
@@ -2380,7 +2381,7 @@ func TestAPI_SolutionRender_PluginPoolFull(t *testing.T) {
 
 	compositeReg := provider.NewCompositeRegistryFromBase(reg)
 
-	mockCat := catalog.NewMockCatalog(
+	catalogFetcher, err := catalog.NewPluginFetcher(logr.Discard(), nil, catalog.NewMockPluginSource(
 		"test-catalog",
 		catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
 			ref.Version = semver.MustParse("1.0.0")
@@ -2389,12 +2390,13 @@ func TestAPI_SolutionRender_PluginPoolFull(t *testing.T) {
 				Catalog:   "test-catalog",
 			}, nil
 		}),
-	)
+	))
+	require.NoError(t, err)
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		Catalog:  mockCat,
-		Cache:    plugin.NewCache(t.TempDir()),
-		Platform: plugin.CurrentPlatform(),
-		Logger:   logr.Discard(),
+		CatalogFetcher: catalogFetcher,
+		Cache:          plugin.NewCache(t.TempDir()),
+		Platform:       plugin.CurrentPlatform(),
+		Logger:         logr.Discard(),
 	})
 
 	pool := plugin.NewVersionPool(
@@ -2459,17 +2461,19 @@ func TestAPI_SolutionRun_AllowedCatalogs_Rejected(t *testing.T) {
 	// Create a fake executable so the cache recognizes it.
 	require.NoError(t, os.WriteFile(pluginBinDir+"/"+pluginName, []byte("#!/bin/sh\n"), 0o755))
 
+	catalogFetcher, err := catalog.NewPluginFetcher(logr.Discard(), nil, catalog.NewMockPluginSource(
+		"untrusted-registry",
+		catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
+			ref.Version = semver.MustParse("1.0.0")
+			return catalog.ArtifactInfo{
+				Reference: ref,
+				Catalog:   "untrusted-registry",
+			}, nil
+		}),
+	))
+	require.NoError(t, err)
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		Catalog: catalog.NewMockCatalog(
-			"untrusted-registry",
-			catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
-				ref.Version = semver.MustParse("1.0.0")
-				return catalog.ArtifactInfo{
-					Reference: ref,
-					Catalog:   "untrusted-registry",
-				}, nil
-			}),
-		),
+		CatalogFetcher:  catalogFetcher,
 		Cache:           plugin.NewCache(cacheDir),
 		Platform:        platform,
 		AllowedCatalogs: []string{"approved-only"},
