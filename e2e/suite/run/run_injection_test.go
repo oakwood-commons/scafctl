@@ -107,4 +107,58 @@ var _ = Describe("run runtime injection", func() {
 				"different environments must select different bundled data files")
 		})
 	})
+
+	Describe("lock and strict modes", func() {
+		var env utils.Isolation
+
+		BeforeEach(func() {
+			env = utils.NewIsolatedEnv()
+		})
+
+		It("rejects an unknown --lock-mode value", func() {
+			dir := stageFixture("run-failures")
+			s := run(env, dir, "run", "solution", "-f", fixturePath(dir), "--lock-mode", "bogus")
+			utils.ExpectExitCode(s, exitInvalidInput)
+			gomega.Expect(string(s.Err.Contents())).To(gomega.ContainSubstring("must be one of"))
+		})
+
+		It("has nothing to enforce under --lock-mode strict when no external provider is declared (control)", func() {
+			dir := stageFixture("run-failures")
+			s := run(env, dir, "run", "solution", "-f", fixturePath(dir), "--lock-mode", "strict")
+			utils.ExpectExitCode(s, exitSuccess)
+		})
+
+		// run-locked declares a non-builtin provider (exec) in bundle.plugins
+		// with no lock file. --lock-mode strict/constrained require a lock
+		// entry to pin or constrain that dependency's version, and this
+		// fixture has none, so resolution must refuse before any network
+		// fetch of the plugin is ever attempted.
+		It("refuses --lock-mode strict when a declared plugin has no lock entry", func() {
+			dir := stageFixture("run-locked")
+			s := run(env, dir, "run", "solution", "-f", fixturePath(dir), "--lock-mode", "strict")
+			utils.ExpectExitCode(s, exitFileNotFound)
+			gomega.Expect(string(s.Err.Contents())).To(gomega.ContainSubstring("requires a lock file"))
+		})
+
+		// Undeclared, non-builtin providers are rejected unconditionally by
+		// validateExternalProviders before any strict/auto-resolution logic
+		// runs, so --strict makes no observable difference here: both
+		// invocations fail identically. (The CLI's --strict flag and the
+		// official-provider auto-resolve path in
+		// pkg/solution/prepare/executionregistry.go#autoResolveOfficialVersioned
+		// appear unreachable from `run` today -- only exercised by unit
+		// tests. Worth a follow-up issue if that auto-resolve path is meant
+		// to be live.)
+		It("fails identically with or without --strict when a provider is neither a builtin nor declared", func() {
+			dir := stageFixture("run-undeclared")
+			withStrict := run(env, dir, "run", "solution", "-f", fixturePath(dir), "--strict")
+			without := run(env, dir, "run", "solution", "-f", fixturePath(dir))
+
+			utils.ExpectExitCode(withStrict, exitFileNotFound)
+			utils.ExpectExitCode(without, exitFileNotFound)
+			const wantMsg = "are not builtins and are not declared in bundle.plugins"
+			gomega.Expect(string(withStrict.Err.Contents())).To(gomega.ContainSubstring(wantMsg))
+			gomega.Expect(string(without.Err.Contents())).To(gomega.ContainSubstring(wantMsg))
+		})
+	})
 })

@@ -57,9 +57,21 @@ var _ = Describe("run exit codes", func() {
 		Entry("validation failure: run solution", "solution", "validation", exitValidationFailed, "must be lowercase"),
 		Entry("validation failure: run action", "action", "validation", exitValidationFailed, "must be lowercase"),
 		Entry("resolver error: run solution", "solution", "resolve", exitGeneralError, "division by zero"),
+		Entry("resolver error: run resolver", "resolver", "resolve", exitGeneralError, "division by zero"),
 		Entry("action failure: run solution", "solution", "action", exitActionFailed, "does-not-exist"),
 		Entry("action failure: run action", "action", "action", exitActionFailed, "does-not-exist"),
 	)
+
+	// Unlike `run solution`/`run action`, `run resolver` does not fail the
+	// process on a validation failure by default: it warns on stderr and
+	// still exits 0, emitting resolved values on stdout. `--on-validation-error
+	// error` (asserted below) is required to make it exit non-zero. This is a
+	// real, confirmed asymmetry between commands -- not a bug in this spec.
+	It("run resolver warns but still exits 0 on validation failure by default", func() {
+		s := run(env, dir, args("resolver", "validation")...)
+		utils.ExpectExitCode(s, exitSuccess)
+		gomega.Expect(string(s.Err.Contents())).To(gomega.ContainSubstring("must be lowercase"))
+	})
 
 	It("exits 6 when an action exceeds its timeout", func() {
 		slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {

@@ -31,6 +31,7 @@ const (
 	exitSuccess          = 0
 	exitGeneralError     = 1
 	exitValidationFailed = 2
+	exitInvalidInput     = 3
 	exitFileNotFound     = 4
 	exitActionFailed     = 6
 	exitPartialSuccess   = 12
