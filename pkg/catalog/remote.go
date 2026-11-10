@@ -29,6 +29,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
+	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 	"oras.land/oras-go/v2/registry/remote/retry"
@@ -54,6 +55,10 @@ type RemoteCatalog struct {
 
 	// anonOnce ensures switchToAnonymous replaces the client exactly once.
 	anonOnce sync.Once
+
+	// probeCredentials overrides the credential check; nil uses
+	// pingWithCredentials. Set by tests.
+	probeCredentials credentialProbe
 }
 
 // RemoteCatalogConfig holds configuration for creating a remote catalog.
@@ -276,17 +281,21 @@ func (c *RemoteCatalog) SetClient(client *auth.Client) {
 	}
 }
 
-// isOCIAuthError returns true if the error looks like a registry
-// authentication/authorization failure (401 or 403).
+// isOCIAuthError returns true if the error is a registry
+// authentication/authorization failure (401 or 403) from the registry or its
+// token endpoint. Flattened errors are matched on "status code 401/403" only:
+// a bare "401"/"403" or "denied" also appears in port numbers and artifact
+// names (127.0.0.1:56403, providers/denied), which would otherwise degrade a
+// healthy catalog to anonymous access.
 func isOCIAuthError(err error) bool {
 	if err == nil {
 		return false
 	}
-	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "401") ||
-		strings.Contains(s, "403") ||
-		strings.Contains(s, "unauthorized") ||
-		strings.Contains(s, "denied")
+	if isRegistryDenied(err) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "status code 401") || strings.Contains(s, "status code 403")
 }
 
 // isOCIServerError returns true if the error looks like a registry
@@ -358,6 +367,110 @@ func isNetworkError(err error) bool {
 		}
 	}
 	return false
+}
+
+// errCredentialsRejected marks a lookup that failed after the registry
+// rejected this catalog's credentials. Anonymous access cannot tell "absent"
+// from "hidden" (registries answer anonymous callers for a private repository
+// with 401, 403 or 404), so such a failure is never reported as not-found:
+// a strict source chain must halt rather than serve the same name from a
+// lower-priority catalog.
+var errCredentialsRejected = errors.New("registry rejected the catalog's credentials and anonymous access cannot confirm the artifact is absent; re-authenticate and retry")
+
+// lookupError classifies a failed manifest resolve or tag listing. Only a
+// definitive miss is not-found, the one outcome a strict chain may fall
+// through on:
+//
+//   - a 404 from a catalog that is not degraded;
+//   - a 401/403 to an anonymous request. GHCR, for one, answers an anonymous
+//     token request for a repository that does not exist with 403 DENIED, so
+//     for an anonymous caller "no access" and "does not exist" are the same.
+//   - a 401/403 to a credentialed request when the registry accepts those
+//     credentials (see credentialsAccepted). GHCR answers a logged-in request
+//     for a package that does not exist with 403 DENIED too, so the denial is
+//     of the repository, not of the credentials.
+//
+// After stored credentials were rejected (see switchToAnonymous), a 401, 403
+// or 404 may hide a private repository, so it halts with
+// errCredentialsRejected. A transport failure is unreachable, and any other
+// failure (5xx, a 401/403 to credentials that are rejected or could not be
+// checked) is returned wrapped so it halts.
+func (c *RemoteCatalog) lookupError(ctx context.Context, action string, ref Reference, err error) error {
+	absent := errors.Is(err, errdef.ErrNotFound) || isRegistryNotFound(err)
+	denied := isRegistryDenied(err)
+	switch {
+	case isNetworkError(err):
+		return &UnreachableError{Catalog: c.name, Cause: err}
+	case c.HasStaleCredentials() && (absent || denied):
+		return fmt.Errorf("%s %s in catalog %q: %w: %w", action, ref.String(), c.name, errCredentialsRejected, err)
+	case absent:
+		return &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+	case denied && (!c.sendsCredentials(ctx) || c.credentialsAccepted(ctx)):
+		return &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+	default:
+		return fmt.Errorf("%s %s in catalog %q: %w", action, ref.String(), c.name, err)
+	}
+}
+
+// manifestResolveError classifies a failed tag/digest resolve; see lookupError.
+func (c *RemoteCatalog) manifestResolveError(ctx context.Context, ref Reference, err error) error {
+	return c.lookupError(ctx, "resolving", ref, err)
+}
+
+// sendsCredentials reports whether requests from this catalog carry
+// credentials for its registry. A catalog with a credential source that yields
+// nothing for the registry host (the common case for a public registry) is
+// anonymous; so is one that already fell back to anonymous access. A failing
+// credential lookup counts as credentialed so classification fails closed.
+func (c *RemoteCatalog) sendsCredentials(ctx context.Context) bool {
+	if c.HasStaleCredentials() {
+		return false
+	}
+	client := c.client
+	if client == nil || client.Credential == nil {
+		return false
+	}
+	cred, err := client.Credential(ctx, c.registry)
+	return err != nil || cred != auth.EmptyCredential
+}
+
+// retryAnonymously runs op and, when the registry rejects the credentials it
+// carried, falls back to anonymous access and runs op once more, so a public
+// artifact stays reachable with an expired token.
+//
+// The fallback can only turn a failure into a success. If the anonymous retry
+// also fails -- including with a 404, which registries commonly return to
+// anonymous callers for a private repository -- the original auth error is
+// returned wrapped in errCredentialsRejected and never as not-found, so a
+// strict source chain halts instead of falling through. A request that sent
+// no credentials is not retried: anonymous access is what it already had.
+//
+// Whether the catalog sends credentials is decided only after an auth
+// failure: the credential callback may launch a docker-credential-* helper,
+// which the common successful path must not pay for. A catalog another call
+// already degraded is retried too, since op may have used the replaced client.
+func retryAnonymously[T any](ctx context.Context, c *RemoteCatalog, op string, ref Reference, fn func() (T, error)) (T, error) {
+	result, err := fn()
+	if err == nil || !isOCIAuthError(err) || errors.Is(err, errCredentialsRejected) {
+		return result, err
+	}
+	if !c.HasStaleCredentials() && !c.sendsCredentials(ctx) {
+		return result, err
+	}
+
+	c.logger.V(1).Info(op+" rejected by registry, retrying anonymously",
+		"kind", ref.Kind, "name", ref.Name, "error", err.Error())
+	c.switchToAnonymous()
+
+	result, retryErr := fn()
+	if retryErr == nil {
+		return result, nil
+	}
+	var zero T
+	// retryErr is reported as text only: wrapping it would let a not-found
+	// from the anonymous retry satisfy IsNotFound and fall through a strict chain.
+	return zero, fmt.Errorf("%s %s in catalog %q: %w (anonymous retry: %s): %w",
+		op, ref.String(), c.name, errCredentialsRejected, retryErr.Error(), err)
 }
 
 // wrapWithCredentialHint enriches err with a credential diagnostic hint when
@@ -623,18 +736,15 @@ func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content, bundl
 
 // Fetch retrieves an artifact from the remote catalog.
 func (c *RemoteCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
-	data, info, err := c.fetchInternal(ctx, ref)
-	if err != nil && isOCIAuthError(err) {
-		c.logger.V(1).Info("fetch rejected by registry, retrying anonymously",
-			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
-		c.switchToAnonymous()
-		data, info, retryErr := c.fetchInternal(ctx, ref)
-		if retryErr != nil {
-			return nil, ArtifactInfo{}, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
-		}
-		return data, info, nil
+	type fetched struct {
+		data []byte
+		info ArtifactInfo
 	}
-	return data, info, c.wrapWithCredentialHint(err)
+	r, err := retryAnonymously(ctx, c, "fetch", ref, func() (fetched, error) {
+		data, info, err := c.fetchInternal(ctx, ref)
+		return fetched{data: data, info: info}, err
+	})
+	return r.data, r.info, c.wrapWithCredentialHint(err)
 }
 
 func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
@@ -708,18 +818,15 @@ func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference) ([]byt
 // FetchWithBundle retrieves an artifact's primary content and bundle layer.
 // If the artifact has no bundle layer, bundleData is nil.
 func (c *RemoteCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
-	data, bundle, info, err := c.fetchWithBundleInternal(ctx, ref)
-	if err != nil && isOCIAuthError(err) {
-		c.logger.V(1).Info("fetch rejected by registry, retrying anonymously",
-			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
-		c.switchToAnonymous()
-		data, bundle, info, retryErr := c.fetchWithBundleInternal(ctx, ref)
-		if retryErr != nil {
-			return nil, nil, ArtifactInfo{}, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
-		}
-		return data, bundle, info, nil
+	type fetched struct {
+		data, bundle []byte
+		info         ArtifactInfo
 	}
-	return data, bundle, info, c.wrapWithCredentialHint(err)
+	r, err := retryAnonymously(ctx, c, "fetch", ref, func() (fetched, error) {
+		data, bundle, info, err := c.fetchWithBundleInternal(ctx, ref)
+		return fetched{data: data, bundle: bundle, info: info}, err
+	})
+	return r.data, r.bundle, r.info, c.wrapWithCredentialHint(err)
 }
 
 func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
@@ -816,18 +923,16 @@ func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Referen
 // The returned map is keyed by the requested media type; absent layers are
 // omitted from the map (not an error).
 func (c *RemoteCatalog) FetchWithLayer(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
-	contentData, layers, info, err := c.fetchWithLayersInternal(ctx, ref, mediaTypes...)
-	if err != nil && isOCIAuthError(err) {
-		c.logger.V(1).Info("fetch rejected by registry, retrying anonymously",
-			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
-		c.switchToAnonymous()
-		contentData, layers, info, retryErr := c.fetchWithLayersInternal(ctx, ref, mediaTypes...)
-		if retryErr != nil {
-			return nil, nil, ArtifactInfo{}, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
-		}
-		return contentData, layers, info, nil
+	type fetched struct {
+		data   []byte
+		layers map[string][]byte
+		info   ArtifactInfo
 	}
-	return contentData, layers, info, c.wrapWithCredentialHint(err)
+	r, err := retryAnonymously(ctx, c, "fetch", ref, func() (fetched, error) {
+		data, layers, info, err := c.fetchWithLayersInternal(ctx, ref, mediaTypes...)
+		return fetched{data: data, layers: layers, info: info}, err
+	})
+	return r.data, r.layers, r.info, c.wrapWithCredentialHint(err)
 }
 
 func (c *RemoteCatalog) fetchWithLayersInternal(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
@@ -997,19 +1102,16 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 		}
 
 		tag := c.tagForRef(ref)
-		desc, err := repo.Resolve(ctx, tag)
-		if err != nil && isOCIAuthError(err) {
-			c.logger.V(1).Info("resolve rejected by registry, retrying anonymously",
-				"kind", ref.Kind, "name", ref.Name, "error", err.Error())
-			c.switchToAnonymous()
+		desc, err := retryAnonymously(ctx, c, "resolve", ref, func() (ocispec.Descriptor, error) {
 			repo.Client = c.client
-			desc, err = repo.Resolve(ctx, tag)
-		}
-		if err != nil {
-			if isNetworkError(err) {
-				return ArtifactInfo{}, &UnreachableError{Catalog: c.name, Cause: err}
+			d, err := repo.Resolve(ctx, tag)
+			if err != nil {
+				return ocispec.Descriptor{}, c.manifestResolveError(ctx, ref, err)
 			}
-			return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+			return d, nil
+		})
+		if err != nil {
+			return ArtifactInfo{}, err
 		}
 
 		return ArtifactInfo{
@@ -1074,29 +1176,14 @@ func (c *RemoteCatalog) listVersions(ctx context.Context, ref Reference) ([]*sem
 		return nil, err
 	}
 
-	versions, err := c.fetchTags(ctx, repo)
-	if err != nil && isOCIAuthError(err) {
-		c.logger.V(1).Info("tag fetch rejected by registry, retrying anonymously",
-			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
-		c.switchToAnonymous()
+	return retryAnonymously(ctx, c, "tag fetch", ref, func() ([]*semver.Version, error) {
 		repo.Client = c.client
-		anonVersions, anonErr := c.fetchTags(ctx, repo)
-		if anonErr != nil {
-			if isNetworkError(anonErr) {
-				return nil, &UnreachableError{Catalog: c.name, Cause: anonErr}
-			}
-			return nil, fmt.Errorf("failed to list tags: %w", anonErr)
+		versions, err := c.fetchTags(ctx, repo)
+		if err != nil {
+			return nil, c.lookupError(ctx, "listing tags of", ref, err)
 		}
-		return anonVersions, nil
-	}
-	if err != nil {
-		if isNetworkError(err) {
-			return nil, &UnreachableError{Catalog: c.name, Cause: err}
-		}
-		return nil, fmt.Errorf("failed to list tags: %w", err)
-	}
-
-	return versions, nil
+		return versions, nil
+	})
 }
 
 // fetchTags enumerates semver tags from a repository.
@@ -1519,18 +1606,10 @@ func (c *RemoteCatalog) ListTags(ctx context.Context, ref Reference) ([]TagInfo,
 		return nil, err
 	}
 
-	tags, err := c.listTagsFromRepo(ctx, repo, ref)
-	if err != nil && isOCIAuthError(err) {
-		c.logger.V(1).Info("tag list rejected by registry, retrying anonymously",
-			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
-		c.switchToAnonymous()
+	tags, err := retryAnonymously(ctx, c, "tag list", ref, func() ([]TagInfo, error) {
 		repo.Client = c.client
-		tags, retryErr := c.listTagsFromRepo(ctx, repo, ref)
-		if retryErr != nil {
-			return nil, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
-		}
-		return tags, nil
-	}
+		return c.listTagsFromRepo(ctx, repo, ref)
+	})
 	return tags, c.wrapWithCredentialHint(err)
 }
 
@@ -2172,4 +2251,210 @@ func ResolveLocalTarget(source Reference, targetName string) (Reference, error) 
 		}
 	}
 	return target, nil
+}
+
+// CachedRemoteCatalog serves a remote catalog through the local catalog's cache
+// of it. It backs plugin fetching only, so every ref and query it receives
+// carries an artifact kind.
+//
+// A cached pinned version is served without re-checking the remote and is
+// never refreshed: version tags are treated as immutable. If a publisher
+// re-pushes an existing version tag with different content, this catalog keeps
+// serving the cached copy, and a lock file pinned to the new digest fails
+// digest verification until the stale copy is removed from the local catalog.
+// Digest pinning in the lock file is what keeps such a mismatch from ever
+// being run silently.
+type CachedRemoteCatalog struct {
+	*RemoteCatalog
+	local *LocalCatalog
+}
+
+// NewCachedRemoteCatalog returns a CachedRemoteCatalog that serves remote
+// through local's cache of it. Both catalogs are required.
+func NewCachedRemoteCatalog(local *LocalCatalog, remote *RemoteCatalog) (*CachedRemoteCatalog, error) {
+	if local == nil {
+		return nil, errors.New("creating cached remote catalog: nil local catalog")
+	}
+	if remote == nil {
+		return nil, errors.New("creating cached remote catalog: nil remote catalog")
+	}
+	return &CachedRemoteCatalog{RemoteCatalog: remote, local: local}, nil
+}
+
+func (c *CachedRemoteCatalog) localRef(ref Reference) Reference {
+	return sanitizeRefForRemote(ref, c.canonicalID())
+}
+
+// Resolve resolves ref through the local cache of this remote, then the remote.
+// A pinned ref (version or digest) found in the cache is served without
+// contacting the remote, since a pinned identity cannot move. An unpinned ref
+// always asks the remote (a newer version may have been published) and falls
+// back to the newest cached copy only when the remote is unreachable.
+func (c *CachedRemoteCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	cachedRef := c.localRef(ref)
+
+	if isPinned(ref) {
+		if info, ok := c.cached(ref, func() (ArtifactInfo, error) {
+			return c.local.Resolve(ctx, cachedRef)
+		}); ok {
+			return info, nil
+		}
+		return c.RemoteCatalog.Resolve(ctx, ref)
+	}
+
+	info, err := c.RemoteCatalog.Resolve(ctx, ref)
+	if _, unreachable := IsCatalogUnreachable(err); !unreachable {
+		return info, err
+	}
+	return c.cachedFallback(ctx, queryFromRef(cachedRef), err)
+}
+
+// Find resolves query against this remote, using the local cache of it. The
+// query's source is pinned to this remote, so local builds and copies from
+// other remotes never match; a SourceBuilt selector or one naming another
+// remote is not-found, as for RemoteCatalog.Find. A pinned query (exact version
+// or digest) found in the cache is served without contacting the remote. An
+// open query or constraint always asks the remote and falls back to the newest
+// matching cached copy only when the remote is unreachable.
+func (c *CachedRemoteCatalog) Find(ctx context.Context, query ArtifactQuery) (ArtifactInfo, error) {
+	if err := query.Validate(); err != nil {
+		return ArtifactInfo{}, err
+	}
+	if !c.servesSource(query.Source) {
+		return ArtifactInfo{}, &ArtifactNotFoundError{
+			Reference: Reference{Kind: query.Kind, Name: query.Name},
+			Catalog:   c.Name(),
+		}
+	}
+	query.Source = SourceSelector{Kind: SourceRemote, Remote: c.canonicalID()}
+
+	if isPinnedQuery(query) {
+		if info, ok := c.cached(Reference{Kind: query.Kind, Name: query.Name}, func() (ArtifactInfo, error) {
+			return c.local.Find(ctx, query)
+		}); ok {
+			return info, nil
+		}
+	}
+
+	info, err := c.RemoteCatalog.Find(ctx, query)
+	if _, unreachable := IsCatalogUnreachable(err); !unreachable {
+		return info, err
+	}
+	return c.cachedFallback(ctx, query, err)
+}
+
+// cached runs a local cache lookup. A miss reports false; any other cache
+// failure is logged and also reports false, since the cache is best-effort and
+// must not block a lookup the remote can still answer.
+func (c *CachedRemoteCatalog) cached(ref Reference, lookup func() (ArtifactInfo, error)) (ArtifactInfo, bool) {
+	info, err := lookup()
+	if err == nil {
+		return c.fromCache(info), true
+	}
+	if !IsNotFound(err) {
+		c.logger.V(1).Info("local cache lookup failed; asking remote",
+			"ref", ref.String(), "error", err.Error())
+	}
+	return ArtifactInfo{}, false
+}
+
+// cachedFallback answers query from the local cache after the remote was
+// unreachable. When nothing cached matches, the remote's error is returned so
+// callers still see that the remote could not be reached.
+func (c *CachedRemoteCatalog) cachedFallback(ctx context.Context, query ArtifactQuery, remoteErr error) (ArtifactInfo, error) {
+	info, err := c.local.Find(ctx, query)
+	if err != nil {
+		return ArtifactInfo{}, remoteErr
+	}
+	c.logger.Info("remote unreachable; using newest locally cached version",
+		"query", query.String(),
+		"version", info.Reference.VersionOrDigest(), "error", remoteErr.Error())
+	return c.fromCache(info), nil
+}
+
+// fromCache presents a cached copy as served by this catalog, so callers see
+// the same catalog identity whether the answer came from the cache or the
+// registry.
+func (c *CachedRemoteCatalog) fromCache(info ArtifactInfo) ArtifactInfo {
+	info.Catalog = c.Name()
+	info.Canonical = c.canonicalID()
+	return info
+}
+
+// isPinnedQuery reports whether query names one exact artifact: a digest or an
+// exact version (not latest and not a constraint).
+func isPinnedQuery(query ArtifactQuery) bool {
+	if query.Digest != "" {
+		return true
+	}
+	var v VersionOrConstraint
+	v.Set(query.Version)
+	return v.Type() == IsVersion
+}
+
+// FetchByPlatform fetches the binary for platform from the local cache of this
+// remote, falling back to the remote. It never writes the cache. Only a pinned
+// ref (version or digest) is served from the cache; an unpinned ref goes
+// straight to the remote, which resolves it, so a stale cached version is never
+// served while the remote has a newer one. Callers such as the plugin fetcher
+// resolve the version before fetching.
+func (c *CachedRemoteCatalog) FetchByPlatform(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error) {
+	if !isPinned(ref) {
+		return c.RemoteCatalog.FetchByPlatform(ctx, ref, platform)
+	}
+
+	data, info, err := c.local.FetchByPlatform(ctx, c.localRef(ref), platform)
+	switch {
+	case err == nil:
+		return data, c.fromCachedFetch(ref, info), nil
+	case IsPlatformNotFound(err):
+		// The cached copy is a verbatim pull of this pinned artifact, so the
+		// remote does not have the platform either.
+		return nil, ArtifactInfo{}, err
+	case !IsNotFound(err):
+		c.logger.V(1).Info("local cache lookup failed; asking remote",
+			"ref", ref.String(), "platform", platform, "error", err.Error())
+	}
+
+	return c.RemoteCatalog.FetchByPlatform(ctx, ref, platform)
+}
+
+// fromCachedFetch presents fetched cached content as served by this catalog and
+// points ImageRef at the same manifest in the remote registry. A cached copy is
+// a verbatim pull, so the remote's signature for that manifest digest covers
+// it; a tampered or re-packaged copy has a different digest and fails
+// verification. Without a manifest digest ImageRef stays empty, which signature
+// enforcement rejects.
+func (c *CachedRemoteCatalog) fromCachedFetch(ref Reference, info ArtifactInfo) ArtifactInfo {
+	info = c.fromCache(info)
+	if info.ManifestDigest != "" {
+		info.ImageRef = c.buildRepositoryPath(ref) + "@" + info.ManifestDigest
+	}
+	return info
+}
+
+// ResolveContentDigest resolves the content-layer digest for platform from the
+// local cache of this remote, falling back to the remote. Like FetchByPlatform,
+// only a pinned ref is served from the cache; an unpinned ref goes straight to
+// the remote so a stale cached version is never reported.
+func (c *CachedRemoteCatalog) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
+	if !isPinned(ref) {
+		return c.RemoteCatalog.ResolveContentDigest(ctx, ref, platform, mediaType)
+	}
+
+	info, err := c.local.ResolveContentDigest(ctx, c.localRef(ref), platform, mediaType)
+	switch {
+	case err == nil:
+		info.ArtifactInfo = c.fromCache(info.ArtifactInfo)
+		return info, nil
+	case IsPlatformNotFound(err):
+		// The cached copy is a verbatim pull of this pinned artifact, so the
+		// remote does not have the platform either.
+		return ContentDigestInfo{}, err
+	case !IsNotFound(err):
+		c.logger.V(1).Info("local cache lookup failed; asking remote",
+			"ref", ref.String(), "platform", platform, "error", err.Error())
+	}
+
+	return c.RemoteCatalog.ResolveContentDigest(ctx, ref, platform, mediaType)
 }

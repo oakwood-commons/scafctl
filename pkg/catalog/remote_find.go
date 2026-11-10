@@ -45,9 +45,8 @@ func (c *RemoteCatalog) Find(ctx context.Context, query ArtifactQuery) (Artifact
 
 	versions, err := c.listVersions(ctx, ref)
 	if err != nil {
-		if isRegistryNotFound(err) {
-			return ArtifactInfo{}, notFound
-		}
+		// listVersions already classifies a definitive miss as not-found and
+		// keeps a miss that may hide a private repository as an error.
 		return ArtifactInfo{}, err
 	}
 
@@ -126,4 +125,12 @@ func latestVersionCandidates(ctx context.Context, versions []*semver.Version) []
 func isRegistryNotFound(err error) bool {
 	var resp *errcode.ErrorResponse
 	return errors.As(err, &resp) && resp.StatusCode == http.StatusNotFound
+}
+
+// isRegistryDenied reports whether err is a registry 401 or 403, from either
+// the registry itself or its token endpoint (e.g. GHCR's 403 DENIED).
+func isRegistryDenied(err error) bool {
+	var resp *errcode.ErrorResponse
+	return errors.As(err, &resp) &&
+		(resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden)
 }

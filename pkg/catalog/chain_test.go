@@ -56,10 +56,10 @@ func TestChainCatalog_Catalogs(t *testing.T) {
 func TestChainCatalog_Fetch_FirstCatalog(t *testing.T) {
 	c1 := newMockCatalog("local")
 	ref := testRef("my-plugin", "1.0.0")
-	c1.addArtifact(ref, []byte("binary-local"), nil)
+	c1.addArtifact(ref, []byte("binary-local"))
 
 	c2 := newMockCatalog("remote")
-	c2.addArtifact(ref, []byte("binary-remote"), nil)
+	c2.addArtifact(ref, []byte("binary-remote"))
 
 	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
 	require.NoError(t, err)
@@ -76,7 +76,7 @@ func TestChainCatalog_Fetch_Fallback(t *testing.T) {
 
 	c2 := newMockCatalog("remote")
 	ref := testRef("my-plugin", "1.0.0")
-	c2.addArtifact(ref, []byte("binary-remote"), nil)
+	c2.addArtifact(ref, []byte("binary-remote"))
 
 	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
 	require.NoError(t, err)
@@ -105,10 +105,10 @@ func TestChainCatalog_Fetch_NotFound(t *testing.T) {
 func TestChainCatalog_FetchWithLayer_FirstCatalog(t *testing.T) {
 	c1 := newMockCatalog("local")
 	ref := testRef("my-plugin", "1.0.0")
-	c1.addArtifact(ref, []byte("binary-local"), nil)
+	c1.addArtifact(ref, []byte("binary-local"))
 
 	c2 := newMockCatalog("remote")
-	c2.addArtifact(ref, []byte("binary-remote"), nil)
+	c2.addArtifact(ref, []byte("binary-remote"))
 
 	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
 	require.NoError(t, err)
@@ -125,7 +125,7 @@ func TestChainCatalog_FetchWithLayer_Fallback(t *testing.T) {
 
 	c2 := newMockCatalog("remote")
 	ref := testRef("my-plugin", "1.0.0")
-	c2.addArtifact(ref, []byte("binary-remote"), nil)
+	c2.addArtifact(ref, []byte("binary-remote"))
 
 	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
 	require.NoError(t, err)
@@ -358,10 +358,10 @@ func TestChainCatalog_FetchWithBundle_Fallback(t *testing.T) {
 func TestChainCatalog_Resolve_Order(t *testing.T) {
 	c1 := newMockCatalog("local")
 	ref := testRef("plugin", "1.0.0")
-	c1.addArtifact(ref, nil, nil)
+	c1.addArtifact(ref, nil)
 
 	c2 := newMockCatalog("remote")
-	c2.addArtifact(ref, nil, nil)
+	c2.addArtifact(ref, nil)
 
 	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
 	require.NoError(t, err)
@@ -376,7 +376,7 @@ func TestChainCatalog_Resolve_FallbackToSecond(t *testing.T) {
 
 	c2 := newMockCatalog("remote")
 	ref := testRef("plugin", "1.0.0")
-	c2.addArtifact(ref, nil, nil)
+	c2.addArtifact(ref, nil)
 
 	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
 	require.NoError(t, err)
@@ -390,14 +390,14 @@ func TestChainCatalog_List_Dedup(t *testing.T) {
 	ref := testRef("shared-plugin", "1.0.0")
 
 	c1 := newMockCatalog("local")
-	c1.addArtifact(ref, nil, nil)
+	c1.addArtifact(ref, nil)
 
 	c2 := newMockCatalog("remote")
-	c2.addArtifact(ref, nil, nil)
+	c2.addArtifact(ref, nil)
 
 	// Also add a unique artifact to remote
 	ref2 := testRef("remote-only", "2.0.0")
-	c2.addArtifact(ref2, nil, nil)
+	c2.addArtifact(ref2, nil)
 
 	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
 	require.NoError(t, err)
@@ -424,7 +424,7 @@ func TestChainCatalog_List_ContinuesOnError(t *testing.T) {
 
 	c2 := newMockCatalog("good")
 	ref := testRef("plugin", "1.0.0")
-	c2.addArtifact(ref, nil, nil)
+	c2.addArtifact(ref, nil)
 
 	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
 	require.NoError(t, err)
@@ -439,7 +439,7 @@ func TestChainCatalog_Exists_AnyTrue(t *testing.T) {
 
 	c2 := newMockCatalog("remote")
 	ref := testRef("plugin", "1.0.0")
-	c2.addArtifact(ref, nil, nil)
+	c2.addArtifact(ref, nil)
 
 	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
 	require.NoError(t, err)
@@ -510,7 +510,7 @@ func TestChainCatalog_Fetch_NonNotFoundError(t *testing.T) {
 
 	c2 := newMockCatalog("good")
 	ref := testRef("plugin", "1.0.0")
-	c2.addArtifact(ref, []byte("good-binary"), nil)
+	c2.addArtifact(ref, []byte("good-binary"))
 
 	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
 	require.NoError(t, err)
@@ -674,7 +674,7 @@ func TestChainCatalog_Fetch_StrictHaltsOnIndeterminate(t *testing.T) {
 	a := unreachableFetch("A")
 	b := newMockCatalog("B")
 	ref := testRef("plugin", "1.0.0")
-	b.addArtifact(ref, []byte("B-binary"), nil)
+	b.addArtifact(ref, []byte("B-binary"))
 
 	chain, err := NewChainCatalogWithMode(logr.Discard(), ChainModeStrict, a, b)
 	require.NoError(t, err)
@@ -691,7 +691,7 @@ func TestChainCatalog_Fetch_BestEffortFallsThroughIndeterminate(t *testing.T) {
 	a := unreachableFetch("A")
 	b := newMockCatalog("B")
 	ref := testRef("plugin", "1.0.0")
-	b.addArtifact(ref, []byte("B-binary"), nil)
+	b.addArtifact(ref, []byte("B-binary"))
 
 	chain, err := NewChainCatalogWithMode(logr.Discard(), ChainModeBestEffort, a, b)
 	require.NoError(t, err)
@@ -709,7 +709,7 @@ func TestChainCatalog_Fetch_StrictFallsThroughDefinitiveNotFound(t *testing.T) {
 	a := newMockCatalog("A") // no artifact -> ErrArtifactNotFound
 	b := newMockCatalog("B")
 	ref := testRef("plugin", "1.0.0")
-	b.addArtifact(ref, []byte("B-binary"), nil)
+	b.addArtifact(ref, []byte("B-binary"))
 
 	chain, err := NewChainCatalogWithMode(logr.Discard(), ChainModeStrict, a, b)
 	require.NoError(t, err)
@@ -724,7 +724,7 @@ func TestChainCatalog_Resolve_StrictHaltsOnIndeterminate(t *testing.T) {
 	a := unreachableFetch("A")
 	b := newMockCatalog("B")
 	ref := testRef("plugin", "1.0.0")
-	b.addArtifact(ref, nil, nil)
+	b.addArtifact(ref, nil)
 
 	chain, err := NewChainCatalogWithMode(logr.Discard(), ChainModeStrict, a, b)
 	require.NoError(t, err)
@@ -804,7 +804,7 @@ func TestNewChainCatalog_DefaultsToBestEffort(t *testing.T) {
 	a := unreachableFetch("A")
 	b := newMockCatalog("B")
 	ref := testRef("plugin", "1.0.0")
-	b.addArtifact(ref, []byte("B-binary"), nil)
+	b.addArtifact(ref, []byte("B-binary"))
 
 	chain, err := NewChainCatalog(logr.Discard(), a, b)
 	require.NoError(t, err)

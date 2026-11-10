@@ -454,6 +454,14 @@ func handleEnsureError(ctx context.Context, err error, operation string) error {
 	if errors.Is(err, prepare.ErrMissingLockFile) {
 		return api.HandleError(ctx, err, operation, http.StatusBadRequest, err.Error())
 	}
+	// A malformed plugin source is a client error; a registry the server has no
+	// catalog for is refused like plugin.ErrUnconfiguredRegistry.
+	if errors.Is(err, solution.ErrInvalidPluginSource) {
+		return api.HandleError(ctx, err, operation, http.StatusBadRequest, err.Error())
+	}
+	if errors.Is(err, prepare.ErrUnconfiguredCatalog) {
+		return api.HandleError(ctx, err, operation, http.StatusForbidden, err.Error())
+	}
 	if status := plugin.PoolErrorHTTPStatus(err); status != 0 {
 		return api.HandleError(ctx, err, operation, status, err.Error())
 	}

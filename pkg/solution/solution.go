@@ -261,6 +261,10 @@ func (p PluginDependency) Registry() string {
 	return ""
 }
 
+// ErrInvalidPluginSource is returned by ValidateSource for a declared Source
+// that names both origins or neither.
+var ErrInvalidPluginSource = errors.New("invalid plugin source")
+
 // ValidateSource checks that a declared Source names exactly one origin:
 // either a remote registry (source.registry) or the locally built copy
 // (source.built). A nil Source is valid (short-name dependency).
@@ -271,9 +275,9 @@ func (p PluginDependency) ValidateSource() error {
 	hasRegistry := p.Source.Registry != ""
 	switch {
 	case hasRegistry && p.Source.Built:
-		return fmt.Errorf("plugin %q: source.registry and source.built are mutually exclusive", p.Name)
+		return fmt.Errorf("plugin %q: source.registry and source.built are mutually exclusive: %w", p.Name, ErrInvalidPluginSource)
 	case !hasRegistry && !p.Source.Built:
-		return fmt.Errorf("plugin %q: source.registry or source.built is required when source is set", p.Name)
+		return fmt.Errorf("plugin %q: source.registry or source.built is required when source is set: %w", p.Name, ErrInvalidPluginSource)
 	}
 	return nil
 }

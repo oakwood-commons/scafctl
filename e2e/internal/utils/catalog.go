@@ -95,6 +95,20 @@ func (i Isolation) CatalogBlobsDir() string {
 	return filepath.Join(i.Root, "scafctl", "catalog", "blobs", "sha256")
 }
 
+// CatalogIndexPath returns the local catalog's OCI layout index.json. Specs
+// read it to see every stored copy of an artifact, since `catalog list`
+// collapses copies of the same name@version.
+func (i Isolation) CatalogIndexPath() string {
+	return filepath.Join(i.Root, "scafctl", "catalog", "index.json")
+}
+
+// PluginCacheDir returns the plugin binary cache directory
+// (XDG_CACHE_HOME/scafctl/plugins). Specs remove it to force a plugin to be
+// resolved through the catalog instead of a previously cached binary.
+func (i Isolation) PluginCacheDir() string {
+	return filepath.Join(i.Root, "scafctl", "plugins")
+}
+
 // SecretsDir returns the encrypted secret-store directory for this isolated
 // environment (XDG_DATA_HOME/scafctl/secrets). Auth handlers persist access
 // tokens, refresh tokens, and metadata here as encrypted ".enc" files.

@@ -241,6 +241,7 @@ func (c *LocalCatalog) fetchFromManifest(ctx context.Context, manifestDesc ocisp
 	// instead of the manifest/index descriptor digest. This ensures that
 	// ArtifactInfo.Digest matches sha256(content) for verification.
 	info.Digest = manifest.Layers[0].Digest.String()
+	info.ManifestDigest = manifestDesc.Digest.String()
 
 	return content, info, nil
 }

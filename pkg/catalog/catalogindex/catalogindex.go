@@ -173,20 +173,27 @@ func FromConfig(cfg *config.Config) *Index {
 // official and local catalogs injected into the chain). The listing preserves
 // chain order. A nil catalog yields an empty Index whose lookups all miss.
 func FromChain(cat catalog.Catalog) *Index {
-	idx := newIndex()
 	if cat == nil {
-		return idx
+		return newIndex()
 	}
 	type catalogsLister interface {
 		Catalogs() []catalog.Catalog
 	}
-	var cats []catalog.Catalog
 	if chain, ok := cat.(catalogsLister); ok {
-		cats = chain.Catalogs()
-	} else {
-		cats = []catalog.Catalog{cat}
+		return FromCatalogs(chain.Catalogs())
 	}
+	return FromCatalogs([]catalog.Catalog{cat})
+}
+
+// FromCatalogs builds an Index from an ordered list of live catalogs, deriving
+// each identity as FromChain does. Catalogs whose identity cannot be derived
+// are skipped. An empty list yields an empty Index whose lookups all miss.
+func FromCatalogs(cats []catalog.Catalog) *Index {
+	idx := newIndex()
 	for _, c := range cats {
+		if c == nil {
+			continue
+		}
 		if id, ok := identityFromCatalog(c); ok {
 			idx.add(id)
 		}

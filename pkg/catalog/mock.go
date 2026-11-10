@@ -6,6 +6,9 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"strings"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 // mockCatalog implements Catalog for testing with pluggable return functions.
@@ -90,14 +93,13 @@ func newMockCatalog(name string) *mockCatalog {
 	}
 }
 
-func (m *mockCatalog) addArtifact(ref Reference, content []byte, annotations map[string]string) {
+func (m *mockCatalog) addArtifact(ref Reference, content []byte) {
 	m.artifacts[ref.String()] = mockArtifact{
 		content: content,
 		info: ArtifactInfo{
-			Reference:   ref,
-			Digest:      fmt.Sprintf("sha256:mock-%s", ref.String()),
-			Annotations: annotations,
-			Catalog:     m.name,
+			Reference: ref,
+			Digest:    fmt.Sprintf("sha256:mock-%s", ref.String()),
+			Catalog:   m.name,
 		},
 	}
 }
@@ -197,4 +199,55 @@ func (m *mockCatalog) Delete(ctx context.Context, ref Reference) error {
 	}
 	delete(m.artifacts, ref.String())
 	return nil
+}
+
+// NewMockPluginSource creates a PluginSource for testing with the given name
+// and options, suitable for NewPluginFetcher. It is also a Catalog.
+func NewMockPluginSource(name string, opts ...MockOption) PluginSource {
+	m, _ := NewMockCatalog(name, opts...).(*mockCatalog)
+	return m
+}
+
+// FetchByPlatform implements PluginSource by delegating to Fetch; the mock
+// stores a single binary per reference.
+func (m *mockCatalog) FetchByPlatform(ctx context.Context, ref Reference, _ string) ([]byte, ArtifactInfo, error) {
+	return m.Fetch(ctx, ref)
+}
+
+// ResolveContentDigest implements PluginSource, reporting the manifest digest
+// from Resolve as the content digest.
+func (m *mockCatalog) ResolveContentDigest(ctx context.Context, ref Reference, _, _ string) (ContentDigestInfo, error) {
+	info, err := m.Resolve(ctx, ref)
+	if err != nil {
+		return ContentDigestInfo{}, err
+	}
+	return ContentDigestInfo{ArtifactInfo: info, ContentDigest: info.Digest}, nil
+}
+
+// Find implements PluginSource. With a resolve func configured it delegates
+// to Resolve (pinning the version when query.Version is an exact semver);
+// otherwise it returns the newest stored artifact matching query.Version
+// ("" / "latest", an exact version, or a semver constraint).
+func (m *mockCatalog) Find(ctx context.Context, query ArtifactQuery) (ArtifactInfo, error) {
+	ref := Reference{Kind: query.Kind, Name: query.Name}
+	if m.resolveFunc != nil {
+		if v, err := semver.StrictNewVersion(query.Version); err == nil {
+			ref.Version = v
+		}
+		return m.resolveFunc(ctx, ref)
+	}
+	infos, err := m.List(ctx, query.Kind, query.Name)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+	if query.Version != "" && !strings.EqualFold(query.Version, "latest") {
+		if infos, err = FilterByVersionConstraint(infos, query.Version); err != nil {
+			return ArtifactInfo{}, fmt.Errorf("%w: %w", ErrInvalidQuery, err)
+		}
+	}
+	if len(infos) == 0 {
+		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: m.name}
+	}
+	sortByVersionDesc(infos)
+	return infos[0], nil
 }

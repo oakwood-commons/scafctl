@@ -185,18 +185,18 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 		chainLogger = logr.Discard()
 	}
 
-	chain, err := catalog.BuildRemoteCatalogChain(appCfg, auth.RegistryFromContext(ctx), chainLogger)
+	remoteFetcher, err := catalog.BuildRemotePluginFetcher(appCfg, auth.RegistryFromContext(ctx), chainLogger)
 	if err != nil {
 		// Remote catalogs may not be configured (e.g. offline, no config).
 		// Proceed without a catalog — pinned versions and empty caches still
 		// work. PlanUpdates will fail for non-pinned plugins that need
 		// catalog resolution, which is the correct behavior.
-		chainLogger.V(1).Info("remote catalog chain not available, proceeding without catalog", "error", err)
+		chainLogger.V(1).Info("remote catalogs not available, proceeding without catalog", "error", err)
 	}
 
-	var catalogFetcher *catalog.PluginFetcher
-	if chain != nil {
-		catalogFetcher = catalog.NewPluginFetcher(chain, chainLogger)
+	var catalogFetcher plugin.CatalogFetcher
+	if remoteFetcher != nil {
+		catalogFetcher = remoteFetcher
 	}
 
 	// Plan updates.
@@ -277,7 +277,7 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 	}
 
 	// Guard: downloading requires a remote catalog chain.
-	if chain == nil {
+	if catalogFetcher == nil {
 		err := fmt.Errorf("cannot download updates: no remote catalogs available")
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
@@ -287,12 +287,12 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 	w.PlainStderrf("Updating %d plugin(s)...", len(plan.Updates))
 
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		Catalog:    chain,
-		Cache:      cache,
-		Platform:   opts.Platform,
-		NoCache:    opts.NoCache,
-		BinaryName: settings.BinaryNameFromContext(ctx),
-		Logger:     chainLogger,
+		CatalogFetcher: catalogFetcher,
+		Cache:          cache,
+		Platform:       opts.Platform,
+		NoCache:        opts.NoCache,
+		BinaryName:     settings.BinaryNameFromContext(ctx),
+		Logger:         chainLogger,
 	})
 
 	var deps []solution.PluginDependency

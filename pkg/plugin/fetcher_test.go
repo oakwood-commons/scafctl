@@ -6,11 +6,13 @@ package plugin
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -145,15 +147,94 @@ func (m *mockCatalog) ListPlatforms(_ context.Context, _ catalog.Reference) ([]s
 	return nil, nil
 }
 
-func (m *mockCatalog) ResolveContentDigest(_ context.Context, ref catalog.Reference, _, _ string) (catalog.ContentDigestInfo, error) {
-	a, ok := m.artifacts[ref.String()]
+// mockCatalog doubles as the Fetcher's CatalogFetcher. Its plugin methods run
+// the production catalog.PluginFetcher over a mockPluginSource view of the
+// mock, so resolution semantics (scoping, not-found handling) match runtime.
+func (m *mockCatalog) pluginFetcher() (*catalog.PluginFetcher, error) {
+	return catalog.NewPluginFetcher(logr.Discard(), nil, mockPluginSource{m})
+}
+
+func (m *mockCatalog) ResolvePlugin(ctx context.Context, name string, kind catalog.ArtifactKind, versionConstraint string, opts ...catalog.Option) (catalog.ArtifactInfo, error) {
+	pf, err := m.pluginFetcher()
+	if err != nil {
+		return catalog.ArtifactInfo{}, err
+	}
+	return pf.ResolvePlugin(ctx, name, kind, versionConstraint, opts...)
+}
+
+func (m *mockCatalog) FetchPlugin(ctx context.Context, name string, kind catalog.ArtifactKind, version, platform string, opts ...catalog.Option) ([]byte, catalog.ArtifactInfo, error) {
+	pf, err := m.pluginFetcher()
+	if err != nil {
+		return nil, catalog.ArtifactInfo{}, err
+	}
+	return pf.FetchPlugin(ctx, name, kind, version, platform, opts...)
+}
+
+func (m *mockCatalog) ResolveContentDigest(ctx context.Context, name string, kind catalog.ArtifactKind, version, platform, mediaType string, opts ...catalog.Option) (catalog.ContentDigestInfo, error) {
+	pf, err := m.pluginFetcher()
+	if err != nil {
+		return catalog.ContentDigestInfo{}, err
+	}
+	return pf.ResolveContentDigest(ctx, name, kind, version, platform, mediaType, opts...)
+}
+
+// Catalogs reports the mock itself so NewFetcher indexes it.
+func (m *mockCatalog) Catalogs() []catalog.Catalog { return []catalog.Catalog{m} }
+
+// mockPluginSource adapts mockCatalog to catalog.PluginSource.
+type mockPluginSource struct{ m *mockCatalog }
+
+func (s mockPluginSource) Name() string { return s.m.name }
+
+func (s mockPluginSource) FetchByPlatform(ctx context.Context, ref catalog.Reference, platform string) ([]byte, catalog.ArtifactInfo, error) {
+	return s.m.FetchByPlatform(ctx, ref, platform)
+}
+
+func (s mockPluginSource) ResolveContentDigest(_ context.Context, ref catalog.Reference, _, _ string) (catalog.ContentDigestInfo, error) {
+	a, ok := s.m.artifacts[ref.String()]
 	if !ok {
-		return catalog.ContentDigestInfo{}, catalog.ErrArtifactNotFound
+		return catalog.ContentDigestInfo{}, &catalog.ArtifactNotFoundError{Reference: ref, Catalog: s.m.name}
 	}
 	return catalog.ContentDigestInfo{
 		ArtifactInfo:  a.info,
 		ContentDigest: a.info.Digest,
 	}, nil
+}
+
+// Find returns the newest artifact matching query.Version ("" / "latest",
+// an exact version, or a semver constraint). For "" / "latest" an unversioned
+// artifact is returned when no versioned one exists.
+func (s mockPluginSource) Find(ctx context.Context, query catalog.ArtifactQuery) (catalog.ArtifactInfo, error) {
+	infos, err := s.m.List(ctx, query.Kind, query.Name)
+	if err != nil {
+		return catalog.ArtifactInfo{}, err
+	}
+	notFound := &catalog.ArtifactNotFoundError{Reference: catalog.Reference{Kind: query.Kind, Name: query.Name}, Catalog: s.m.name}
+	constraint := query.Version
+	if strings.EqualFold(constraint, "latest") {
+		constraint = ""
+	}
+	if constraint == "" {
+		var best *catalog.ArtifactInfo
+		for i := range infos {
+			v := infos[i].Reference.Version
+			if best == nil || (v != nil && (best.Reference.Version == nil || v.GreaterThan(best.Reference.Version))) {
+				best = &infos[i]
+			}
+		}
+		if best == nil {
+			return catalog.ArtifactInfo{}, notFound
+		}
+		return *best, nil
+	}
+	matches, err := catalog.FilterByVersionConstraint(infos, constraint)
+	if err != nil {
+		return catalog.ArtifactInfo{}, fmt.Errorf("%w: %w", catalog.ErrInvalidQuery, err)
+	}
+	if len(matches) == 0 {
+		return catalog.ArtifactInfo{}, notFound
+	}
+	return matches[0], nil
 }
 
 func testRef(name, version string) catalog.Reference {
@@ -174,10 +255,10 @@ func testRef(name, version string) catalog.Reference {
 func TestFetcher_FetchPlugins_Empty(t *testing.T) {
 	cat := newMockCatalog()
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	results, err := f.FetchPlugins(context.Background(), nil, nil)
@@ -185,33 +266,723 @@ func TestFetcher_FetchPlugins_Empty(t *testing.T) {
 	assert.Nil(t, results)
 }
 
-func TestFetcher_BuiltDependency_FailsClosed(t *testing.T) {
-	t.Parallel()
+// builtFixture is a fetcher over a real local catalog holding a locally built
+// my-plugin@1.0.0, in front of a remote serving pulled copies of 1.0.0 and
+// 2.0.0 under the same name.
+type builtFixture struct {
+	fetcher *Fetcher
+	cache   *Cache
+}
 
-	// A pulled copy of the same name@version must not be served for a
-	// source.built dependency.
-	cat := newMockCatalog()
-	cat.addArtifact(testRef("my-plugin", "1.0.0"), []byte("pulled-binary"))
-	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
-	})
-	dep := solution.PluginDependency{
-		Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0",
+var builtBinary = []byte("built-binary")
+
+func newBuiltFixture(t *testing.T, opts ...func(*FetcherConfig)) builtFixture {
+	t.Helper()
+	local, err := catalog.NewLocalCatalogAt(t.TempDir(), logr.Discard())
+	require.NoError(t, err)
+	_, err = local.StoreMultiPlatform(t.Context(), testRef("my-plugin", "1.0.0"),
+		[]catalog.PlatformBinary{{Platform: "linux/amd64", Data: builtBinary}}, nil, false)
+	require.NoError(t, err)
+
+	remote := newMockCatalog()
+	remote.name = "remote"
+	remote.addArtifact(testRef("my-plugin", "1.0.0"), []byte("pulled-binary"))
+	remote.addArtifact(testRef("my-plugin", "2.0.0"), []byte("pulled-binary-2"))
+
+	pf, err := catalog.NewPluginFetcher(logr.Discard(), local, mockPluginSource{remote})
+	require.NoError(t, err)
+	cache := NewCache(t.TempDir())
+	cfg := FetcherConfig{
+		CatalogFetcher: pf,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return builtFixture{fetcher: NewFetcher(cfg), cache: cache}
+}
+
+func builtPluginDep(version string) solution.PluginDependency {
+	return solution.PluginDependency{
+		Name: "my-plugin", Kind: solution.PluginKindProvider, Version: version,
 		Source: &solution.PluginSource{Built: true},
 	}
-	ctx := context.Background()
+}
 
-	_, err := f.FetchPlugins(ctx, []solution.PluginDependency{dep}, nil)
-	require.ErrorIs(t, err, ErrBuiltPluginUnsupported)
+func readResult(t *testing.T, r FetchResult) string {
+	t.Helper()
+	data, err := os.ReadFile(r.Path)
+	require.NoError(t, err)
+	return string(data)
+}
 
-	_, err = f.FetchPlugin(ctx, dep, nil)
-	require.ErrorIs(t, err, ErrBuiltPluginUnsupported)
+func TestFetcher_BuiltDependency_ServedFromLocalCatalog(t *testing.T) {
+	t.Parallel()
 
-	_, err = f.ResolvePlugins(ctx, []solution.PluginDependency{dep})
-	require.ErrorIs(t, err, ErrBuiltPluginUnsupported)
+	tests := []struct {
+		name    string
+		catalog string
+	}{
+		{name: "unbound dep is bound to local"},
+		{name: "dep already bound to local", catalog: catalog.LocalCatalogName},
+		{name: "local binding is case-insensitive", catalog: "LOCAL"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fx := newBuiltFixture(t)
+			ctx := t.Context()
+			dep := builtPluginDep("1.0.0")
+			dep.Catalog = tt.catalog
+
+			results, err := fx.fetcher.FetchPlugins(ctx, []solution.PluginDependency{dep}, nil)
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, catalog.LocalCatalogName, results[0].Catalog)
+			assert.Equal(t, string(builtBinary), readResult(t, results[0]))
+
+			infos, err := fx.fetcher.ResolvePlugins(ctx, []solution.PluginDependency{dep})
+			require.NoError(t, err)
+			require.Len(t, infos, 1)
+			assert.Equal(t, catalog.LocalCatalogName, infos[0].Catalog)
+		})
+	}
+}
+
+func TestFetcher_BuiltDependency_NeverFallsBackToRemote(t *testing.T) {
+	t.Parallel()
+	fx := newBuiltFixture(t)
+	ctx := t.Context()
+
+	// Only the remote serves 2.0.0; a short name resolves it there...
+	short := builtPluginDep("^2.0.0")
+	short.Source = nil
+	infos, err := fx.fetcher.ResolvePlugins(ctx, []solution.PluginDependency{short})
+	require.NoError(t, err)
+	assert.Equal(t, "remote", infos[0].Catalog)
+
+	// ...but a built dep must fail closed rather than serve the pulled copy.
+	dep := builtPluginDep("^2.0.0")
+	_, err = fx.fetcher.ResolvePlugins(ctx, []solution.PluginDependency{dep})
+	require.ErrorIs(t, err, catalog.ErrArtifactNotFound)
+
+	_, err = fx.fetcher.FetchPlugin(ctx, dep, nil)
+	require.ErrorIs(t, err, catalog.ErrArtifactNotFound)
+}
+
+func TestFetcher_BuiltDependency_CatalogConflict(t *testing.T) {
+	t.Parallel()
+
+	otherCatalog := builtPluginDep("1.0.0")
+	otherCatalog.Catalog = "remote"
+	withRegistry := builtPluginDep("1.0.0")
+	withRegistry.Source.Registry = "ghcr.io/other"
+
+	for name, dep := range map[string]solution.PluginDependency{
+		"bound to another catalog": otherCatalog,
+		"also names a registry":    withRegistry,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fx := newBuiltFixture(t)
+			ctx := t.Context()
+
+			_, err := fx.fetcher.FetchPlugins(ctx, []solution.PluginDependency{dep}, nil)
+			require.ErrorIs(t, err, ErrCatalogConflict)
+
+			_, err = fx.fetcher.FetchPlugin(ctx, dep, nil)
+			require.ErrorIs(t, err, ErrCatalogConflict)
+
+			_, err = fx.fetcher.ResolvePlugins(ctx, []solution.PluginDependency{dep})
+			require.ErrorIs(t, err, ErrCatalogConflict)
+		})
+	}
+}
+
+func TestFetcher_LocalCatalog_SkipsUnverifiedCache(t *testing.T) {
+	t.Parallel()
+
+	shortName := func(catalogName string) solution.PluginDependency {
+		dep := builtPluginDep("1.0.0")
+		dep.Source = nil
+		dep.Catalog = catalogName
+		return dep
+	}
+
+	tests := []struct {
+		name string
+		dep  solution.PluginDependency
+	}{
+		{name: "built dep", dep: builtPluginDep("1.0.0")},
+		{name: "short name bound to local", dep: shortName(catalog.LocalCatalogName)},
+		{name: "unbound short name", dep: shortName("")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fx := newBuiltFixture(t)
+			ctx := t.Context()
+
+			// A stale binary cached under the local catalog's identity at the
+			// built version, as left behind by rebuilding the plugin in place.
+			localHash := fx.fetcher.resolveCatalogIdentity(catalog.LocalCatalogName).RegistryHash()
+			_, err := fx.cache.Put(PluginCacheKey("my-plugin", solution.PluginKindProvider), "1.0.0", "linux/amd64",
+				[]byte("stale-binary"), WithRegistryHash(localHash))
+			require.NoError(t, err)
+
+			// The digest is re-resolved and the current build is served.
+			r, err := fx.fetcher.FetchPlugin(ctx, tt.dep, nil)
+			require.NoError(t, err)
+			assert.False(t, r.FromCache)
+			assert.Equal(t, catalog.LocalCatalogName, r.Catalog)
+			assert.Equal(t, string(builtBinary), readResult(t, r))
+
+			// The verified binary is then reused through the digest-checked cache.
+			r, err = fx.fetcher.FetchPlugin(ctx, tt.dep, nil)
+			require.NoError(t, err)
+			assert.True(t, r.FromCache)
+			assert.Equal(t, string(builtBinary), readResult(t, r))
+		})
+	}
+}
+
+func TestFetcher_BuiltDependency_Locked(t *testing.T) {
+	t.Parallel()
+
+	builtLock := func(digest string) []bundler.LockPlugin {
+		return []bundler.LockPlugin{{
+			Name: "my-plugin", Kind: "provider", Version: "1.0.0", Constraint: "1.0.0",
+			Digest: digest, ResolvedFrom: catalog.LocalCatalogName,
+			Source: &bundler.LockPluginSource{Built: true},
+		}}
+	}
+
+	t.Run("verified against the lock digest", func(t *testing.T) {
+		t.Parallel()
+		fx := newBuiltFixture(t)
+		r, err := fx.fetcher.FetchPlugin(t.Context(), builtPluginDep("1.0.0"), builtLock(binaryDigest(builtBinary)))
+		require.NoError(t, err)
+		assert.Equal(t, catalog.LocalCatalogName, r.Catalog)
+		assert.Equal(t, binaryDigest(builtBinary), r.Digest)
+		assert.Equal(t, string(builtBinary), readResult(t, r))
+	})
+
+	t.Run("short name locked to a built copy resolves locally", func(t *testing.T) {
+		t.Parallel()
+		fx := newBuiltFixture(t)
+		dep := builtPluginDep("1.0.0")
+		dep.Source = nil
+		lock := builtLock(binaryDigest(builtBinary))
+		lock[0].Source = nil
+		r, err := fx.fetcher.FetchPlugin(t.Context(), dep, lock)
+		require.NoError(t, err)
+		assert.Equal(t, catalog.LocalCatalogName, r.Catalog)
+		assert.Equal(t, string(builtBinary), readResult(t, r))
+	})
+
+	t.Run("rebuilt after locking reports a refresh hint", func(t *testing.T) {
+		t.Parallel()
+		fx := newBuiltFixture(t)
+		_, err := fx.fetcher.FetchPlugin(t.Context(), builtPluginDep("1.0.0"), builtLock(binaryDigest([]byte("old-build"))))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "built plugin my-plugin@1.0.0 does not match the lock file")
+		assert.Contains(t, err.Error(), "build solution")
+		assert.NotContains(t, err.Error(), "supply chain")
+	})
+}
+
+func disallowLocalBuilds(cfg *FetcherConfig) { cfg.DisallowLocalBuilds = true }
+
+func TestFetcher_DisallowLocalBuilds_RejectsLocalBuilds(t *testing.T) {
+	t.Parallel()
+
+	shortName := func(catalogName string) solution.PluginDependency {
+		dep := builtPluginDep("1.0.0")
+		dep.Source = nil
+		dep.Catalog = catalogName
+		return dep
+	}
+
+	tests := []struct {
+		name string
+		dep  solution.PluginDependency
+	}{
+		{name: "built dep", dep: builtPluginDep("1.0.0")},
+		{name: "short name bound to local", dep: shortName(catalog.LocalCatalogName)},
+		{name: "unbound short name shadowed by a local build", dep: shortName("")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fx := newBuiltFixture(t, disallowLocalBuilds)
+			ctx := t.Context()
+
+			_, err := fx.fetcher.FetchPlugins(ctx, []solution.PluginDependency{tt.dep}, nil)
+			require.ErrorIs(t, err, ErrLocalBuildNotAllowed)
+			assert.Contains(t, err.Error(), "publish the plugin to a registry")
+
+			_, err = fx.fetcher.FetchPlugin(ctx, tt.dep, nil)
+			require.ErrorIs(t, err, ErrLocalBuildNotAllowed)
+
+			_, err = fx.fetcher.ResolvePlugins(ctx, []solution.PluginDependency{tt.dep})
+			require.ErrorIs(t, err, ErrLocalBuildNotAllowed)
+		})
+	}
+}
+
+func TestFetcher_DisallowLocalBuilds_RejectsBuiltLockEntry(t *testing.T) {
+	t.Parallel()
+	fx := newBuiltFixture(t, disallowLocalBuilds)
+	dep := builtPluginDep("1.0.0")
+	dep.Source = nil
+	lock := []bundler.LockPlugin{{
+		Name: "my-plugin", Kind: "provider", Version: "1.0.0", Constraint: "1.0.0",
+		Digest: binaryDigest(builtBinary), ResolvedFrom: catalog.LocalCatalogName,
+	}}
+
+	_, err := fx.fetcher.FetchPlugin(t.Context(), dep, lock)
+	require.ErrorIs(t, err, ErrLocalBuildNotAllowed)
+	assert.Contains(t, err.Error(), "locked from a local build")
+}
+
+// A lock entry that claims a remote origin the config does not know, but
+// whose stored alias names the local catalog, must not bypass the gate --
+// neither through a cached copy nor a fresh fetch.
+func TestFetcher_DisallowLocalBuilds_RejectsLocalSourceClaimingRemoteOrigin(t *testing.T) {
+	t.Parallel()
+	dep := builtPluginDep("1.0.0")
+	dep.Source = nil
+	lock := []bundler.LockPlugin{{
+		Name: "my-plugin", Kind: "provider", Version: "1.0.0", Constraint: "1.0.0",
+		Digest: binaryDigest(builtBinary), ResolvedFrom: catalog.LocalCatalogName,
+		ResolvedCanonical: "ghcr.io/unconfigured",
+	}}
+	require.False(t, lock[0].IsBuilt(), "precondition: the entry does not look built")
+
+	for _, cached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cached=%t", cached), func(t *testing.T) {
+			t.Parallel()
+			fx := newBuiltFixture(t, disallowLocalBuilds)
+			if cached {
+				localHash := fx.fetcher.resolveCatalogIdentity(catalog.LocalCatalogName).RegistryHash()
+				_, err := fx.cache.Put(PluginCacheKey("my-plugin", solution.PluginKindProvider), "1.0.0", "linux/amd64",
+					builtBinary, WithRegistryHash(localHash))
+				require.NoError(t, err)
+			}
+
+			_, err := fx.fetcher.FetchPlugin(t.Context(), dep, lock)
+			require.ErrorIs(t, err, ErrLocalBuildNotAllowed)
+		})
+	}
+}
+
+// A crafted lock entry whose origin is empty or not a configured remote must
+// not reach a cached local build: the cache entry has no provenance and the
+// expected digest comes from the same lock entry.
+func TestFetcher_DisallowLocalBuilds_UnattributedLockSkipsCache(t *testing.T) {
+	t.Parallel()
+	dep := builtPluginDep("1.0.0")
+	dep.Source = nil
+
+	tests := []struct {
+		name         string
+		resolvedFrom func(fx builtFixture) string
+		cacheHash    func(fx builtFixture) string
+		check        func(t *testing.T, err error)
+	}{
+		{
+			name:         "empty origin, flat cache entry",
+			resolvedFrom: func(builtFixture) string { return "" },
+			cacheHash:    func(builtFixture) string { return "" },
+			// The fresh unscoped fetch finds the local build and rejects it.
+			check: func(t *testing.T, err error) { require.ErrorIs(t, err, ErrLocalBuildNotAllowed) },
+		},
+		{
+			name: "origin is the local catalog's canonical",
+			resolvedFrom: func(fx builtFixture) string {
+				return fx.fetcher.resolveCatalogIdentity(catalog.LocalCatalogName).Canonical
+			},
+			cacheHash: func(fx builtFixture) string {
+				return fx.fetcher.resolveCatalogIdentity(catalog.LocalCatalogName).RegistryHash()
+			},
+			// A path is not a catalog alias, so the fresh fetch has nowhere to go.
+			check: func(t *testing.T, err error) { assert.Contains(t, err.Error(), "not configured") },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fx := newBuiltFixture(t, disallowLocalBuilds)
+			lock := []bundler.LockPlugin{{
+				Name: "my-plugin", Kind: "provider", Version: "1.0.0", Constraint: "1.0.0",
+				Digest: binaryDigest(builtBinary), ResolvedFrom: tt.resolvedFrom(fx),
+			}}
+			require.False(t, lock[0].IsBuilt(), "precondition: the entry does not look built")
+
+			var opts []CacheOption
+			if h := tt.cacheHash(fx); h != "" {
+				opts = append(opts, WithRegistryHash(h))
+			}
+			_, err := fx.cache.Put(PluginCacheKey("my-plugin", solution.PluginKindProvider), "1.0.0", "linux/amd64",
+				builtBinary, opts...)
+			require.NoError(t, err)
+
+			r, err := fx.fetcher.FetchPlugin(t.Context(), dep, lock)
+			require.Error(t, err)
+			assert.False(t, r.FromCache)
+			tt.check(t, err)
+		})
+	}
+}
+
+func TestFetcher_CheckLocalBuild_UnknownCatalogFailsClosed(t *testing.T) {
+	t.Parallel()
+	fx := newBuiltFixture(t, disallowLocalBuilds)
+
+	err := fx.fetcher.checkLocalBuild(catalog.ArtifactInfo{Catalog: "not-configured"})
+	require.ErrorIs(t, err, ErrLocalBuildNotAllowed)
+
+	require.NoError(t, fx.fetcher.checkLocalBuild(catalog.ArtifactInfo{Catalog: "not-configured", Canonical: "ghcr.io/x"}))
+}
+
+func TestFetcher_DisallowLocalBuilds_IgnoresUnknownOriginCache(t *testing.T) {
+	t.Parallel()
+	dep := builtPluginDep("1.0.0")
+	dep.Source = nil
+
+	for _, disallow := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disallow=%t", disallow), func(t *testing.T) {
+			t.Parallel()
+			fx := newBuiltFixture(t, func(cfg *FetcherConfig) { cfg.DisallowLocalBuilds = disallow })
+			// A flat-layout entry has no recorded origin.
+			_, err := fx.cache.Put(PluginCacheKey("my-plugin", solution.PluginKindProvider), "1.0.0", "linux/amd64",
+				[]byte("unknown-origin"))
+			require.NoError(t, err)
+
+			r, err := fx.fetcher.FetchPlugin(t.Context(), dep, nil)
+			if disallow {
+				require.ErrorIs(t, err, ErrLocalBuildNotAllowed)
+				return
+			}
+			// The local build outranks a cached copy of unknown origin.
+			require.NoError(t, err)
+			assert.False(t, r.FromCache)
+			assert.Equal(t, string(builtBinary), readResult(t, r))
+		})
+	}
+}
+
+func TestFetcher_DisallowLocalBuilds_AllowsRemotePlugins(t *testing.T) {
+	t.Parallel()
+	fx := newRegistryFixture(t, disallowLocalBuilds)
+	r, err := fx.fetcher.FetchPlugin(t.Context(), registryPluginDep(betaRegistry), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "beta", r.Catalog)
+	assert.Equal(t, string(betaBinary), readResult(t, r))
+}
+
+// Where no local catalog is configured (e.g. a server), a dependency bound to
+// the reserved local alias -- as a built lock entry binds it -- is a policy
+// rejection, not an unconfigured-catalog failure.
+func TestFetcher_DisallowLocalBuilds_ReservedLocalAliasWithoutLocalCatalog(t *testing.T) {
+	t.Parallel()
+	fx := newRegistryFixture(t, disallowLocalBuilds)
+	ctx := t.Context()
+	dep := registryPluginDep("")
+	dep.Source = nil
+	dep.Catalog = catalog.LocalCatalogName
+
+	_, err := fx.fetcher.FetchPlugin(ctx, dep, nil)
+	require.ErrorIs(t, err, ErrLocalBuildNotAllowed)
+	assert.Equal(t, 403, PoolErrorHTTPStatus(err))
+
+	_, err = fx.fetcher.ResolvePlugins(ctx, []solution.PluginDependency{dep})
+	require.ErrorIs(t, err, ErrLocalBuildNotAllowed)
+
+	// Without the policy it is the usual unconfigured-catalog failure.
+	allowed := newRegistryFixture(t)
+	_, err = allowed.fetcher.FetchPlugin(ctx, dep, nil)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrLocalBuildNotAllowed)
+}
+
+// registryCatalog is a mock remote catalog with an OCI origin, so the fetcher's
+// catalog index maps that registry to the catalog's alias.
+type registryCatalog struct {
+	*mockCatalog
+	registry string
+}
+
+func (c registryCatalog) Registry() string   { return c.registry }
+func (c registryCatalog) Repository() string { return "" }
+
+// indexedPluginFetcher reports registry-aware catalogs for the fetcher's index.
+type indexedPluginFetcher struct {
+	*catalog.PluginFetcher
+	cats []catalog.Catalog
+}
+
+func (f indexedPluginFetcher) Catalogs() []catalog.Catalog { return f.cats }
+
+// registryFixture is a fetcher over two remote catalogs, alpha (first in the
+// chain) and beta, that both serve my-plugin@1.0.0 with different binaries.
+type registryFixture struct {
+	fetcher *Fetcher
+	cache   *Cache
+}
+
+const betaRegistry = "ghcr.io/beta"
+
+var (
+	alphaBinary = []byte("alpha-binary")
+	betaBinary  = []byte("beta-binary")
+)
+
+func newRegistryFixture(t *testing.T, opts ...func(*FetcherConfig)) registryFixture {
+	t.Helper()
+	alpha := newMockCatalog()
+	alpha.name = "alpha"
+	alpha.addArtifact(testRef("my-plugin", "1.0.0"), alphaBinary)
+	beta := newMockCatalog()
+	beta.name = "beta"
+	beta.addArtifact(testRef("my-plugin", "1.0.0"), betaBinary)
+
+	pf, err := catalog.NewPluginFetcher(logr.Discard(), nil, mockPluginSource{alpha}, mockPluginSource{beta})
+	require.NoError(t, err)
+	cache := NewCache(t.TempDir())
+	cfg := FetcherConfig{
+		CatalogFetcher: indexedPluginFetcher{PluginFetcher: pf, cats: []catalog.Catalog{
+			registryCatalog{mockCatalog: alpha, registry: "ghcr.io/alpha"},
+			registryCatalog{mockCatalog: beta, registry: betaRegistry},
+		}},
+		Cache:    cache,
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return registryFixture{fetcher: NewFetcher(cfg), cache: cache}
+}
+
+func registryPluginDep(registry string) solution.PluginDependency {
+	return solution.PluginDependency{
+		Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0",
+		Source: &solution.PluginSource{Registry: registry, Artifact: "my-plugin"},
+	}
+}
+
+// An unscoped dep must run the same plugin whether or not a remote copy is
+// already cached: a local build outranks every remote, so it wins.
+func TestFetcher_UnscopedDep_LocalBuildBeatsCachedRemoteCopy(t *testing.T) {
+	t.Parallel()
+
+	newFixture := func(t *testing.T) (*Fetcher, *Cache) {
+		t.Helper()
+		local, err := catalog.NewLocalCatalogAt(t.TempDir(), logr.Discard())
+		require.NoError(t, err)
+		_, err = local.StoreMultiPlatform(t.Context(), testRef("my-plugin", "1.0.0"),
+			[]catalog.PlatformBinary{{Platform: "linux/amd64", Data: builtBinary}}, nil, false)
+		require.NoError(t, err)
+
+		alpha := newMockCatalog()
+		alpha.name = "alpha"
+		alpha.addArtifact(testRef("my-plugin", "1.0.0"), alphaBinary)
+		alpha.addArtifact(testRef("my-plugin", "2.0.0"), alphaBinary)
+
+		pf, err := catalog.NewPluginFetcher(logr.Discard(), local, mockPluginSource{alpha})
+		require.NoError(t, err)
+		cache := NewCache(t.TempDir())
+		f := NewFetcher(FetcherConfig{
+			CatalogFetcher: indexedPluginFetcher{PluginFetcher: pf, cats: []catalog.Catalog{
+				local,
+				registryCatalog{mockCatalog: alpha, registry: "ghcr.io/alpha"},
+			}},
+			Cache:    cache,
+			Platform: "linux/amd64",
+			Logger:   logr.Discard(),
+		})
+
+		alphaHash := f.resolveCatalogIdentity("alpha").RegistryHash()
+		for _, v := range []string{"1.0.0", "2.0.0"} {
+			_, err = cache.Put(PluginCacheKey("my-plugin", solution.PluginKindProvider), v, "linux/amd64",
+				[]byte("cached-alpha-"+v), WithRegistryHash(alphaHash))
+			require.NoError(t, err)
+		}
+		return f, cache
+	}
+
+	dep := func(version, catalogName string) solution.PluginDependency {
+		return solution.PluginDependency{
+			Name: "my-plugin", Kind: solution.PluginKindProvider, Version: version, Catalog: catalogName,
+		}
+	}
+
+	tests := []struct {
+		name        string
+		dep         solution.PluginDependency
+		wantCatalog string
+		wantBinary  string
+		wantCached  bool
+	}{
+		{name: "local build wins over cached remote copy", dep: dep("1.0.0", ""), wantCatalog: catalog.LocalCatalogName, wantBinary: string(builtBinary)},
+		{name: "no local build keeps the cache fast path", dep: dep("2.0.0", ""), wantCatalog: "alpha", wantBinary: "cached-alpha-2.0.0", wantCached: true},
+		{name: "dep bound to a remote keeps the cache fast path", dep: dep(">=1.0.0", "alpha"), wantCatalog: "alpha", wantBinary: "cached-alpha-2.0.0", wantCached: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f, _ := newFixture(t)
+
+			r, err := f.FetchPlugin(t.Context(), tt.dep, nil)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantCatalog, r.Catalog)
+			assert.Equal(t, tt.wantCached, r.FromCache)
+			assert.Equal(t, tt.wantBinary, readResult(t, r))
+		})
+	}
+}
+
+func TestFetcher_RegistryDependency_ServedFromItsCatalog(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		registry string
+		catalog  string
+	}{
+		{name: "unbound dep is bound to the registry's catalog", registry: betaRegistry},
+		{name: "registry matches case-insensitively", registry: "GHCR.io/Beta"},
+		{name: "dep already bound to the registry's catalog", registry: betaRegistry, catalog: "beta"},
+		{name: "existing binding matches case-insensitively", registry: betaRegistry, catalog: "BETA"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fx := newRegistryFixture(t)
+			ctx := t.Context()
+			dep := registryPluginDep(tt.registry)
+			dep.Catalog = tt.catalog
+
+			results, err := fx.fetcher.FetchPlugins(ctx, []solution.PluginDependency{dep}, nil)
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, "beta", results[0].Catalog)
+			assert.Equal(t, string(betaBinary), readResult(t, results[0]))
+
+			infos, err := fx.fetcher.ResolvePlugins(ctx, []solution.PluginDependency{dep})
+			require.NoError(t, err)
+			require.Len(t, infos, 1)
+			assert.Equal(t, "beta", infos[0].Catalog)
+		})
+	}
+
+	t.Run("control: a short name resolves from the first catalog", func(t *testing.T) {
+		t.Parallel()
+		fx := newRegistryFixture(t)
+		short := registryPluginDep(betaRegistry)
+		short.Source = nil
+		infos, err := fx.fetcher.ResolvePlugins(t.Context(), []solution.PluginDependency{short})
+		require.NoError(t, err)
+		assert.Equal(t, "alpha", infos[0].Catalog)
+	})
+}
+
+func TestFetcher_RegistryDependency_FailsClosed(t *testing.T) {
+	t.Parallel()
+
+	unconfigured := registryPluginDep("ghcr.io/other")
+	otherCatalog := registryPluginDep(betaRegistry)
+	otherCatalog.Catalog = "alpha"
+
+	tests := []struct {
+		name    string
+		dep     solution.PluginDependency
+		wantErr error
+	}{
+		{name: "unconfigured registry", dep: unconfigured, wantErr: ErrUnconfiguredRegistry},
+		{name: "bound to another catalog", dep: otherCatalog, wantErr: ErrCatalogConflict},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fx := newRegistryFixture(t)
+			ctx := t.Context()
+
+			_, err := fx.fetcher.FetchPlugins(ctx, []solution.PluginDependency{tt.dep}, nil)
+			require.ErrorIs(t, err, tt.wantErr)
+
+			_, err = fx.fetcher.FetchPlugin(ctx, tt.dep, nil)
+			require.ErrorIs(t, err, tt.wantErr)
+
+			_, err = fx.fetcher.ResolvePlugins(ctx, []solution.PluginDependency{tt.dep})
+			require.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestFetcher_RegistryDependency_CacheScopedToItsCatalog(t *testing.T) {
+	t.Parallel()
+	fx := newRegistryFixture(t)
+	ctx := t.Context()
+	cacheKey := PluginCacheKey("my-plugin", solution.PluginKindProvider)
+
+	// A copy cached from alpha must not satisfy a dep sourced from beta.
+	alphaHash := fx.fetcher.resolveCatalogIdentity("alpha").RegistryHash()
+	_, err := fx.cache.Put(cacheKey, "1.0.0", "linux/amd64", []byte("alpha-cached"), WithRegistryHash(alphaHash))
+	require.NoError(t, err)
+
+	r, err := fx.fetcher.FetchPlugin(ctx, registryPluginDep(betaRegistry), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "beta", r.Catalog)
+	assert.Equal(t, string(betaBinary), readResult(t, r))
+
+	// A copy cached from beta is reused, and a catalog binding matches the
+	// index alias case-insensitively.
+	betaHash := fx.fetcher.resolveCatalogIdentity("beta").RegistryHash()
+	_, err = fx.cache.Put(cacheKey, "1.0.0", "linux/amd64", []byte("beta-cached"), WithRegistryHash(betaHash))
+	require.NoError(t, err)
+
+	short := registryPluginDep(betaRegistry)
+	short.Source = nil
+	short.Catalog = "BETA"
+	r, err = fx.fetcher.FetchPlugin(ctx, short, nil)
+	require.NoError(t, err)
+	assert.True(t, r.FromCache)
+	assert.Equal(t, "beta", r.Catalog)
+	assert.Equal(t, "beta-cached", readResult(t, r))
+}
+
+func TestFetcher_RegistryDependency_Locked(t *testing.T) {
+	t.Parallel()
+
+	lockFrom := func(canonical string, binary []byte) []bundler.LockPlugin {
+		return []bundler.LockPlugin{{
+			Name: "my-plugin", Kind: "provider", Version: "1.0.0", Constraint: "1.0.0",
+			Digest: binaryDigest(binary), ResolvedCanonical: canonical,
+			Source: &bundler.LockPluginSource{Registry: betaRegistry},
+		}}
+	}
+
+	t.Run("served from the locked catalog", func(t *testing.T) {
+		t.Parallel()
+		fx := newRegistryFixture(t)
+		r, err := fx.fetcher.FetchPlugin(t.Context(), registryPluginDep(betaRegistry), lockFrom(betaRegistry, betaBinary))
+		require.NoError(t, err)
+		assert.Equal(t, "beta", r.Catalog)
+		assert.Equal(t, string(betaBinary), readResult(t, r))
+	})
+
+	t.Run("lock resolved from another catalog is stale", func(t *testing.T) {
+		t.Parallel()
+		fx := newRegistryFixture(t)
+		_, err := fx.fetcher.FetchPlugin(t.Context(), registryPluginDep(betaRegistry), lockFrom("ghcr.io/alpha", alphaBinary))
+		require.ErrorIs(t, err, ErrLockStale)
+		assert.Contains(t, err.Error(), `resolved from catalog "alpha"`)
+		assert.Contains(t, err.Error(), "build solution")
+	})
 }
 
 func TestFetcher_FetchPlugins_CacheMiss_FetchFromCatalog(t *testing.T) {
@@ -221,10 +992,10 @@ func TestFetcher_FetchPlugins_CacheMiss_FetchFromCatalog(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(cacheDir),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(cacheDir),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -258,10 +1029,10 @@ func TestFetcher_FetchPlugins_MultiPlatformLock_CrossPlatform(t *testing.T) {
 	cat.addArtifact(ref, binary)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -299,10 +1070,10 @@ func TestFetcher_FetchPlugins_MultiPlatformLock_MissingPlatform(t *testing.T) {
 	cat.addArtifact(ref, binary)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "windows/amd64", // not published by the lock
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "windows/amd64", // not published by the lock
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -337,10 +1108,10 @@ func TestFetcher_FetchPlugins_CacheHit(t *testing.T) {
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    cache,
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -362,10 +1133,10 @@ func TestFetcher_FetchPlugins_NoLockFile_WarnsAndResolves(t *testing.T) {
 	cat.addArtifact(ref, []byte("resolved-binary"))
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -385,10 +1156,10 @@ func TestFetcher_FetchPlugins_NotFound(t *testing.T) {
 	cat := newMockCatalog()
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -410,10 +1181,10 @@ func TestFetcher_FetchPlugins_MultiplePlugins(t *testing.T) {
 	cat.addArtifact(ref2, []byte("binary-b"))
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -563,10 +1334,10 @@ func TestFetcher_FetchPlugins_VersionConstraintMismatch(t *testing.T) {
 	_ = origResolve // use the default
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	// Use an exact version that exists but the constraint doesn't match
@@ -600,11 +1371,11 @@ func TestFetcher_FetchPlugins_NoCache_BypassesCachedBinary(t *testing.T) {
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    cache,
-		Platform: "linux/amd64",
-		NoCache:  true,
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		NoCache:        true,
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -625,6 +1396,9 @@ func TestFetcher_FetchPlugins_EnforceMode_BypassesCache(t *testing.T) {
 	cat := newMockCatalog()
 	ref := testRef("signed-plugin", "1.0.0")
 	cat.addArtifact(ref, []byte("fresh-binary"))
+	signed := cat.artifacts[ref.String()]
+	signed.info.ImageRef = "ghcr.io/org/providers/signed-plugin@sha256:abc"
+	cat.artifacts[ref.String()] = signed
 
 	cacheDir := t.TempDir()
 	cache := NewCache(cacheDir)
@@ -633,16 +1407,18 @@ func TestFetcher_FetchPlugins_EnforceMode_BypassesCache(t *testing.T) {
 	_, err := cache.Put("signed-plugin", "1.0.0", "linux/amd64", []byte("fresh-binary"), WithRegistryHash(testCatalogRegistryHash()))
 	require.NoError(t, err)
 
+	verifier := &mockVerifier{result: &SignatureResult{Verified: true}}
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    cache,
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 		SignaturePolicy: &SignaturePolicy{
 			Mode:              SignatureModeEnforce,
 			TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
 			TrustedIdentities: []string{"https://github.com/org/*"},
 		},
+		SignatureVerifier: verifier,
 	})
 
 	deps := []solution.PluginDependency{
@@ -656,6 +1432,131 @@ func TestFetcher_FetchPlugins_EnforceMode_BypassesCache(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.False(t, results[0].FromCache, "enforce mode must bypass cache for signature verification")
+	require.NotNil(t, results[0].Signature)
+	assert.True(t, results[0].Signature.Verified)
+	assert.Equal(t, []string{"ghcr.io/org/providers/signed-plugin@sha256:abc"}, verifier.imageRefs)
+}
+
+func TestFetcher_FetchPlugins_EnforceMode_NoLockFile_BypassesCache(t *testing.T) {
+	t.Parallel()
+
+	enforce := &SignaturePolicy{
+		Mode:              SignatureModeEnforce,
+		TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+		TrustedIdentities: []string{"https://github.com/org/*"},
+	}
+	deps := []solution.PluginDependency{
+		{Name: "signed-plugin", Kind: solution.PluginKindProvider, Version: "^1.0.0"},
+	}
+	newCachedFetcher := func(t *testing.T, cat *mockCatalog, verifier *mockVerifier) *Fetcher {
+		t.Helper()
+		cache := NewCache(t.TempDir())
+		_, err := cache.Put("signed-plugin", "1.0.0", "linux/amd64", []byte("cached-binary"), WithRegistryHash(testCatalogRegistryHash()))
+		require.NoError(t, err)
+		return NewFetcher(FetcherConfig{
+			CatalogFetcher:    cat,
+			Cache:             cache,
+			Platform:          "linux/amd64",
+			Logger:            logr.Discard(),
+			SignaturePolicy:   enforce,
+			SignatureVerifier: verifier,
+		})
+	}
+
+	t.Run("cache shortcut skipped", func(t *testing.T) {
+		t.Parallel()
+		cat := newMockCatalog()
+		ref := testRef("signed-plugin", "1.0.0")
+		cat.addArtifact(ref, []byte("fresh-binary"))
+		signed := cat.artifacts[ref.String()]
+		signed.info.ImageRef = "ghcr.io/org/providers/signed-plugin@sha256:abc"
+		cat.artifacts[ref.String()] = signed
+
+		verifier := &mockVerifier{result: &SignatureResult{Verified: true}}
+		results, err := newCachedFetcher(t, cat, verifier).FetchPlugins(t.Context(), deps, nil)
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.False(t, results[0].FromCache, "enforce mode must not serve an unverified cached binary")
+		require.NotNil(t, results[0].Signature)
+		assert.True(t, results[0].Signature.Verified)
+		assert.Equal(t, []string{"ghcr.io/org/providers/signed-plugin@sha256:abc"}, verifier.imageRefs)
+	})
+
+	t.Run("no offline fallback", func(t *testing.T) {
+		t.Parallel()
+		verifier := &mockVerifier{err: errors.New("verifier must not be called")}
+		_, err := newCachedFetcher(t, newMockCatalog(), verifier).FetchPlugins(t.Context(), deps, nil)
+		require.Error(t, err, "enforce mode must fail closed rather than fall back to the cache")
+		assert.Empty(t, verifier.imageRefs)
+	})
+}
+
+func TestFetcher_CacheReadsAllowed(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		noCache bool
+		policy  *SignaturePolicy
+		want    bool
+	}{
+		{name: "default", want: true},
+		{name: "no cache", noCache: true, want: false},
+		{name: "warn", policy: &SignaturePolicy{Mode: SignatureModeWarn}, want: true},
+		{name: "enforce", policy: &SignaturePolicy{Mode: SignatureModeEnforce}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := &Fetcher{noCache: tt.noCache, sigPolicy: tt.policy}
+			assert.Equal(t, tt.want, f.cacheReadsAllowed())
+		})
+	}
+}
+
+func TestFetcher_SignaturePolicy_LocalBuildHasNoSignature(t *testing.T) {
+	t.Parallel()
+
+	policy := func(mode SignatureMode) func(*FetcherConfig) {
+		return func(cfg *FetcherConfig) {
+			cfg.SignaturePolicy = &SignaturePolicy{
+				Mode:              mode,
+				TrustedIssuers:    []string{"https://issuer.example.com"},
+				TrustedIdentities: []string{"https://github.com/org/*"},
+			}
+			cfg.SignatureVerifier = &mockVerifier{err: errors.New("verifier must not be called")}
+		}
+	}
+
+	t.Run("enforce rejects", func(t *testing.T) {
+		t.Parallel()
+		fx := newBuiltFixture(t, policy(SignatureModeEnforce))
+		_, err := fx.fetcher.FetchPlugin(t.Context(), builtPluginDep("1.0.0"), nil)
+		require.ErrorIs(t, err, ErrSignatureUnverifiable)
+		assert.Contains(t, err.Error(), "no published origin")
+	})
+
+	t.Run("warn logs and continues", func(t *testing.T) {
+		t.Parallel()
+		fx := newBuiltFixture(t, policy(SignatureModeWarn))
+		r, err := fx.fetcher.FetchPlugin(t.Context(), builtPluginDep("1.0.0"), nil)
+		require.NoError(t, err)
+		assert.Nil(t, r.Signature)
+		assert.Equal(t, string(builtBinary), readResult(t, r))
+	})
+}
+
+func TestErrUnverifiable(t *testing.T) {
+	t.Parallel()
+	dep := builtPluginDep("1.0.0")
+
+	err := errUnverifiable(dep, "1.0.0", catalog.ArtifactInfo{Catalog: "local"})
+	require.ErrorIs(t, err, ErrSignatureUnverifiable)
+	assert.Contains(t, err.Error(), "no published origin")
+
+	err = errUnverifiable(dep, "1.0.0", catalog.ArtifactInfo{Catalog: "remote", Canonical: "ghcr.io/org"})
+	require.ErrorIs(t, err, ErrSignatureUnverifiable)
+	assert.NotContains(t, err.Error(), "no published origin")
+	assert.Contains(t, err.Error(), `from catalog "remote"`)
 }
 
 func TestFetcher_FetchPlugins_WarnMode_UsesCache(t *testing.T) {
@@ -671,10 +1572,10 @@ func TestFetcher_FetchPlugins_WarnMode_UsesCache(t *testing.T) {
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    cache,
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 		SignaturePolicy: &SignaturePolicy{
 			Mode:              SignatureModeWarn,
 			TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
@@ -708,11 +1609,11 @@ func TestFetcher_FetchPlugins_NoCache_BypassesLatestCached(t *testing.T) {
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    cache,
-		Platform: "linux/amd64",
-		NoCache:  true,
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		NoCache:        true,
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -729,8 +1630,8 @@ func TestFetcher_FetchPlugins_NoCache_BypassesLatestCached(t *testing.T) {
 func TestNewFetcher_BinaryNameDefault(t *testing.T) {
 	t.Parallel()
 	f := NewFetcher(FetcherConfig{
-		Catalog: &mockCatalog{name: "test"},
-		Logger:  logr.Discard(),
+		CatalogFetcher: &mockCatalog{name: "test"},
+		Logger:         logr.Discard(),
 	})
 	assert.Equal(t, "scafctl", f.binaryName)
 }
@@ -738,9 +1639,9 @@ func TestNewFetcher_BinaryNameDefault(t *testing.T) {
 func TestNewFetcher_BinaryNameCustom(t *testing.T) {
 	t.Parallel()
 	f := NewFetcher(FetcherConfig{
-		Catalog:    &mockCatalog{name: "test"},
-		BinaryName: "mycli",
-		Logger:     logr.Discard(),
+		CatalogFetcher: &mockCatalog{name: "test"},
+		BinaryName:     "mycli",
+		Logger:         logr.Discard(),
 	})
 	assert.Equal(t, "mycli", f.binaryName)
 }
@@ -1012,7 +1913,7 @@ func TestNewFetcher_AllowedCatalogs(t *testing.T) {
 	t.Parallel()
 	cat := newMockCatalog()
 	f := NewFetcher(FetcherConfig{
-		Catalog:         cat,
+		CatalogFetcher:  cat,
 		Logger:          logr.Discard(),
 		AllowedCatalogs: []string{"Official", "Internal"},
 	})
@@ -1043,7 +1944,7 @@ func TestFetcher_FetchPlugins_CatalogNotAllowed(t *testing.T) {
 	cat.addArtifact(ref, binaryData)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:         cat,
+		CatalogFetcher:  cat,
 		Logger:          logr.Discard(),
 		NoCache:         true,
 		AllowedCatalogs: []string{"official"},
@@ -1074,6 +1975,9 @@ type localMockCatalog struct {
 
 func (l *localMockCatalog) Path() string { return l.path }
 
+// Catalogs reports the wrapper (not the embedded mock) so the index sees Path.
+func (l *localMockCatalog) Catalogs() []catalog.Catalog { return []catalog.Catalog{l} }
+
 // TestFetcher_FetchPlugins_PluginNotAllowedFromCatalog_Locked proves the
 // per-catalog plugin allowlist is enforced on the locked path, which serves
 // entirely from lock+cache and never touches the chain's AllowlistCatalog
@@ -1087,7 +1991,7 @@ func TestFetcher_FetchPlugins_PluginNotAllowedFromCatalog_Locked(t *testing.T) {
 	digest := binaryDigest(binaryData)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:         cat,
+		CatalogFetcher:  cat,
 		Logger:          logr.Discard(),
 		NoCache:         true,
 		AllowedCatalogs: []string{"trusted"}, // catalog IS allowed
@@ -1135,10 +2039,10 @@ func TestFetcher_CachedPlugin_PluginNotAllowedFromCatalog(t *testing.T) {
 	release()
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    c,
-		Platform: platform,
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          c,
+		Platform:       platform,
+		Logger:         logr.Discard(),
 		// Catalog is allowed (no AllowedCatalogs restriction), but it may only
 		// serve "good-plugin" -- not the cached "evil-plugin".
 		PerCatalogArtifacts: map[string]catalog.PluginPolicy{
@@ -1174,7 +2078,7 @@ func TestFetcher_CacheFallback_AllowlistRejects(t *testing.T) {
 	cat.addArtifact(ref, []byte("#!/bin/sh\n"))
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:         cat,
+		CatalogFetcher:  cat,
 		Cache:           NewCache(cacheDir),
 		Platform:        platform,
 		Logger:          logr.Discard(),
@@ -1340,10 +2244,10 @@ func TestFetcher_FetchPlugins_CatalogFallback_RejectsConstraintMismatch(t *testi
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    cache,
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	// Request version 0.6.0 — catalog fails, cache has 0.5.0 which doesn't satisfy.
@@ -1372,10 +2276,10 @@ func TestFetcher_FetchPlugins_CacheHit_RangeConstraintSatisfied(t *testing.T) {
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    cache,
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	// Request ^0.5.0 — cache has 0.5.2 which satisfies ^0.5.0.
@@ -1405,10 +2309,10 @@ func TestFetcher_FetchPlugins_CacheHit_LatestUsesAnyVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    cache,
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	// Request "latest" — cache has 0.5.0 which matches any version.
@@ -1422,6 +2326,60 @@ func TestFetcher_FetchPlugins_CacheHit_LatestUsesAnyVersion(t *testing.T) {
 	require.Len(t, results, 1)
 	assert.Equal(t, "0.5.0", results[0].Version)
 	assert.True(t, results[0].FromCache)
+}
+
+func TestFetcher_FetchPlugins_ScopedDep_IgnoresLegacyFlatCache(t *testing.T) {
+	t.Parallel()
+
+	// Catalog has nothing -- resolution fails.
+	cat := newMockCatalog()
+
+	cache := NewCache(t.TempDir())
+
+	// Origin-unknown binary in the flat (no registry hash) layout.
+	_, err := cache.Put("my-plugin", "1.0.0", "linux/amd64", []byte("unattributed-binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		CatalogFetcher: cat,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0", Catalog: "test"},
+	}
+
+	_, err = f.FetchPlugins(context.Background(), deps, nil)
+	require.Error(t, err, "scoped dep must not be served an origin-unknown cached binary")
+}
+
+func TestFetcher_FetchPlugins_UnscopedDep_UsesLegacyFlatCache(t *testing.T) {
+	t.Parallel()
+
+	cat := newMockCatalog()
+	cache := NewCache(t.TempDir())
+
+	_, err := cache.Put("my-plugin", "1.0.0", "linux/amd64", []byte("legacy-binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		CatalogFetcher: cat,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.True(t, results[0].FromCache)
+	assert.Empty(t, results[0].Catalog)
 }
 
 func TestFetcher_FetchPlugins_CatalogFallback_InvalidConstraintReportsParseError(t *testing.T) {
@@ -1438,10 +2396,10 @@ func TestFetcher_FetchPlugins_CatalogFallback_InvalidConstraintReportsParseError
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    cache,
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          cache,
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	// Use an unparseable constraint — catalog resolution fails, and the
@@ -1465,10 +2423,10 @@ func TestFetcher_FetchPlugins_SkipsBuiltinProviders(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(cacheDir),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(cacheDir),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -1492,10 +2450,10 @@ func TestFetcher_FetchPlugins_AllBuiltins_ReturnsNil(t *testing.T) {
 	// When every declared plugin is a builtin, FetchPlugins should return nil.
 	cat := newMockCatalog()
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -1516,13 +2474,14 @@ func TestFetcher_FetchPlugins_AuthHandlerBuiltinNotSkipped(t *testing.T) {
 	// (the builtin check only applies to provider-kind plugins).
 	cat := newMockCatalog()
 	ref := testRef("cel", "1.0.0")
+	ref.Kind = catalog.ArtifactKindAuthHandler
 	cat.addArtifact(ref, []byte("auth-binary"))
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -1686,10 +2645,10 @@ func TestFilterAuthHandlers(t *testing.T) {
 func TestFetcher_ResolvePlugins_Empty(t *testing.T) {
 	t.Parallel()
 	f := NewFetcher(FetcherConfig{
-		Catalog:  newMockCatalog(),
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: newMockCatalog(),
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	infos, err := f.ResolvePlugins(context.Background(), nil)
@@ -1704,10 +2663,10 @@ func TestFetcher_ResolvePlugins_Success(t *testing.T) {
 	cat.addArtifact(testRef("plugin-b", "2.0.0"), []byte("binary-b"))
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{
@@ -1734,7 +2693,7 @@ func TestFetcher_ResolvePlugins_CatalogNotAllowed(t *testing.T) {
 	cat.addArtifact(testRef("plugin-a", "1.0.0"), []byte("binary-a"))
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:         cat,
+		CatalogFetcher:  cat,
 		Cache:           NewCache(t.TempDir()),
 		Platform:        "linux/amd64",
 		Logger:          logr.Discard(),
@@ -1759,10 +2718,10 @@ func TestFetcher_ResolvePlugins_PluginNotAllowedFromCatalog(t *testing.T) {
 	cat.addArtifact(testRef("evil-plugin", "1.0.0"), []byte("binary"))
 
 	f := NewFetcher(FetcherConfig{
-		Catalog:  cat,
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: cat,
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 		// The catalog is allowed, but may only serve "good-plugin".
 		PerCatalogArtifacts: map[string]catalog.PluginPolicy{
 			"trusted": {Plugins: []string{"good-plugin"}},
@@ -1782,10 +2741,10 @@ func TestFetcher_ResolvePlugins_ResolveError(t *testing.T) {
 	t.Parallel()
 	// No artifacts added, so resolution fails with not-found.
 	f := NewFetcher(FetcherConfig{
-		Catalog:  newMockCatalog(),
-		Cache:    NewCache(t.TempDir()),
-		Platform: "linux/amd64",
-		Logger:   logr.Discard(),
+		CatalogFetcher: newMockCatalog(),
+		Cache:          NewCache(t.TempDir()),
+		Platform:       "linux/amd64",
+		Logger:         logr.Discard(),
 	})
 
 	deps := []solution.PluginDependency{

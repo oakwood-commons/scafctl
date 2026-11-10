@@ -94,11 +94,13 @@ func TestStubVerifier_ReturnsErrCosignNotAvailable(t *testing.T) {
 
 // mockVerifier is a test helper that implements SignatureVerifier.
 type mockVerifier struct {
-	result *SignatureResult
-	err    error
+	result    *SignatureResult
+	err       error
+	imageRefs []string
 }
 
-func (m *mockVerifier) VerifySignature(_ context.Context, _ string, _ *SignaturePolicy) (*SignatureResult, error) {
+func (m *mockVerifier) VerifySignature(_ context.Context, imageRef string, _ *SignaturePolicy) (*SignatureResult, error) {
+	m.imageRefs = append(m.imageRefs, imageRef)
 	return m.result, m.err
 }
 

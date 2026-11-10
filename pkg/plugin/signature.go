@@ -178,6 +178,10 @@ var ErrSignatureNotFound = errors.New("no cosign signature found for artifact")
 // (wrong issuer, identity mismatch, expired certificate, etc.).
 var ErrSignatureInvalid = errors.New("cosign signature verification failed")
 
+// ErrSignatureUnverifiable indicates that a plugin has no registry image whose
+// signature could be checked, such as a locally built plugin.
+var ErrSignatureUnverifiable = errors.New("plugin has no registry image to verify a signature against")
+
 // fulcioOIDCIssuerOIDs are the ASN.1 OIDs for the Fulcio OIDC issuer
 // certificate extension. v1 is 1.3.6.1.4.1.57264.1.1; v2 is
 // 1.3.6.1.4.1.57264.1.8.

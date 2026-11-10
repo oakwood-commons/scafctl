@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,63 @@ func built_plugin(name string) solution.PluginDependency {
 		Name:   name,
 		Kind:   solution.PluginKindProvider,
 		Source: &solution.PluginSource{Built: true},
+	}
+}
+
+func TestLockPlugin_IsBuilt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		lp   *LockPlugin
+		want bool
+	}{
+		{
+			name: "source.built entry",
+			lp:   &LockPlugin{Source: &LockPluginSource{Built: true}, ResolvedFrom: catalog.LocalCatalogName},
+			want: true,
+		},
+		{
+			name: "source.built entry is built regardless of the stored alias",
+			lp:   &LockPlugin{Source: &LockPluginSource{Built: true}},
+			want: true,
+		},
+		{
+			name: "short name locked from a built-only local copy",
+			lp:   &LockPlugin{ResolvedFrom: catalog.LocalCatalogName},
+			want: true,
+		},
+		{
+			name: "local alias is matched case-insensitively",
+			lp:   &LockPlugin{ResolvedFrom: "LOCAL"},
+			want: true,
+		},
+		{
+			name: "short name locked from a pulled copy keeps its remote origin",
+			lp:   &LockPlugin{ResolvedFrom: catalog.LocalCatalogName, ResolvedCanonical: "ghcr.io/echo"},
+			want: false,
+		},
+		{
+			name: "registry entry",
+			lp:   &LockPlugin{Source: &LockPluginSource{Registry: "ghcr.io/echo"}, ResolvedCanonical: "ghcr.io/echo"},
+			want: false,
+		},
+		{
+			name: "legacy entry without a canonical from another catalog",
+			lp:   &LockPlugin{ResolvedFrom: "official"},
+			want: false,
+		},
+		{
+			name: "nil entry",
+			lp:   nil,
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, tt.lp.IsBuilt())
+		})
 	}
 }
 
