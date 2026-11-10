@@ -5,8 +5,10 @@ metadata:
   name: run-undeclared
   version: 1.0.0
   description: >-
-    Uses the exec provider without declaring it in bundle.plugins, so --strict
-    must refuse to auto-resolve it while the default mode succeeds.
+    Uses the exec provider (official, not a builtin) without declaring it in
+    bundle.plugins. The run is rejected with or without --strict, because
+    undeclared non-builtin providers fail validation before any strict-mode
+    logic runs.
 
 spec:
   workflow:
