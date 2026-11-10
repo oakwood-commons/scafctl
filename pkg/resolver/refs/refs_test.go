@@ -205,3 +205,79 @@ func TestExtractFromTemplate_AuthorFunction(t *testing.T) {
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"env", "appName"}, refs)
 }
+
+func TestOutput_ToMap(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		output   Output
+		expected map[string]any
+	}{
+		{
+			name: "multiple references joined",
+			output: Output{
+				Source:     "{{ ._.config.host }}:{{ ._.port }}",
+				SourceType: "template",
+				References: []string{"config", "port"},
+				Count:      2,
+			},
+			expected: map[string]any{
+				"source":     "{{ ._.config.host }}:{{ ._.port }}",
+				"sourceType": "template",
+				"references": "config, port",
+				"count":      2,
+			},
+		},
+		{
+			name: "single reference",
+			output: Output{
+				Source:     "_.config",
+				SourceType: "cel-expression",
+				References: []string{"config"},
+				Count:      1,
+			},
+			expected: map[string]any{
+				"source":     "_.config",
+				"sourceType": "cel-expression",
+				"references": "config",
+				"count":      1,
+			},
+		},
+		{
+			name: "no references yields empty cell",
+			output: Output{
+				Source:     "static text",
+				SourceType: "template",
+				References: nil,
+				Count:      0,
+			},
+			expected: map[string]any{
+				"source":     "static text",
+				"sourceType": "template",
+				"references": "",
+				"count":      0,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.output.ToMap())
+		})
+	}
+}
+
+// TestRefsColumnOrder guards that the CSV column order stays aligned with the
+// keys ToMap emits, so the header row and data cells never drift apart.
+func TestRefsColumnOrder(t *testing.T) {
+	t.Parallel()
+
+	m := Output{}.ToMap()
+	assert.Len(t, RefsColumnOrder, len(m), "column order must list every ToMap key")
+	for _, col := range RefsColumnOrder {
+		_, ok := m[col]
+		assert.Truef(t, ok, "ToMap is missing column %q", col)
+	}
+}
