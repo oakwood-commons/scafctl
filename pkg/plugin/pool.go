@@ -14,6 +14,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
@@ -239,6 +240,24 @@ type PoolStats struct {
 	Dead    int // Entries that crashed and await eviction or re-spawn
 	Total   int // All entries
 	Evicted int // Cumulative evictions since pool creation
+}
+
+// MetricsSnapshot returns the per-state counts reported by the plugin pool
+// entries gauge.
+func (s PoolStats) MetricsSnapshot() metrics.PluginPoolStats {
+	return metrics.PluginPoolStats{
+		Active: int64(s.Active),
+		Idle:   int64(s.Idle),
+		Dead:   int64(s.Dead),
+	}
+}
+
+// evictReason returns the eviction metric reason for an entry being evicted.
+func evictReason(dead bool) string {
+	if dead {
+		return metrics.EvictReasonDead
+	}
+	return metrics.EvictReasonIdle
 }
 
 // Pool manages shared, long-lived plugin processes with lazy initialization
@@ -771,6 +790,7 @@ func (p *Pool) evict() {
 	p.mu.Lock()
 	var names []string
 	var entries []*poolEntry
+	var reasons []string
 	for name, entry := range p.entries {
 		entry.mu.Lock()
 		refs := atomic.LoadInt32(&entry.refCount)
@@ -784,6 +804,7 @@ func (p *Pool) evict() {
 		if idle || dead {
 			names = append(names, name)
 			entries = append(entries, entry)
+			reasons = append(reasons, evictReason(dead))
 		}
 	}
 	for _, name := range names {
@@ -794,6 +815,7 @@ func (p *Pool) evict() {
 
 	for i, entry := range entries {
 		p.teardownEntry(entry)
+		metrics.RecordPluginPoolEviction(p.ctx, reasons[i])
 		p.logger.V(1).Info("evicted plugin from pool", "plugin", names[i])
 	}
 }

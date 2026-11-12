@@ -18,11 +18,21 @@ import (
 // AdminInfoResponse wraps admin server info.
 type AdminInfoResponse struct {
 	Body struct {
-		Version   string `json:"version" maxLength:"50" doc:"Server version"`
-		Uptime    string `json:"uptime" maxLength:"50" doc:"Server uptime"`
-		StartTime string `json:"startTime" maxLength:"50" doc:"Server start time"`
-		Providers int    `json:"providers" doc:"Number of registered providers"`
+		Version   string                `json:"version" maxLength:"50" doc:"Server version"`
+		Uptime    string                `json:"uptime" maxLength:"50" doc:"Server uptime"`
+		StartTime string                `json:"startTime" maxLength:"50" doc:"Server start time"`
+		Providers int                   `json:"providers" doc:"Number of registered providers"`
+		Plugins   *AdminPluginPoolStats `json:"plugins,omitempty" required:"false" doc:"Plugin pool occupancy; omitted when the server runs no plugin pool"`
 	}
+}
+
+// AdminPluginPoolStats reports plugin pool entry counts.
+type AdminPluginPoolStats struct {
+	Active  int `json:"active" doc:"Plugin entries starting or serving requests"`
+	Idle    int `json:"idle" doc:"Ready plugin entries with no active references"`
+	Dead    int `json:"dead" doc:"Crashed or failed plugin entries awaiting eviction"`
+	Total   int `json:"total" doc:"All plugin entries in the pool"`
+	Evicted int `json:"evicted" doc:"Plugin entries evicted since the pool was created"`
 }
 
 // AdminReloadRequest is the request body for config reload.
@@ -66,6 +76,16 @@ func RegisterAdminEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefix s
 		resp.Body.Uptime = time.Since(hctx.StartTime).Round(time.Second).String()
 		resp.Body.StartTime = hctx.StartTime.Format(time.RFC3339)
 		resp.Body.Providers = providerCount
+		if hctx.PluginPool != nil {
+			stats := hctx.PluginPool.Stats()
+			resp.Body.Plugins = &AdminPluginPoolStats{
+				Active:  stats.Active,
+				Idle:    stats.Idle,
+				Dead:    stats.Dead,
+				Total:   stats.Total,
+				Evicted: stats.Evicted,
+			}
+		}
 		return resp, nil
 	})
 

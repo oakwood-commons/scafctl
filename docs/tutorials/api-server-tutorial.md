@@ -143,7 +143,7 @@ CLI flags override configuration file values.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/v1/admin/info` | Server info (version, uptime) |
+| GET | `/v1/admin/info` | Server info (version, uptime, plugin pool stats) |
 | POST | `/v1/admin/reload-config` | Reload configuration |
 | POST | `/v1/admin/clear-cache` | Clear caches |
 

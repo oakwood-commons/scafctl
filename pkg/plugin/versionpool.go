@@ -12,6 +12,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/plugin/identity"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -794,6 +795,7 @@ type evictCandidate struct {
 	id      pluginIdentity
 	version *semver.Version
 	entry   *poolEntry
+	reason  string // metrics.EvictReasonIdle or metrics.EvictReasonDead
 }
 
 // evictionLoop periodically scans for idle or dead entries and removes them. It
@@ -843,7 +845,7 @@ func (vp *VersionPool) evict() {
 			entry.mu.Unlock()
 
 			if idle || dead {
-				candidates = append(candidates, evictCandidate{id: id, version: sv, entry: entry})
+				candidates = append(candidates, evictCandidate{id: id, version: sv, entry: entry, reason: evictReason(dead)})
 			}
 		}
 	}
@@ -857,6 +859,7 @@ func (vp *VersionPool) evict() {
 
 	for _, c := range candidates {
 		vp.teardownEntry(c.entry)
+		metrics.RecordPluginPoolEviction(vp.ctx, c.reason)
 		vp.logger.V(1).Info("evicted plugin from pool",
 			"plugin", c.id.Name(), "version", c.version)
 	}

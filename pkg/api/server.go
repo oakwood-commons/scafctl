@@ -27,6 +27,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
@@ -347,12 +348,27 @@ func (s *Server) HandlerCtx() *HandlerContext {
 	return hctx
 }
 
+// reportPluginPoolMetrics points the plugin pool entries gauge at this
+// server's pool and returns a function that stops reporting. It is a no-op
+// when no pool is configured.
+func (s *Server) reportPluginPoolMetrics() (stop func()) {
+	pool := s.pluginPool
+	if pool == nil {
+		return func() {}
+	}
+	metrics.SetPluginPoolStatsFunc(func() metrics.PluginPoolStats {
+		return pool.Stats().MetricsSnapshot()
+	})
+	return func() { metrics.SetPluginPoolStatsFunc(nil) }
+}
+
 // Start starts the HTTP server and blocks until shutdown.
 func (s *Server) Start() error {
 	// Cancel the server context when Start returns so background goroutines
 	// (e.g. rate-limit cleanup) are stopped on all exit paths, including
 	// early TLS validation failures.
 	defer s.cancel()
+	defer s.reportPluginPoolMetrics()()
 
 	apiCfg := s.cfg.APIServer
 

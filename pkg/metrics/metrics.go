@@ -36,7 +36,29 @@ const (
 	AttrStatus        = "status"
 	AttrPluginName    = "plugin_name"
 	AttrPluginSource  = "source"
+	AttrPoolState     = "state"
+	AttrEvictReason   = "reason"
 )
+
+// Plugin pool entry states (AttrPoolState values) and eviction reasons
+// (AttrEvictReason values).
+const (
+	PoolStateActive = "active"
+	PoolStateIdle   = "idle"
+	PoolStateDead   = "dead"
+
+	EvictReasonIdle = "idle"
+	EvictReasonDead = "dead"
+)
+
+// PluginPoolStats is a point-in-time count of plugin pool entries by state.
+// It mirrors plugin.PoolStats; pkg/plugin imports this package, so the gauge
+// reads counts through a callback rather than the pool type.
+type PluginPoolStats struct {
+	Active int64
+	Idle   int64
+	Dead   int64
+}
 
 // requestTimesBuckets are the histogram bucket boundaries used for duration metrics.
 var requestTimesBuckets = []float64{.1, .2, .4, .6, .8, 1, 2.5, 5, 10, 20}
@@ -45,6 +67,7 @@ var requestTimesBuckets = []float64{.1, .2, .4, .6, .8, 1, 2.5, 5, 10, 20}
 var (
 	cacheSizeBytesVal    atomic.Int64
 	circuitBreakerStates sync.Map // map[string]float64
+	pluginPoolStatsFunc  atomic.Pointer[func() PluginPoolStats]
 )
 
 // OTel metric instruments (initialised by InitMetrics).
@@ -76,6 +99,7 @@ var (
 	httpClientConcurrentRequests  metric.Int64UpDownCounter
 	httpClientCacheSizeBytes      metric.Float64ObservableGauge
 	httpClientCircuitBreakerState metric.Float64ObservableGauge
+	pluginPoolEvictionsTotal      metric.Int64Counter
 )
 
 var initOnce sync.Once
@@ -267,8 +291,77 @@ func InitMetrics(_ context.Context) error {
 			initErr = fmt.Errorf("AuthStatusDuration: %w", err)
 			return
 		}
+
+		if err = registerPluginPoolInstruments(m, n); err != nil {
+			initErr = err
+			return
+		}
 	})
 	return initErr
+}
+
+// registerPluginPoolInstruments creates the plugin pool entries gauge and
+// evictions counter on m. It is separate from InitMetrics so tests can bind
+// the instruments to a meter backed by a manual reader.
+func registerPluginPoolInstruments(m metric.Meter, n string) error {
+	entries, err := m.Int64ObservableGauge(fmt.Sprintf("%s_plugin_pool_entries", n),
+		metric.WithDescription("Number of plugin pool entries by state"))
+	if err != nil {
+		return fmt.Errorf("pluginPoolEntries: %w", err)
+	}
+	if _, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		observePluginPool(o, entries)
+		return nil
+	}, entries); err != nil {
+		return fmt.Errorf("register pluginPoolEntries callback: %w", err)
+	}
+
+	pluginPoolEvictionsTotal, err = m.Int64Counter(fmt.Sprintf("%s_plugin_pool_evictions_total", n),
+		metric.WithDescription("Total number of plugin pool evictions by reason"))
+	if err != nil {
+		return fmt.Errorf("pluginPoolEvictionsTotal: %w", err)
+	}
+	return nil
+}
+
+// observePluginPool reports one gauge value per entry state. It reports
+// nothing when no stats source is set, so the series is absent rather than
+// a misleading zero when the process runs no pool.
+func observePluginPool(o metric.Observer, gauge metric.Int64Observable) {
+	fn := pluginPoolStatsFunc.Load()
+	if fn == nil {
+		return
+	}
+	stats := (*fn)()
+	for _, s := range []struct {
+		state string
+		count int64
+	}{
+		{PoolStateActive, stats.Active},
+		{PoolStateIdle, stats.Idle},
+		{PoolStateDead, stats.Dead},
+	} {
+		o.ObserveInt64(gauge, s.count, metric.WithAttributes(attribute.String(AttrPoolState, s.state)))
+	}
+}
+
+// SetPluginPoolStatsFunc sets the source the plugin pool entries gauge reads
+// on each collection. Pass nil to stop reporting.
+func SetPluginPoolStatsFunc(fn func() PluginPoolStats) {
+	if fn == nil {
+		pluginPoolStatsFunc.Store(nil)
+		return
+	}
+	pluginPoolStatsFunc.Store(&fn)
+}
+
+// RecordPluginPoolEviction counts one plugin pool eviction. reason is
+// EvictReasonIdle or EvictReasonDead.
+func RecordPluginPoolEviction(ctx context.Context, reason string) {
+	if pluginPoolEvictionsTotal == nil {
+		return
+	}
+	pluginPoolEvictionsTotal.Add(ctx, 1, metric.WithAttributes(attribute.String(AttrEvictReason, reason)))
 }
 
 // SetCacheSizeBytes updates the observable gauge backing value for HTTP client cache size.

@@ -21,15 +21,17 @@ import (
 
 // PluginPool is the minimal surface the API server needs from a plugin pool:
 // acquiring the external plugins a request depends on (holding a reference for
-// the duration of the work) and shutting the pool down on server stop. Both
-// *plugin.Pool and *plugin.VersionPool satisfy it, so the server can be wired
-// with either implementation.
+// the duration of the work), reporting pool occupancy, and shutting the pool
+// down on server stop. Both *plugin.Pool and *plugin.VersionPool satisfy it,
+// so the server can be wired with either implementation.
 type PluginPool interface {
 	// EnsureAndAcquire loads every provider dependency and takes a reference on
 	// each ready entry, returning a release function that drops all acquired
 	// references and must be called when the caller is done (typically via
 	// defer).
 	EnsureAndAcquire(ctx context.Context, deps []solution.PluginDependency) (release func(), err error)
+	// Stats returns a snapshot of pool entry counts by state.
+	Stats() plugin.PoolStats
 	// Shutdown kills all managed plugin processes.
 	Shutdown()
 }

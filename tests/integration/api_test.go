@@ -1703,6 +1703,10 @@ func (m *mockPluginPool) EnsureAndAcquire(_ context.Context, deps []solution.Plu
 	return func() {}, nil
 }
 
+func (m *mockPluginPool) Stats() plugin.PoolStats {
+	return plugin.PoolStats{}
+}
+
 func (m *mockPluginPool) Shutdown() {
 }
 

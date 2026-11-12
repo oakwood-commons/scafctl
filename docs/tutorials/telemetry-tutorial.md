@@ -161,6 +161,11 @@ Key metrics:
 | `scafctl_resolver_execution_duration_seconds` | Histogram | `resolver_name`, `status` |
 | `scafctl_resolver_executions_total` | Counter | `resolver_name`, `status` |
 | `scafctl_get_solution_time_histogram` | Histogram | `path` |
+| `scafctl_plugin_pool_entries` | Gauge | `state` (`active`, `idle`, `dead`) |
+| `scafctl_plugin_pool_evictions_total` | Counter | `reason` (`idle`, `dead`) |
+
+The plugin pool metrics are reported by `scafctl serve` (and any embedder
+running the API server with a plugin pool).
 
 ---
 
