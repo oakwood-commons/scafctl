@@ -18,6 +18,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/store"
 	"github.com/oakwood-commons/scafctl/pkg/versionindex"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var ErrUnresolvedDependency = errors.New("dependency has no catalog; must be resolved to a concrete catalog before reaching the pool")
@@ -169,6 +171,7 @@ type options struct {
 	clientOpts      []ClientOption // extra options for spawned plugin clients
 	sanitizeEnv     bool           // prepend WithSanitizedEnv() on spawn
 	baseConfig      ProviderConfig // host-static config delivered to each pooled provider at load
+	tracerProvider  trace.TracerProvider
 }
 
 type Option func(*options)
@@ -287,6 +290,15 @@ func WithVersionPoolBaseProviderConfig(cfg ProviderConfig) Option {
 	}
 }
 
+// WithVersionPoolTracerProvider sets the source of the pool's plugin.ensure,
+// plugin.acquire, and plugin.spawn spans. When unset (or nil), the global
+// OpenTelemetry provider is used.
+func WithVersionPoolTracerProvider(tp trace.TracerProvider) Option {
+	return func(o *options) {
+		o.tracerProvider = tp
+	}
+}
+
 /*
 Invariants :
 - For every key in the index, the store contains a poolEntry for each version in the index.
@@ -343,6 +355,7 @@ func (vp *VersionPool) ensureOneByVersion(ctx context.Context, dep solution.Plug
 	id := identity.DependencyToPluginIdentity(dep)
 	if entry := vp.GetByVersion(id, version); entry != nil {
 		vp.mu.Unlock()
+		recordAcquire(ctx, existingEntryOutcome(entry), version)
 		return vp.waitForEntry(ctx, id, entry, acquire)
 	}
 	// Cache miss: loading this version adds a new entry, so enforce capacity.
@@ -359,7 +372,8 @@ func (vp *VersionPool) ensureOneByVersion(ctx context.Context, dep solution.Plug
 	}
 	vp.insert(id, version, entry)
 	vp.mu.Unlock()
-	spawnCtx, cancel := vp.newSpawnContext()
+	recordAcquire(ctx, outcomeSpawned, version)
+	spawnCtx, cancel := vp.newSpawnContext(ctx)
 	go vp.spawnWithEntry(spawnCtx, cancel, entry, dep)
 	return vp.waitForEntry(ctx, id, entry, acquire)
 }
@@ -371,6 +385,7 @@ func (vp *VersionPool) ensureOneByConstraint(ctx context.Context, dep solution.P
 	vp.mu.Lock()
 	if entry := vp.GetByConstraint(id, con); entry != nil {
 		vp.mu.Unlock()
+		recordAcquire(ctx, existingEntryOutcome(entry), entry.version)
 		return vp.waitForEntry(ctx, id, entry, acquire)
 	}
 	// Nothing satisfies the constraint yet, so resolving it will add a new
@@ -410,7 +425,7 @@ func (vp *VersionPool) ensureOneByLatest(ctx context.Context, dep solution.Plugi
 	// catalog than the one we later download from).
 	infos, err := vp.fetcher.ResolvePlugins(ctx, []solution.PluginDependency{dep})
 	if err != nil {
-		return nil, false, fmt.Errorf("resolving latest for plugin %q: %w", dep.DisplayName(), err)
+		return nil, false, withStage(StageResolve, fmt.Errorf("resolving latest for plugin %q: %w", dep.DisplayName(), err))
 	}
 	if len(infos) == 0 {
 		return nil, false, fmt.Errorf("resolving latest for plugin %q: no results returned", dep.DisplayName())
@@ -426,6 +441,7 @@ func (vp *VersionPool) ensureOneByLatest(ctx context.Context, dep solution.Plugi
 	vp.mu.Lock()
 	if entry := vp.GetByVersion(id, version); entry != nil {
 		vp.mu.Unlock()
+		recordAcquire(ctx, existingEntryOutcome(entry), version)
 		return vp.waitForEntry(ctx, id, entry, acquire)
 	}
 	// Miss: committing the resolved version adds a new entry, so enforce
@@ -478,6 +494,7 @@ func (vp *VersionPool) fetchResolveCommit(ctx context.Context, dep solution.Plug
 	if entry := vp.GetByVersion(id, version); entry != nil {
 		vp.mu.Unlock()
 		releaseResults(results)
+		recordAcquire(ctx, existingEntryOutcome(entry), version)
 		return vp.waitForEntry(ctx, id, entry, acquire)
 	}
 	// Definitive capacity check: another caller may have filled the pool while
@@ -499,7 +516,8 @@ func (vp *VersionPool) fetchResolveCommit(ctx context.Context, dep solution.Plug
 
 	// Hand the already-fetched result to the spawner, which owns releasing the
 	// cache pin once the process has started.
-	spawnCtx, cancel := vp.newSpawnContext()
+	recordAcquire(ctx, outcomeSpawned, version)
+	spawnCtx, cancel := vp.newSpawnContext(ctx)
 	go vp.spawnFromResult(spawnCtx, cancel, entry, result)
 	return vp.waitForEntry(ctx, id, entry, acquire)
 }
@@ -564,25 +582,36 @@ func (vp *VersionPool) spawnWithEntry(ctx context.Context, cancel context.Cancel
 // entry ready (or dead on failure). It is the binary-agnostic tail shared by
 // both spawn paths; the caller owns fetching the binary and releasing its pin.
 func (vp *VersionPool) startAndRegister(ctx context.Context, entry *poolEntry, result FetchResult) {
+	ctx, span := vp.tracer().Start(ctx, spanSpawn, trace.WithAttributes(
+		attrName.String(entry.id.Name()),
+		attrCatalog.String(entry.id.Catalog()),
+		attrVersion.String(result.Version),
+	))
+	var spawnErr error
+	defer func() { endSpan(span, spawnErr) }()
+
 	clientOpts := buildSpawnClientOpts(vp.opts.sanitizeEnv, vp.opts.clientOpts)
 	client, err := vp.opts.newClient(result.Path, clientOpts...)
 	if err != nil {
-		err = fmt.Errorf("starting process: %w", err)
-		entry.failWith(err)
-		vp.logger.V(1).Info("plugin spawn failed", "plugin", entry.id.Name(), "error", err)
+		spawnErr = withStage(StageSpawn, fmt.Errorf("starting process: %w", err))
+		entry.failWith(spawnErr)
+		vp.logger.V(1).Info("plugin spawn failed", "plugin", entry.id.Name(), "error", spawnErr)
 		return
 	}
+	span.AddEvent(eventProcessStarted)
 
 	providers, err := client.GetProviders(ctx)
 	if err != nil {
 		client.Kill()
-		err = fmt.Errorf("getting providers: %w", err)
-		entry.failWith(err)
-		vp.logger.V(1).Info("plugin spawn failed", "plugin", entry.id.Name(), "error", err)
+		spawnErr = withStage(StageHandshake, fmt.Errorf("getting providers: %w", err))
+		entry.failWith(spawnErr)
+		vp.logger.V(1).Info("plugin spawn failed", "plugin", entry.id.Name(), "error", spawnErr)
 		return
 	}
+	span.AddEvent(eventProvidersListed)
 
 	registered := vp.registerProviders(ctx, entry, client, providers)
+	span.SetAttributes(attrProvidersRegistered.Int(len(registered)))
 
 	entry.mu.Lock()
 	entry.client = client
@@ -641,14 +670,57 @@ func (vp *VersionPool) registerProviders(ctx context.Context, entry *poolEntry, 
 	return registered
 }
 
-func (vp *VersionPool) newSpawnContext() (context.Context, context.CancelFunc) {
+// newSpawnContext derives a context for a background spawn. It is bounded by
+// the pool's lifetime (not the request's), so a cancelled request never aborts
+// a spawn other waiters depend on, but it carries the request's span context so
+// the spawn's spans join the request's trace instead of starting orphan traces.
+func (vp *VersionPool) newSpawnContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx := trace.ContextWithSpanContext(vp.ctx, trace.SpanContextFromContext(parent))
 	if vp.opts.spawnTimeout > 0 {
-		return context.WithTimeout(vp.ctx, vp.opts.spawnTimeout)
+		return context.WithTimeout(ctx, vp.opts.spawnTimeout)
 	}
-	return context.WithCancel(vp.ctx)
+	return context.WithCancel(ctx)
 }
 
-func (vp *VersionPool) ensureOne(ctx context.Context, dep solution.PluginDependency, acquire bool) (*poolEntry, bool, error) {
+// tracer returns the tracer for the pool's spans.
+func (vp *VersionPool) tracer() trace.Tracer {
+	return pluginTracer(vp.opts.tracerProvider)
+}
+
+// recordAcquire stamps the plugin.acquire span in ctx with how the entry was
+// obtained and the concrete version it resolved to.
+func recordAcquire(ctx context.Context, outcome string, version *semver.Version) {
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return
+	}
+	attrs := []attribute.KeyValue{attrOutcome.String(outcome)}
+	if version != nil {
+		attrs = append(attrs, attrResolvedVersion.String(version.String()))
+	}
+	span.SetAttributes(attrs...)
+}
+
+// existingEntryOutcome classifies acquiring an entry already in the pool: a
+// pool hit when its spawn has finished, otherwise a wait on a concurrent spawn.
+func existingEntryOutcome(entry *poolEntry) string {
+	select {
+	case <-entry.ready:
+		return outcomePoolHit
+	default:
+		return outcomeWaited
+	}
+}
+
+func (vp *VersionPool) ensureOne(ctx context.Context, dep solution.PluginDependency, acquire bool) (entry *poolEntry, acquired bool, err error) {
+	id := identity.DependencyToPluginIdentity(dep)
+	ctx, span := vp.tracer().Start(ctx, spanAcquire, trace.WithAttributes(
+		attrName.String(id.Name()),
+		attrCatalog.String(id.Catalog()),
+		attrVersionConstraint.String(dep.Version),
+	))
+	defer func() { endSpan(span, err) }()
+
 	if vp.closed.Load() {
 		return nil, false, ErrPoolClosed
 	}
@@ -711,6 +783,18 @@ func (vp *VersionPool) Ensure(ctx context.Context, deps []solution.PluginDepende
 // concrete catalog (dep.Catalog != ""). Callers bind short names via ResolveDeps
 // first; an unresolved dependency fails with ErrUnresolvedDependency.
 func (vp *VersionPool) EnsureAndAcquire(ctx context.Context, deps []solution.PluginDependency) (release func(), err error) {
+	ctx, span := vp.tracer().Start(ctx, spanEnsure)
+	defer func() { endSpan(span, err) }()
+	if span.IsRecording() {
+		stats := vp.Stats()
+		span.SetAttributes(
+			attrDependencyCount.Int(countProviderDeps(deps)),
+			attrPoolActive.Int(stats.Active),
+			attrPoolIdle.Int(stats.Idle),
+			attrPoolDead.Int(stats.Dead),
+		)
+	}
+
 	var acquired []*poolEntry
 	for _, dep := range deps {
 		if dep.Kind != solution.PluginKindProvider {
@@ -732,6 +816,18 @@ func (vp *VersionPool) EnsureAndAcquire(ctx context.Context, deps []solution.Plu
 			vp.releaseEntry(e)
 		}
 	}, nil
+}
+
+// countProviderDeps returns how many of deps are provider plugins, the only
+// kind the pool loads.
+func countProviderDeps(deps []solution.PluginDependency) int {
+	n := 0
+	for _, dep := range deps {
+		if dep.Kind == solution.PluginKindProvider {
+			n++
+		}
+	}
+	return n
 }
 
 // releaseEntry drops one reference on entry. If this drains the last reference

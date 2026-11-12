@@ -25,6 +25,9 @@ const (
 	TracerAction = TracerRoot + "/action"
 	// TracerMCP is the instrumentation scope for MCP server handling.
 	TracerMCP = TracerRoot + "/mcp"
+	// TracerPlugin is the instrumentation scope for plugin resolve, fetch,
+	// and spawn (plugin acquisition, as opposed to provider execution).
+	TracerPlugin = TracerRoot + "/plugin"
 )
 
 // Tracer returns a named tracer from the global TracerProvider.
