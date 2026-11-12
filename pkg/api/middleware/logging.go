@@ -7,10 +7,15 @@ import (
 	"net/http"
 	"time"
 
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-logr/logr"
 )
 
 // RequestLogging returns middleware that logs every request.
+//
+// The logged requestID is the one chi's RequestID middleware stored in the
+// request context (client-supplied X-Request-Id or generated). traceID is
+// included when the request is traced, so log lines can be joined to spans.
 func RequestLogging(lgr logr.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -20,14 +25,18 @@ func RequestLogging(lgr logr.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(sw, r)
 
 			duration := time.Since(start)
-			lgr.V(1).Info("request",
+			fields := []any{
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", sw.status,
 				"duration", duration.String(),
 				"remote", r.RemoteAddr,
-				"requestID", r.Header.Get("X-Request-ID"),
-			)
+				"requestID", chimiddleware.GetReqID(r.Context()),
+			}
+			if traceID := traceIDFromContext(r.Context()); traceID != "" {
+				fields = append(fields, "traceID", traceID)
+			}
+			lgr.V(1).Info("request", fields...)
 		})
 	}
 }

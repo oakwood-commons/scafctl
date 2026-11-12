@@ -22,7 +22,9 @@ import (
 // SetupMiddleware configures the middleware stack on the root router.
 //
 // Global middleware (logging, recovery, request ID, strip-slashes) runs for
-// every request, including health probes and the /metrics endpoint.
+// every request, including health probes and the /metrics endpoint. Tracing,
+// when enabled, is registered in the global block (so its root span wraps the
+// whole chain) but is itself scoped to versioned paths.
 //
 // API-specific middleware (authentication, rate limiting, security headers,
 // compression, metrics instrumentation, etc.) is scoped to versioned paths
@@ -93,6 +95,16 @@ func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServer
 	router.Use(chimiddleware.Recoverer)
 	router.Use(chimiddleware.RequestID)
 	router.Use(middleware.FlightID)
+
+	// Tracing wraps every later middleware so the root span covers the full
+	// request -- including host-allowlist, auth, and rate-limit rejections --
+	// and so RequestLogging and AuditLog see the span in r.Context() and can
+	// log its trace ID. It stays scoped to versioned paths so health probes
+	// and /metrics do not produce spans.
+	if cfg.Tracing.Enabled {
+		router.Use(makeVersionedOnly(middleware.Tracing()))
+	}
+
 	router.Use(chimiddleware.StripSlashes)
 	router.Use(middleware.RequestLogging(lgr))
 	router.Use(middleware.TokenPassthrough(cfg.TokenPassThroughAllowedHeaders()))
@@ -187,11 +199,6 @@ func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServer
 	// 10. Audit logging
 	if cfg.Audit.Enabled {
 		router.Use(makeVersionedOnly(middleware.AuditLog(lgr, cfg.Audit.TrustProxy)))
-	}
-
-	// 11. Tracing
-	if cfg.Tracing.Enabled {
-		router.Use(makeVersionedOnly(middleware.Tracing()))
 	}
 
 	// Return the root router. SetupMiddleware previously returned a sub-router
