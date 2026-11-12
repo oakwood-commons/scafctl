@@ -211,7 +211,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Performs a dry run of the solution, showing what actions would be taken without executing them.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionDryRunRequest) (*SolutionDryRunResponse, error) {
-		sol, executionRegistry, release, err := loadAndPrepareSolution(ctx, hctx, input.Body.Path, input.Body.LockMode, "solution-dryrun")
+		ctx, sol, executionRegistry, release, err := loadAndPrepareSolution(ctx, hctx, input.Body.Path, input.Body.LockMode, "solution-dryrun")
 		defer releaseFunc(release)
 		if err != nil {
 			return nil, err
@@ -245,7 +245,26 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 			}
 		}
 
-		sol, executionRegistry, release, err := loadAndPrepareSolution(ctx, hctx, input.Body.Path, input.Body.LockMode, "solution-run")
+		// Capture the server working directory and resolve the output directory
+		// before staging: the staged context anchors relative paths to the
+		// per-request bundle directory, which is deleted when the request ends.
+		cwd, err := provider.GetWorkingDirectory(ctx)
+		if err != nil {
+			return nil, api.HandleError(ctx, err, "solution-run", http.StatusInternalServerError, "failed to determine working directory")
+		}
+		actionCfg := execute.ActionExecutionConfigFromContext(ctx)
+		if input.Body.OutputDir != "" {
+			actionCfg.OutputDir = input.Body.OutputDir
+		}
+		if actionCfg.OutputDir != "" {
+			absDir, err := provider.AbsFromContext(ctx, actionCfg.OutputDir)
+			if err != nil {
+				return nil, api.HandleError(ctx, err, "solution-run", http.StatusInternalServerError, "failed to resolve output directory")
+			}
+			actionCfg.OutputDir = absDir
+		}
+
+		ctx, sol, executionRegistry, release, err := loadAndPrepareSolution(ctx, hctx, input.Body.Path, input.Body.LockMode, "solution-run")
 		defer releaseFunc(release)
 		if err != nil {
 			return nil, err
@@ -266,13 +285,13 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		resp := &SolutionRunResponse{}
 		resp.Body.ResolverData = resolverResult.Data
 
-		// Execute actions if workflow exists
+		// Execute actions if workflow exists. Like the CLI, actions resolve
+		// relative output paths against the caller's working directory, while
+		// resolvers (above) keep resolving bundle-relative inputs against the
+		// staged solution directory.
 		if sol.Spec.HasWorkflow() {
-			actionCfg := execute.ActionExecutionConfigFromContext(ctx)
-			if input.Body.OutputDir != "" {
-				actionCfg.OutputDir = input.Body.OutputDir
-			}
-			actionResult, err := execute.Actions(ctx, sol, resolverResult.Data, executionRegistry, actionCfg)
+			actionCtx := provider.WithWorkingDirectory(ctx, cwd)
+			actionResult, err := execute.Actions(actionCtx, sol, resolverResult.Data, executionRegistry, actionCfg)
 			if err != nil {
 				return nil, api.HandleError(ctx, err, "solution-run", http.StatusInternalServerError, "action execution failed")
 			}
@@ -291,7 +310,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Resolves all inputs in a solution without executing actions. Returns the resolved values.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionRenderRequest) (*SolutionRenderResponse, error) {
-		sol, executionRegistry, release, err := loadAndPrepareSolution(ctx, hctx, input.Body.Path, input.Body.LockMode, "solution-render")
+		ctx, sol, executionRegistry, release, err := loadAndPrepareSolution(ctx, hctx, input.Body.Path, input.Body.LockMode, "solution-render")
 		defer releaseFunc(release)
 		if err != nil {
 			return nil, err
@@ -365,44 +384,68 @@ func parseLockMode(s string) (prepare.LockMode, error) {
 
 // loadAndPrepareSolution runs the shared preparation pipeline for the dryrun,
 // run, and render endpoints: it parses the lock mode, loads the solution via
-// loadSolution, parses its lock layer, and builds the execution registry with
-// provider dependencies resolved. On success it returns the loaded solution and
-// its execution registry; on failure it returns an already-mapped Huma error
-// (400 for a bad lock mode, a load failure, or a malformed lock, or the
-// classification chosen by handleEnsureError for a dependency-resolution
-// failure).
+// loadSolution, stages it (parses the lock in memory and extracts its bundle
+// to a private per-request directory), and builds the execution registry with
+// provider dependencies resolved. On success it returns the execution context
+// -- ctx carrying the bundle's solution directory and per-execution provider
+// settings, which the caller must use for everything that runs the solution --
+// the loaded solution, and its execution registry. On failure it returns an
+// already-mapped Huma error (400 for a bad lock mode, a load failure, or a
+// malformed lock or bundle, or the classification chosen by handleEnsureError
+// for a dependency-resolution failure).
 //
 // The returned release function is always safe to pass to releaseFunc and MUST
-// be deferred by the caller regardless of the returned error, since provider
-// dependencies may have been partially acquired before a later failure.
+// be deferred by the caller regardless of the returned error: it releases
+// provider dependencies that may have been partially acquired and removes the
+// extracted bundle.
 func loadAndPrepareSolution(
 	ctx context.Context,
 	hctx *api.HandlerContext,
 	path, lockModeStr, operation string,
-) (*solution.Solution, *executionregistry.ExecutionRegistry[solution.PluginDependency], func(), error) {
+) (context.Context, *solution.Solution, *executionregistry.ExecutionRegistry[solution.PluginDependency], func(), error) {
 	lockMode, err := parseLockMode(lockModeStr)
 	if err != nil {
-		return nil, nil, nil, err
+		return ctx, nil, nil, nil, err
 	}
 
 	ms, err := loadSolution(ctx, hctx, path, operation)
 	if err != nil {
-		return nil, nil, nil, err
+		return ctx, nil, nil, nil, err
 	}
-	lock, err := ms.LockFile()
-	if err != nil {
-		return nil, nil, nil, api.HandleError(ctx, err, operation, http.StatusBadRequest, "failed to parse solution lock")
-	}
-	sol := ms.Solution
 
-	executionRegistry, release, err := ensureProviderDependencies(
-		ctx, sol, hctx.CompositeRegistry, hctx.CatalogIndex,
-		hctx.PluginFetcher, hctx.PluginPool, lock, lockMode,
-	)
+	staged, err := prepare.Stage(ctx, ms, prepare.StageOptions{Entrypoint: prepare.EntrypointAPI})
 	if err != nil {
-		return nil, nil, release, handleEnsureError(ctx, err, operation)
+		return ctx, nil, nil, nil, handleStageError(ctx, err, operation)
 	}
-	return sol, executionRegistry, release, nil
+
+	executionRegistry, releasePlugins, err := ensureProviderDependencies(
+		ctx, staged.Solution, hctx.CompositeRegistry, hctx.CatalogIndex,
+		hctx.PluginFetcher, hctx.PluginPool, staged.Lock, lockMode,
+	)
+	release := func() {
+		releaseFunc(releasePlugins)
+		staged.Cleanup()
+	}
+	if err != nil {
+		return ctx, nil, nil, release, handleEnsureError(ctx, err, operation)
+	}
+	return staged.Context(ctx), staged.Solution, executionRegistry, release, nil
+}
+
+// handleStageError maps errors from prepare.Stage to an HTTP status. A bad lock
+// or bundle is a property of the requested solution (400); anything else is a
+// server-side failure (500) whose detail, such as temp paths, is not returned.
+func handleStageError(ctx context.Context, err error, operation string) error {
+	switch {
+	case errors.Is(err, prepare.ErrInvalidLock):
+		return api.HandleError(ctx, err, operation, http.StatusBadRequest, "failed to parse solution lock")
+	case errors.Is(err, bundler.ErrBundleTooLarge):
+		return api.HandleError(ctx, err, operation, http.StatusBadRequest, "solution bundle exceeds the maximum extracted size")
+	case errors.Is(err, prepare.ErrInvalidBundle):
+		return api.HandleError(ctx, err, operation, http.StatusBadRequest, "failed to extract solution bundle")
+	default:
+		return api.HandleError(ctx, err, operation, http.StatusInternalServerError, "failed to stage solution")
+	}
 }
 
 func ensureProviderDependencies(

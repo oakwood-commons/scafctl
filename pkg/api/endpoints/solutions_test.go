@@ -549,7 +549,7 @@ func TestLoadAndPrepareSolution_Lock(t *testing.T) {
 			hctx := newTestHandlerContext(t)
 			hctx.NewSolutionLoader = loader.factory()
 
-			sol, reg, release, err := loadAndPrepareSolution(t.Context(), hctx, "my-solution", "", "solution-dryrun")
+			_, sol, reg, release, err := loadAndPrepareSolution(t.Context(), hctx, "my-solution", "", "solution-dryrun")
 			releaseFunc(release)
 			assert.Nil(t, sol)
 			assert.Nil(t, reg)
