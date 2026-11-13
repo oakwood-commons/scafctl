@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-logr/logr"
 )
 
@@ -69,11 +70,15 @@ func AuditLog(lgr logr.Logger, trustProxy bool) func(http.Handler) http.Handler 
 			auditFields := []any{
 				"caller", caller,
 				"sourceIP", extractIP(r, trustProxy),
-				"requestID", r.Header.Get("X-Request-ID"),
+				"requestID", chimiddleware.GetReqID(r.Context()),
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", sw.status,
 				"duration", duration.String(),
+			}
+
+			if traceID := traceIDFromContext(r.Context()); traceID != "" {
+				auditFields = append(auditFields, "traceID", traceID)
 			}
 
 			if bodySummary != "" {

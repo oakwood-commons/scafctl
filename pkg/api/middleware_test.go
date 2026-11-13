@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,9 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	apimiddleware "github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -185,6 +189,85 @@ func TestSetupMiddleware_TokenPassThroughWiring(t *testing.T) {
 			req.Header.Set(fmt.Sprintf("%sGithub", apimiddleware.TokenHeaderPrefix), "ghp_123456")
 			req.Header.Set(fmt.Sprintf("%sAzure-Ad", apimiddleware.TokenHeaderPrefix), "azure-token")
 			apiRouter.ServeHTTP(httptest.NewRecorder(), req)
+		})
+	}
+}
+
+// TestSetupMiddleware_TracingWrapsAPIChain proves the tracing span is the
+// outermost API middleware: a request rejected by the host allowlist (the first
+// API middleware) must still produce a span, routed requests get a
+// route-pattern span name, and non-versioned paths are not traced.
+//
+// SetupMiddleware builds Tracing() with the global tracer provider, so this test
+// swaps it and must not run in parallel.
+func TestSetupMiddleware_TracingWrapsAPIChain(t *testing.T) {
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prev)
+		_ = tp.Shutdown(context.Background())
+	})
+
+	router := chi.NewRouter()
+	cfg := &config.APIServerConfig{
+		AllowedHosts: []string{"api.example.com"},
+		Tracing:      config.APITracingConfig{Enabled: true},
+	}
+	_, err := SetupMiddleware(t.Context(), router, cfg, logr.Discard())
+	require.NoError(t, err)
+
+	versioned := "/" + settings.DefaultAPIVersion + "/items/{id}"
+	router.Get(versioned, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	router.Get("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	tests := []struct {
+		name       string
+		host       string
+		path       string
+		wantStatus int
+		wantSpan   string // "" means no span expected
+	}{
+		{
+			name:       "allowed host gets route-pattern span name",
+			host:       "api.example.com",
+			path:       "/" + settings.DefaultAPIVersion + "/items/42",
+			wantStatus: http.StatusOK,
+			wantSpan:   http.MethodGet + " " + versioned,
+		},
+		{
+			name:       "host-allowlist rejection is still traced",
+			host:       "evil.example.net",
+			path:       "/" + settings.DefaultAPIVersion + "/items/42",
+			wantStatus: http.StatusForbidden,
+			wantSpan:   http.MethodGet,
+		},
+		{
+			name:       "non-versioned path is not traced",
+			host:       "api.example.com",
+			path:       "/health",
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := len(sr.Ended())
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.path, nil)
+			req.Host = tt.host
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			assert.Equal(t, tt.wantStatus, rec.Code)
+
+			spans := sr.Ended()[before:]
+			if tt.wantSpan == "" {
+				assert.Empty(t, spans)
+				return
+			}
+			require.Len(t, spans, 1)
+			assert.Equal(t, tt.wantSpan, spans[0].Name())
 		})
 	}
 }

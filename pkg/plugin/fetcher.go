@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
@@ -111,6 +112,9 @@ type Fetcher struct {
 	// disallowLocalBuilds rejects every plugin that would be served from a
 	// local build (see FetcherConfig.DisallowLocalBuilds).
 	disallowLocalBuilds bool
+	// tracerProvider is the source of plugin.fetch spans; nil uses the
+	// global provider.
+	tracerProvider trace.TracerProvider
 }
 type pluginFetchResult struct {
 	bytes []byte
@@ -187,6 +191,10 @@ type FetcherConfig struct {
 	// with ErrLocalBuildNotAllowed.
 	DisallowLocalBuilds bool
 
+	// TracerProvider is the source of plugin.fetch spans. When nil, the global
+	// OpenTelemetry provider is used.
+	TracerProvider trace.TracerProvider
+
 	// Logger for logging operations.
 	Logger logr.Logger
 }
@@ -235,6 +243,7 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 		sigPolicy:      cfg.SignaturePolicy,
 		sigVerifier:    sigVerifier,
 		catalogIndex:   catalogIndex,
+		tracerProvider: cfg.TracerProvider,
 
 		disallowLocalBuilds: cfg.DisallowLocalBuilds,
 	}
@@ -712,14 +721,28 @@ func (f *Fetcher) FetchPlugin(ctx context.Context, dep solution.PluginDependency
 // fetchOne resolves and fetches a single plugin dependency. locked is the
 // dependency's pre-resolved lock entry (nil when unpinned), supplied by the
 // FetchPlugins boundary so the fetch path never re-derives it from the raw dep.
-func (f *Fetcher) fetchOne(ctx context.Context, dep pluginArtifact, locked *bundler.LockPlugin) (FetchResult, error) {
+func (f *Fetcher) fetchOne(ctx context.Context, dep pluginArtifact, locked *bundler.LockPlugin) (result FetchResult, err error) {
+	ctx, span := pluginTracer(f.tracerProvider).Start(ctx, spanFetch, trace.WithAttributes(
+		attrName.String(dep.ArtifactName()),
+		attrCatalog.String(dep.CatalogName()),
+		attrVersionConstraint.String(dep.VersionConstraint()),
+	))
+	defer func() { endSpan(span, err) }()
+
 	start := time.Now()
-	result, err := f.doFetchOne(ctx, dep, locked)
+	result, err = f.doFetchOne(ctx, dep, locked)
 	duration := time.Since(start).Seconds()
 
-	source := "registry"
+	source := fetchSourceRegistry
 	if err == nil && result.FromCache {
-		source = "cache"
+		source = fetchSourceCache
+	}
+	span.SetAttributes(attrSource.String(source))
+	if err == nil {
+		span.SetAttributes(attrVersion.String(result.Version))
+		if result.Catalog != "" {
+			span.SetAttributes(attrCatalog.String(result.Catalog))
+		}
 	}
 
 	f.logger.V(1).Info("plugin resolution completed",
@@ -754,7 +777,7 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep pluginArtifact, locked *bu
 	// embed built binaries in the bundle or surface a dedicated error.
 	dep, err := f.bindCatalog(dep)
 	if err != nil {
-		return FetchResult{}, err
+		return FetchResult{}, withStage(StageBind, err)
 	}
 	kind := pluginKindToArtifactKind(dep.PluginKind())
 
@@ -765,20 +788,21 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep pluginArtifact, locked *bu
 	//   neither matches               → stale lock, error
 	locked, err = f.disposeLock(dep, locked)
 	if err != nil {
-		return FetchResult{}, err
+		return FetchResult{}, withStage(StageLock, err)
 	}
+	trace.SpanFromContext(ctx).SetAttributes(attrFromLock.Bool(locked != nil))
 
 	var resolved resolvedPlugin
 	if locked != nil {
 		r, err := f.resolveFromLock(dep, locked)
 		if err != nil {
-			return FetchResult{}, err
+			return FetchResult{}, withStage(StageResolve, err)
 		}
 		resolved = r
 	} else {
 		earlyResult, r, err := f.resolveFromCatalog(ctx, dep, kind)
 		if err != nil {
-			return FetchResult{}, err
+			return FetchResult{}, withStage(StageResolve, err)
 		}
 		if r == nil {
 			return earlyResult, nil
@@ -1012,8 +1036,16 @@ func (f *Fetcher) fetchAndVerify(ctx context.Context, dep pluginArtifact, locked
 	expectedDigest := resolved.expectedDigest
 	resolvedFrom := resolved.resolvedFrom
 
+	// Record the resolved artifact before fetching so failed acquisitions
+	// can be filtered by the version and catalog that failed.
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(attrVersion.String(version))
+	if resolvedFrom != "" {
+		span.SetAttributes(attrCatalog.String(resolvedFrom))
+	}
+
 	if err := f.checkLocalSource(dep, resolvedFrom); err != nil {
-		return FetchResult{}, err
+		return FetchResult{}, withStage(StageBind, err)
 	}
 
 	// Derive the registry hash now that we know the origin.
@@ -1055,10 +1087,10 @@ func (f *Fetcher) fetchAndVerify(ctx context.Context, dep pluginArtifact, locked
 
 	data, fetchInfo, err := f.fetchPlugin(ctx, kind, dep.ArtifactName(), version, f.platform, resolvedFrom)
 	if err != nil {
-		return FetchResult{}, fmt.Errorf("fetching binary: %w", err)
+		return FetchResult{}, withStage(StageDownload, fmt.Errorf("fetching binary: %w", err))
 	}
 	if err := f.checkLocalBuild(fetchInfo); err != nil {
-		return FetchResult{}, err
+		return FetchResult{}, withStage(StageBind, err)
 	}
 
 	// For multi-platform artifacts, FetchPlugin returns the per-platform
@@ -1069,25 +1101,25 @@ func (f *Fetcher) fetchAndVerify(ctx context.Context, dep pluginArtifact, locked
 
 	// Verify the downloaded binary matches the expected digest.
 	if expectedDigest == "" {
-		return FetchResult{}, fmt.Errorf(
+		return FetchResult{}, withStage(StageDigest, fmt.Errorf(
 			"plugin %s@%s: no digest available for verification; "+
 				"run '%s build solution' to generate a lock file with pinned digests",
 			dep.ArtifactName(), version, f.binaryName,
-		)
+		))
 	}
 	actualDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
 	if actualDigest != expectedDigest && locked != nil && (dep.HasBuilt() || locked.IsBuilt()) {
-		return FetchResult{}, fmt.Errorf(
+		return FetchResult{}, withStage(StageDigest, fmt.Errorf(
 			"built plugin %s@%s does not match the lock file: expected %s, got %s; "+
 				"it was rebuilt after the lock was written -- run '%s build solution' to refresh the lock",
 			dep.ArtifactName(), version, expectedDigest, actualDigest, f.binaryName,
-		)
+		))
 	}
 	if actualDigest != expectedDigest {
-		return FetchResult{}, fmt.Errorf(
+		return FetchResult{}, withStage(StageDigest, fmt.Errorf(
 			"plugin binary digest mismatch for %s@%s: expected %s, got %s (possible supply chain attack or corrupted download)",
 			dep.ArtifactName(), version, expectedDigest, actualDigest,
-		)
+		))
 	}
 
 	// Signature verification (after digest passes, before caching).
@@ -1096,12 +1128,12 @@ func (f *Fetcher) fetchAndVerify(ctx context.Context, dep pluginArtifact, locked
 		if fetchInfo.ImageRef == "" {
 			if err := HandleVerificationError(f.sigPolicy, errUnverifiable(dep, version, fetchInfo), f.logger,
 				"name", dep.ArtifactName(), "version", version); err != nil {
-				return FetchResult{}, err
+				return FetchResult{}, withStage(StageSignature, err)
 			}
 		} else {
 			sigResult, err = f.verifySignature(ctx, dep.ArtifactName(), version, fetchInfo.ImageRef)
 			if err != nil {
-				return FetchResult{}, err
+				return FetchResult{}, withStage(StageSignature, err)
 			}
 		}
 	}
@@ -1114,7 +1146,7 @@ func (f *Fetcher) fetchAndVerify(ctx context.Context, dep pluginArtifact, locked
 	}
 	cachedPath, release, err := f.cache.SetPin(cacheName, version, f.platform, data, WithRegistryHash(registryHash))
 	if err != nil {
-		return FetchResult{}, fmt.Errorf("caching binary: %w", err)
+		return FetchResult{}, withStage(StageCache, fmt.Errorf("caching binary: %w", err))
 	}
 
 	digest := fetchInfo.Digest

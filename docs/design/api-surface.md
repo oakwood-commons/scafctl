@@ -191,11 +191,18 @@ The API uses a two-layer middleware architecture. Health probes and metrics bypa
 | Order | Middleware | Purpose |
 | ------- | ----------- | --------- |
 | 1 | Panic Recovery | Catches panics, logs stack trace, returns 500 |
-| 2 | Request ID | Generates unique `X-Request-ID` per request |
+| 2 | Request ID | Assigns a request ID (client `X-Request-Id` or generated), logged as `requestID` |
 | 3 | Flight ID | Correlation ID spanning the full request lifecycle |
-| 4 | Strip Slashes | Normalizes trailing slashes in URLs |
-| 5 | Request Logging | Structured log of method, path, status, duration |
-| 6 | Token Passthrough | Forwards allow-listed caller tokens to providers (when configured) |
+| 4 | Tracing | OpenTelemetry root span per request (when `tracing.enabled`; versioned paths only) |
+| 5 | Strip Slashes | Normalizes trailing slashes in URLs |
+| 6 | Request Logging | Structured log of method, path, status, duration, `requestID`, and `traceID` (when traced) |
+| 7 | Token Passthrough | Forwards allow-listed caller tokens to providers (when configured) |
+
+Tracing sits ahead of every other middleware it covers, so its span records
+the full request -- including host-allowlist, auth, and rate-limit
+rejections -- and request/audit logs carry the matching `traceID`. Spans are
+named `{method} {route}` (for example `POST /v1/solutions/run`) once chi has
+matched a route; requests that never match a route keep the method-only name.
 
 ### API Middleware (Business Endpoints)
 
@@ -212,8 +219,7 @@ The API uses a two-layer middleware architecture. Health probes and metrics bypa
 | 7 | Compression | gzip response compression |
 | 8 | Security Headers | CSP, X-Frame-Options, HSTS, etc. |
 | 9 | Metrics | OpenTelemetry metrics collection |
-| 10 | Audit Logging | Structured audit logs with field redaction |
-| 11 | Tracing | OpenTelemetry distributed tracing |
+| 10 | Audit Logging | Structured audit logs with field redaction, `requestID`, and `traceID` (when traced) |
 
 ---
 

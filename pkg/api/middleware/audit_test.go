@@ -9,8 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 func TestAuditLog(t *testing.T) {
@@ -23,6 +26,49 @@ func TestAuditLog(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestAuditLog_CorrelationFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		traced bool
+	}{
+		{name: "traced request logs traceID", traced: true},
+		{name: "untraced request omits traceID", traced: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tp, sr := newRecordingTracerProvider(t)
+			lgr, lines := newCaptureLogger(t)
+
+			var h http.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+			h = AuditLog(lgr, false)(h)
+			if tt.traced {
+				h = Tracing(otelhttp.WithTracerProvider(tp))(h)
+			}
+			h = chimiddleware.RequestID(h)
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/test", nil)
+			h.ServeHTTP(httptest.NewRecorder(), req)
+
+			logged := lines()
+			require.Len(t, logged, 1)
+			entry := logged[0]
+			assert.Equal(t, "audit", entry["msg"])
+			assert.NotEmpty(t, entry["requestID"])
+
+			if tt.traced {
+				spans := sr.Ended()
+				require.Len(t, spans, 1)
+				assert.Equal(t, spans[0].SpanContext().TraceID().String(), entry["traceID"])
+			} else {
+				assert.NotContains(t, entry, "traceID")
+			}
+		})
+	}
 }
 
 func TestRedactBody(t *testing.T) {

@@ -20,13 +20,13 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
-	"go.opentelemetry.io/otel"
+	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
 // authTracer is the OpenTelemetry tracer for auth handler plugin operations.
-var authTracer = otel.Tracer("scafctl/plugin/auth")
+var authTracer = telemetry.Tracer(telemetry.TracerPlugin + "/auth")
 
 // Compile-time interface checks.
 var (
