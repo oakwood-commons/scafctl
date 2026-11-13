@@ -148,8 +148,6 @@ func TestListCapabilities_EmbedderTools(t *testing.T) {
 					coreCount++
 				case SourcePlugin:
 					pluginCount++
-				case SourceUpstream:
-					// not expected in this test
 				}
 			}
 		}
@@ -204,8 +202,6 @@ func TestListCapabilities_EmbedderPrompts(t *testing.T) {
 					corePrompts++
 				case SourcePlugin:
 					pluginPrompts++
-				case SourceUpstream:
-					// not expected in this test
 				}
 			}
 		}
