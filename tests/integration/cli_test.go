@@ -15546,12 +15546,13 @@ spec:
 `
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "actions.yaml"), []byte(actionsYAML), 0o644))
 
-	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "action", "hello")
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "action", "hello", "--verbose")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Hello from actions.yaml")
+	assert.NotContains(t, stderr, "Skipping")
 }
 
 func TestIntegration_ExplicitFile_GoTaskTaskfileStillErrors(t *testing.T) {

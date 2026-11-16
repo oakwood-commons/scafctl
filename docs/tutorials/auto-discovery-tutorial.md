@@ -114,7 +114,7 @@ This produces 30 candidate paths checked in this exact order:
 | 30 | `actions.yml` |
 
 The first file that exists is used -- with one exception: a `taskfile.yaml`/
-`taskfile.yml` that is **not** a scafctl Solution (no `apiVersion: scafctl.io/...`,
+`taskfile.yml` that is **not** a scafctl Solution (no `apiVersion: scafctl.io/v1`,
 `kind: Solution`, or `spec` -- for example a [go-task](https://taskfile.dev)
 taskfile) is skipped and discovery continues to the next candidate, with a note
 under `--verbose`. Explicit `-f` is unaffected: pointing `-f` at such a file
