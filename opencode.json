@@ -1,38 +1,13 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "instructions": [
-    "AGENTS.md",
-    ".github/copilot-instructions.md",
-    ".github/instructions/*.instructions.md"
-  ],
   "skills": {
     "paths": [".github/skills"]
   },
-  "plugin": [
-    "opencode-vibeguard",
-    "@tarquinen/opencode-dcp@3.1.14"
-  ],
   "mcp": {
     "scafctl": {
       "type": "local",
       "command": ["./dist/scafctl", "mcp", "serve"],
       "enabled": true
-    }
-  },
-  "formatter": {},
-  "lsp": {
-    "gopls": {
-      "command": ["gopls"]
-    }
-  },
-  "permission": {
-    "bash": {
-      "*": "allow",
-      "git commit*": "ask",
-      "git commit --amend*": "deny",
-      "git push*": "ask",
-      "gh pr create*": "ask",
-      "gh pr merge*": "ask"
     }
   }
 }
