@@ -1,142 +1,387 @@
 # AGENTS.md
 
-Primary AI guidance for this repo lives in the GitHub Copilot files and is
-auto-loaded by opencode via `opencode.json`:
+Canonical repo guidance for any author or tool working in scafctl. Copilot's
+review contract lives separately in [`REVIEW.md`](REVIEW.md) (enforced on every
+PR). On-demand skills live in `.github/skills/` -- load the one matching the
+task before deep work in that area.
 
-- `.github/copilot-instructions.md` -- project overview, key patterns, conventions.
-- `.github/instructions/*.instructions.md` -- path-scoped rules (Go, CLI, providers,
-  MCP, testing, docs). Read the one matching the file you are editing.
+## Overview
 
-## Git safety & commit signing
+Go-based CLI tool using CEL (Common Expression Language) for dynamic
+configuration evaluation and template processing. Pre-production: breaking
+changes are allowed (note them in the commit/PR); do not add backward
+compatibility for removed behavior.
 
-The AI **may** create commits, push, and open/merge PRs (with approval), but
-must follow these rules:
+## Git
 
-1. **Publishing is approval-gated; amend is blocked.** Creating commits,
-   pushing, and opening/merging PRs all require the user's explicit approval
-   FIRST. A **single approval may cover the whole `commit` -> `push` -> PR
-   sequence** -- the AI asks once (presenting the consolidated summary and the
-   exact commands it intends to run), and on approval may run that sequence
-   without stopping again for each step. If anything material changes after
-   approval (different files, a failing gate), re-ask. `git commit --amend` is
-   **denied** outright -- the user rewrites history manually.
-   - **Enforcement is opencode's `permission` `ask` rules** (in `opencode.json`:
-     `git commit*`, `git push*`, `gh pr create*`, `gh pr merge*` -> `ask`;
-     `git commit --amend*` -> `deny`). The `ask` prompt is the real consent
-     gate: it is surfaced to the user and cannot be self-approved by the agent.
-     (There is deliberately no in-band "approval marker" -- a marker in the
-     command text would be asserted by the agent, not the user, so it proves
-     nothing.)
-   - **Never push or open a PR without asking.** The AI must not chain
-     branch/commit/push/PR autonomously. Present the summary, ask, and only
-     then run the approved sequence.
-2. **Do not `sleep` to wait for CI; ask first, then loop-poll.** After
-   pushing or opening a PR, do not silently idle on a long `sleep` waiting for
-   pipeline results, and do not silently move on either -- **ask the user
-   whether to wait**. If the user wants to wait, poll in a **bounded loop**
-   (e.g. repeated `gh pr checks` with a short interval) rather than a single
-   long sleep, and hand control back promptly once there is a result or the
-   user says to stop.
-3. **Commits must be signed AND DCO signed-off.**
-   - The repo sets `commit.gpgsign=true` (SSH signing).
-   - The DCO check requires a `Signed-off-by:` trailer, so always commit with
-     `-s` (or ensure the trailer is present).
-4. **Verify the signing key is available before committing.** The SSH signing
-   key is passphrase-protected; if it is not loaded in the ssh-agent, the commit
-   fails mid-operation and no commit object is written. Check with:
+- **Conventional commits** (`feat:`, `fix:`, `docs:`, `chore:`, `!` for
+  breaking).
+- **Signing**: every commit is SSH-signed and carries a DCO `Signed-off-by:`
+  trailer (`git commit -s -S`). Verify a signing key is loaded
+  (`ssh-add -l`) before committing; if none is loaded, load it into the
+  ssh-agent per your local machine setup rather than attempting a doomed
+  commit.
+- **Squash-merge repo**: every PR becomes one commit on `main` built from the
+  **PR title and body** (per-commit messages are discarded). Do not split a
+  branch into multiple commits for history's sake; put the effort into the PR
+  title/body and keep unrelated concerns in separate PRs. The PR title must be
+  a valid conventional-commit subject. **Whenever a new commit changes what the
+  PR does, update the PR body in the same step** (`gh pr edit`) so the eventual
+  squash commit stays accurate.
+- Copilot re-reviews every push (`review_on_push: true`), so each review fix
+  triggers a fresh review. Fix substantive findings (correctness, security,
+  fail-open logic, missing error handling, 0%-covered new logic); acknowledge
+  nitpicks in a reply within the thread and resolve them -- resolving does not
+  create a commit, so it does not trigger another review round.
 
-   ```
-   ssh-add -l
-   ```
+## Build, test, lint
 
-5. **If no key is loaded, prompt the user to load it** (per their local machine
-   setup) instead of retrying a doomed commit. Then have them confirm with
-   `ssh-add -l` before you retry the commit. (The
-   `.opencode/plugins/git-signing-guard.ts` plugin enforces this by blocking
-   commits when no key is loaded.)
+The project uses `task` (go-task/task). Always use `task lint` rather than raw
+golangci-lint (it uses a pinned version).
 
-### This is a squash-merge repo
+~~~bash
+# Build
+go build -ldflags "-w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.BuildVersion=dev -X main.Commit=$(git rev-parse HEAD)" -o dist/scafctl ./cmd/scafctl/scafctl.go
 
-PRs are merged with **squash**, so every PR becomes a single commit on `main`
-and the individual commit messages on the branch are discarded (GitHub uses the
-**PR title and body** as the final squash commit message). Commit accordingly:
+# Test
+go test ./...                    # all tests (add -race for race detection)
 
-- **Do not split a branch into multiple commits for history's sake** -- it buys
-  nothing under squash and the messages are thrown away. Prefer a single,
-  well-formed commit per PR (or however many is convenient while working;
-  they collapse anyway).
-- **Put the real effort into the PR title and body**, not per-commit messages.
-  The PR title must be a valid conventional-commit subject (`feat:`, `fix:`,
-  `docs:`, `!` for breaking) because it becomes the squash subject.
-- **One logical change per PR.** Since everything in a PR squashes together,
-  keep unrelated concerns in **separate PRs** rather than separate commits --
-  e.g. a bug fix and unrelated tooling/docs changes should be two PRs, not one
-  PR with two commits.
-- The branch still must be signed and DCO signed-off (the checks run on the
-  branch commits, and the DCO trailer must survive into the squash).
+# Lint
+task lint                         # pinned golangci-lint
+task lint:fix                    # lint + auto-fix
+task lint:changed                 # only issues this branch introduced (vs merge base)
+~~~
 
-**The PR body IS the final commit message -- keep it in sync with every commit.**
-The repo is configured with `squash_merge_commit_title=PR_TITLE` and
-`squash_merge_commit_message=PR_BODY`, so the squash commit on `main` is exactly
-the **PR title + PR body** (the per-commit messages are discarded entirely).
-Because the AI cannot amend (`git commit --amend` is denied) and each review
-fix is a **new commit**, a PR routinely accumulates many noisy fix commits --
-none of which reach `main`. The discipline that makes this clean:
+- Before every commit, run `task lint:changed` and confirm it reports **no new
+  issues** -- plain `task lint` always exits non-zero due to pre-existing
+  findings in untouched files; `lint:changed` is the gate.
+- After any change, run `task test:e2e` (e2e is slow -- run it **once**, tee
+  output to a file under `temp/`, and grep the file; never re-run just to read
+  it differently). Targeted unit tests for iteration: `go test ./pkg/<pkg>/...`.
+- Security scanning: `gosec ./...`.
+- Scratch files go in the gitignored `temp/`; never commit them. Coverage
+  profiles also go to `temp/` (`go test -coverprofile temp/cover.out ...`),
+  never the repo root.
 
-- **Whenever a commit changes what the PR does, update the PR body to match.**
-  Treat the PR body as the living commit message. If a review fix changes
-  behavior, flags, or scope, edit the PR body (via `gh pr edit`) in the same
-  step so the eventual squash commit is accurate and complete -- never a stale
-  description of an earlier version.
-- **Before proposing a merge, do a final pass on the PR title and body** so they
-  read as one coherent change (folding in anything that shifted during review),
-  and show them to the user for approval. The messy fix-commit log is invisible
-  on `main`; only the title/body matter.
+## Validate an issue before implementing it
 
-**Reviewer-loop judgment: know when to stop.** This repo has Copilot configured
-to **re-review on every push** (`review_on_push: true`), so each new commit --
-including every review fix -- triggers a fresh review that may surface new
-threads. To avoid an endless fix -> push -> new-review loop, classify each review
-round:
+An open issue is not a mandate. Confirm the bug/gap is real against the
+current code (cite `file:line`) and worth doing before writing a solution.
+Treat the reporter's "Proposed Fix"/"Files to Modify" as an unverified hint --
+reporters may lack codebase access, so validate the actual best location and
+approach. Aim for the best solution, not the easy one; take cues from
+best-in-class CLIs (`git`, `docker`, `kubectl`, `gh`, `terraform`, `brew`).
+The `planner` agent (`.opencode/agent/planner.md`) codifies this triage gate.
 
-- **Substantive** (correctness bugs, fail-open/guarantee-defeating logic, silent
-  failures, security, missing error handling, 0%-covered new logic): **fix it**,
-  accept that pushing triggers another review.
-- **Nitpick** (comment wording, naming, doc phrasing, display-only issues,
-  "consider..." suggestions with no behavioral impact, defensive guards for
-  non-existent callers): **do NOT push another fix**. Instead **reply to the
-  thread acknowledging it as a non-blocking nit and resolve it** -- replying and
-  resolving does not create a commit, so it does not trigger a new review.
-- **The stop signal:** when a review round is **all nits** (no substantive
-  findings), state that explicitly with the reasoning, reply-and-resolve the
-  nit threads, and -- once **CI is green AND the PR's `reviewDecision` is not
-  blocking** -- recommend merging. Do not keep pushing. Note that resolving
-  threads does NOT clear a `CHANGES_REQUESTED` review decision on GitHub, and
-  `main` requires an approving review (`required_approving_review_count: 1`,
-  `require_last_push_approval: true`): so if the decision is still
-  `CHANGES_REQUESTED` or `REVIEW_REQUIRED`, the merge stays blocked on green CI
-  alone. In that case say so and ask the user to approve (or request a
-  re-review) rather than implying the PR is mergeable.
+## Key patterns
 
+- **CLI output**: `writer.FromContext(ctx)` -- never `fmt.Fprintf` directly.
+  See `pkg/terminal/writer/`.
+- **Data output**: `kvx.OutputOptions` for structured table/json/yaml/quiet
+  output (see `pkg/terminal/kvx/`). Commands emitting an **array of objects**
+  attach an interactive display schema via `kvx.WithOutputDisplaySchemaJSON`
+  so `-i` renders a card/detail view. **Before debugging kvx list/`-i`
+  rendering, load the `kvx-rendering` skill** (`.github/skills/kvx-rendering/`).
+- **CLI layer**: commands are thin wiring (`pkg/cmd/scafctl/...`) -- no
+  business logic.
+- **HTTP client**: `pkg/httpc/` (see its README).
+- **Paths**: xdg paths via `pkg/paths`.
+- **Configuration**: `pkg/settings` for defaults; `pkg/config/` for app
+  configuration.
+- **CEL**: `celexp.EvaluateExpression()`; prefer the `expression` field over
+  `expr`. When writing CEL extension functions, load the `cel-extensions`
+  skill (`.github/skills/cel-extensions/`).
 
-### Identity for this worktree
+## MCP tools are the source of truth
 
-Commits in this repo must be **SSH-signed** and carry a **DCO `Signed-off-by:`**
-trailer (see the Git safety rules above). Contributors configure their own
-signing identity locally (git `user.name` / `user.email` / `user.signingkey`);
-do not hardcode a specific person's key or email here.
+scafctl ships an MCP server whose tools return facts about the solution spec,
+functions, providers, and lint rules straight from the code. When authoring or
+reasoning about solutions -- or writing docs/skills -- **consult these tools
+instead of relying on (or hand-maintaining) inline catalogs**, which drift:
 
-## Conventions (summary; see .github for full detail)
+- **Spec / fields**: `get_solution_schema`, `explain_kind` (solution, resolver,
+  action, workflow, spec, provider, schema, retry).
+- **Functions**: `list_cel_functions`, `list_go_template_functions`.
+- **Providers**: `list_providers`, `list_official_providers`,
+  `get_provider_schema`.
+- **Lint**: `list_lint_rules`, `explain_lint_rule`.
+- **Concepts / runtime**: `explain_concepts` (including the `context` category)
+  and `list_context_variables` for the injected-variable-per-phase matrix.
+- **Validate before shipping**: `validate_expression`, `evaluate_cel`,
+  `evaluate_go_template`, `lint_solution`, `extract_resolver_refs`.
 
-- **Conventional commits** (`feat:`, `fix:`, `docs:`, `!` for breaking).
-- **Squash-merge repo:** PRs squash to one commit from the PR title/body -- don't
-  split for history, keep unrelated concerns in separate PRs (see Git section).
-- **Errors:** wrap with `fmt.Errorf("context: %w", err)`; never panic.
-- **Business logic** never in `pkg/cmd/scafctl/...`, `pkg/mcp/tools_*.go`, or API
-  packages -- put it in shared domain packages.
-- **Tests** for every new/changed file (target 70%+ patch coverage).
-- **Scratch files** go in the gitignored `temp/`; never commit them.
-- **Build/lint** via `task` (use `task lint`, not raw golangci-lint). Before
-  every commit, run `task lint:changed` and confirm no new issues -- it filters
-  out pre-existing findings in untouched files (which make plain `task lint`
-  always exit non-zero) and reports only what this branch introduced.
+**Caveat:** the MCP server reflects the **built binary** (`dist/scafctl`), not
+your uncommitted working tree. If you just changed a function, provider, spec
+field, or lint rule, rebuild and restart the server before querying it. When
+in doubt, the source code is the ultimate authority.
+
+## Business logic placement
+
+Business logic never lives in CLI command packages (`pkg/cmd/scafctl/...`),
+MCP handler files (`pkg/mcp/tools_*.go`), or API packages -- it goes in shared
+domain packages (`pkg/...`). Endpoints, command handlers, and MCP tool
+handlers validate input, call domain packages, and render output; nothing more.
+
+## Embedder contract
+
+scafctl is used as a **library by external CLIs**. Every new feature must be
+consumable by embedders via `RootOptions` or domain package APIs.
+
+- **No hardcoded "scafctl"**: use `settings.CliBinaryName` or
+  `settings.Run.BinaryName` in context; guard against empty names by falling
+  back to `CliBinaryName`.
+- **`RootOptions` is the embedder API surface**: new CLI-level capabilities
+  must be exposed as fields with sensible defaults -- config layers, hooks, and
+  customization points must be wireable through it. New `RootOptions` fields
+  need doc comments explaining the default behavior when unset.
+- **Env var prefixes** come from `settings.SafeEnvPrefix()` -- never hardcode
+  `SCAFCTL_`.
+- **Test embedder scenarios**: include a test with a non-default binary name
+  (e.g. `mycli`).
+- Applies to every layer, not just commands: the API server is configured via
+  `ServerOption` functions with composable middleware (embedders may add or
+  replace it); MCP tool descriptions and the server name use the configured
+  binary name, not a literal string.
+
+## Auto-discovery and resolution
+
+CLI commands pick the solution source with `load.Router.Select()` from
+`pkg/solution/load` (load it with `Router.SelectionLoader()` so discovery is
+not repeated), which:
+
+1. Uses the explicit `-f` value if provided.
+2. Uses the first positional argument when it is unambiguously a source (URL,
+   registry reference, or versioned name `app@1.2.3`).
+3. Auto-discovers solution files (`load.DiscoverLoader`) by searching folder
+   prefixes (`scafctl/`, `.scafctl/`, `.`) combined with file names
+   (`solution.yaml`, `solution.yml`, `scafctl.yaml`, `scafctl.yml`,
+   `solution.json`, `scafctl.json`, `taskfile.yaml`, `taskfile.yml`). Action
+   file names (`actions.yaml`, `actions.yml`) are only searched in
+   `DiscoveryModeAction` (used by `run action`).
+4. With `ArgsAreNamesOrCatalog`, falls back to a bare positional name as a
+   catalog reference when nothing is discovered.
+
+Multi-match ambiguity handling uses risk levels:
+
+- **Low-risk** (`DiscoveryRiskLow`): uses first match, emits a warning about
+  other matches. Used by `run`, `lint`, `test`.
+- **High-risk** (`DiscoveryRiskHigh`): returns `load.ErrAmbiguousSolution`,
+  requiring `-f`. Used by `build`.
+
+The MCP server's `list_solutions` tool uses `findSolutionFiles()`
+(`DiscoverLoader.Discover()` over the working directory and client workspace
+roots) and returns all discovered paths.
+
+## Go conventions
+
+- **Errors**: wrap with `fmt.Errorf("context: %w", err)`; never panic.
+- **Struct tags**: always add JSON/YAML tags plus [Huma validation
+  tags](https://huma.rocks/features/request-validation/#validation-tags):
+  `doc` on all fields; `maxLength`, `example`, `pattern`, `patternDescription`
+  on strings; `maximum`, `example` on integers; `maxItems` on arrays (no
+  example); no `example` on objects/maps.
+- **Special field types**: `expr` -> `Expression` (`pkg/celexp`); `tmpl` ->
+  `GoTemplatingContent` (`pkg/gotmpl`).
+- **Design principles**: accept interfaces, return structs; keep interfaces
+  small (1-3 methods); define interfaces where they are used; constructor
+  functions for dependency injection; functional options
+  (`WithX(val) Option`); `context.Context` as first parameter; no
+  package-level mutable state.
+- **Secrets**: read from environment variables -- never hardcode.
+- **Formatting**: gofmt and goimports are mandatory.
+- **No magic values**: define constants or use settings for configuration
+  values, including timeout defaults (`DefaultResolverTimeout`,
+  `DefaultHTTPTimeout`) and conflict-strategy defaults (all exported constants
+  with doc comments).
+- **Go modules**: run `go mod tidy -v` after adding/removing dependencies;
+  never edit `go.sum` manually; pin dependencies to versions, not branches;
+  `go mod verify` for integrity.
+- **Markdown**: ASCII only; use `--` instead of em dashes, straight quotes, and
+  standard hyphens; use tilde fences when a code block contains backticks (4+
+  backtick fences if tilde is unsuitable).
+
+### Deprecating a spec field
+
+scafctl has a reusable, struct-tag-driven deprecation mechanism -- no per-field
+lint code. The worked example is the resolver/action `onError` enum superseded
+by `continueOnError`:
+
+1. Tag the OLD field deprecated and name its replacement:
+
+   ~~~go
+   OnError ErrorBehavior `json:"onError,omitempty" yaml:"onError,omitempty" deprecated:"true" deprecatedReplacement:"continueOnError" doc:"DEPRECATED: use continueOnError instead. ..."`
+   ~~~
+
+   - `deprecated:"true"` -- required; marks the field deprecated.
+   - `deprecatedReplacement:"<newYamlKey>"` -- the replacement's YAML key;
+     drives lint messaging and the schema `[DEPRECATED] (use <replacement>)`
+     marker.
+   - `deprecatedMessage:"<extra guidance>"` -- optional note appended to the
+     lint warning.
+
+2. Keep the old field fully functional (parse + translate) for at least one
+   major version. Never delete a field in the same release you deprecate it.
+   Provide a translation path and document the mapping in the new field's
+   `doc` tag (worked example: `onError: continue` -> `continueOnError: true`,
+   `onError: fail` -> `continueOnError: false`).
+
+3. Add the NEW field. If it is a `*Condition`, do NOT add an `example` tag
+   (Huma validates examples against the object schema and a scalar panics
+   schema generation).
+
+4. Plumbing is automatic: `pkg/schema/introspect.go` reads the tags into
+   `FieldInfo`; `pkg/schema/format.go` renders the marker; Huma emits
+   `deprecated: true`; the generic `deprecated-field` lint rule
+   (`pkg/lint/deprecated.go`) emits a WARNING when the old field is set (add a
+   traversal call there for new struct locations -- resolvers, workflow
+   actions, and forEach are covered). If the fields are mutually exclusive,
+   `deprecated-field-conflict` emits an ERROR when both are set (runtime: the
+   new field wins).
+
+5. Escalate by SEMVER, not wall-clock time: warn now -> error in the next major
+   -> remove in the major after that. CI can opt into strict mode by treating
+   lint warnings as failures.
+
+6. Migrate first-party docs and examples to the new field, but keep ONE example
+   of the deprecated field to demonstrate the warning, and keep a test asserting
+   the old field still works and warns. Cross-reference the
+   `deprecated-field` rule's explain text.
+
+## Testing
+
+- Standard `go test` with **table-driven tests**; `testify/assert` for
+  assertions; mocks in `mock.go` files; run with `-race`.
+- **Coverage targets**: every new or changed file has tests; every PR has
+  **70%+ patch coverage** (enforced by Codecov). Domain packages (`pkg/...`)
+  80%+; CLI commands (`pkg/cmd/...`) 65%+ package / 70%+ patch; critical
+  business logic 90%+ package / 100% patch; generated code excluded. Never
+  submit a new file with 0% coverage -- at minimum test the happy path and one
+  error path. If a cobra RunE is hard to test directly, extract the core logic
+  into a helper and test that.
+- **Benchmarks** for new features and providers (`b.ReportAllocs()`,
+  `b.ResetTimer()`, `for b.Loop()`).
+- **Integration test scope**:
+
+  | Feature type | Test location |
+  | ------------- | --------------- |
+  | CLI commands | `tests/integration/cli_test.go` |
+  | Providers, resolvers, actions, plugins, solutions | `tests/integration/solutions/` |
+  | REST endpoints, middleware, auth | `tests/integration/api_test.go` |
+
+  API/server features are tested **only** in `tests/integration/api_test.go`,
+  never in solution integration tests. New commands and new endpoints always
+  land in their integration test file, and any new or changed provider,
+  resolver, action, plugin, or solution gets a `tests/integration/solutions/`
+  case.
+- **Manual CLI verification**: automated tests can pass while the actual CLI
+  is broken. When a command changes, build the binary (`go build ... -o
+  dist/scafctl`) and exercise the changed commands against `./dist/scafctl`:
+  happy path first, then error paths (bad input, missing args, invalid
+  flags), with `--debug` to surface silent failures, `--verbose` on output
+  paths, `--dry-run` where available, and `--help` to verify flag
+  registration. Isolate state-writing commands with `XDG_DATA_HOME` /
+  `XDG_CACHE_HOME` pointed at a temp dir, and verify writes with read
+  commands afterwards.
+- **kvx TUI assertions**: array commands cannot be visually verified by
+  piping (a non-TTY shell only shows the flat text fallback). Use kvx's
+  snapshot API -- see the `kvx-rendering` skill.
+
+## Per-area rules
+
+### CLI commands (`pkg/cmd/scafctl/**`)
+
+- Commands are **thin wiring only**: they parse flags, call domain packages,
+  and render output.
+- Use `cobra.Command`; wire `settings.Run` parameters from flags.
+- Use `kvx.OutputOptions` for structured data. Array-output commands attach a
+  `go:embed`-ed `<cmd>_schema.json` display schema (see
+  `pkg/cmd/scafctl/get/provider/provider.go` + `provider_schema.json` for the
+  canonical pattern). Single-object or scalar output does not need a schema.
+- Programmatic filtering is `-e`/`--expression` (CEL over the whole result,
+  bound to `_`) and `-w`/`--where` (per-item CEL) -- already wired via
+  `flags.ToKvxOutputOptions`; do not add a bespoke search/filter flag.
+- Structured/quiet formats always emit a parseable document (`[]`, not
+  `null`; non-nil empty slice); human "no results" text goes to stderr.
+- Extract complex RunE logic into testable helpers.
+
+### Diff subcommands (`pkg/cmd/scafctl/diff/**`)
+
+Every `diff` verb renders through **one shared pipeline** (`writeDiffOutput` in
+`output.go` + `pkg/diffreport`): a thin adapter `reportFrom<Kind>Diff(native)
+*diffreport.Report` lives in the command's own file (build it with
+`report.Add(...)` so the summary counts stay correct), rendered via
+`writeDiffOutput(native, report)`. Default/`auto`/`text` -> shared human
+report; `json`/`yaml` -> the native per-command struct (schema preserved);
+everything else -> the flattened `report.Entries` via the shared
+`diff_schema.json`. Output flags come from the standard
+`flags.KvxOutputFlags` (`-o`/`-i`/`-e`/`-w`, wired with
+`flags.AddKvxOutputFlagsToStruct`). Never hand-roll output formatting, add a
+per-command `-o` switch, duplicate the shared schema/column hints, or add
+bespoke styling; unit-test the adapter alongside its command.
+
+### API server (`pkg/api/**`)
+
+- chi for routing, Huma for OpenAPI-driven request/response handling with
+  struct-tag validation; `ServerOption` functional options; structured errors
+  via `pkg/api/errors.go`.
+
+### MCP tools (`pkg/mcp/tools_*.go`)
+
+- **Thin wrappers**: parse inputs, call domain packages, format results; never
+  panic (return `mcp.NewToolResultText()` / `mcp.NewToolResultError()`).
+- Register in `register*Tools()` methods on `*Server`; `mcp.NewTool()` with
+  typed parameters, Huma-style descriptions and constraints, and
+  `mcp.With*HintAnnotation()` metadata.
+- Before adding a tool, confirm the capability is not already covered -- the
+  server already exposes broad reference tools (`explain_concepts`,
+  `explain_kind`, `get_solution_schema`, `list_providers` /
+  `get_provider_schema`, `list_cel_functions` /
+  `list_go_template_functions`, `list_lint_rules` / `explain_lint_rule`,
+  `list_context_variables`). Prefer extending or pointing at those over a
+  bespoke handler.
+
+### Providers (`pkg/provider/**`)
+
+- Stateless execution primitives implementing `Descriptor()` (name, version,
+  API version, schema, capabilities) and `Execute(ctx, input)`.
+- Package: `pkg/provider/builtin/<name>provider/` (e.g. `envprovider`;
+  main file matches the provider name, e.g. `env.go`); register in
+  `pkg/provider/builtin/builtin.go`.
+- Define `ProviderName` / `Version` constants; use `schemahelper` for JSON
+  schema generation; Huma validation tags on all Descriptor fields.
+- Define a testable ops interface (e.g. `EnvOps`) injected via constructor;
+  `DefaultXxxOps` for real implementations; mocks in `mock.go`.
+- Always include benchmark tests (`*_benchmark_test.go`).
+- Verify provider names and schemas against the live catalog with
+  `list_providers` / `get_provider_schema` (rebuild first if you changed a
+  provider), not a hand-maintained list.
+
+### Settings & configuration (`pkg/settings`, `pkg/config`)
+
+- `settings.CliBinaryName` fallback; `settings.SanitizeBinaryName()` to
+  normalize; `settings.SafeEnvPrefix()` for env prefixes.
+- xdg paths for all file locations: config `xdg.ConfigHome`/binary name; cache
+  `xdg.CacheHome`/binary name; data `xdg.DataHome`/binary name.
+- Functions producing paths, cache keys, or display strings accept a binary
+  name parameter or read from context.
+- `config.Config` for runtime application configuration; loading supports
+  layered overrides (file, env, flags); always validate after loading.
+
+### Docs & examples (`docs/`, `examples/`, `pkg/docs`, `pkg/examples`)
+
+- Always create and update documentation, tutorials, and examples for new
+  features, providers, and commands -- including MCP server tools when
+  applicable.
+- Reader-facing docs must stand alone -- website and checkout readers cannot
+  invoke MCP tools, so keep committed reference material complete. Use the
+  MCP tools (see the list above) to **verify or generate** that reference, not
+  as the sole reader-facing source.
+- **Publish hygiene**: this repo is public. Before creating/editing an issue,
+  PR, or comment, or committing any file, check it against the
+  `publish-hygiene` skill (`.github/skills/publish-hygiene/SKILL.md`).
+
+## Review contract
+
+Copilot code review follows [`REVIEW.md`](REVIEW.md) -- enforced on every PR
+regardless of the author's tooling. Reviewer-side guidance (what is substantive
+vs. a nit, what not to flag) lives there.

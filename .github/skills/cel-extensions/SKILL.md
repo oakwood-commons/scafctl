@@ -1,6 +1,6 @@
 ---
-description: "CEL extension function rules for scafctl. Covers file layout, ExtFunction struct, naming, types, conversion, error handling, registration, testing, and documentation. Use when creating or editing CEL extension functions."
-applyTo: "pkg/celexp/ext/**/*.go"
+name: cel-extensions
+description: "scafctl CEL extension functions: file layout, the ExtFunction struct, naming, CEL type patterns, conversion helpers, binding types, error handling, registration, testing, documentation. Load before creating or editing a CEL extension function (pkg/celexp/ext/**)."
 ---
 
 # CEL Extension Functions
@@ -14,11 +14,11 @@ Before adding a function, check the live catalog with the MCP tool
 
 ## File Layout
 
-```
+~~~
 pkg/celexp/ext/<namespace>/
     <func>.go           # Function implementation
     <func>_test.go      # Tests + benchmarks
-```
+~~~
 
 One file per function (or per closely related group). The namespace directory
 matches the CEL function prefix (e.g., `arrays/` for `arrays.*` functions).
@@ -27,7 +27,7 @@ matches the CEL function prefix (e.g., `arrays/` for `arrays.*` functions).
 
 Every function returns `celexp.ExtFunction` from a constructor:
 
-```go
+~~~go
 func GroupByFunc() celexp.ExtFunction {
     funcName := "arrays.groupBy"
     return celexp.ExtFunction{
@@ -55,12 +55,12 @@ func GroupByFunc() celexp.ExtFunction {
         },
     }
 }
-```
+~~~
 
 ## Naming Conventions
 
 | Convention | Rule | Example |
-|-----------|------|---------|
+| ----------- | ---- | ------- |
 | Function name | `<namespace>.<camelCase>` | `arrays.groupBy`, `map.fromEntries` |
 | Constructor | `<PascalCase>Func()` | `GroupByFunc()`, `FromEntriesFunc()` |
 | Overload ID | `strings.ReplaceAll(funcName, ".", "_")` | `arrays_groupBy` |
@@ -70,7 +70,7 @@ func GroupByFunc() celexp.ExtFunction {
 
 Common type signatures for list/map operations:
 
-```go
+~~~go
 // Input: list of objects
 cel.ListType(cel.MapType(cel.StringType, cel.DynType))
 
@@ -82,13 +82,13 @@ cel.MapType(cel.StringType, cel.DynType)
 
 // Output: map with list values
 cel.MapType(cel.StringType, cel.ListType(cel.MapType(cel.StringType, cel.DynType)))
-```
+~~~
 
 ## Conversion Helpers
 
 Use helpers from `pkg/celexp/conversion/` for Go <-> CEL type conversion:
 
-```go
+~~~go
 // CEL list -> Go slice of maps
 items, err := conversion.ListToObjectSlice(listVal)
 
@@ -100,12 +100,12 @@ return types.DefaultTypeAdapter.NativeToValue(result)
 
 // Go value -> CEL ref.Val (deep conversion)
 return conversion.GoToCelValue(result)
-```
+~~~
 
 ## Binding Types
 
 | Args | Binding | Use |
-|------|---------|-----|
+| ---- | ------- | --- |
 | 1 | `cel.UnaryBinding(func(ref.Val) ref.Val)` | Single argument |
 | 2 | `cel.BinaryBinding(func(ref.Val, ref.Val) ref.Val)` | Two arguments |
 | 3+ | `cel.FunctionBinding(func(...ref.Val) ref.Val)` | Variadic |
@@ -114,10 +114,10 @@ return conversion.GoToCelValue(result)
 
 Return errors via `types.NewErr` with the function name prefix:
 
-```go
+~~~go
 return types.NewErr("arrays.groupBy: expected string key, got %s", val.Type())
 return types.NewErr("arrays.groupBy: %s", err.Error())
-```
+~~~
 
 Do NOT panic or return Go errors. CEL functions must return `ref.Val`.
 
@@ -126,7 +126,7 @@ Do NOT panic or return Go errors. CEL functions must return `ref.Val`.
 Add the function to `Custom()` in `pkg/celexp/ext/ext.go` under the
 appropriate namespace comment:
 
-```go
+~~~go
 func Custom() celexp.ExtFunctionList {
     funcs := celexp.ExtFunctionList{
         // Arrays functions
@@ -135,7 +135,7 @@ func Custom() celexp.ExtFunctionList {
         arrays.GroupByFunc(),          // <-- add here
         // ...
     }
-```
+~~~
 
 ## Testing
 
@@ -143,7 +143,7 @@ func Custom() celexp.ExtFunctionList {
 - Benchmark test for performance-critical functions
 - Test CEL evaluation end-to-end (compile + eval), not just the Go function
 
-```go
+~~~go
 func TestGroupByFunc(t *testing.T) {
     fn := arrays.GroupByFunc()
     env, _ := cel.NewEnv(fn.EnvOptions...)
@@ -153,7 +153,7 @@ func TestGroupByFunc(t *testing.T) {
 func BenchmarkGroupByFunc(b *testing.B) {
     // setup once, eval in loop
 }
-```
+~~~
 
 ## Documentation
 
@@ -170,4 +170,5 @@ After adding a function:
   function (a pattern, pitfall, or cost note) -- not a mirror of the function
   signature, which the tool already provides.
 
-Only expose implemented functions. Never register planned/aspirational functions.
+Only expose implemented functions. Never register planned/aspirational
+functions.
