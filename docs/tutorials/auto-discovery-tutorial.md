@@ -113,7 +113,13 @@ This produces 30 candidate paths checked in this exact order:
 | 29 | `actions.yaml` |
 | 30 | `actions.yml` |
 
-The first file that exists on disk is used.
+The first file that exists is used -- with one exception: a `taskfile.yaml`/
+`taskfile.yml` that is **not** a scafctl Solution (it parses as YAML but carries
+none of the recognized solution headers -- `apiVersion: scafctl.io/v1`,
+`kind: Solution`, or a non-null `spec` -- for example a
+[go-task](https://taskfile.dev) taskfile) is skipped and discovery continues to
+the next candidate, with a note under `--verbose`. Explicit `-f` is unaffected:
+pointing `-f` at such a file still reports the full validation error.
 
 > **Note:** `taskfile.yaml` is NOT searched in action discovery mode (`scafctl run action`). It is only searched in default and solution discovery modes.
 
@@ -355,7 +361,7 @@ scafctl config paths
 
 3. **Use `.scafctl/` for hidden configuration** -- useful when the solution is infrastructure that shouldn't be front-and-center.
 
-4. **Use `taskfile.yaml` for task runner workflows** -- similar to how `make` uses `Makefile` or `task` uses `Taskfile.yaml`, scafctl discovers `taskfile.yaml` for task-oriented solutions.
+4. **Use `taskfile.yaml` for task runner workflows** -- similar to how `make` uses `Makefile` or `task` uses `Taskfile.yaml`, scafctl discovers `taskfile.yaml` for task-oriented solutions. If your repo already has a go-task taskfile under that name, discovery skips it (it carries no recognized solution headers) and loads your solution file instead; keep your scafctl solution in `solution.yaml` or pass `-f` explicitly.
 
 5. **Always use `-f` in CI/CD** -- explicit paths prevent surprises when the working directory changes.
 

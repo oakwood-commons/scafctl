@@ -15477,6 +15477,101 @@ spec:
 	assert.NotContains(t, stderr, "Multiple solution files found")
 }
 
+// goTaskTaskfileYAML is a go-task taskfile: it shares a discovery file name
+// with scafctl solutions but is not one.
+const goTaskTaskfileYAML = `version: '3'
+tasks:
+  build:
+    cmds:
+      - echo hi
+`
+
+func TestIntegration_RunResolver_AutoDiscovery_GoTaskTaskfileSkipped(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// A repo migrating from go-task has both a taskfile.yaml and a scafctl
+	// solution; discovery must pick the solution and skip the go-task file.
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "taskfile.yaml"), []byte(goTaskTaskfileYAML), 0o644))
+	solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: migration
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: from solution.yaml
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), []byte(solutionYAML), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-o", "json", "--verbose")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "from solution.yaml")
+	// The skip is reported under --verbose.
+	assert.Contains(t, stderr, "Skipping")
+	assert.Contains(t, filepath.ToSlash(stderr), "taskfile.yaml")
+}
+
+func TestIntegration_RunAction_AutoDiscovery_GoTaskTaskfileSkipped(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// A repo migrating from go-task has both a taskfile.yaml and an actions
+	// file; action discovery finds actions.yaml (taskfiles are not searched
+	// in action mode, and the go-task file never loads as a Solution).
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "taskfile.yaml"), []byte(goTaskTaskfileYAML), 0o644))
+	actionsYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: migration-actions
+  version: 1.0.0
+spec:
+  workflow:
+    actions:
+      hello:
+        provider: message
+        inputs:
+          message:
+            expr: "'Hello from actions.yaml'"
+          type: success
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "actions.yaml"), []byte(actionsYAML), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "action", "hello", "--verbose")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Hello from actions.yaml")
+	assert.NotContains(t, stderr, "Skipping")
+}
+
+func TestIntegration_ExplicitFile_GoTaskTaskfileStillErrors(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// Explicit -f keeps the strict error: a go-task taskfile is not a
+	// solution, and pointing -f at it must fail, not silently skip.
+	taskfilePath := filepath.Join(tmpDir, "taskfile.yaml")
+	require.NoError(t, os.WriteFile(taskfilePath, []byte(goTaskTaskfileYAML), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-f", taskfilePath)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "metadata.name is required")
+}
+
 // ============================================================================
 // State Command Tests
 // ============================================================================
