@@ -136,10 +136,47 @@ func writeToTarWriter(tw *tar.Writer, name string, content []byte) error {
 	return writeToTar(tw, name, content)
 }
 
+// ErrBundleTooLarge is returned by ExtractBundleTarLimited when the bundle's
+// extracted contents exceed the caller's size limit.
+var ErrBundleTooLarge = errors.New("bundle exceeds maximum extracted size")
+
+// extractBudget tracks the bytes an extraction may still write. A nil budget
+// is unlimited.
+type extractBudget struct {
+	max       int64
+	remaining int64
+}
+
+// take reserves n bytes, failing with ErrBundleTooLarge when the budget
+// cannot cover them. It is a no-op on a nil budget.
+func (b *extractBudget) take(name string, n int64) error {
+	if b == nil {
+		return nil
+	}
+	if n > b.remaining {
+		return fmt.Errorf("%w: %s would exceed the %d byte limit", ErrBundleTooLarge, name, b.max)
+	}
+	b.remaining -= n
+	return nil
+}
+
 // ExtractBundleTar extracts a bundle tar archive to a destination directory.
 // Returns the bundle manifest.
 func ExtractBundleTar(tarData []byte, destDir string) (*BundleManifest, error) {
-	return extractBundleTarRecursive(tarData, destDir, nil)
+	return extractBundleTarRecursive(tarData, destDir, nil, nil)
+}
+
+// ExtractBundleTarLimited is ExtractBundleTar with a cap on the total bytes
+// written, nested sub-solution bundles included. Use it when the archive comes
+// from a source the caller does not control, such as a request to a
+// long-running server. Exceeding maxBytes returns an error wrapping
+// ErrBundleTooLarge; files already written are left for the caller to remove
+// with destDir.
+func ExtractBundleTarLimited(tarData []byte, destDir string, maxBytes int64) (*BundleManifest, error) {
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("bundle size limit must be positive, got %d", maxBytes)
+	}
+	return extractBundleTarRecursive(tarData, destDir, nil, &extractBudget{max: maxBytes, remaining: maxBytes})
 }
 
 // safeExtractPath is the zip-slip guard for archive extraction. It accepts a
@@ -157,7 +194,8 @@ func safeExtractPath(destDir, name string) (string, error) {
 // extractBundleTarRecursive extracts a bundle tar archive, detecting and recursively
 // extracting nested tar archives from sub-solution bundles.
 // visitedDigests tracks tar content digests to detect circular nested bundles.
-func extractBundleTarRecursive(tarData []byte, destDir string, visitedDigests map[string]bool) (*BundleManifest, error) {
+// budget caps the bytes written across the whole extraction; nil is unlimited.
+func extractBundleTarRecursive(tarData []byte, destDir string, visitedDigests map[string]bool, budget *extractBudget) (*BundleManifest, error) {
 	if visitedDigests == nil {
 		visitedDigests = make(map[string]bool)
 	}
@@ -205,6 +243,13 @@ func extractBundleTarRecursive(tarData []byte, destDir string, visitedDigests ma
 				return nil, fmt.Errorf("failed to create directory for %s: %w", cleanName, err)
 			}
 
+			// Reserve the entry's size before reading it so an oversized
+			// entry is rejected without being buffered. tar.Reader never
+			// yields more than header.Size bytes for an entry.
+			if err := budget.take(cleanName, header.Size); err != nil {
+				return nil, err
+			}
+
 			content, err := io.ReadAll(tr)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read %s from tar: %w", cleanName, err)
@@ -238,9 +283,13 @@ func extractBundleTarRecursive(tarData []byte, destDir string, visitedDigests ma
 
 	// Extract nested tar archives
 	for _, nt := range nestedTars {
-		nestedManifest, err := extractBundleTarRecursive(nt.content, nt.destDir, visitedDigests)
+		nestedManifest, err := extractBundleTarRecursive(nt.content, nt.destDir, visitedDigests, budget)
 		if err != nil {
-			// Log but don't fail — nested bundles are best-effort
+			// Nested bundles are best-effort, except that exceeding the size
+			// limit must fail the whole extraction.
+			if errors.Is(err, ErrBundleTooLarge) {
+				return nil, err
+			}
 			continue
 		}
 		// Merge nested manifest files into the parent manifest for visibility
