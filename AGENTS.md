@@ -188,7 +188,8 @@ roots) and returns all discovered paths.
   (`WithX(val) Option`); `context.Context` as first parameter; no
   package-level mutable state.
 - **Secrets**: read from environment variables -- never hardcode.
-- **Formatting**: gofmt and goimports are mandatory.
+- **Formatting**: gofmt and goimports are mandatory. In Copilot agent
+  sessions, `.github/hooks/go-format.json` auto-formats edited `.go` files.
 - **No magic values**: define constants or use settings for configuration
   values, including timeout defaults (`DefaultResolverTimeout`,
   `DefaultHTTPTimeout`) and conflict-strategy defaults (all exported constants
