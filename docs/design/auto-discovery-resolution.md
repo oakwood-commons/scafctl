@@ -90,6 +90,16 @@ in the default search list.
 
 This produces 24 candidate paths checked in priority order (3 folders x 8 names).
 
+### Taskfile Content Check
+
+`taskfile.yaml`/`taskfile.yml` are also the default file names of other task
+runners (go-task), so discovery reads each taskfile candidate and skips it when
+it parses as YAML but carries none of a solution's `apiVersion`, `kind`, or
+`spec`. Files that fail to parse, or that carry any solution header (even only
+`kind: Solution` or only a `spec`), are kept so a broken solution still loads
+and reports its real validation error. The skip is reported under `--verbose`.
+An explicit `-f` skips discovery entirely and keeps the strict error.
+
 ### Discover vs Load
 
 | Method | Behavior |

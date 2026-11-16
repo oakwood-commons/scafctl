@@ -579,3 +579,56 @@ func BenchmarkDiscoverLoader_Load(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkDiscoverLoader_Load_GoTaskTaskfile measures the cost of the
+// taskfile content sniff when a go-task taskfile sits next to the solution.
+func BenchmarkDiscoverLoader_Load_GoTaskTaskfile(b *testing.B) {
+	dir := b.TempDir()
+	writeTree(b, dir, map[string]string{
+		"taskfile.yaml": goTaskfile,
+		"solution.yaml": validSolutionYAML,
+	})
+	ctx := provider.WithWorkingDirectory(b.Context(), dir)
+	dl := NewDiscoverLoader(nil, "scafctl")
+	c := source.Classification{Kind: source.KindAutoDiscover}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := dl.Load(ctx, c); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkMayBeSolution measures the header sniff alone (the extra work the
+// skip adds to discovery for each taskfile candidate).
+func BenchmarkMayBeSolution(b *testing.B) {
+	dir := b.TempDir()
+	path := filepath.Join(dir, "taskfile.yaml")
+	require.NoError(b, os.WriteFile(path, []byte(goTaskfile), 0o600))
+	dl := NewDiscoverLoader(nil, "scafctl")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if dl.mayBeSolution(path) {
+			b.Fatal("expected mayBeSolution false for go-task file")
+		}
+	}
+}
+
+func TestDiscoverLoader_Discover_VerboseSkipNote(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// A go-task taskfile loses to a later solution match; the skip is
+	// reported through the writer when verbose output is enabled.
+	writeTree(t, dir, map[string]string{"taskfile.yaml": goTaskfile, "solution.yaml": validSolutionYAML})
+	ctx, errOut := verboseWriterCtx(provider.WithWorkingDirectory(t.Context(), dir))
+
+	_, err := NewDiscoverLoader(nil, "scafctl").Discover(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, errOut.String(), "Skipping "+filepath.Join(dir, "taskfile.yaml"))
+	assert.Contains(t, errOut.String(), "no apiVersion, kind, or spec")
+}

@@ -173,6 +173,9 @@ func (l *DiscoverLoader) Discover(ctx context.Context) ([]Discovery, error) {
 			seen[path] = struct{}{}
 			if settings.IsTaskFile(name) && !l.mayBeSolution(path) {
 				log.V(1).Info("skipping taskfile that is not a solution", "path", path)
+				if w := writer.FromContext(ctx); w != nil {
+					w.Verbosef("Skipping %s: no apiVersion, kind, or spec; continuing discovery", path)
+				}
 				continue
 			}
 			found = append(found, Discovery{Path: path, IsActionFile: l.isActionFile(name)})
