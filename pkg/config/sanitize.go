@@ -27,7 +27,6 @@ type SanitizedConfig struct {
 	APIServer  SanitizedAPIServer  `json:"apiServer,omitempty" yaml:"apiServer,omitempty" doc:"REST API server configuration (TLS key path and opaque auth handler map redacted)"`
 	Discovery  DiscoveryConfig     `json:"discovery,omitempty" yaml:"discovery,omitempty" doc:"Auto-discovery configuration"`
 	Plugins    PluginsConfig       `json:"plugins,omitempty" yaml:"plugins,omitempty" doc:"Plugin management configuration"`
-	MCP        SanitizedMCPConfig  `json:"mcp,omitempty" yaml:"mcp,omitempty" doc:"MCP server configuration (URLs redacted)"`
 	Kube       SanitizedKubeConfig `json:"kube,omitempty" yaml:"kube,omitempty" doc:"Kubernetes cluster resolution (resolver headers redacted)"`
 }
 
@@ -217,21 +216,6 @@ type SanitizedAPIAuthConfig struct {
 	Handlers  map[string]string  `json:"handlers,omitempty" yaml:"handlers,omitempty" doc:"Auth handler plugin settings keyed by handler name (values redacted)"`
 }
 
-// SanitizedMCPConfig mirrors MCPConfig but with URLs redacted.
-type SanitizedMCPConfig struct {
-	Servers map[string]SanitizedMCPServerConfig `json:"servers,omitempty" yaml:"servers,omitempty" doc:"Upstream MCP server configurations (URLs redacted)"`
-}
-
-// SanitizedMCPServerConfig contains only non-sensitive upstream MCP server fields.
-type SanitizedMCPServerConfig struct {
-	Enabled    *bool               `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"Whether this upstream server is active"`
-	URL        string              `json:"url,omitempty" yaml:"url,omitempty" doc:"Upstream URL (redacted)"`
-	Auth       MCPServerAuthConfig `json:"auth,omitempty" yaml:"auth,omitempty" doc:"Authentication configuration"`
-	Timeout    string              `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Request timeout"`
-	ToolPrefix string              `json:"toolPrefix,omitempty" yaml:"toolPrefix,omitempty" doc:"Prefix added to upstream tool names"`
-	Tools      []string            `json:"tools,omitempty" yaml:"tools,omitempty" doc:"Tool name allowlist patterns"`
-}
-
 // SanitizeConfig creates a sanitized copy of the config with sensitive values
 // redacted. It is a fail-closed allowlist: only explicitly-copied fields make
 // it into the result. Add a new field to the sanitized types AND to this
@@ -252,24 +236,6 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 		Discovery:  cfg.Discovery,
 		Plugins:    cfg.Plugins,
 		Kube:       sanitizeKube(cfg.Kube),
-	}
-
-	// Sanitize MCP upstream servers -- redact URLs.
-	if len(cfg.MCP.Servers) > 0 {
-		s.MCP.Servers = make(map[string]SanitizedMCPServerConfig, len(cfg.MCP.Servers))
-		for name, srv := range cfg.MCP.Servers {
-			sanitized := SanitizedMCPServerConfig{
-				Enabled:    srv.Enabled,
-				Auth:       srv.Auth,
-				Timeout:    srv.Timeout,
-				ToolPrefix: srv.ToolPrefix,
-				Tools:      srv.Tools,
-			}
-			if srv.URL != "" {
-				sanitized.URL = RedactedValue
-			}
-			s.MCP.Servers[name] = sanitized
-		}
 	}
 
 	// Sanitize catalogs
