@@ -2,6 +2,68 @@
 
 Thank you for your interest in contributing to scafctl! This document provides guidelines and best practices for contributing.
 
+## How to Contribute
+
+There are two ways to contribute: open an issue, or send a pull request for
+an issue that has been accepted. The best first step is usually the issue.
+
+### Issues Are the Preferred Contribution
+
+A clear, well-described issue is the most valuable thing you can send. It
+lets maintainers validate the problem, check how the change fits the
+architecture, and agree on the approach before anyone spends effort on an
+implementation. Maintainers may implement a good report directly. If we
+implement your report, you get the credit: we will mention you on the
+resulting PR and, where you agree, add a `Co-authored-by` trailer to the
+commit.
+
+### Issue-First Pull Requests
+
+Maintainers work issue-first: validate the change on an issue, agree on the
+approach, then implement. Pull requests from outside the maintainers team
+follow the same flow, because reconstructing a change's intent from a
+finished diff alone is the most expensive part of reviewing it.
+
+If you are not on the maintainers team and want to submit a PR:
+
+1. Open an issue describing the bug or the feature, using the issue
+   templates.
+2. Wait for a maintainer to accept the issue. The `accepted` label means
+   "maintainers agree this should be done; outside PRs welcome."
+3. Open the PR and link the accepted issue in the PR template.
+
+An unsolicited PR that changes code or behavior without a linked accepted
+issue may be closed by a maintainer with a pointer back to this section.
+That is not a judgment about your code -- it is how we keep reviewing
+sustainable. Open the issue, get it accepted, and the PR is welcome. Two
+kinds of PR are exempt and do not need an accepted issue:
+
+- PRs submitted by members of the maintainers team, and
+- typo and docs-only fixes.
+
+For large or architectural changes the approach must be agreed on the issue
+before work starts. A maintainer may ask for a design sketch on the issue
+first; spending that time up front is better than having a finished PR
+reworked afterwards.
+
+Maintainers apply this policy manually during triage. Nothing here is
+automated: no bot enforces this policy -- a maintainer reads the PR and
+applies it.
+
+### AI-Assisted Contributions
+
+PRs written with the help of AI tools are welcome under the same standards
+as any other contribution, with one expectation: disclosure. Every PR author
+-- whatever tooling they used -- must have reviewed the diff and be able to
+explain every change. If AI tools helped produce the PR, tick the
+AI-assistance checkbox on the PR template too.
+
+Copilot reviews every PR regardless of how it was written, but that does
+not replace your own understanding: a PR whose author cannot answer
+questions about its own diff puts the review cost back on the maintainers.
+Disclosed AI assistance from an author who understands the change is
+unremarkable; an undisclosed surprise diff is not.
+
 ## Code of Conduct
 
 See our [Code of Conduct](CODE_OF_CONDUCT.md).
@@ -75,6 +137,9 @@ golangci-lint run
 ```
 
 ## Development Workflow
+
+The steps below assume the change already has an accepted issue (see
+[How to Contribute](#how-to-contribute)); typo and docs-only fixes excepted.
 
 ### 1. Create a Branch
 
@@ -190,8 +255,10 @@ Then create a Pull Request on GitHub.
 
 ### Contributing from a Fork
 
-External contributors are welcome to fork the repository and submit pull requests.
-CI runs automatically on code-affecting PRs (including those from forks) with the
+External contributors are welcome to fork the repository and submit pull
+requests -- for an accepted issue, following
+[Issue-First Pull Requests](#issue-first-pull-requests) above. CI runs
+automatically on code-affecting PRs (including those from forks) with the
 following security model. Note that docs-only changes may not trigger all workflows
 due to path filters:
 
