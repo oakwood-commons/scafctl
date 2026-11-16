@@ -94,11 +94,13 @@ This produces 24 candidate paths checked in priority order (3 folders x 8 names)
 
 `taskfile.yaml`/`taskfile.yml` are also the default file names of other task
 runners (go-task), so discovery reads each taskfile candidate and skips it when
-it parses as YAML but carries none of a solution's `apiVersion`, `kind`, or
-`spec`. Files that fail to parse, or that carry any solution header (even only
-`kind: Solution` or only a `spec`), are kept so a broken solution still loads
-and reports its real validation error. The skip is reported under `--verbose`.
-An explicit `-f` skips discovery entirely and keeps the strict error.
+it parses as YAML but carries none of the recognized solution headers:
+`apiVersion: scafctl.io/v1`, `kind: Solution`, or a non-null `spec`. Files
+that fail to parse, or that carry a recognized header (even only
+`kind: Solution` or a non-null `spec`), are kept so a broken solution still
+loads and reports its real validation error. The skip is reported under
+`--verbose`. An explicit `-f` skips discovery entirely and keeps the strict
+error.
 
 ### Discover vs Load
 

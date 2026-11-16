@@ -630,5 +630,5 @@ func TestDiscoverLoader_Discover_VerboseSkipNote(t *testing.T) {
 	_, err := NewDiscoverLoader(nil, "scafctl").Discover(ctx)
 	require.NoError(t, err)
 	assert.Contains(t, errOut.String(), "Skipping "+filepath.Join(dir, "taskfile.yaml"))
-	assert.Contains(t, errOut.String(), "no apiVersion, kind, or spec")
+	assert.Contains(t, errOut.String(), "no recognized solution headers")
 }

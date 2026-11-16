@@ -156,9 +156,10 @@ not repeated), which:
    prefixes (`scafctl/`, `.scafctl/`, `.`) combined with file names
    (`solution.yaml`, `solution.yml`, `scafctl.yaml`, `scafctl.yml`,
    `solution.json`, `scafctl.json`, `taskfile.yaml`, `taskfile.yml`). A
-   taskfile candidate that parses as YAML but has none of a solution's
-   `apiVersion`, `kind`, or `spec` (e.g. a go-task taskfile) is skipped, with
-   a note under `--verbose`; explicit `-f` keeps the strict error. Action
+   taskfile candidate that parses as YAML but carries none of the recognized
+   solution headers -- `apiVersion: scafctl.io/v1`, `kind: Solution`, or a
+   non-null `spec` (e.g. a go-task taskfile) -- is skipped, with a note
+   under `--verbose`; explicit `-f` keeps the strict error. Action
    file names (`actions.yaml`, `actions.yml`) are only searched in
    `DiscoveryModeAction` (used by `run action`).
 4. With `ArgsAreNamesOrCatalog`, falls back to a bare positional name as a
