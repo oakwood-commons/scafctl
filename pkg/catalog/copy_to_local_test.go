@@ -103,6 +103,8 @@ func TestLocalCatalog_IngestVerbatim(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, LocalCatalogName, info.Catalog)
 	assert.Equal(t, "ghcr.io/myorg/scafctl", info.Annotations[AnnotationSourceCanonical])
+	assert.Equal(t, "ghcr.io/myorg/scafctl", info.Canonical, "cached copy must carry its source canonical")
+	assert.False(t, info.IsBuilt())
 	assert.Equal(t, "demo", info.Annotations[AnnotationArtifactName])
 
 	// The local tag is derived from the reference.

@@ -7,11 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -43,10 +43,12 @@ func (s *Server) registerPluginTools() {
 			"List plugin artifacts (providers and auth handlers) available in catalogs -- "+
 				"the remote counterpart to 'list_plugins' (which shows only locally cached "+
 				"binaries). Searches the local catalog and remote OCI catalog(s) and returns "+
-				"each plugin's name, kind (provider or auth-handler), version, catalog, and digest. "+
+				"each plugin's name, kind (provider or auth-handler), version, catalog (configured alias, "+
+				"or 'local' for locally built plugins), registry (canonical origin), locations "+
+				"(local, remote, or both), and digest. "+
 				"Use this to discover what plugins exist, list all versions of a specific plugin "+
 				"(set 'name'), or check whether a newer version is available (combine 'name' with a "+
-				"'version' constraint). Results are deduplicated across catalogs.",
+				"'version' constraint). A locally cached copy is merged with the remote artifact it was pulled from; artifacts from different origins are listed separately.",
 		),
 		mcp.WithTitleAnnotation("Catalog List Plugins"),
 		mcp.WithToolIcons(toolIcons["plugin"]),
@@ -152,26 +154,20 @@ func (s *Server) handleListPlugins(_ context.Context, request mcp.CallToolReques
 // pluginCatalogEntry is the MCP output shape for a plugin artifact discovered in
 // a catalog (as opposed to a locally cached binary, which handleListPlugins
 // reports). It is intentionally flat and stable for AI consumers.
+//
+// Catalog is the configured alias of the artifact's registry ("local" for a
+// locally built artifact), Registry is the canonical registry/repository it was
+// published to, and Locations reports whether it is in the local store, the
+// remote catalog, or both. Cached copies are not digest-verified here, so no
+// stale flag is reported (use the 'catalog list' CLI for that).
 type pluginCatalogEntry struct {
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Version string `json:"version,omitempty"`
-	Catalog string `json:"catalog,omitempty"`
-	Digest  string `json:"digest,omitempty"`
-}
-
-// pluginSortKey returns a stable string identity for an artifact, used as the
-// final tiebreak in the catalog_list_plugins ordering so entries that are equal
-// on name/kind/semver (or have unparsed versions) still sort deterministically
-// rather than depending on catalog iteration order.
-func pluginSortKey(a catalog.ArtifactInfo) string {
-	if a.Tag != "" {
-		return a.Tag
-	}
-	if a.Reference.Version != nil {
-		return a.Reference.Version.String()
-	}
-	return a.Digest
+	Name      string   `json:"name"`
+	Kind      string   `json:"kind"`
+	Version   string   `json:"version,omitempty"`
+	Catalog   string   `json:"catalog,omitempty"`
+	Registry  string   `json:"registry,omitempty"`
+	Locations []string `json:"locations,omitempty"`
+	Digest    string   `json:"digest,omitempty"`
 }
 
 // handleCatalogListPlugins lists plugin artifacts (provider + auth-handler)
@@ -264,49 +260,35 @@ func (s *Server) handleCatalogListPlugins(ctx context.Context, request mcp.CallT
 			WithSuggestion("Use a valid semver constraint such as '>=1.2.0' or '~1.4'."),
 		), nil
 	}
-	filtered = catalog.DeduplicateArtifacts(filtered)
 
-	// Deterministic ordering (name, then kind, then semver-descending version)
-	// so repeated calls and cross-run diffs by AI consumers are stable
-	// regardless of catalog iteration order. Version uses a semver-aware compare
-	// (newest first) so 10.0.0 sorts before 2.0.0; when versions are equal or
-	// unparsed, fall back to a string compare of the raw tag/version so ordering
-	// is fully deterministic rather than dependent on catalog iteration order.
-	sort.SliceStable(filtered, func(i, j int) bool {
-		a, b := filtered[i], filtered[j]
-		if a.Reference.Name != b.Reference.Name {
-			return a.Reference.Name < b.Reference.Name
-		}
-		if a.Reference.Kind != b.Reference.Kind {
-			return a.Reference.Kind < b.Reference.Kind
-		}
-		vi, vj := a.Reference.Version, b.Reference.Version
-		switch {
-		case vi != nil && vj != nil:
-			if !vi.Equal(vj) {
-				return vi.GreaterThan(vj) // newest first
-			}
-		case vi != nil:
-			return true // parsed versions sort before unparsed
-		case vj != nil:
-			return false
-		}
-		// Equal semver, or both unparsed: deterministic string tiebreak.
-		return pluginSortKey(a) < pluginSortKey(b)
-	})
+	// Origin-aware dedup and deterministic ordering (name, kind, newest version
+	// first, then origin) shared with the CLI 'catalog list' rendering. Every
+	// version is kept: callers use this tool to discover available versions.
+	listed, err := catalog.BuildListing(ctx, filtered, catalog.ListingOptions{AllVersions: true})
+	if err != nil {
+		s.logger.V(1).Info("plugin listing completed with errors", "error", err)
+	}
 
-	entries := make([]pluginCatalogEntry, 0, len(filtered))
-	for _, a := range filtered {
+	idx := catalogindex.FromConfig(s.resolveConfig())
+	entries := make([]pluginCatalogEntry, 0, len(listed))
+	for _, a := range listed {
 		version := ""
 		if a.Reference.Version != nil {
 			version = a.Reference.Version.String()
 		}
+		locations := a.ResolvedLocations()
+		locationNames := make([]string, len(locations))
+		for i, l := range locations {
+			locationNames[i] = string(l)
+		}
 		entries = append(entries, pluginCatalogEntry{
-			Name:    a.Reference.Name,
-			Kind:    a.Reference.Kind.String(),
-			Version: version,
-			Catalog: a.Catalog,
-			Digest:  a.Digest,
+			Name:      a.Reference.Name,
+			Kind:      a.Reference.Kind.String(),
+			Version:   version,
+			Catalog:   idx.DisplayCatalog(a),
+			Registry:  a.Canonical,
+			Locations: locationNames,
+			Digest:    a.Digest,
 		})
 	}
 

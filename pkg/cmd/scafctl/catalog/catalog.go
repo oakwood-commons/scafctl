@@ -348,18 +348,6 @@ func filterPreReleaseArtifacts(artifacts []catalog.ArtifactInfo) []catalog.Artif
 	return stable
 }
 
-// filterArtifactsByCatalog keeps only artifacts whose Catalog field matches the
-// given name (case-sensitive).
-func filterArtifactsByCatalog(artifacts []catalog.ArtifactInfo, catalogName string) []catalog.ArtifactInfo {
-	filtered := make([]catalog.ArtifactInfo, 0, len(artifacts))
-	for _, a := range artifacts {
-		if a.Catalog == catalogName {
-			filtered = append(filtered, a)
-		}
-	}
-	return filtered
-}
-
 // isConfiguredCatalog returns true if the given name matches a catalog entry
 // in the application configuration.
 func isConfiguredCatalog(ctx context.Context, name string) bool {
@@ -369,11 +357,4 @@ func isConfiguredCatalog(ctx context.Context, name string) bool {
 	}
 	_, ok := cfg.GetCatalog(name)
 	return ok
-}
-
-// deduplicateArtifacts merges rows with the same name+tag+kind across catalogs.
-// It delegates to catalog.DeduplicateArtifacts (shared with the MCP
-// catalog_list_plugins tool) so dedup behavior is identical across surfaces.
-func deduplicateArtifacts(artifacts []catalog.ArtifactInfo) []catalog.ArtifactInfo {
-	return catalog.DeduplicateArtifacts(artifacts)
 }

@@ -43,7 +43,11 @@ scafctl catalog push solution resolver-demo@1.0.0 --catalog ghcr.io/YOUR_ORG/sca
 scafctl catalog pull ghcr.io/YOUR_ORG/scafctl/solutions/resolver-demo@1.0.0
 
 # Verify it's in local catalog
-scafctl catalog list
+scafctl catalog list --catalog local
+
+# REGISTRY shows the registry the copy was pulled from and LOCATION shows
+# "local". When the remote catalog is also listed, the row shows
+# "local, remote", or "local (stale)" if the tag was re-published.
 
 # Run the resolver-only solution
 scafctl run resolver resolver-demo
