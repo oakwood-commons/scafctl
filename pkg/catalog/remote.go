@@ -48,14 +48,6 @@ type RemoteCatalog struct {
 	authHandlerUsed   string
 	credentialSource  atomic.Value // stores string; written from credential callbacks
 
-	// staleCredentials is set to true when OCI operations fall back to
-	// anonymous access because stored credentials were rejected by the
-	// registry. Used by the CLI layer to emit a user-facing warning.
-	staleCredentials atomic.Bool
-
-	// anonOnce ensures switchToAnonymous replaces the client exactly once.
-	anonOnce sync.Once
-
 	// probeCredentials overrides the credential check; nil uses
 	// pingWithCredentials. Set by tests.
 	probeCredentials credentialProbe
@@ -381,7 +373,7 @@ var errCredentialsRejected = errors.New("registry rejected the catalog's credent
 // definitive miss is not-found, the one outcome a strict chain may fall
 // through on:
 //
-//   - a 404 from a catalog that is not degraded;
+//   - a 404;
 //   - a 401/403 to an anonymous request. GHCR, for one, answers an anonymous
 //     token request for a repository that does not exist with 403 DENIED, so
 //     for an anonymous caller "no access" and "does not exist" are the same.
@@ -390,22 +382,24 @@ var errCredentialsRejected = errors.New("registry rejected the catalog's credent
 //     for a package that does not exist with 403 DENIED too, so the denial is
 //     of the repository, not of the credentials.
 //
-// After stored credentials were rejected (see switchToAnonymous), a 401, 403
-// or 404 may hide a private repository, so it halts with
-// errCredentialsRejected. A transport failure is unreachable, and any other
-// failure (5xx, a 401/403 to credentials that are rejected or could not be
-// checked) is returned wrapped so it halts.
-func (c *RemoteCatalog) lookupError(ctx context.Context, action string, ref Reference, err error) error {
+// A transport failure is unreachable, and any other failure (5xx, a 401/403
+// to credentials that are rejected or could not be checked) is returned
+// wrapped so it halts; retryAnonymously then decides whether anonymous access
+// can still serve the request.
+//
+// client is the client the failed request used, not necessarily the catalog's
+// configured client: during an anonymous retry it carries no credentials, so
+// classification must not consult the configured client and must not probe the
+// registry for credentials it never sent.
+func (c *RemoteCatalog) lookupError(ctx context.Context, client *auth.Client, action string, ref Reference, err error) error {
 	absent := errors.Is(err, errdef.ErrNotFound) || isRegistryNotFound(err)
 	denied := isRegistryDenied(err)
 	switch {
 	case isNetworkError(err):
 		return &UnreachableError{Catalog: c.name, Cause: err}
-	case c.HasStaleCredentials() && (absent || denied):
-		return fmt.Errorf("%s %s in catalog %q: %w: %w", action, ref.String(), c.name, errCredentialsRejected, err)
 	case absent:
 		return &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
-	case denied && (!c.sendsCredentials(ctx) || c.credentialsAccepted(ctx)):
+	case denied && (!c.sendsCredentialsWith(ctx, client) || c.credentialsAcceptedWith(ctx, client)):
 		return &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	default:
 		return fmt.Errorf("%s %s in catalog %q: %w", action, ref.String(), c.name, err)
@@ -413,20 +407,22 @@ func (c *RemoteCatalog) lookupError(ctx context.Context, action string, ref Refe
 }
 
 // manifestResolveError classifies a failed tag/digest resolve; see lookupError.
-func (c *RemoteCatalog) manifestResolveError(ctx context.Context, ref Reference, err error) error {
-	return c.lookupError(ctx, "resolving", ref, err)
+func (c *RemoteCatalog) manifestResolveError(ctx context.Context, client *auth.Client, ref Reference, err error) error {
+	return c.lookupError(ctx, client, "resolving", ref, err)
 }
 
 // sendsCredentials reports whether requests from this catalog carry
 // credentials for its registry. A catalog with a credential source that yields
 // nothing for the registry host (the common case for a public registry) is
-// anonymous; so is one that already fell back to anonymous access. A failing
-// credential lookup counts as credentialed so classification fails closed.
+// anonymous. A failing credential lookup counts as credentialed so
+// classification fails closed.
 func (c *RemoteCatalog) sendsCredentials(ctx context.Context) bool {
-	if c.HasStaleCredentials() {
-		return false
-	}
-	client := c.client
+	return c.sendsCredentialsWith(ctx, c.client)
+}
+
+// sendsCredentialsWith reports whether requests made with client carry
+// credentials for the catalog's registry.
+func (c *RemoteCatalog) sendsCredentialsWith(ctx context.Context, client *auth.Client) bool {
 	if client == nil || client.Credential == nil {
 		return false
 	}
@@ -447,22 +443,33 @@ func (c *RemoteCatalog) sendsCredentials(ctx context.Context) bool {
 //
 // Whether the catalog sends credentials is decided only after an auth
 // failure: the credential callback may launch a docker-credential-* helper,
-// which the common successful path must not pay for. A catalog another call
-// already degraded is retried too, since op may have used the replaced client.
-func retryAnonymously[T any](ctx context.Context, c *RemoteCatalog, op string, ref Reference, fn func() (T, error)) (T, error) {
-	result, err := fn()
+// which the common successful path must not pay for.
+//
+// The fallback is scoped to this call: the catalog keeps its credentials for
+// every other request. The rejection is recorded on ctx (see
+// WithCredentialRejections) whatever the retry's outcome, so a caller can
+// tell an anonymous result, which may omit private content, from an
+// authoritative one.
+func retryAnonymously[T any](ctx context.Context, c *RemoteCatalog, op string, ref Reference, fn func(*auth.Client) (T, error)) (T, error) {
+	result, err := fn(c.client)
 	if err == nil || !isOCIAuthError(err) || errors.Is(err, errCredentialsRejected) {
 		return result, err
 	}
-	if !c.HasStaleCredentials() && !c.sendsCredentials(ctx) {
+	if !c.sendsCredentials(ctx) {
 		return result, err
 	}
 
 	c.logger.V(1).Info(op+" rejected by registry, retrying anonymously",
 		"kind", ref.Kind, "name", ref.Name, "error", err.Error())
-	c.switchToAnonymous()
+	RecordCredentialRejection(ctx, AuthDegradedError{
+		Registry:         c.registry,
+		Handler:          c.AuthHandlerUsed(),
+		CredentialSource: c.CredentialSource(),
+	})
 
-	result, retryErr := fn()
+	anon, release := c.anonymousClient()
+	defer release()
+	result, retryErr := fn(anon)
 	if retryErr == nil {
 		return result, nil
 	}
@@ -487,51 +494,31 @@ func (c *RemoteCatalog) wrapWithCredentialHint(err error) error {
 	return fmt.Errorf("%w (hint: registry returned 500 while using %q credentials -- the token may be expired; try re-authenticating)", err, src)
 }
 
-// anonymousClient returns a plain auth.Client with no credentials.
-// Used to retry OCI operations when the stored credentials are rejected
-// (e.g. expired token) but the resource may be publicly accessible.
-func (c *RemoteCatalog) anonymousClient() *auth.Client {
+// anonymousClient returns a plain auth.Client with no credentials, plus a
+// release func the caller must run once the attempt is done. Used to retry OCI
+// operations when the stored credentials are rejected (e.g. expired token) but
+// the resource may be publicly accessible.
+//
+// In insecure mode the client owns a private transport, and release closes its
+// idle connections so repeated fallbacks in a long-lived process do not
+// accumulate keep-alive sockets. Otherwise the client uses the process-wide
+// retry.DefaultClient, whose connections are shared and must not be closed,
+// and release does nothing.
+func (c *RemoteCatalog) anonymousClient() (*auth.Client, func()) {
 	client := &auth.Client{
 		Client: retry.DefaultClient,
 		Cache:  auth.NewCache(),
 	}
-	if c.insecure {
-		client.Client = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, //nolint:gosec // Opt-in via --insecure flag for local dev/testing only
-				},
-			},
-		}
+	if !c.insecure {
+		return client, func() {}
 	}
-	return client
-}
-
-// switchToAnonymous replaces the OCI client with an anonymous (no-credentials)
-// client and records the fact that stale credentials were detected. All
-// subsequent OCI operations on this RemoteCatalog will use anonymous access.
-// The replacement is guarded by sync.Once so concurrent callers do not race.
-func (c *RemoteCatalog) switchToAnonymous() {
-	c.anonOnce.Do(func() {
-		c.client = c.anonymousClient()
-		c.staleCredentials.Store(true)
-		c.logger.Info("switched to anonymous OCI client — stored credentials were rejected")
-	})
-}
-
-// HasStaleCredentials returns true if any OCI operation during the lifetime
-// of this catalog client fell back to anonymous access because the stored
-// credentials were rejected by the registry. Callers can use this to show
-// a user-facing hint suggesting re-authentication.
-func (c *RemoteCatalog) HasStaleCredentials() bool {
-	return c.staleCredentials.Load()
-}
-
-// SetStaleForTesting marks the catalog as having stale credentials.
-// This is intended for use by CLI-layer tests that need to exercise
-// the user-facing warning path.
-func (c *RemoteCatalog) SetStaleForTesting() {
-	c.staleCredentials.Store(true)
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, //nolint:gosec // Opt-in via --insecure flag for local dev/testing only
+		},
+	}
+	client.Client = &http.Client{Transport: transport}
+	return client, transport.CloseIdleConnections
 }
 
 // SetCredentialSourceForTest stores a credential source string.
@@ -558,8 +545,16 @@ func (c *RemoteCatalog) CredentialSource() string {
 	return ""
 }
 
-// getRepository creates a remote.Repository for an artifact.
+// getRepository creates a remote.Repository for an artifact that uses the
+// catalog's configured client.
 func (c *RemoteCatalog) getRepository(ref Reference) (*remote.Repository, error) {
+	return c.repositoryWithClient(ref, c.client)
+}
+
+// repositoryWithClient creates a remote.Repository for an artifact that uses
+// client. retryAnonymously passes a per-attempt client here so an anonymous
+// retry is scoped to one call and never replaces the catalog's client.
+func (c *RemoteCatalog) repositoryWithClient(ref Reference, client *auth.Client) (*remote.Repository, error) {
 	// Build full repository path: registry/repository/name
 	repoPath := c.buildRepositoryPath(ref)
 
@@ -568,7 +563,7 @@ func (c *RemoteCatalog) getRepository(ref Reference) (*remote.Repository, error)
 		return nil, fmt.Errorf("failed to create repository: %w", err)
 	}
 
-	repo.Client = c.client
+	repo.Client = client
 
 	return repo, nil
 }
@@ -740,24 +735,24 @@ func (c *RemoteCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, Artif
 		data []byte
 		info ArtifactInfo
 	}
-	r, err := retryAnonymously(ctx, c, "fetch", ref, func() (fetched, error) {
-		data, info, err := c.fetchInternal(ctx, ref)
+	r, err := retryAnonymously(ctx, c, "fetch", ref, func(client *auth.Client) (fetched, error) {
+		data, info, err := c.fetchInternal(ctx, ref, client)
 		return fetched{data: data, info: info}, err
 	})
 	return r.data, r.info, c.wrapWithCredentialHint(err)
 }
 
-func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
+func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference, client *auth.Client) ([]byte, ArtifactInfo, error) {
 	// When no version is specified, resolve to the latest version first.
 	if !ref.HasVersion() && !ref.HasDigest() {
-		resolved, err := c.resolveWithKind(ctx, ref)
+		resolved, err := c.resolveWithKindInternal(ctx, ref, client)
 		if err != nil {
 			return nil, ArtifactInfo{}, err
 		}
 		ref = resolved.Reference
 	}
 
-	repo, err := c.getRepository(ref)
+	repo, err := c.repositoryWithClient(ref, client)
 	if err != nil {
 		return nil, ArtifactInfo{}, err
 	}
@@ -766,10 +761,7 @@ func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference) ([]byt
 	tag := c.tagForRef(ref)
 	manifestDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		if isNetworkError(err) {
-			return nil, ArtifactInfo{}, &UnreachableError{Catalog: c.name, Cause: err}
-		}
-		return nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+		return nil, ArtifactInfo{}, c.manifestResolveError(ctx, client, ref, err)
 	}
 
 	// Fetch manifest with digest verification
@@ -822,24 +814,24 @@ func (c *RemoteCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]b
 		data, bundle []byte
 		info         ArtifactInfo
 	}
-	r, err := retryAnonymously(ctx, c, "fetch", ref, func() (fetched, error) {
-		data, bundle, info, err := c.fetchWithBundleInternal(ctx, ref)
+	r, err := retryAnonymously(ctx, c, "fetch", ref, func(client *auth.Client) (fetched, error) {
+		data, bundle, info, err := c.fetchWithBundleInternal(ctx, ref, client)
 		return fetched{data: data, bundle: bundle, info: info}, err
 	})
 	return r.data, r.bundle, r.info, c.wrapWithCredentialHint(err)
 }
 
-func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Reference, client *auth.Client) ([]byte, []byte, ArtifactInfo, error) {
 	// When no version is specified, resolve to the latest version first.
 	if !ref.HasVersion() && !ref.HasDigest() {
-		resolved, err := c.resolveWithKind(ctx, ref)
+		resolved, err := c.resolveWithKindInternal(ctx, ref, client)
 		if err != nil {
 			return nil, nil, ArtifactInfo{}, err
 		}
 		ref = resolved.Reference
 	}
 
-	repo, err := c.getRepository(ref)
+	repo, err := c.repositoryWithClient(ref, client)
 	if err != nil {
 		return nil, nil, ArtifactInfo{}, err
 	}
@@ -848,10 +840,7 @@ func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Referen
 	tag := c.tagForRef(ref)
 	manifestDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		if isNetworkError(err) {
-			return nil, nil, ArtifactInfo{}, &UnreachableError{Catalog: c.name, Cause: err}
-		}
-		return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+		return nil, nil, ArtifactInfo{}, c.manifestResolveError(ctx, client, ref, err)
 	}
 
 	// Fetch manifest with digest verification
@@ -928,14 +917,14 @@ func (c *RemoteCatalog) FetchWithLayer(ctx context.Context, ref Reference, media
 		layers map[string][]byte
 		info   ArtifactInfo
 	}
-	r, err := retryAnonymously(ctx, c, "fetch", ref, func() (fetched, error) {
-		data, layers, info, err := c.fetchWithLayersInternal(ctx, ref, mediaTypes...)
+	r, err := retryAnonymously(ctx, c, "fetch", ref, func(client *auth.Client) (fetched, error) {
+		data, layers, info, err := c.fetchWithLayersInternal(ctx, ref, client, mediaTypes...)
 		return fetched{data: data, layers: layers, info: info}, err
 	})
 	return r.data, r.layers, r.info, c.wrapWithCredentialHint(err)
 }
 
-func (c *RemoteCatalog) fetchWithLayersInternal(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+func (c *RemoteCatalog) fetchWithLayersInternal(ctx context.Context, ref Reference, client *auth.Client, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
 	for _, mt := range mediaTypes {
 		if !isAuxLayerMediaType(mt) {
 			return nil, nil, ArtifactInfo{}, fmt.Errorf("FetchWithLayer: %q is not a fetchable auxiliary layer", mt)
@@ -944,14 +933,14 @@ func (c *RemoteCatalog) fetchWithLayersInternal(ctx context.Context, ref Referen
 
 	// When no version is specified, resolve to the latest version first.
 	if !ref.HasVersion() && !ref.HasDigest() {
-		resolved, err := c.resolveWithKind(ctx, ref)
+		resolved, err := c.resolveWithKindInternal(ctx, ref, client)
 		if err != nil {
 			return nil, nil, ArtifactInfo{}, err
 		}
 		ref = resolved.Reference
 	}
 
-	repo, err := c.getRepository(ref)
+	repo, err := c.repositoryWithClient(ref, client)
 	if err != nil {
 		return nil, nil, ArtifactInfo{}, err
 	}
@@ -960,10 +949,7 @@ func (c *RemoteCatalog) fetchWithLayersInternal(ctx context.Context, ref Referen
 	tag := c.tagForRef(ref)
 	manifestDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		if isNetworkError(err) {
-			return nil, nil, ArtifactInfo{}, &UnreachableError{Catalog: c.name, Cause: err}
-		}
-		return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+		return nil, nil, ArtifactInfo{}, c.manifestResolveError(ctx, client, ref, err)
 	}
 
 	// Fetch manifest with digest verification (single round-trip for all layers)
@@ -1094,24 +1080,24 @@ func (c *RemoteCatalog) resolveAcrossKinds(ctx context.Context, ref Reference) (
 
 // resolveWithKind resolves a reference that has a known kind (or is intentionally kindless).
 func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	return retryAnonymously(ctx, c, "resolve", ref, func(client *auth.Client) (ArtifactInfo, error) {
+		return c.resolveWithKindInternal(ctx, ref, client)
+	})
+}
+
+// resolveWithKindInternal is resolveWithKind using client for every registry
+// request and without an anonymous retry, so callers already inside a
+// retryAnonymously attempt keep one identity for the whole attempt.
+func (c *RemoteCatalog) resolveWithKindInternal(ctx context.Context, ref Reference, client *auth.Client) (ArtifactInfo, error) {
 	// If version is specified, resolve directly
 	if ref.HasVersion() || ref.HasDigest() {
-		repo, err := c.getRepository(ref)
+		repo, err := c.repositoryWithClient(ref, client)
 		if err != nil {
 			return ArtifactInfo{}, err
 		}
-
-		tag := c.tagForRef(ref)
-		desc, err := retryAnonymously(ctx, c, "resolve", ref, func() (ocispec.Descriptor, error) {
-			repo.Client = c.client
-			d, err := repo.Resolve(ctx, tag)
-			if err != nil {
-				return ocispec.Descriptor{}, c.manifestResolveError(ctx, ref, err)
-			}
-			return d, nil
-		})
+		desc, err := repo.Resolve(ctx, c.tagForRef(ref))
 		if err != nil {
-			return ArtifactInfo{}, err
+			return ArtifactInfo{}, c.manifestResolveError(ctx, client, ref, err)
 		}
 
 		return ArtifactInfo{
@@ -1124,7 +1110,7 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 	}
 
 	// No version specified - find the latest
-	versions, err := c.listVersions(ctx, ref)
+	versions, err := c.listVersionsInternal(ctx, ref, client)
 	if err != nil {
 		// listVersions already classifies network vs. list-tags failures;
 		// propagate as-is rather than re-wrapping as not-found.
@@ -1166,24 +1152,27 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 		"name", ref.Name,
 		"version", ref.Version.String(),
 		"catalog", c.name)
-	return c.resolveWithKind(ctx, ref)
+	return c.resolveWithKindInternal(ctx, ref, client)
 }
 
 // listVersions lists all versions of an artifact.
 func (c *RemoteCatalog) listVersions(ctx context.Context, ref Reference) ([]*semver.Version, error) {
-	repo, err := c.getRepository(ref)
+	return retryAnonymously(ctx, c, "tag fetch", ref, func(client *auth.Client) ([]*semver.Version, error) {
+		return c.listVersionsInternal(ctx, ref, client)
+	})
+}
+
+// listVersionsInternal is listVersions using client and without an anonymous retry.
+func (c *RemoteCatalog) listVersionsInternal(ctx context.Context, ref Reference, client *auth.Client) ([]*semver.Version, error) {
+	repo, err := c.repositoryWithClient(ref, client)
 	if err != nil {
 		return nil, err
 	}
-
-	return retryAnonymously(ctx, c, "tag fetch", ref, func() ([]*semver.Version, error) {
-		repo.Client = c.client
-		versions, err := c.fetchTags(ctx, repo)
-		if err != nil {
-			return nil, c.lookupError(ctx, "listing tags of", ref, err)
-		}
-		return versions, nil
-	})
+	versions, err := c.fetchTags(ctx, repo)
+	if err != nil {
+		return nil, c.lookupError(ctx, client, "listing tags of", ref, err)
+	}
+	return versions, nil
 }
 
 // fetchTags enumerates semver tags from a repository.
@@ -1601,13 +1590,11 @@ type TagInfo struct {
 // ListTags returns all tags (semver versions and aliases) for an artifact
 // in the remote registry.
 func (c *RemoteCatalog) ListTags(ctx context.Context, ref Reference) ([]TagInfo, error) {
-	repo, err := c.getRepository(ref)
-	if err != nil {
-		return nil, err
-	}
-
-	tags, err := retryAnonymously(ctx, c, "tag list", ref, func() ([]TagInfo, error) {
-		repo.Client = c.client
+	tags, err := retryAnonymously(ctx, c, "tag list", ref, func(client *auth.Client) ([]TagInfo, error) {
+		repo, err := c.repositoryWithClient(ref, client)
+		if err != nil {
+			return nil, err
+		}
 		return c.listTagsFromRepo(ctx, repo, ref)
 	})
 	return tags, c.wrapWithCredentialHint(err)
@@ -1649,29 +1636,33 @@ func (c *RemoteCatalog) listTagsFromRepo(ctx context.Context, repo *remote.Repos
 
 // Exists checks if an artifact exists in the catalog.
 func (c *RemoteCatalog) Exists(ctx context.Context, ref Reference) (bool, error) {
-	repo, err := c.getRepository(ref)
-	if err != nil {
-		return false, err
-	}
-
 	if !ref.HasVersion() && !ref.HasDigest() {
 		return false, fmt.Errorf("cannot check existence without version or digest for %q", ref.Name)
 	}
+	// A malformed repository path is a configuration error, not a missing
+	// artifact: report it before the lookup can classify it as absent.
+	if _, err := c.getRepository(ref); err != nil {
+		return false, err
+	}
 
 	tag := c.tagForRef(ref)
-	_, err = repo.Resolve(ctx, tag)
-	if err != nil && isOCIAuthError(err) {
-		c.logger.V(1).Info("existence check rejected by registry, retrying anonymously",
-			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
-		c.switchToAnonymous()
-		repo.Client = c.client
-		_, err = repo.Resolve(ctx, tag)
-	}
+	_, err := retryAnonymously(ctx, c, "existence check", ref, func(client *auth.Client) (ocispec.Descriptor, error) {
+		return c.resolveTagWithClient(ctx, ref, tag, client)
+	})
 	if err == nil {
 		return true, nil
 	}
+	if _, ok := IsCatalogUnreachable(err); ok {
+		return false, err
+	}
 	if isNetworkError(err) {
 		return false, &UnreachableError{Catalog: c.name, Cause: err}
+	}
+	// Rejected credentials leave "absent" and "hidden" indistinguishable, so
+	// existence cannot be answered: report the failure rather than a false
+	// negative that would let a chain fall through to a lower-priority catalog.
+	if errors.Is(err, errCredentialsRejected) {
+		return false, err
 	}
 	// Any other resolve error means the artifact doesn't exist.
 	return false, nil
@@ -1851,26 +1842,46 @@ func (c *RemoteCatalog) CanonicalID() string {
 // ref's repository. ref is only used to locate the repository (kind/name); tag
 // is passed to the registry as-is, with no latest-version lookup.
 func (c *RemoteCatalog) resolveByTag(ctx context.Context, ref Reference, tag string) (ocispec.Descriptor, error) {
-	repo, err := c.getRepository(ref)
-	if err != nil {
+	// A malformed repository path is a configuration error, not a missing
+	// artifact: report it before the lookup can classify it as not-found.
+	if _, err := c.getRepository(ref); err != nil {
 		return ocispec.Descriptor{}, err
 	}
-
-	desc, err := repo.Resolve(ctx, tag)
-	if err != nil && isOCIAuthError(err) {
-		c.logger.V(1).Info("resolve rejected by registry, retrying anonymously",
-			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
-		c.switchToAnonymous()
-		repo.Client = c.client
-		desc, err = repo.Resolve(ctx, tag)
-	}
+	desc, err := retryAnonymously(ctx, c, "resolve", ref, func(client *auth.Client) (ocispec.Descriptor, error) {
+		return c.resolveTagWithClient(ctx, ref, tag, client)
+	})
 	if err != nil {
+		if _, ok := IsCatalogUnreachable(err); ok {
+			return ocispec.Descriptor{}, err
+		}
 		if isNetworkError(err) {
 			return ocispec.Descriptor{}, &UnreachableError{Catalog: c.name, Cause: err}
+		}
+		// A rejected-credential failure cannot be reported as not-found: the
+		// artifact may exist but be hidden from anonymous access.
+		if errors.Is(err, errCredentialsRejected) {
+			return ocispec.Descriptor{}, err
 		}
 		return ocispec.Descriptor{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	}
 
+	return desc, nil
+}
+
+// resolveTagWithClient resolves tag in ref's repository using client and
+// classifies a failure with that same client (see manifestResolveError). A
+// denial of credentials the registry accepts -- a missing repository answers
+// 403 even to a valid login -- becomes not-found here, so retryAnonymously
+// does not mistake it for rejected credentials.
+func (c *RemoteCatalog) resolveTagWithClient(ctx context.Context, ref Reference, tag string, client *auth.Client) (ocispec.Descriptor, error) {
+	repo, err := c.repositoryWithClient(ref, client)
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+	desc, err := repo.Resolve(ctx, tag)
+	if err != nil {
+		return ocispec.Descriptor{}, c.manifestResolveError(ctx, client, ref, err)
+	}
 	return desc, nil
 }
 
@@ -1881,10 +1892,6 @@ func (c *RemoteCatalog) resolveByTag(ctx context.Context, ref Reference, tag str
 // The copied root must match desc, so a tag that moved after resolveByTag is
 // reported rather than silently copying different content.
 func (c *RemoteCatalog) copyToStorage(ctx context.Context, ref Reference, desc ocispec.Descriptor, destinationReference string, target oras.Target) error {
-	repo, err := c.getRepository(ref)
-	if err != nil {
-		return err
-	}
 	srcTag := c.tagForRef(ref)
 	// The target may be an in-memory store, so bound every blob by its
 	// advertised size before it is transferred. oras verifies the copied bytes
@@ -1893,14 +1900,13 @@ func (c *RemoteCatalog) copyToStorage(ctx context.Context, ref Reference, desc o
 	copyOpts.PreCopy = func(_ context.Context, desc ocispec.Descriptor) error {
 		return checkLayerSize(desc)
 	}
-	root, err := oras.Copy(ctx, repo, srcTag, target, destinationReference, copyOpts)
-	if err != nil && isOCIAuthError(err) {
-		c.logger.V(1).Info("copy rejected by registry, retrying anonymously",
-			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
-		c.switchToAnonymous()
-		repo.Client = c.client
-		root, err = oras.Copy(ctx, repo, srcTag, target, destinationReference, copyOpts)
-	}
+	root, err := retryAnonymously(ctx, c, "copy", ref, func(client *auth.Client) (ocispec.Descriptor, error) {
+		repo, err := c.repositoryWithClient(ref, client)
+		if err != nil {
+			return ocispec.Descriptor{}, err
+		}
+		return oras.Copy(ctx, repo, srcTag, target, destinationReference, copyOpts)
+	})
 	if err != nil {
 		if isNetworkError(err) {
 			return &UnreachableError{Catalog: c.name, Cause: err}
@@ -2076,17 +2082,24 @@ func (c *RemoteCatalog) CopyToLocal(ctx context.Context, ref Reference, local *L
 		return ArtifactInfo{}, errors.New("copying artifact: nil local catalog")
 	}
 
-	repo, err := c.getRepository(ref)
-	if err != nil {
-		return ArtifactInfo{}, fmt.Errorf("getting repository for %q: %w", ref, err)
-	}
+	// The reference is resolved before this call, possibly through an
+	// anonymous fallback. Copying must make the same fallback: otherwise the
+	// configured credentials fail here even though the same artifact just
+	// resolved anonymously. The retry is scoped to this call, and the
+	// repository is rebuilt per attempt so the copy uses that attempt's client.
+	return retryAnonymously(ctx, c, "copy", ref, func(client *auth.Client) (ArtifactInfo, error) {
+		repo, err := c.repositoryWithClient(ref, client)
+		if err != nil {
+			return ArtifactInfo{}, fmt.Errorf("getting repository for %q: %w", ref, err)
+		}
 
-	srcTag := c.tagForRef(ref)
+		srcTag := c.tagForRef(ref)
 
-	if opts.TargetName == "" {
-		return c.copyVerbatim(ctx, repo, srcTag, ref, local, opts)
-	}
-	return c.copyRenamed(ctx, repo, srcTag, ref, local, opts)
+		if opts.TargetName == "" {
+			return c.copyVerbatim(ctx, repo, srcTag, ref, local, opts)
+		}
+		return c.copyRenamed(ctx, repo, srcTag, ref, local, opts)
+	})
 }
 
 // copyVerbatim streams the artifact unchanged and records its remote origin on

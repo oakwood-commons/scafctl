@@ -60,9 +60,22 @@ func classifyCredentialProbe(presented bool, err error) credentialVerdict {
 // the next lookup and an expired one stops being trusted. Callers only ask
 // after a credentialed denial, so successful lookups never pay for the check.
 func (c *RemoteCatalog) credentialsAccepted(ctx context.Context) bool {
+	return c.credentialsAcceptedWith(ctx, c.client)
+}
+
+// credentialsAcceptedWith is credentialsAccepted for client, the client the
+// failed request used. A client that carries no credentials is never probed:
+// its request sent none, so there is nothing to verify and probing would make
+// credential-helper and token requests for credentials the request never used.
+func (c *RemoteCatalog) credentialsAcceptedWith(ctx context.Context, client *auth.Client) bool {
 	probe := c.probeCredentials
 	if probe == nil {
-		probe = c.pingWithCredentials
+		// A client that carries no credentials cannot be verified: there is
+		// nothing to present, and pinging would not reflect the request.
+		if client == nil || client.Credential == nil {
+			return false
+		}
+		probe = func(ctx context.Context) (bool, error) { return c.pingWithCredentialsClient(ctx, client) }
 	}
 	presented, err := probe(ctx)
 	verdict := classifyCredentialProbe(presented, err)
@@ -83,7 +96,14 @@ func (c *RemoteCatalog) credentialsAccepted(ctx context.Context) bool {
 // valid credentials, which the auth client would otherwise request; see
 // unscopedChallenge.
 func (c *RemoteCatalog) pingWithCredentials(ctx context.Context) (bool, error) {
-	if c.client == nil || c.client.Credential == nil {
+	return c.pingWithCredentialsClient(ctx, c.client)
+}
+
+// pingWithCredentialsClient is pingWithCredentials using client. The probe is
+// kept client-scoped so classifying a request made anonymously never re-sends
+// the catalog's configured credentials.
+func (c *RemoteCatalog) pingWithCredentialsClient(ctx context.Context, client *auth.Client) (bool, error) {
+	if client == nil || client.Credential == nil {
 		return false, nil
 	}
 	reg, err := remote.NewRegistry(c.registry)
@@ -92,8 +112,8 @@ func (c *RemoteCatalog) pingWithCredentials(ctx context.Context) (bool, error) {
 	}
 
 	var presented atomic.Bool
-	credential := c.client.Credential
-	probe := *c.client
+	credential := client.Credential
+	probe := *client
 	probe.Cache = auth.NewCache()
 	probe.Credential = func(ctx context.Context, host string) (auth.Credential, error) {
 		cred, err := credential(ctx, host)
@@ -102,7 +122,7 @@ func (c *RemoteCatalog) pingWithCredentials(ctx context.Context) (bool, error) {
 		}
 		return cred, err
 	}
-	probe.Client = unscopedHTTPClient(c.client.Client)
+	probe.Client = unscopedHTTPClient(client.Client)
 	reg.Client = &probe
 
 	err = reg.Ping(ctx)

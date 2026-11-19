@@ -266,6 +266,28 @@ func TestChainCatalog_Exists_AllNotFoundNoError(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestChainCatalog_Exists_RejectedCredentialsHalt(t *testing.T) {
+	// A catalog whose credentials were rejected cannot tell "absent" from
+	// "hidden", so existence must not be reported as a clean not-found that
+	// lets a caller fall through to a lower-priority catalog.
+	rejected := fmt.Errorf("existence check p@1.0.0: %w", errCredentialsRejected)
+	c1 := NewMockCatalog("remote", WithExistsFunc(func(_ context.Context, _ Reference) (bool, error) {
+		return false, rejected
+	}))
+	c2 := NewMockCatalog("official", WithExistsFunc(func(_ context.Context, _ Reference) (bool, error) {
+		return false, nil
+	}))
+
+	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
+	require.NoError(t, err)
+
+	ok, err := chain.Exists(context.Background(), testRef("my-plugin", "1.0.0"))
+	assert.False(t, ok)
+	require.ErrorIs(t, err, errCredentialsRejected)
+	assert.NotErrorIs(t, err, ErrArtifactNotFound)
+	assert.Contains(t, err.Error(), "remote")
+}
+
 func TestAggregateChainError(t *testing.T) {
 	t.Run("no unreachable, all not found", func(t *testing.T) {
 		err := aggregateChainError("subject", []catalogOutcome{

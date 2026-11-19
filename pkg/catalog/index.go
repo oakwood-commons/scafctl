@@ -15,6 +15,7 @@ import (
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
 	"oras.land/oras-go/v2/registry/remote"
+	"oras.land/oras-go/v2/registry/remote/auth"
 )
 
 // catalogIndexRepository is the well-known repository name for the catalog
@@ -38,38 +39,31 @@ type Index struct {
 
 // FetchIndex pulls the well-known catalog-index artifact and returns
 // the discovered artifacts. Returns an error if the index does not exist or
-// cannot be parsed.
+// cannot be parsed. Rejected credentials are retried anonymously for this
+// call only; the catalog's client is left unchanged.
 func (c *RemoteCatalog) FetchIndex(ctx context.Context) ([]DiscoveredArtifact, error) {
 	repoPath := c.buildIndexRepositoryPath()
 
-	repo, err := remote.NewRepository(repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("creating index repository: %w", err)
-	}
-	repo.Client = c.client
-
-	artifacts, fetchErr := c.fetchIndexFromRepo(ctx, repo)
-	if fetchErr != nil && isOCIAuthError(fetchErr) {
-		c.logger.V(1).Info("catalog index fetch rejected by registry, retrying anonymously",
-			"repo", repoPath, "error", fetchErr.Error())
-		c.switchToAnonymous()
-		repo.Client = c.client
-		anonArtifacts, anonErr := c.fetchIndexFromRepo(ctx, repo)
-		if anonErr != nil {
-			return nil, fetchErr
+	return retryAnonymously(ctx, c, "catalog index fetch", Reference{Name: catalogIndexRepository}, func(client *auth.Client) ([]DiscoveredArtifact, error) {
+		repo, err := remote.NewRepository(repoPath)
+		if err != nil {
+			return nil, fmt.Errorf("creating index repository: %w", err)
 		}
-		return anonArtifacts, nil
-	}
-
-	return artifacts, fetchErr
+		repo.Client = client
+		return c.fetchIndexFromRepo(ctx, repo, client)
+	})
 }
 
-// fetchIndexFromRepo fetches and parses the catalog index from an OCI repository.
-func (c *RemoteCatalog) fetchIndexFromRepo(ctx context.Context, repo *remote.Repository) ([]DiscoveredArtifact, error) {
+// fetchIndexFromRepo fetches and parses the catalog index from an OCI
+// repository. client is the client repo uses: a failed resolve is classified
+// with it (see lookupError), so a 403 for an index package that does not exist
+// yet is not-found when the registry accepts the credentials, rather than a
+// credential rejection.
+func (c *RemoteCatalog) fetchIndexFromRepo(ctx context.Context, repo *remote.Repository, client *auth.Client) ([]DiscoveredArtifact, error) {
 	// Resolve the manifest descriptor.
 	manifestDesc, err := repo.Resolve(ctx, catalogIndexTag)
 	if err != nil {
-		return nil, fmt.Errorf("resolving catalog index: %w", err)
+		return nil, c.lookupError(ctx, client, "resolving catalog index", Reference{Name: catalogIndexRepository}, err)
 	}
 
 	// Fetch and parse the OCI manifest.

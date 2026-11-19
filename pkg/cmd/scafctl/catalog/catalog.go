@@ -84,40 +84,29 @@ func hintOnAuthError(ctx context.Context, w *writer.Writer, registry string, err
 	}
 }
 
-// warnStaleCredentials emits a user-facing warning when a RemoteCatalog
-// detected that stored credentials were rejected and fell back to anonymous
-// access. Includes the credential source and a fix command.
-func warnStaleCredentials(ctx context.Context, w *writer.Writer, rc *catalog.RemoteCatalog) {
-	if !rc.HasStaleCredentials() {
+// warnStaleCredentials emits a user-facing warning when a request made with
+// ctx (prepared with catalog.WithCredentialRejections) fell back to anonymous
+// access because the registry rejected the stored credentials. Includes the
+// credential source and a fix command.
+func warnStaleCredentials(ctx context.Context, w *writer.Writer) {
+	degraded := catalog.CredentialRejection(ctx)
+	if degraded == nil {
 		return
 	}
 
-	registry := rc.Registry()
-	bin := settings.BinaryNameFromContext(ctx)
-
 	// Use the specific credential source when available, fall back to
 	// a handler-based or generic description.
-	source := rc.CredentialSource()
+	source := degraded.CredentialSource
 	if source == "" {
-		if handler := rc.AuthHandlerUsed(); handler != "" {
-			source = fmt.Sprintf("%s auth handler credentials", handler)
+		if degraded.Handler != "" {
+			source = fmt.Sprintf("%s auth handler credentials", degraded.Handler)
 		} else {
 			source = "stored credentials"
 		}
 	}
 
-	w.WarnStderrf("Your %s for %s were rejected — fell back to anonymous access.", source, registry)
-
-	var customHandlers []config.CustomOAuth2Config
-	if cfg := config.FromContext(ctx); cfg != nil {
-		customHandlers = cfg.Auth.CustomOAuth2
-	}
-
-	if handler := catalog.InferAuthHandler(registry, customHandlers); handler != "" {
-		w.PlainStderrf("  To fix: %s auth login %s", bin, handler)
-	} else {
-		w.PlainStderrf("  To fix: %s catalog login %s", bin, registry)
-	}
+	w.WarnStderrf("Your %s for %s were rejected — fell back to anonymous access.", source, degraded.Registry)
+	w.PlainStderrf("  To fix: %s", authLoginHint(ctx, degraded.Registry, degraded.Handler))
 }
 
 // resolveAuthProvider attempts to find and return the auth provider name for a registry.

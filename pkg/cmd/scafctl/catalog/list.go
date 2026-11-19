@@ -351,6 +351,8 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
+	// Scope credential-rejection tracking to this listing.
+	ctx = catalog.WithCredentialRejections(ctx)
 
 	if opts.Catalog != "" {
 		w.Error("cannot use --catalog with a full remote reference in --name")
@@ -438,7 +440,7 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 		w.Verbosef("After version filter %q: %d artifact(s)", opts.VersionConstraint, len(artifacts))
 	}
 
-	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, catalog.NewAuthDegradedError(remoteCatalog), rawResultCount)
+	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, catalog.CredentialRejection(ctx), rawResultCount)
 }
 
 func runListRemote(ctx context.Context, opts *ListOptions, kinds []catalog.ArtifactKind, outputOpts *kvx.OutputOptions) error {
@@ -543,13 +545,15 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kinds []catalog
 		return nil, nil, fmt.Errorf("failed to create remote catalog: %w", err)
 	}
 
+	// Scope credential-rejection tracking to this catalog's listing.
+	ctx = catalog.WithCredentialRejections(ctx)
 	result, listErr := catalog.ListAcrossKinds(ctx, remoteCatalog, kinds, opts.Name, *lgr)
 
-	// If stored credentials were rejected the catalog fell back to anonymous
-	// access, so the listing is degraded/incomplete rather than authoritative.
+	// If stored credentials were rejected the listing fell back to anonymous
+	// access, so it is degraded/incomplete rather than authoritative.
 	// Surface that as a typed value so the render layer can decide whether it is
 	// a fatal error (empty result) or a non-fatal warning (partial result).
-	degraded := catalog.NewAuthDegradedError(remoteCatalog)
+	degraded := catalog.CredentialRejection(ctx)
 	verboseCredentialSource(w, remoteCatalog)
 
 	return result, degraded, listErr

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -109,6 +110,79 @@ func TestFetchIndex_Success(t *testing.T) {
 	assert.Equal(t, "terraform", result[2].Name)
 }
 
+// rejectCredsHandler challenges anonymous requests until a credentialed one
+// arrives, rejects every credentialed request with 403, and afterwards serves
+// anonymous requests with anonStatus (or the inner handler when unset).
+type rejectCredsHandler struct {
+	inner      http.Handler
+	anonStatus int
+	sawCreds   atomic.Bool
+}
+
+func (h *rejectCredsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != "" {
+		h.sawCreds.Store(true)
+		writeRegistryError(w, http.StatusForbidden)
+		return
+	}
+	if !h.sawCreds.Load() {
+		w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
+		writeRegistryError(w, http.StatusUnauthorized)
+		return
+	}
+	if h.anonStatus != 0 {
+		writeRegistryError(w, h.anonStatus)
+		return
+	}
+	h.inner.ServeHTTP(w, r)
+}
+
+func TestFetchIndex_RejectedCredentials(t *testing.T) {
+	t.Parallel()
+
+	artifacts := []DiscoveredArtifact{{Kind: ArtifactKindSolution, Name: "hello-world"}}
+
+	newCatalog := func(t *testing.T, anonStatus int) *RemoteCatalog {
+		t.Helper()
+		indexSrv := buildTestIndexServer(t, artifacts)
+		t.Cleanup(indexSrv.Close)
+		srv := httptest.NewTLSServer(&rejectCredsHandler{inner: indexSrv.Config.Handler, anonStatus: anonStatus})
+		t.Cleanup(srv.Close)
+
+		cat := &RemoteCatalog{
+			name:     "test",
+			registry: strings.TrimPrefix(srv.URL, "https://"),
+			insecure: true,
+			client:   &orasauth.Client{Client: srv.Client()},
+			logger:   logr.Discard(),
+		}
+		withCredentials(cat)
+		return cat
+	}
+
+	t.Run("anonymous retry is scoped to the call", func(t *testing.T) {
+		t.Parallel()
+		cat := newCatalog(t, 0)
+		client := cat.client
+		ctx := WithCredentialRejections(t.Context())
+
+		result, err := cat.FetchIndex(ctx)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Equal(t, "hello-world", result[0].Name)
+		assert.Same(t, client, cat.client, "a later PushIndex must still use the configured credentials")
+		assert.NotNil(t, CredentialRejection(ctx), "an anonymous index is reported as degraded")
+	})
+
+	t.Run("failed anonymous retry reports rejected credentials", func(t *testing.T) {
+		t.Parallel()
+		cat := newCatalog(t, http.StatusNotFound)
+
+		_, err := cat.FetchIndex(t.Context())
+		require.ErrorIs(t, err, errCredentialsRejected)
+	})
+}
+
 func TestFetchIndex_WithRepository(t *testing.T) {
 	t.Parallel()
 
@@ -152,7 +226,7 @@ func TestFetchIndex_NotFound(t *testing.T) {
 
 	_, err := cat.FetchIndex(t.Context())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "resolving catalog index")
+	assert.True(t, IsNotFound(err), "a missing index is reported as not-found: %v", err)
 }
 
 func TestFetchIndex_InvalidJSON(t *testing.T) {

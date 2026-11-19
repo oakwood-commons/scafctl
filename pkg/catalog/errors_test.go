@@ -4,6 +4,7 @@
 package catalog
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -134,19 +135,6 @@ func TestIsEnumerationNotSupported(t *testing.T) {
 	})
 }
 
-// fakeStaleReporter implements staleCredentialReporter for testing.
-type fakeStaleReporter struct {
-	stale   bool
-	reg     string
-	handler string
-	source  string
-}
-
-func (f fakeStaleReporter) HasStaleCredentials() bool { return f.stale }
-func (f fakeStaleReporter) Registry() string          { return f.reg }
-func (f fakeStaleReporter) AuthHandlerUsed() string   { return f.handler }
-func (f fakeStaleReporter) CredentialSource() string  { return f.source }
-
 func TestAuthDegradedError_Error(t *testing.T) {
 	tests := []struct {
 		name string
@@ -176,22 +164,35 @@ func TestAuthDegradedError_Error(t *testing.T) {
 	}
 }
 
-func TestNewAuthDegradedError(t *testing.T) {
-	t.Run("nil when not stale", func(t *testing.T) {
-		assert.Nil(t, NewAuthDegradedError(fakeStaleReporter{stale: false, reg: "reg"}))
+func TestCredentialRejection(t *testing.T) {
+	first := AuthDegradedError{Registry: "reg.example.com", Handler: "github", CredentialSource: "github auth handler token"}
+
+	t.Run("nil without a recorder", func(t *testing.T) {
+		ctx := t.Context()
+		RecordCredentialRejection(ctx, first)
+		assert.Nil(t, CredentialRejection(ctx))
 	})
-	t.Run("nil reporter", func(t *testing.T) {
-		assert.Nil(t, NewAuthDegradedError(nil))
+	t.Run("nil when nothing was recorded", func(t *testing.T) {
+		assert.Nil(t, CredentialRejection(WithCredentialRejections(t.Context())))
 	})
-	t.Run("builds from stale reporter", func(t *testing.T) {
-		e := NewAuthDegradedError(fakeStaleReporter{
-			stale: true, reg: "reg.example.com", handler: "github", source: "github auth handler token",
-		})
-		if assert.NotNil(t, e) {
-			assert.Equal(t, "reg.example.com", e.Registry)
-			assert.Equal(t, "github", e.Handler)
-			assert.Equal(t, "github auth handler token", e.CredentialSource)
-		}
+	t.Run("keeps the first rejection", func(t *testing.T) {
+		ctx := WithCredentialRejections(t.Context())
+		RecordCredentialRejection(ctx, first)
+		RecordCredentialRejection(ctx, AuthDegradedError{Registry: "other.example.com"})
+		assert.Equal(t, &first, CredentialRejection(ctx))
+	})
+	t.Run("derived contexts share the recorder", func(t *testing.T) {
+		ctx := WithCredentialRejections(t.Context())
+		child, cancel := context.WithCancel(ctx)
+		defer cancel()
+		RecordCredentialRejection(child, first)
+		assert.Equal(t, &first, CredentialRejection(ctx))
+	})
+	t.Run("returns a copy", func(t *testing.T) {
+		ctx := WithCredentialRejections(t.Context())
+		RecordCredentialRejection(ctx, first)
+		CredentialRejection(ctx).Registry = "mutated"
+		assert.Equal(t, "reg.example.com", CredentialRejection(ctx).Registry)
 	})
 }
 

@@ -289,7 +289,8 @@ func runIndexShow(ctx context.Context, opts *IndexShowOptions, outputOpts *kvx.O
 	// Use catalog name as table header instead of binary name.
 	outputOpts.AppName = remoteCatalog.Name()
 
-	artifacts, err := remoteCatalog.FetchIndex(ctx)
+	fetchCtx := catalog.WithCredentialRejections(ctx)
+	artifacts, err := remoteCatalog.FetchIndex(fetchCtx)
 	if err != nil {
 		err = fmt.Errorf("failed to fetch catalog index: %w", err)
 		w.Errorf("%v", err)
@@ -298,7 +299,7 @@ func runIndexShow(ctx context.Context, opts *IndexShowOptions, outputOpts *kvx.O
 	}
 
 	// Warn if stale credentials were detected during fetch.
-	warnStaleCredentials(ctx, w, remoteCatalog)
+	warnStaleCredentials(fetchCtx, w)
 	verboseCredentialSource(w, remoteCatalog)
 
 	if len(artifacts) == 0 {

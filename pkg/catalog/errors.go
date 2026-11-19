@@ -4,9 +4,11 @@
 package catalog
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // ErrArtifactNotFound is returned when an artifact cannot be found.
@@ -364,11 +366,11 @@ func (e *TagError) Unwrap() error {
 }
 
 // AuthDegradedError indicates that stored credentials for a registry were
-// rejected and the catalog silently fell back to anonymous access. The listing
-// it produced is therefore degraded/incomplete rather than authoritatively
-// empty. The message is data-only (registry and credential source); callers
-// (e.g. the CLI) are responsible for adding a binary-name-specific fix hint,
-// since the binary name is context-driven.
+// rejected and a request fell back to anonymous access. Its result is
+// therefore degraded/incomplete rather than authoritative. The message is
+// data-only (registry and credential source); callers (e.g. the CLI) are
+// responsible for adding a binary-name-specific fix hint, since the binary
+// name is context-driven.
 type AuthDegradedError struct {
 	// Registry is the registry host whose credentials were rejected.
 	Registry string
@@ -393,29 +395,56 @@ func (e *AuthDegradedError) Error() string {
 	return fmt.Sprintf("authentication required for registry %q: rejected %s; fell back to anonymous access", e.Registry, source)
 }
 
-// staleCredentialReporter is the subset of RemoteCatalog needed to build an
-// AuthDegradedError. It lets NewAuthDegradedError be tested without a full
-// RemoteCatalog and keeps the dependency direction clean.
-type staleCredentialReporter interface {
-	HasStaleCredentials() bool
-	Registry() string
-	AuthHandlerUsed() string
-	CredentialSource() string
+// credentialRejectionsKey is the context key for *credentialRejections.
+type credentialRejectionsKey struct{}
+
+// credentialRejections holds the first credential rejection recorded during
+// the requests made with one context.
+type credentialRejections struct {
+	mu    sync.Mutex
+	first *AuthDegradedError
 }
 
-// NewAuthDegradedError builds an AuthDegradedError from a catalog that fell
-// back to anonymous access. It returns nil when the catalog's credentials are
-// not stale, so callers can write:
-//
-//	if degraded := catalog.NewAuthDegradedError(rc); degraded != nil { ... }
-func NewAuthDegradedError(rc staleCredentialReporter) *AuthDegradedError {
-	if rc == nil || !rc.HasStaleCredentials() {
+// WithCredentialRejections returns a context in which a RemoteCatalog records
+// a registry rejecting its credentials and the request falling back to
+// anonymous access. The record covers only requests made with the returned
+// context (or one derived from it), so scope it to one command or API
+// request; read it with CredentialRejection.
+func WithCredentialRejections(ctx context.Context) context.Context {
+	return context.WithValue(ctx, credentialRejectionsKey{}, &credentialRejections{})
+}
+
+// CredentialRejection returns the first credential rejection recorded in ctx,
+// or nil when none was recorded or ctx was not prepared with
+// WithCredentialRejections. A non-nil result means at least one result was
+// served anonymously and may omit private content.
+func CredentialRejection(ctx context.Context) *AuthDegradedError {
+	r, _ := ctx.Value(credentialRejectionsKey{}).(*credentialRejections)
+	if r == nil {
 		return nil
 	}
-	return &AuthDegradedError{
-		Registry:         rc.Registry(),
-		Handler:          rc.AuthHandlerUsed(),
-		CredentialSource: rc.CredentialSource(),
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.first == nil {
+		return nil
+	}
+	cp := *r.first
+	return &cp
+}
+
+// RecordCredentialRejection stores rejection in ctx's recorder unless one was
+// already recorded. It is a no-op without WithCredentialRejections.
+// RemoteCatalog calls it on an anonymous fallback; other Catalog
+// implementations can call it to report the same condition.
+func RecordCredentialRejection(ctx context.Context, rejection AuthDegradedError) {
+	r, _ := ctx.Value(credentialRejectionsKey{}).(*credentialRejections)
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.first == nil {
+		r.first = &rejection
 	}
 }
 
