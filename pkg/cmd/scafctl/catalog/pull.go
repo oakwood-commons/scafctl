@@ -129,6 +129,8 @@ func runPullResolvedBuiltReference(ctx context.Context, opts *PullOptions, build
 	ref := build.Reference
 	registry := build.Registry
 	repository := build.Repository
+	// Scope credential-rejection tracking to this pull (see postPull).
+	ctx = catalog.WithCredentialRejections(ctx)
 
 	remoteCatalog, err := newPullRemoteCatalog(ctx, opts, registry, repository)
 	if err != nil {
@@ -224,7 +226,7 @@ func postPull(
 		format.Bytes(result.Size))
 
 	// Warn about stale credentials if anonymous fallback was used.
-	warnStaleCredentials(ctx, w, remoteCatalog)
+	warnStaleCredentials(ctx, w)
 	verboseCredentialSource(w, remoteCatalog)
 
 	// === Pulled-bundle completeness verification (solution kind only) ===

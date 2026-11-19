@@ -717,15 +717,16 @@ func BenchmarkWriteArtifactList(b *testing.B) {
 	}
 }
 
-// staleDegraded builds an AuthDegradedError from a real RemoteCatalog marked
-// stale, exercising the same NewAuthDegradedError path the command uses.
+// staleDegraded builds the AuthDegradedError a credential-rejecting listing
+// records on its request context.
 func staleDegraded(t *testing.T) *catalogpkg.AuthDegradedError {
 	t.Helper()
-	rc, err := catalogpkg.NewRemoteCatalog(catalogpkg.RemoteCatalogConfig{Registry: "ghcr.io"})
-	require.NoError(t, err)
-	rc.SetStaleForTesting()
-	rc.SetCredentialSourceForTest("github auth handler token")
-	d := catalogpkg.NewAuthDegradedError(rc)
+	ctx := catalogpkg.WithCredentialRejections(t.Context())
+	catalogpkg.RecordCredentialRejection(ctx, catalogpkg.AuthDegradedError{
+		Registry:         "ghcr.io",
+		CredentialSource: "github auth handler token",
+	})
+	d := catalogpkg.CredentialRejection(ctx)
 	require.NotNil(t, d)
 	return d
 }
@@ -853,11 +854,7 @@ func TestWriteArtifactList_EmptyStale_GenericSourceAndRegistry(t *testing.T) {
 	w := writer.New(ioStreams, &settings.Run{})
 
 	// An arbitrary private registry with no known handler and no source.
-	rc, err := catalogpkg.NewRemoteCatalog(catalogpkg.RemoteCatalogConfig{Registry: "private.example.com"})
-	require.NoError(t, err)
-	rc.SetStaleForTesting()
-	degraded := catalogpkg.NewAuthDegradedError(rc)
-	require.NotNil(t, degraded)
+	degraded := &catalogpkg.AuthDegradedError{Registry: "private.example.com"}
 
 	wErr := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
 	require.Error(t, wErr)

@@ -7,11 +7,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
@@ -21,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	orasauth "oras.land/oras-go/v2/registry/remote/auth"
 	"oras.land/oras-go/v2/registry/remote/errcode"
+	"oras.land/oras-go/v2/registry/remote/retry"
 )
 
 // configureAuthRegistry registers the given mock handler in an
@@ -863,25 +867,6 @@ func TestIsOCIAuthError(t *testing.T) {
 	}
 }
 
-func TestSwitchToAnonymous(t *testing.T) {
-	t.Parallel()
-
-	cat := &RemoteCatalog{
-		name:     "test",
-		registry: "ghcr.io",
-		logger:   logr.Discard(),
-		client:   &orasauth.Client{},
-	}
-
-	assert.False(t, cat.HasStaleCredentials(), "should start without stale credentials")
-
-	originalClient := cat.client
-	cat.switchToAnonymous()
-
-	assert.True(t, cat.HasStaleCredentials(), "should report stale credentials after switch")
-	assert.NotSame(t, originalClient, cat.client, "client should be replaced")
-}
-
 func TestAnonymousClient_Insecure(t *testing.T) {
 	t.Parallel()
 
@@ -893,10 +878,61 @@ func TestAnonymousClient_Insecure(t *testing.T) {
 		insecure: true,
 	}
 
-	anonClient := cat.anonymousClient()
-	assert.NotNil(t, anonClient)
-	// The anonymous client should have a custom transport for insecure mode.
-	assert.NotNil(t, anonClient.Client)
+	anonClient, release := cat.anonymousClient()
+	require.NotNil(t, anonClient)
+	require.NotNil(t, release)
+	// The anonymous client should have a private transport for insecure mode.
+	require.NotNil(t, anonClient.Client)
+	assert.NotSame(t, retry.DefaultClient, anonClient.Client)
+	assert.IsType(t, &http.Transport{}, anonClient.Client.Transport)
+	assert.Nil(t, anonClient.Credential, "the anonymous client must not carry credentials")
+	release()
+}
+
+// TestAnonymousClient_InsecureReleaseClosesIdleConnections verifies that the
+// release func closes the keep-alive connections of the private insecure
+// transport, so repeated fallbacks do not accumulate idle sockets.
+func TestAnonymousClient_InsecureReleaseClosesIdleConnections(t *testing.T) {
+	t.Parallel()
+
+	closed := make(chan struct{}, 1)
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	ts.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateClosed {
+			select {
+			case closed <- struct{}{}:
+			default:
+			}
+		}
+	}
+	ts.StartTLS()
+	t.Cleanup(ts.Close)
+
+	cat := &RemoteCatalog{name: "test", registry: "localhost", logger: logr.Discard(), client: &orasauth.Client{}, insecure: true}
+	anonClient, release := cat.anonymousClient()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL, nil)
+	require.NoError(t, err)
+	resp, err := anonClient.Client.Do(req)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	require.NoError(t, resp.Body.Close())
+
+	select {
+	case <-closed:
+		t.Fatal("connection closed before release; keep-alive was not in effect")
+	default:
+	}
+
+	release()
+
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("release did not close the idle connection")
+	}
 }
 
 func TestAnonymousClient_Secure(t *testing.T) {
@@ -910,8 +946,13 @@ func TestAnonymousClient_Secure(t *testing.T) {
 		insecure: false,
 	}
 
-	anonClient := cat.anonymousClient()
-	assert.NotNil(t, anonClient)
+	anonClient, release := cat.anonymousClient()
+	require.NotNil(t, anonClient)
+	require.NotNil(t, release)
+	assert.Same(t, retry.DefaultClient, anonClient.Client, "the secure client shares the process-wide retry client")
+	// Releasing must be a no-op: the shared client's connections belong to
+	// every other caller in the process.
+	release()
 }
 
 func TestAuthHandlerUsed(t *testing.T) {

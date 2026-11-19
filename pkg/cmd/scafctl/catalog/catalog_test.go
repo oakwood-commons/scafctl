@@ -1009,14 +1009,16 @@ func TestWarnStaleCredentials_NoStale(t *testing.T) {
 	ctx := writer.WithWriter(context.Background(), w)
 	ctx = settings.IntoContext(ctx, settings.NewCliParams())
 
-	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
-		Registry:   "ghcr.io",
-		Repository: "myorg/solutions",
-	})
-	require.NoError(t, err)
+	warnStaleCredentials(ctx, w)
+	warnStaleCredentials(catalog.WithCredentialRejections(ctx), w)
+	assert.Empty(t, errBuf.String(), "should not emit warning when no credentials were rejected")
+}
 
-	warnStaleCredentials(ctx, w, rc)
-	assert.Empty(t, errBuf.String(), "should not emit warning when credentials are not stale")
+// rejectedCtx returns ctx with a recorded credential rejection for registry.
+func rejectedCtx(ctx context.Context, rejection catalog.AuthDegradedError) context.Context {
+	ctx = catalog.WithCredentialRejections(ctx)
+	catalog.RecordCredentialRejection(ctx, rejection)
+	return ctx
 }
 
 func TestWarnStaleCredentials_WithStale_KnownHandler(t *testing.T) {
@@ -1028,14 +1030,7 @@ func TestWarnStaleCredentials_WithStale_KnownHandler(t *testing.T) {
 	ctx := writer.WithWriter(context.Background(), w)
 	ctx = settings.IntoContext(ctx, params)
 
-	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
-		Registry:   "ghcr.io",
-		Repository: "myorg/solutions",
-	})
-	require.NoError(t, err)
-	rc.SetStaleForTesting()
-
-	warnStaleCredentials(ctx, w, rc)
+	warnStaleCredentials(rejectedCtx(ctx, catalog.AuthDegradedError{Registry: "ghcr.io"}), w)
 	output := errBuf.String()
 	assert.Contains(t, output, "rejected")
 	assert.Contains(t, output, "anonymous access")
@@ -1052,18 +1047,27 @@ func TestWarnStaleCredentials_WithStale_UnknownRegistry(t *testing.T) {
 	ctx := writer.WithWriter(context.Background(), w)
 	ctx = settings.IntoContext(ctx, params)
 
-	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
-		Registry:   "registry.example.com",
-		Repository: "myorg/solutions",
-	})
-	require.NoError(t, err)
-	rc.SetStaleForTesting()
-
-	warnStaleCredentials(ctx, w, rc)
+	warnStaleCredentials(rejectedCtx(ctx, catalog.AuthDegradedError{Registry: "registry.example.com"}), w)
 	output := errBuf.String()
 	assert.Contains(t, output, "rejected")
+	assert.Contains(t, output, "stored credentials")
 	assert.Contains(t, output, "catalog login registry.example.com",
 		"should suggest catalog login for unknown registry")
+}
+
+func TestWarnStaleCredentials_WithHandler(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	params := settings.NewCliParams()
+	w := writer.New(ioStreams, params)
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = settings.IntoContext(ctx, params)
+
+	warnStaleCredentials(rejectedCtx(ctx, catalog.AuthDegradedError{Registry: "registry.example.com", Handler: "corp-sso"}), w)
+	output := errBuf.String()
+	assert.Contains(t, output, "corp-sso auth handler credentials")
+	assert.Contains(t, output, "auth login corp-sso", "should prefer the handler that supplied the credentials")
 }
 
 func TestWarnStaleCredentials_WithCredentialSource(t *testing.T) {
@@ -1075,15 +1079,10 @@ func TestWarnStaleCredentials_WithCredentialSource(t *testing.T) {
 	ctx := writer.WithWriter(context.Background(), w)
 	ctx = settings.IntoContext(ctx, params)
 
-	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
-		Registry:   "ghcr.io",
-		Repository: "myorg/solutions",
-	})
-	require.NoError(t, err)
-	rc.SetStaleForTesting()
-	rc.SetCredentialSourceForTest("docker credential helper (desktop)")
-
-	warnStaleCredentials(ctx, w, rc)
+	warnStaleCredentials(rejectedCtx(ctx, catalog.AuthDegradedError{
+		Registry:         "ghcr.io",
+		CredentialSource: "docker credential helper (desktop)",
+	}), w)
 	output := errBuf.String()
 	assert.Contains(t, output, "docker credential helper (desktop)")
 }
@@ -1098,14 +1097,7 @@ func TestWarnStaleCredentials_EmbedderBinaryName(t *testing.T) {
 	ctx := writer.WithWriter(context.Background(), w)
 	ctx = settings.IntoContext(ctx, params)
 
-	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
-		Registry:   "ghcr.io",
-		Repository: "myorg/solutions",
-	})
-	require.NoError(t, err)
-	rc.SetStaleForTesting()
-
-	warnStaleCredentials(ctx, w, rc)
+	warnStaleCredentials(rejectedCtx(ctx, catalog.AuthDegradedError{Registry: "ghcr.io"}), w)
 	output := errBuf.String()
 	assert.Contains(t, output, "mycli auth login github")
 	assert.NotContains(t, output, "scafctl")

@@ -290,11 +290,15 @@ func (c *ChainCatalog) Exists(ctx context.Context, ref Reference) (bool, error) 
 	if len(outcomes) == 0 {
 		return false, nil
 	}
-	// At least one catalog couldn't determine existence; surface that if any
-	// were unreachable, otherwise treat as a clean "not found" (false, nil)
-	// to preserve prior behavior for benign resolve errors.
+	// At least one catalog couldn't determine existence; surface that when it
+	// is unreachable or had its credentials rejected (the artifact may be
+	// hidden), otherwise treat as a clean "not found" (false, nil) to preserve
+	// prior behavior for benign resolve errors.
 	for _, o := range outcomes {
 		if _, ok := IsCatalogUnreachable(o.err); ok {
+			return false, aggregateChainError(ref.String(), outcomes)
+		}
+		if errors.Is(o.err, errCredentialsRejected) {
 			return false, aggregateChainError(ref.String(), outcomes)
 		}
 	}

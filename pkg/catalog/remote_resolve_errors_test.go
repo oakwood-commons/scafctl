@@ -5,7 +5,6 @@ package catalog
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -34,16 +33,32 @@ import (
 // rejects credentials with credStatus, unless credsValid is set: that models a
 // registry that accepts the login but denies the repository, as GHCR does for
 // a package that does not exist.
+//
+// missingRepo models a repository that does not exist yet: the configured
+// failures apply only until the first write (push) arrives, after which the
+// repository is served normally.
 type manifestStatusHandler struct {
-	inner      http.Handler
-	status     atomic.Int32
-	credStatus atomic.Int32
-	credsValid atomic.Bool
-	sawCreds   atomic.Bool
+	inner       http.Handler
+	status      atomic.Int32
+	credStatus  atomic.Int32
+	credsValid  atomic.Bool
+	sawCreds    atomic.Bool
+	missingRepo atomic.Bool
+	created     atomic.Bool
+	// credLookups counts credentialed manifest and tag-list requests.
+	credLookups atomic.Int32
+	// authProbes counts credentialed /v2/ login probes.
+	authProbes atomic.Int32
 }
 
 func (h *manifestStatusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.missingRepo.Load() && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.created.Store(true)
+	}
 	if r.URL.Path == "/v2/" {
+		if r.Header.Get("Authorization") != "" {
+			h.authProbes.Add(1)
+		}
 		if cs := h.credStatus.Load(); cs != 0 {
 			if r.Header.Get("Authorization") == "" {
 				w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
@@ -62,9 +77,14 @@ func (h *manifestStatusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		h.inner.ServeHTTP(w, r)
 		return
 	}
+	if h.created.Load() {
+		h.inner.ServeHTTP(w, r)
+		return
+	}
 	if cs := h.credStatus.Load(); cs != 0 {
 		if r.Header.Get("Authorization") != "" {
 			h.sawCreds.Store(true)
+			h.credLookups.Add(1)
 			writeRegistryError(w, int(cs))
 			return
 		}
@@ -173,14 +193,15 @@ func TestRemoteCatalog_ManifestErrors_StrictChain(t *testing.T) {
 					h.credStatus.Store(tc.credStatus)
 					h.status.Store(tc.status)
 					fallback := okSource("secondary")
+					ctx := WithCredentialRejections(t.Context())
 
-					_, err := op(t.Context(), newPluginSourceChain(logr.Discard(), nil, remote, fallback))
+					_, err := op(ctx, newPluginSourceChain(logr.Discard(), nil, remote, fallback))
 					require.Error(t, err)
 					assert.NotErrorIs(t, err, ErrArtifactNotFound)
 					assert.Zero(t, fallback.calls, "a registry failure must not fall through to a lower-priority source")
 					if tc.rejected {
 						assert.ErrorIs(t, err, errCredentialsRejected)
-						assert.True(t, remote.HasStaleCredentials())
+						assert.NotNil(t, CredentialRejection(ctx), "the rejection is recorded on the request context")
 					}
 				})
 			}
@@ -199,11 +220,12 @@ func TestRemoteCatalog_ManifestErrors_StrictChain(t *testing.T) {
 					remote, h := newManifestStatusRemote(t)
 					h.status.Store(tc.status)
 					fallback := okSource("secondary")
+					ctx := WithCredentialRejections(t.Context())
 
-					got, err := op(t.Context(), newPluginSourceChain(logr.Discard(), nil, remote, fallback))
+					got, err := op(ctx, newPluginSourceChain(logr.Discard(), nil, remote, fallback))
 					require.NoError(t, err)
 					assert.Equal(t, "secondary", got)
-					assert.False(t, remote.HasStaleCredentials(), "an anonymous catalog has no credentials to reject")
+					assert.Nil(t, CredentialRejection(ctx), "an anonymous catalog has no credentials to reject")
 				})
 			}
 
@@ -215,11 +237,12 @@ func TestRemoteCatalog_ManifestErrors_StrictChain(t *testing.T) {
 				h.credsValid.Store(true)
 				h.status.Store(http.StatusForbidden)
 				fallback := okSource("secondary")
+				ctx := WithCredentialRejections(t.Context())
 
-				got, err := op(t.Context(), newPluginSourceChain(logr.Discard(), nil, remote, fallback))
+				got, err := op(ctx, newPluginSourceChain(logr.Discard(), nil, remote, fallback))
 				require.NoError(t, err)
 				assert.Equal(t, "secondary", got)
-				assert.False(t, remote.HasStaleCredentials(), "valid credentials must not degrade the catalog to anonymous")
+				assert.Nil(t, CredentialRejection(ctx), "valid credentials must not be reported as rejected")
 			})
 
 			t.Run("credentialed 403 then anonymous success serves primary", func(t *testing.T) {
@@ -228,12 +251,14 @@ func TestRemoteCatalog_ManifestErrors_StrictChain(t *testing.T) {
 				withCredentials(remote)
 				h.credStatus.Store(http.StatusForbidden)
 				fallback := okSource("secondary")
+				ctx := WithCredentialRejections(t.Context())
 
-				got, err := op(t.Context(), newPluginSourceChain(logr.Discard(), nil, remote, fallback))
+				got, err := op(ctx, newPluginSourceChain(logr.Discard(), nil, remote, fallback))
 				require.NoError(t, err)
 				assert.Equal(t, "primary", got)
 				assert.Zero(t, fallback.calls)
-				assert.True(t, remote.HasStaleCredentials())
+				assert.NotNil(t, CredentialRejection(ctx), "an anonymous result is reported as degraded")
+				assert.Nil(t, CredentialRejection(t.Context()), "the record does not outlive the request context")
 			})
 		})
 	}
@@ -256,13 +281,10 @@ func TestRemoteCatalog_LookupError(t *testing.T) {
 	rejected := &probeResult{presented: true, err: probeRejected}
 	unverified := &probeResult{}
 
-	newCat := func(credentialed, stale bool, probe *probeResult, probes *atomic.Int32) *RemoteCatalog {
+	newCat := func(credentialed bool, probe *probeResult, probes *atomic.Int32) *RemoteCatalog {
 		cat := &RemoteCatalog{name: "primary", registry: "registry.example", client: &auth.Client{}, logger: logr.Discard()}
 		if credentialed {
 			withCredentials(cat)
-		}
-		if stale {
-			cat.SetStaleForTesting()
 		}
 		cat.probeCredentials = func(context.Context) (bool, error) {
 			probes.Add(1)
@@ -277,11 +299,9 @@ func TestRemoteCatalog_LookupError(t *testing.T) {
 	tests := []struct {
 		name         string
 		credentialed bool
-		stale        bool
 		probe        *probeResult
 		err          error
 		wantNotFound bool
-		wantRejected bool
 		wantProbes   int32
 	}{
 		{name: "anonymous 404", err: missing, wantNotFound: true},
@@ -293,18 +313,17 @@ func TestRemoteCatalog_LookupError(t *testing.T) {
 		{name: "credentialed 403 with rejected credentials", credentialed: true, probe: rejected, err: denied, wantProbes: 1},
 		{name: "credentialed 403 with unverified credentials", credentialed: true, probe: unverified, err: denied, wantProbes: 1},
 		{name: "credentialed 403 when the probe fails", credentialed: true, err: denied, wantProbes: 1},
-		{name: "stale 404", credentialed: true, stale: true, err: missing, wantRejected: true},
-		{name: "stale 403", credentialed: true, stale: true, probe: accepted, err: denied, wantRejected: true},
 		{name: "anonymous other", err: assert.AnError},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			var probes atomic.Int32
-			err := newCat(tc.credentialed, tc.stale, tc.probe, &probes).lookupError(t.Context(), "resolving", ref, tc.err)
+			cat := newCat(tc.credentialed, tc.probe, &probes)
+			err := cat.lookupError(t.Context(), cat.client, "resolving", ref, tc.err)
 			require.Error(t, err)
 			assert.Equal(t, tc.wantNotFound, IsNotFound(err))
-			assert.Equal(t, tc.wantRejected, errors.Is(err, errCredentialsRejected))
+			assert.NotErrorIs(t, err, errCredentialsRejected, "only retryAnonymously reports rejected credentials")
 			assert.Equal(t, tc.wantProbes, probes.Load(), "credential probes")
 			if !tc.wantNotFound {
 				assert.ErrorIs(t, err, tc.err)
@@ -334,8 +353,6 @@ func TestRemoteCatalog_SendsCredentials(t *testing.T) {
 	cred := &RemoteCatalog{registry: "r", client: &auth.Client{}}
 	withCredentials(cred)
 	assert.True(t, cred.sendsCredentials(ctx))
-	cred.SetStaleForTesting()
-	assert.False(t, cred.sendsCredentials(ctx), "a degraded catalog is anonymous")
 }
 
 func TestRetryAnonymously_CredentialLookupOnlyOnAuthFailure(t *testing.T) {
@@ -362,40 +379,380 @@ func TestRetryAnonymously_CredentialLookupOnlyOnAuthFailure(t *testing.T) {
 			}}
 
 			var runs int
-			_, err := retryAnonymously(t.Context(), cat, "op", testRef("p", "1.0.0"), func() (struct{}, error) {
+			ctx := WithCredentialRejections(t.Context())
+			_, err := retryAnonymously(ctx, cat, "op", testRef("p", "1.0.0"), func(*auth.Client) (struct{}, error) {
 				runs++
 				return struct{}{}, tc.err
 			})
 			assert.Equal(t, tc.err, err)
 			assert.Equal(t, tc.wantCalls, calls.Load(), "credential callback invocations")
 			assert.Equal(t, 1, runs, "an anonymous catalog is not retried")
-			assert.False(t, cat.HasStaleCredentials())
+			assert.Nil(t, CredentialRejection(ctx))
 		})
 	}
 
-	t.Run("already degraded catalog retries without a lookup", func(t *testing.T) {
+	t.Run("credentialed auth failure retries with anonymous client without mutating catalog client", func(t *testing.T) {
 		t.Parallel()
-		var calls atomic.Int32
-		cat := &RemoteCatalog{name: "primary", registry: "r", logger: logr.Discard(), client: &auth.Client{
-			Credential: func(context.Context, string) (auth.Credential, error) {
-				calls.Add(1)
-				return auth.Credential{Username: "u", Password: "p"}, nil
-			},
-		}}
-		cat.switchToAnonymous()
+		baseClient := &auth.Client{Credential: auth.StaticCredential("r", auth.Credential{Username: "u", Password: "p"})}
+		cat := &RemoteCatalog{name: "primary", registry: "r", logger: logr.Discard(), client: baseClient, authHandlerUsed: "github"}
 
 		var runs int
-		_, err := retryAnonymously(t.Context(), cat, "op", testRef("p", "1.0.0"), func() (struct{}, error) {
+		var first, second *auth.Client
+		ctx := WithCredentialRejections(t.Context())
+		_, err := retryAnonymously(ctx, cat, "op", testRef("p", "1.0.0"), func(client *auth.Client) (struct{}, error) {
 			runs++
 			if runs == 1 {
-				return struct{}{}, &errcode.ErrorResponse{StatusCode: http.StatusUnauthorized}
+				first = client
+				return struct{}{}, &errcode.ErrorResponse{StatusCode: http.StatusForbidden}
 			}
+			second = client
 			return struct{}{}, nil
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 2, runs)
-		assert.Zero(t, calls.Load())
+		assert.Same(t, baseClient, first, "first attempt must use the catalog client")
+		assert.NotSame(t, baseClient, second, "retry must use a request-scoped anonymous client")
+		assert.Same(t, baseClient, cat.client, "catalog client must remain unchanged")
+		assert.Equal(t, &AuthDegradedError{Registry: "r", Handler: "github"}, CredentialRejection(ctx))
 	})
+}
+
+// TestRemoteCatalog_LatestFetch_SingleIdentityPerAttempt verifies that a
+// fetch without a version resolves the latest version with the same client
+// as the rest of the attempt: once the credentialed attempt is rejected, the
+// anonymous retry must not send credentials again.
+func TestRemoteCatalog_LatestFetch_SingleIdentityPerAttempt(t *testing.T) {
+	t.Parallel()
+
+	ops := map[string]func(ctx context.Context, cat *RemoteCatalog) (ArtifactInfo, error){
+		"Fetch": func(ctx context.Context, cat *RemoteCatalog) (ArtifactInfo, error) {
+			_, info, err := cat.Fetch(ctx, testRef("p", ""))
+			return info, err
+		},
+		"FetchWithBundle": func(ctx context.Context, cat *RemoteCatalog) (ArtifactInfo, error) {
+			_, _, info, err := cat.FetchWithBundle(ctx, testRef("p", ""))
+			return info, err
+		},
+		"FetchByPlatform": func(ctx context.Context, cat *RemoteCatalog) (ArtifactInfo, error) {
+			_, info, err := cat.FetchByPlatform(ctx, testRef("p", ""), "linux/amd64")
+			return info, err
+		},
+	}
+	for name, op := range ops {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cat, h := newManifestStatusRemote(t)
+			withCredentials(cat)
+			h.credStatus.Store(http.StatusForbidden)
+
+			info, err := op(t.Context(), cat)
+			require.NoError(t, err)
+			assert.Equal(t, "1.0.0", info.Reference.Version.String())
+			assert.Equal(t, int32(1), h.credLookups.Load(),
+				"only the first lookup of the credentialed attempt may send credentials")
+		})
+	}
+}
+
+// TestRemoteCatalog_VersionedFetch_RejectedCredentials verifies that fetches
+// with an explicit version classify a manifest auth failure as an auth error,
+// so the anonymous retry runs, and that a failed retry halts instead of being
+// reported as not-found.
+func TestRemoteCatalog_VersionedFetch_RejectedCredentials(t *testing.T) {
+	t.Parallel()
+
+	ref := testRef("p", "1.0.0")
+	ops := map[string]func(ctx context.Context, cat *RemoteCatalog) (ArtifactInfo, error){
+		"Fetch": func(ctx context.Context, cat *RemoteCatalog) (ArtifactInfo, error) {
+			_, info, err := cat.Fetch(ctx, ref)
+			return info, err
+		},
+		"FetchWithBundle": func(ctx context.Context, cat *RemoteCatalog) (ArtifactInfo, error) {
+			_, _, info, err := cat.FetchWithBundle(ctx, ref)
+			return info, err
+		},
+		"FetchWithLayer": func(ctx context.Context, cat *RemoteCatalog) (ArtifactInfo, error) {
+			_, _, info, err := cat.FetchWithLayer(ctx, ref)
+			return info, err
+		},
+	}
+	for name, op := range ops {
+		t.Run(name+" anonymous retry succeeds", func(t *testing.T) {
+			t.Parallel()
+			cat, h := newManifestStatusRemote(t)
+			withCredentials(cat)
+			h.credStatus.Store(http.StatusForbidden)
+
+			info, err := op(t.Context(), cat)
+			require.NoError(t, err)
+			assert.Equal(t, "1.0.0", info.Reference.Version.String())
+			assert.Equal(t, int32(1), h.credLookups.Load())
+		})
+
+		t.Run(name+" anonymous 404 halts", func(t *testing.T) {
+			t.Parallel()
+			cat, h := newManifestStatusRemote(t)
+			withCredentials(cat)
+			h.credStatus.Store(http.StatusForbidden)
+			h.status.Store(http.StatusNotFound)
+
+			_, err := op(t.Context(), cat)
+			require.Error(t, err)
+			require.ErrorIs(t, err, errCredentialsRejected)
+			assert.NotErrorIs(t, err, ErrArtifactNotFound)
+		})
+
+		t.Run(name+" anonymous not found", func(t *testing.T) {
+			t.Parallel()
+			cat, h := newManifestStatusRemote(t)
+			h.status.Store(http.StatusNotFound)
+
+			_, err := op(t.Context(), cat)
+			require.ErrorIs(t, err, ErrArtifactNotFound)
+		})
+	}
+}
+
+// TestRemoteCatalog_RejectedCredentials_NotReportedAsAbsent verifies that the
+// paths which infer absence from a resolve error do not turn a rejected
+// credential into a false negative: the artifact may exist but be hidden from
+// anonymous access, so a strict source chain must halt instead of falling
+// through to a lower-priority catalog.
+func TestRemoteCatalog_RejectedCredentials_NotReportedAsAbsent(t *testing.T) {
+	t.Parallel()
+
+	ops := map[string]func(ctx context.Context, cat *RemoteCatalog) error{
+		"Exists": func(ctx context.Context, cat *RemoteCatalog) error {
+			exists, err := cat.Exists(ctx, testRef("p", "1.0.0"))
+			if err == nil && !exists {
+				return fmt.Errorf("reported absent: %w", ErrArtifactNotFound)
+			}
+			return err
+		},
+		"resolveByTag": func(ctx context.Context, cat *RemoteCatalog) error {
+			_, err := cat.resolveByTag(ctx, testRef("p", "1.0.0"), "1.0.0")
+			return err
+		},
+	}
+	for name, op := range ops {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cat, h := newManifestStatusRemote(t)
+			withCredentials(cat)
+			h.credStatus.Store(http.StatusForbidden)
+			h.status.Store(http.StatusNotFound)
+
+			err := op(t.Context(), cat)
+			require.ErrorIs(t, err, errCredentialsRejected)
+			assert.NotErrorIs(t, err, ErrArtifactNotFound, "a hidden artifact must not be reported as absent")
+		})
+	}
+}
+
+// TestRemoteCatalog_CopyToLocal_RejectedCredentials verifies that copying makes
+// the same anonymous fallback as resolving: pull resolves the reference first,
+// so by the time CopyToLocal runs the configured client is intact and its
+// manifest request is rejected. Both the verbatim copy and the --as rebuild
+// must retry anonymously for the copy itself.
+func TestRemoteCatalog_CopyToLocal_RejectedCredentials(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		target string
+	}{
+		{name: "verbatim"},
+		{name: "renamed", target: "renamed@2.0.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cat, h := newManifestStatusRemote(t)
+			withCredentials(cat)
+			h.credStatus.Store(http.StatusForbidden)
+
+			// Resolve first, as catalog pull does, exercising the anonymous
+			// fallback without changing the catalog's configured client.
+			info, err := cat.Resolve(t.Context(), testRef("p", "1.0.0"))
+			require.NoError(t, err)
+
+			local := newTestCatalog(t)
+			_, err = cat.CopyToLocal(t.Context(), info.Reference, local, CopyOptions{TargetName: tc.target})
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestRemoteCatalog_ListPlatforms_RejectedCredentials verifies that a versioned
+// platform listing classifies its manifest denial as an auth failure, so the
+// anonymous retry runs instead of the listing failing as not-found.
+func TestRemoteCatalog_ListPlatforms_RejectedCredentials(t *testing.T) {
+	t.Parallel()
+
+	cat, h := newManifestStatusRemote(t)
+	withCredentials(cat)
+	h.credStatus.Store(http.StatusForbidden)
+
+	_, err := cat.ListPlatforms(t.Context(), testRef("p", "1.0.0"))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), h.credLookups.Load(),
+		"the credentialed attempt is rejected and retried anonymously")
+}
+
+// TestRemoteCatalog_RejectedCredentials_AnonymousRetrySkipsCredentialProbe
+// verifies that when the anonymous retry itself is denied, classification does
+// not fall back to the configured client: no extra credentialed /v2/ login
+// probe and no extra credentialed manifest or tag-list request may be made.
+func TestRemoteCatalog_RejectedCredentials_AnonymousRetrySkipsCredentialProbe(t *testing.T) {
+	t.Parallel()
+
+	ops := map[string]func(ctx context.Context, cat *RemoteCatalog) error{
+		"ListPlatforms": func(ctx context.Context, cat *RemoteCatalog) error {
+			_, err := cat.ListPlatforms(ctx, testRef("p", "1.0.0"))
+			return err
+		},
+		"List": func(ctx context.Context, cat *RemoteCatalog) error {
+			_, err := cat.List(ctx, ArtifactKindProvider, "p")
+			return err
+		},
+	}
+	for name, op := range ops {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cat, h := newManifestStatusRemote(t)
+			withCredentials(cat)
+			// Credentials are rejected, and so is anonymous access, so the
+			// anonymous retry fails and must report rejected credentials.
+			h.credStatus.Store(http.StatusForbidden)
+			h.status.Store(http.StatusForbidden)
+
+			err := op(t.Context(), cat)
+			require.ErrorIs(t, err, errCredentialsRejected)
+			assert.Equal(t, int32(1), h.authProbes.Load(),
+				"only the credentialed attempt may probe the registry's credentials")
+			assert.Equal(t, int32(1), h.credLookups.Load(),
+				"only the credentialed attempt may send credentials to a manifest or tag list")
+		})
+	}
+}
+
+// TestRemoteCatalog_DeniedRepository_ValidCredentials verifies that a
+// repository denial to credentials the registry accepts -- GHCR answers a
+// logged-in request for a package that does not exist with 403 DENIED -- is
+// classified as not-found by the attempt that hit it. It must not be mistaken
+// for rejected credentials, even when anonymous access is denied too.
+func TestRemoteCatalog_DeniedRepository_ValidCredentials(t *testing.T) {
+	t.Parallel()
+
+	setup := func(t *testing.T) (*RemoteCatalog, *manifestStatusHandler) {
+		t.Helper()
+		cat, h := newManifestStatusRemote(t)
+		withCredentials(cat)
+		h.credStatus.Store(http.StatusForbidden)
+		h.credsValid.Store(true)
+		h.status.Store(http.StatusForbidden)
+		return cat, h
+	}
+
+	t.Run("Exists reports absent", func(t *testing.T) {
+		t.Parallel()
+		cat, h := setup(t)
+		ctx := WithCredentialRejections(t.Context())
+
+		exists, err := cat.Exists(ctx, testRef("q", "1.0.0"))
+		require.NoError(t, err)
+		assert.False(t, exists)
+		assert.Nil(t, CredentialRejection(ctx), "valid credentials must not be reported as rejected")
+		assert.Equal(t, int32(1), h.authProbes.Load(), "the denial is checked against the login once")
+		assert.Equal(t, int32(1), h.credLookups.Load(), "no anonymous retry follows a repository denial")
+	})
+
+	t.Run("resolveByTag reports not found", func(t *testing.T) {
+		t.Parallel()
+		cat, h := setup(t)
+		ctx := WithCredentialRejections(t.Context())
+
+		_, err := cat.resolveByTag(ctx, testRef("q", "1.0.0"), "1.0.0")
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+		assert.NotErrorIs(t, err, errCredentialsRejected)
+		assert.Nil(t, CredentialRejection(ctx), "valid credentials must not be reported as rejected")
+		assert.Equal(t, int32(1), h.credLookups.Load(), "no anonymous retry follows a repository denial")
+	})
+
+	t.Run("FetchIndex reports not found", func(t *testing.T) {
+		t.Parallel()
+		cat, h := setup(t)
+		ctx := WithCredentialRejections(t.Context())
+
+		_, err := cat.FetchIndex(ctx)
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+		assert.NotErrorIs(t, err, errCredentialsRejected)
+		assert.Nil(t, CredentialRejection(ctx), "valid credentials must not be reported as rejected")
+		assert.Equal(t, int32(1), h.authProbes.Load(), "the denial is checked against the login once")
+		assert.Equal(t, int32(1), h.credLookups.Load(), "no anonymous retry follows a repository denial")
+	})
+
+	t.Run("Store creates a missing package", func(t *testing.T) {
+		t.Parallel()
+		cat, h := setup(t)
+		h.missingRepo.Store(true)
+		ctx := WithCredentialRejections(t.Context())
+
+		ref := testRef("q", "1.0.0")
+		_, err := cat.Store(ctx, ref, []byte("binary"), nil, nil, false)
+		require.NoError(t, err, "a denied existence check with valid credentials must not abort the push")
+		assert.Nil(t, CredentialRejection(ctx))
+
+		exists, err := cat.Exists(ctx, ref)
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
+}
+
+// TestRemoteCatalog_MalformedRepository verifies that a repository path that
+// cannot be constructed is reported as a configuration error, never as a
+// missing artifact, and that no registry request is made.
+func TestRemoteCatalog_MalformedRepository(t *testing.T) {
+	t.Parallel()
+
+	ops := map[string]func(ctx context.Context, cat *RemoteCatalog) error{
+		"Exists": func(ctx context.Context, cat *RemoteCatalog) error {
+			exists, err := cat.Exists(ctx, testRef("p", "1.0.0"))
+			if err == nil && !exists {
+				return fmt.Errorf("reported absent: %w", ErrArtifactNotFound)
+			}
+			return err
+		},
+		"resolveByTag": func(ctx context.Context, cat *RemoteCatalog) error {
+			_, err := cat.resolveByTag(ctx, testRef("p", "1.0.0"), "1.0.0")
+			return err
+		},
+	}
+	for name, op := range ops {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var requests atomic.Int32
+			ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			t.Cleanup(ts.Close)
+
+			cat := &RemoteCatalog{
+				name:       "primary",
+				registry:   strings.TrimPrefix(ts.URL, "https://"),
+				repository: "INVALID//Repo",
+				client:     &auth.Client{Client: ts.Client()},
+				logger:     logr.Discard(),
+			}
+
+			err := op(t.Context(), cat)
+			require.Error(t, err)
+			require.ErrorIs(t, err, errdef.ErrInvalidReference)
+			assert.NotErrorIs(t, err, ErrArtifactNotFound, "a malformed repository must not be reported as a missing artifact")
+			assert.Contains(t, err.Error(), "failed to create repository")
+			assert.Zero(t, requests.Load(), "no registry request is made for a malformed repository")
+		})
+	}
 }
 
 func TestRemoteCatalog_ManifestResolveError(t *testing.T) {
@@ -403,10 +760,10 @@ func TestRemoteCatalog_ManifestResolveError(t *testing.T) {
 	cat := &RemoteCatalog{name: "primary"}
 	ref := testRef("p", "1.0.0")
 
-	_, unreachable := IsCatalogUnreachable(cat.manifestResolveError(t.Context(), ref, &netTimeoutError{}))
+	_, unreachable := IsCatalogUnreachable(cat.manifestResolveError(t.Context(), cat.client, ref, &netTimeoutError{}))
 	assert.True(t, unreachable)
 
-	err := cat.manifestResolveError(t.Context(), ref, assert.AnError)
+	err := cat.manifestResolveError(t.Context(), cat.client, ref, assert.AnError)
 	require.ErrorIs(t, err, assert.AnError)
 	assert.NotErrorIs(t, err, ErrArtifactNotFound)
 	assert.Contains(t, err.Error(), `catalog "primary"`)

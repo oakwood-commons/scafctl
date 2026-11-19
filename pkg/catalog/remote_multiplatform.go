@@ -11,6 +11,7 @@ import (
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2/content"
+	"oras.land/oras-go/v2/registry/remote/auth"
 )
 
 // Compile-time check that RemoteCatalog implements PlatformAwareCatalog.
@@ -24,24 +25,24 @@ func (c *RemoteCatalog) FetchByPlatform(ctx context.Context, ref Reference, plat
 		data []byte
 		info ArtifactInfo
 	}
-	r, err := retryAnonymously(ctx, c, "platform fetch", ref, func() (fetched, error) {
-		data, info, err := c.fetchByPlatformInternal(ctx, ref, platform)
+	r, err := retryAnonymously(ctx, c, "platform fetch", ref, func(client *auth.Client) (fetched, error) {
+		data, info, err := c.fetchByPlatformInternal(ctx, ref, platform, client)
 		return fetched{data: data, info: info}, err
 	})
 	return r.data, r.info, err
 }
 
-func (c *RemoteCatalog) fetchByPlatformInternal(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error) {
+func (c *RemoteCatalog) fetchByPlatformInternal(ctx context.Context, ref Reference, platform string, client *auth.Client) ([]byte, ArtifactInfo, error) {
 	// When no version is specified, resolve to the latest version first.
 	if !ref.HasVersion() && !ref.HasDigest() {
-		resolved, err := c.resolveWithKind(ctx, ref)
+		resolved, err := c.resolveWithKindInternal(ctx, ref, client)
 		if err != nil {
 			return nil, ArtifactInfo{}, err
 		}
 		ref = resolved.Reference
 	}
 
-	repo, err := c.getRepository(ref)
+	repo, err := c.repositoryWithClient(ref, client)
 	if err != nil {
 		return nil, ArtifactInfo{}, err
 	}
@@ -49,7 +50,7 @@ func (c *RemoteCatalog) fetchByPlatformInternal(ctx context.Context, ref Referen
 	tag := c.tagForRef(ref)
 	topDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		return nil, ArtifactInfo{}, c.manifestResolveError(ctx, ref, err)
+		return nil, ArtifactInfo{}, c.manifestResolveError(ctx, client, ref, err)
 	}
 
 	topData, err := content.FetchAll(ctx, repo, topDesc)
@@ -138,21 +139,21 @@ func (c *RemoteCatalog) extractLayerContent(
 // ListPlatforms returns the platforms available for a multi-platform artifact.
 // Returns nil if the artifact is single-platform.
 func (c *RemoteCatalog) ListPlatforms(ctx context.Context, ref Reference) ([]string, error) {
-	return retryAnonymously(ctx, c, "list platforms", ref, func() ([]string, error) {
-		return c.listPlatformsInternal(ctx, ref)
+	return retryAnonymously(ctx, c, "list platforms", ref, func(client *auth.Client) ([]string, error) {
+		return c.listPlatformsInternal(ctx, ref, client)
 	})
 }
 
-func (c *RemoteCatalog) listPlatformsInternal(ctx context.Context, ref Reference) ([]string, error) {
+func (c *RemoteCatalog) listPlatformsInternal(ctx context.Context, ref Reference, client *auth.Client) ([]string, error) {
 	if !ref.HasVersion() && !ref.HasDigest() {
-		resolved, err := c.resolveWithKind(ctx, ref)
+		resolved, err := c.resolveWithKindInternal(ctx, ref, client)
 		if err != nil {
 			return nil, err
 		}
 		ref = resolved.Reference
 	}
 
-	repo, err := c.getRepository(ref)
+	repo, err := c.repositoryWithClient(ref, client)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +161,10 @@ func (c *RemoteCatalog) listPlatformsInternal(ctx context.Context, ref Reference
 	tag := c.tagForRef(ref)
 	desc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		return nil, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+		// Classify like the other resolve paths so a rejected credential
+		// reaches retryAnonymously instead of becoming a not-found that hides
+		// the authentication failure.
+		return nil, c.manifestResolveError(ctx, client, ref, err)
 	}
 
 	if !IsImageIndex(desc) {
@@ -190,22 +194,22 @@ func (c *RemoteCatalog) listPlatformsInternal(ctx context.Context, ref Reference
 // platform-specific manifest; for a single-platform manifest the platform
 // argument is ignored.
 func (c *RemoteCatalog) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
-	return retryAnonymously(ctx, c, "resolve content digest", ref, func() (ContentDigestInfo, error) {
-		return c.resolveContentDigestInternal(ctx, ref, platform, mediaType)
+	return retryAnonymously(ctx, c, "resolve content digest", ref, func(client *auth.Client) (ContentDigestInfo, error) {
+		return c.resolveContentDigestInternal(ctx, ref, platform, mediaType, client)
 	})
 }
 
-func (c *RemoteCatalog) resolveContentDigestInternal(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
+func (c *RemoteCatalog) resolveContentDigestInternal(ctx context.Context, ref Reference, platform, mediaType string, client *auth.Client) (ContentDigestInfo, error) {
 	// When no version is specified, resolve to the latest version first.
 	if !ref.HasVersion() && !ref.HasDigest() {
-		resolved, err := c.resolveWithKind(ctx, ref)
+		resolved, err := c.resolveWithKindInternal(ctx, ref, client)
 		if err != nil {
 			return ContentDigestInfo{}, err
 		}
 		ref = resolved.Reference
 	}
 
-	repo, err := c.getRepository(ref)
+	repo, err := c.repositoryWithClient(ref, client)
 	if err != nil {
 		return ContentDigestInfo{}, err
 	}
@@ -213,7 +217,7 @@ func (c *RemoteCatalog) resolveContentDigestInternal(ctx context.Context, ref Re
 	tag := c.tagForRef(ref)
 	topDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		return ContentDigestInfo{}, c.manifestResolveError(ctx, ref, err)
+		return ContentDigestInfo{}, c.manifestResolveError(ctx, client, ref, err)
 	}
 
 	topData, err := content.FetchAll(ctx, repo, topDesc)
