@@ -11,7 +11,7 @@
     "titleField": "name",
     "subtitleField": "displayName",
     "subtitleMaxLines": 1,
-    "badgeFields": ["kind", "category"]
+    "badgeFields": ["kind", "category", "location"]
   },
 
   "x-kvx-detail": {
@@ -30,8 +30,8 @@
       },
       {
         "title": "Catalog",
-        "fields": ["catalog"],
-        "layout": "paragraph"
+        "fields": ["catalog", "registry", "location"],
+        "layout": "table"
       },
       {
         "title": "Category",
@@ -85,6 +85,33 @@
         "title": "Catalog",
         "maxLength": 25,
         "x-kvx-priority": 8
+      },
+      "registry": {
+        "type": "string",
+        "title": "Registry",
+        "description": "Canonical registry/repository the artifact came from; empty for locally built artifacts",
+        "maxLength": 35,
+        "x-kvx-priority": 7
+      },
+      "location": {
+        "type": "string",
+        "title": "Location",
+        "description": "Where the artifact is available: local, remote, or both; a stale local copy is marked (stale)",
+        "maxLength": 15,
+        "x-kvx-priority": 6
+      },
+      "locations": {
+        "type": "array",
+        "title": "Locations",
+        "items": { "type": "string", "enum": ["local", "remote"] },
+        "maxItems": 2,
+        "deprecated": true
+      },
+      "stale": {
+        "type": "boolean",
+        "title": "Stale",
+        "description": "True when the local copy's digest differs from the remote catalog's",
+        "deprecated": true
       },
       "version": {
         "type": "string",

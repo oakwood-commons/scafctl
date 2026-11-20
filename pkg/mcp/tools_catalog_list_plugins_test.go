@@ -13,6 +13,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -178,6 +179,49 @@ func TestHandleCatalogListPlugins_UnknownCatalogNameErrors(t *testing.T) {
 	result := callListPlugins(t, srv, map[string]any{"catalog": "does-not-exist"})
 	assert.True(t, result.IsError,
 		"an unknown catalog name must return an error, not an empty result")
+}
+
+func TestHandleCatalogListPlugins_Provenance(t *testing.T) {
+	setTestXDG(t, t.TempDir())
+
+	const (
+		registry = "ghcr.io/acme/plugins"
+		alias    = "acme"
+	)
+
+	ctx := context.Background()
+	cat, err := catalog.NewLocalCatalog(logr.Discard())
+	require.NoError(t, err)
+	builtRef := catalog.Reference{Name: "built-plugin", Kind: catalog.ArtifactKindProvider, Version: semver.MustParse("1.0.0")}
+	_, err = cat.Store(ctx, builtRef, []byte("built"), nil, nil, false)
+	require.NoError(t, err)
+	pulledRef := catalog.Reference{Name: "pulled-plugin", Kind: catalog.ArtifactKindProvider, Version: semver.MustParse("2.0.0")}
+	_, err = cat.Store(ctx, pulledRef, []byte("pulled"), nil,
+		map[string]string{catalog.AnnotationSourceCanonical: registry}, false)
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{Name: config.CatalogNameLocal, Type: config.CatalogTypeFilesystem},
+			{Name: alias, Type: config.CatalogTypeOCI, URL: "oci://" + registry},
+		},
+	}
+	srv, err := NewServer(WithServerVersion("test"), WithServerConfig(cfg))
+	require.NoError(t, err)
+
+	env := decodePluginEnvelope(t, callListPlugins(t, srv, map[string]any{"catalog": "local"}))
+	require.Len(t, env.Plugins, 2)
+
+	built, pulled := env.Plugins[0], env.Plugins[1]
+	assert.Equal(t, "built-plugin", built.Name)
+	assert.Equal(t, "local", built.Catalog, "built artifacts report the local catalog")
+	assert.Empty(t, built.Registry, "built artifacts have no registry")
+	assert.Equal(t, []string{"local"}, built.Locations)
+
+	assert.Equal(t, "pulled-plugin", pulled.Name)
+	assert.Equal(t, alias, pulled.Catalog, "cached artifacts report the alias of their registry")
+	assert.Equal(t, registry, pulled.Registry)
+	assert.Equal(t, []string{"local"}, pulled.Locations)
 }
 
 func TestCatalogListPluginsToolRegistered(t *testing.T) {

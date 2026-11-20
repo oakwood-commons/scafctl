@@ -8,12 +8,12 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -51,23 +51,47 @@ type ArtifactListItem struct {
 	Category    string `json:"category" yaml:"category"`
 	Digest      string `json:"digest" yaml:"digest"`
 	CreatedAt   string `json:"createdAt" yaml:"createdAt"`
-	Catalog     string `json:"catalog" yaml:"catalog"`
+	// Catalog is the configured catalog alias the artifact comes from ("local"
+	// for artifacts built locally, empty for cached copies of an unconfigured
+	// registry).
+	Catalog string `json:"catalog" yaml:"catalog"`
+	// Registry is the canonical "registry/repository" origin (empty for
+	// artifacts built locally).
+	Registry string `json:"registry" yaml:"registry"`
+	// Location is the human-readable form of Locations, suffixed with
+	// " (stale)" when the cached copy differs from the remote.
+	Location string `json:"location" yaml:"location"`
+	// Locations lists where the artifact content exists (local, remote).
+	Locations []string `json:"locations" yaml:"locations"`
+	// Stale is true when a cached local copy no longer matches the digest
+	// published under the same tag in its remote catalog.
+	Stale bool `json:"stale" yaml:"stale"`
 }
+
+// staleLocationSuffix marks a cached copy that differs from its remote.
+const staleLocationSuffix = " (stale)"
 
 //go:embed list_schema.json
 var listSchemaJSON []byte
+
+// listColumnOrder is the table column order for catalog list.
+var listColumnOrder = []string{"name", "tag", "kind", "displayName", "category", "catalog", "registry", "location", "digest"}
 
 // listColumnHints controls table column display for catalog list.
 var listColumnHints = map[string]tui.ColumnHint{
 	"name":        {MaxWidth: 30, Priority: 10},
 	"tag":         {MaxWidth: 12, Priority: 8},
 	"kind":        {MaxWidth: 12, Priority: 10},
-	"displayName": {MaxWidth: 25, Priority: 6, DisplayName: "display name"},
+	"displayName": {MaxWidth: 25, Priority: 5, DisplayName: "display name"},
 	"category":    {MaxWidth: 15, Priority: 4},
-	"catalog":     {MaxWidth: 25, Priority: 8},
+	"catalog":     {MaxWidth: 20, Priority: 8},
+	"registry":    {MaxWidth: 35, Priority: 7},
+	"location":    {MaxWidth: 15, Priority: 6},
 	"createdAt":   {Hidden: true},
 	"digest":      {Hidden: true},
 	"version":     {Hidden: true},
+	"locations":   {Hidden: true},
+	"stale":       {Hidden: true},
 }
 
 // CommandList creates the list command.
@@ -94,6 +118,17 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			By default, only the latest version of each artifact is shown.
 			Use --name to see all versions of a specific artifact, or
 			--all-versions to see everything.
+
+			Each row shows where the artifact comes from:
+			  CATALOG   the configured catalog alias ("local" for artifacts built
+			            locally; empty for copies cached from an unconfigured registry)
+			  REGISTRY  the canonical registry/repository the artifact was pulled from
+			  LOCATION  where the content exists: local, remote, or both. A cached
+			            copy whose digest no longer matches the remote tag is shown
+			            as "local (stale)" next to a separate remote row.
+			"remote" is relative to the catalogs queried by this command (see
+			--catalog and --all). Artifacts cached by older versions carry no
+			registry and appear as built locally until pulled again.
 
 			Filter by kind (solution, provider, auth-handler) to narrow results.
 			When listing from a remote registry without --name, all artifacts
@@ -125,6 +160,9 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			  # List all artifacts in a remote catalog
 			  %[1]s catalog list --catalog my-registry
 
+			  # List only artifacts present in the local store (built and cached)
+			  %[1]s catalog list --catalog local
+
 			  # List all configured catalogs
 			  %[1]s catalog list --all
 
@@ -142,7 +180,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			options.AppName = cliParams.BinaryName
 			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags,
 				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputColumnOrder([]string{"name", "tag", "kind", "displayName", "category", "digest", "catalog"}),
+				kvx.WithOutputColumnOrder(listColumnOrder),
 				kvx.WithOutputDisplaySchemaJSON(listSchemaJSON),
 				kvx.WithOutputColumnHints(listColumnHints),
 			)
@@ -234,6 +272,10 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 	// error when the combined result is empty (see writeArtifactList).
 	var aggregateDegraded *catalog.AuthDegradedError
 
+	// resolvers verifies cached copies against the remotes listed successfully,
+	// keyed by each remote's canonical origin.
+	resolvers := make(map[string]catalog.DigestResolver)
+
 	// Determine which remote catalogs to query.
 	// --catalog: only the named catalog (used as post-filter below).
 	// --all: all configured catalogs.
@@ -284,7 +326,7 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 				CliParams: opts.CliParams,
 				IOStreams: opts.IOStreams,
 			}
-			remoteArtifacts, remoteDegraded, remoteErr := listRemoteArtifacts(ctx, remoteOpts, kinds)
+			remoteArtifacts, remoteCatalog, remoteDegraded, remoteErr := listRemoteArtifacts(ctx, remoteOpts, kinds)
 			if remoteErr != nil {
 				if catalog.IsEnumerationNotSupported(remoteErr) {
 					w.Verbosef("Catalog %q does not support enumeration, skipping.", catCfg.Name)
@@ -309,6 +351,9 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 			// catalog.
 			if remoteDegraded != nil && aggregateDegraded == nil {
 				aggregateDegraded = remoteDegraded
+			}
+			if _, exists := resolvers[remoteCatalog.CanonicalID()]; !exists {
+				resolvers[remoteCatalog.CanonicalID()] = remoteCatalog
 			}
 			artifacts = append(artifacts, remoteArtifacts...)
 		}
@@ -338,12 +383,13 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 		}
 	}
 
-	// Post-filter by catalog name when --catalog is set.
-	if opts.Catalog != "" {
-		artifacts = filterArtifactsByCatalog(artifacts, opts.Catalog)
-	}
-
-	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, aggregateDegraded, rawResultCount)
+	return renderArtifactList(ctx, w, artifacts, outputOpts, listRenderOptions{
+		showAll:        opts.AllVersions || opts.VersionConstraint != "",
+		degraded:       aggregateDegraded,
+		rawResultCount: rawResultCount,
+		catalogFilter:  opts.Catalog,
+		resolvers:      resolvers,
+	})
 }
 
 // runListFromRemoteRef lists artifacts from a full OCI reference
@@ -450,7 +496,7 @@ func runListRemote(ctx context.Context, opts *ListOptions, kinds []catalog.Artif
 		w.Verbose("Enumerating all artifacts in catalog (this may take a moment)...")
 	}
 
-	artifacts, degraded, err := listRemoteArtifacts(ctx, opts, kinds)
+	artifacts, _, degraded, err := listRemoteArtifacts(ctx, opts, kinds)
 	rawResultCount := len(artifacts)
 	if err != nil {
 		if catalog.IsEnumerationNotSupported(err) {
@@ -503,10 +549,12 @@ func runListRemote(ctx context.Context, opts *ListOptions, kinds []catalog.Artif
 	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, degraded, rawResultCount)
 }
 
-// listRemoteArtifacts fetches artifacts from a configured remote catalog.
+// listRemoteArtifacts fetches artifacts from a configured remote catalog and
+// returns the catalog handle so callers can resolve digests against it.
 // This is shared between runListRemote (explicit --catalog) and the
-// unified all-catalogs search in runList.
-func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kinds []catalog.ArtifactKind) ([]catalog.ArtifactInfo, *catalog.AuthDegradedError, error) {
+// unified all-catalogs search in runList. The catalog is nil only when it
+// could not be created (err is then non-nil).
+func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kinds []catalog.ArtifactKind) ([]catalog.ArtifactInfo, *catalog.RemoteCatalog, *catalog.AuthDegradedError, error) {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -514,7 +562,7 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kinds []catalog
 
 	catalogURL, err := catalog.ResolveCatalogURL(ctx, opts.Catalog)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	registry, repository := catalog.ParseCatalogURL(catalogURL)
@@ -542,7 +590,7 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kinds []catalog
 		Logger:            *lgr,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create remote catalog: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create remote catalog: %w", err)
 	}
 
 	// Scope credential-rejection tracking to this catalog's listing.
@@ -556,12 +604,55 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kinds []catalog
 	degraded := catalog.CredentialRejection(ctx)
 	verboseCredentialSource(w, remoteCatalog)
 
-	return result, degraded, listErr
+	return result, remoteCatalog, degraded, listErr
 }
 
+// listRenderOptions configures renderArtifactList.
+type listRenderOptions struct {
+	// showAll keeps every version instead of the latest per origin.
+	showAll bool
+	// degraded is the first remote listing that fell back to anonymous access.
+	degraded *catalog.AuthDegradedError
+	// rawResultCount is the row count before user filters (see the empty-result
+	// handling in renderArtifactList).
+	rawResultCount int
+	// catalogFilter keeps only rows of the named catalog (--catalog).
+	catalogFilter string
+	// resolvers verifies cached copies against their remote catalog.
+	resolvers map[string]catalog.DigestResolver
+}
+
+// writeArtifactList renders artifacts without catalog filtering or cached-copy
+// verification.
 func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalog.ArtifactInfo, showAll bool, outputOpts *kvx.OutputOptions, degraded *catalog.AuthDegradedError, rawResultCount int) error {
+	return renderArtifactList(ctx, w, artifacts, outputOpts, listRenderOptions{
+		showAll:        showAll,
+		degraded:       degraded,
+		rawResultCount: rawResultCount,
+	})
+}
+
+func renderArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalog.ArtifactInfo, outputOpts *kvx.OutputOptions, opts listRenderOptions) error {
 	structured := kvx.IsStructuredFormat(outputOpts.Format)
 	quiet := kvx.IsQuietFormat(outputOpts.Format)
+	degraded := opts.degraded
+	rawResultCount := opts.rawResultCount
+
+	idx := catalogindex.FromContext(ctx)
+	listingOpts := catalog.ListingOptions{
+		AllVersions: opts.showAll,
+		Resolvers:   opts.resolvers,
+		Concurrency: settings.DefaultRegistryConcurrency,
+	}
+	if opts.catalogFilter != "" {
+		listingOpts.Include = func(a catalog.ArtifactInfo) bool {
+			return idx.MatchesCatalog(a, opts.catalogFilter)
+		}
+	}
+	artifacts, verifyErr := catalog.BuildListing(ctx, artifacts, listingOpts)
+	if verifyErr != nil {
+		w.Verbosef("Could not verify some cached artifacts against their remote catalog: %v", verifyErr)
+	}
 
 	// Handle empty results.
 	if len(artifacts) == 0 {
@@ -608,41 +699,6 @@ func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalo
 		renderDegradedSignal(ctx, w, degraded, structured, quiet, false /* partial/non-empty */)
 	}
 
-	// Sort by name, then version descending
-	sort.Slice(artifacts, func(i, j int) bool {
-		if artifacts[i].Reference.Name != artifacts[j].Reference.Name {
-			return artifacts[i].Reference.Name < artifacts[j].Reference.Name
-		}
-		vi := artifacts[i].Reference.Version
-		vj := artifacts[j].Reference.Version
-		if vi == nil {
-			return false
-		}
-		if vj == nil {
-			return true
-		}
-		return vi.GreaterThan(vj)
-	})
-
-	// Deduplicate across catalogs: merge rows with same name+tag+kind,
-	// combining catalog names and preferring richer metadata (digest, createdAt).
-	artifacts = deduplicateArtifacts(artifacts)
-
-	// When not showing all versions, keep only the latest per name+kind
-	// (after dedup, catalog names are merged so we key on kind+name only).
-	if !showAll {
-		seen := make(map[string]bool)
-		filtered := artifacts[:0]
-		for _, a := range artifacts {
-			key := string(a.Reference.Kind) + "/" + a.Reference.Name
-			if !seen[key] {
-				seen[key] = true
-				filtered = append(filtered, a)
-			}
-		}
-		artifacts = filtered
-	}
-
 	// Convert to output format
 	items := make([]ArtifactListItem, len(artifacts))
 	for i, a := range artifacts {
@@ -667,11 +723,33 @@ func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalo
 			Category:    a.Annotations[catalog.AnnotationCategory],
 			Digest:      a.Digest,
 			CreatedAt:   createdAt,
-			Catalog:     a.Catalog,
+			Catalog:     idx.DisplayCatalog(a),
+			Registry:    a.Canonical,
+			Location:    artifactLocation(a),
+			Locations:   locationStrings(a.ResolvedLocations()),
+			Stale:       a.Stale,
 		}
 	}
 
 	return outputOpts.Write(items)
+}
+
+// artifactLocation renders where an artifact exists, e.g. "local, remote" or
+// "local (stale)".
+func artifactLocation(a catalog.ArtifactInfo) string {
+	loc := catalog.FormatLocations(a.ResolvedLocations())
+	if a.Stale {
+		loc += staleLocationSuffix
+	}
+	return loc
+}
+
+func locationStrings(locs []catalog.ArtifactLocation) []string {
+	out := make([]string, len(locs))
+	for i, l := range locs {
+		out[i] = string(l)
+	}
+	return out
 }
 
 // authLoginHint returns the "<bin> auth login <handler>" (or "<bin> catalog

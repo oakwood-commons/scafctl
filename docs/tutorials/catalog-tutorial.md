@@ -264,7 +264,7 @@ scafctl catalog list -o yaml
 > catalog chain the resolver uses: your default catalog first, then the built-in
 > anonymous `official` catalog as a fallback. This means official artifacts are
 > listed even when your default catalog is private and you are unauthenticated.
-> Each row's `catalog` column attributes its source. Set
+> Each row's provenance columns attribute its source (see below). Set
 > `settings.disableOfficialCatalog: true` to drop the official fallback, use
 > `--catalog <name>` to list exactly one catalog, or `--all` to list every
 > configured catalog.
@@ -273,18 +273,54 @@ Expected output:
 
 ```yaml
 - name: greeting
-  version: 1.0.0
-  kind: solution
-  digest: sha256:abc123...
-  createdAt: "2026-02-17 10:00:00"
-  catalog: local
-- name: greeting
   version: 1.0.1
+  tag: 1.0.1
   kind: solution
   digest: sha256:def456...
   createdAt: "2026-02-17 10:01:00"
   catalog: local
+  registry: ""
+  location: local
+  locations:
+    - local
+  stale: false
 ```
+
+By default only the latest version **per origin** is shown; pass
+`--all-versions` to list every version (including `greeting@1.0.0`).
+
+### Reading provenance: CATALOG, REGISTRY, LOCATION
+
+Every row says where the artifact came from and where it is available:
+
+| Column | Meaning |
+|--------|---------|
+| `CATALOG` | The configured catalog alias for the artifact's registry (for example `official`). Locally built artifacts show `local`. A cached copy whose registry has no configured alias shows an empty value. |
+| `REGISTRY` | The canonical `registry/repository` the artifact was published to. Empty for locally built artifacts. |
+| `LOCATION` | `local` (in the local store only), `remote` (in the remote catalog only), or `local, remote` (cached locally and still published remotely). |
+
+A cached copy and the remote artifact it was pulled from are shown as **one**
+row with `LOCATION` `local, remote`. A locally built artifact never merges with
+a remote one, even when the name and version match, and the same version
+published to two registries stays as two rows.
+
+When a cached copy is listed alongside its remote catalog, `catalog list`
+checks the remote digest. If the remote artifact was re-published under the
+same tag, the row splits in two: the cached copy is shown as `local (stale)`
+(and `stale: true` in structured output), next to a `remote` row with the new
+digest. Re-pull the artifact to refresh the cache. Remote catalogs that were not
+queried in this run are not checked, so a cached-only row carries no stale
+marker.
+
+`--catalog local` lists every artifact in the local store -- both locally
+built artifacts and cached copies -- without querying any remote catalog.
+`--catalog <alias>` matches rows by their `CATALOG` value, so cached copies
+pulled from that catalog are included.
+
+> [!NOTE]
+> Artifacts cached by an older version of scafctl do not record their source
+> registry, so they show as locally built (`CATALOG` `local`, empty
+> `REGISTRY`). Re-pull them to record their provenance.
 
 ### Step 2: Filter by Name
 
@@ -860,10 +896,16 @@ Expected output:
 ```yaml
 - name: greeting
   version: 1.0.0
+  tag: 1.0.0
   kind: solution
   digest: sha256:abc123...
   createdAt: "2026-02-17 10:00:00"
   catalog: local
+  registry: ""
+  location: local
+  locations:
+    - local
+  stale: false
 ```
 
 ### Step 7: Try Loading Again (Conflict)

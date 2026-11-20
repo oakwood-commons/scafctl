@@ -196,7 +196,7 @@ func TestArtifactListSchema_ValidJSON(t *testing.T) {
 	require.True(t, ok, "items must have properties")
 
 	// Verify all ArtifactListItem fields are in the schema
-	expectedFields := []string{"name", "tag", "kind", "catalog", "version", "digest", "createdAt"}
+	expectedFields := []string{"name", "tag", "kind", "catalog", "registry", "location", "locations", "stale", "version", "digest", "createdAt"}
 	for _, field := range expectedFields {
 		_, exists := props[field]
 		assert.True(t, exists, "schema missing field %q", field)
@@ -267,8 +267,9 @@ func TestArtifactListSchema_HiddenFields(t *testing.T) {
 	items := schema["items"].(map[string]any)
 	props := items["properties"].(map[string]any)
 
-	// version, createdAt, and digest should be hidden in both schema and column hints
-	for _, field := range []string{"version", "createdAt", "digest"} {
+	// version, createdAt, digest, locations, and stale should be hidden in both
+	// schema and column hints (location carries the human-readable form).
+	for _, field := range []string{"version", "createdAt", "digest", "locations", "stale"} {
 		fieldMap := props[field].(map[string]any)
 		deprecated, ok := fieldMap["deprecated"]
 		assert.True(t, ok, "field %q should have deprecated", field)
@@ -278,6 +279,47 @@ func TestArtifactListSchema_HiddenFields(t *testing.T) {
 		assert.True(t, exists, "field %q should have a column hint", field)
 		assert.True(t, hint.Hidden, "field %q column hint should be Hidden", field)
 	}
+}
+
+func TestArtifactListSchema_ColumnHintsMatchSchema(t *testing.T) {
+	t.Parallel()
+
+	var schema map[string]any
+	require.NoError(t, json.Unmarshal(listSchemaJSON, &schema))
+	props := schema["items"].(map[string]any)["properties"].(map[string]any)
+
+	for _, field := range listColumnOrder {
+		_, inSchema := props[field]
+		assert.True(t, inSchema, "column %q missing from schema", field)
+		_, hasHint := listColumnHints[field]
+		assert.True(t, hasHint, "column %q missing a column hint", field)
+	}
+	for _, field := range []string{"registry", "location"} {
+		assert.False(t, listColumnHints[field].Hidden, "provenance column %q must be visible", field)
+	}
+}
+
+func TestCommandList_TUISnapshot(t *testing.T) {
+	// Not parallel: kvx.Snapshot mutates package-global TUI config, which races
+	// with other parallel snapshot tests in this package.
+
+	items := []ArtifactListItem{
+		{Name: "built-app", Tag: "1.0.0", Kind: "solution", Catalog: "local", Location: "local", Locations: []string{"local"}},
+		{Name: "pulled-app", Tag: "2.0.0", Kind: "solution", Catalog: testListAlias, Registry: testListRegistry, Location: "local (stale)", Locations: []string{"local"}, Stale: true},
+	}
+
+	out, err := kvx.Snapshot(items,
+		kvx.WithDisplaySchemaJSON(listSchemaJSON),
+		kvx.WithColumnHints(listColumnHints),
+		kvx.WithDimensions(120, 30),
+		kvx.WithNoColor(true),
+		kvx.WithAppName("mycli catalog list"),
+	)
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "built-app")
+	assert.Contains(t, out, "pulled-app")
+	assert.Contains(t, out, "local (stale)", "card view must surface the stale location badge")
 }
 
 func TestWriteArtifactList_LatestOnly(t *testing.T) {
@@ -499,11 +541,13 @@ func TestWriteArtifactList_CrossCatalogDedup(t *testing.T) {
 			Digest:    "sha256:abc",
 			CreatedAt: now,
 			Catalog:   "local",
+			Canonical: testListRegistry,
 		},
 		{
 			Reference: catalogpkg.Reference{Name: "app", Kind: catalogpkg.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
 			Digest:    "",
 			Catalog:   "remote",
+			Canonical: testListRegistry,
 		},
 	}
 
@@ -514,9 +558,46 @@ func TestWriteArtifactList_CrossCatalogDedup(t *testing.T) {
 	var items []ArtifactListItem
 	err = json.Unmarshal(out.Bytes(), &items)
 	require.NoError(t, err)
-	require.Len(t, items, 1, "duplicate artifact should be merged")
-	assert.Equal(t, "local, remote", items[0].Catalog)
+	require.Len(t, items, 1, "cached copy and its remote should be merged")
+	assert.Equal(t, "remote", items[0].Catalog)
+	assert.Equal(t, testListRegistry, items[0].Registry)
+	assert.Equal(t, "local, remote", items[0].Location)
+	assert.Equal(t, []string{"local", "remote"}, items[0].Locations)
 	assert.Equal(t, "sha256:abc", items[0].Digest, "should use row with digest")
+}
+
+func TestWriteArtifactList_BuiltNotMergedWithRemote(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+
+	artifacts := []catalogpkg.ArtifactInfo{
+		{
+			Reference: catalogpkg.Reference{Name: "app", Kind: catalogpkg.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Digest:    "sha256:abc",
+			Catalog:   "local",
+		},
+		{
+			Reference: catalogpkg.Reference{Name: "app", Kind: catalogpkg.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:   "remote",
+			Canonical: testListRegistry,
+		},
+	}
+
+	w := writer.New(ioStreams, &settings.Run{})
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
+	require.NoError(t, err)
+
+	var items []ArtifactListItem
+	require.NoError(t, json.Unmarshal(out.Bytes(), &items))
+	require.Len(t, items, 2, "a locally built artifact is never merged with a same-named remote one")
+	assert.Equal(t, "local", items[0].Catalog)
+	assert.Empty(t, items[0].Registry)
+	assert.Equal(t, "local", items[0].Location)
+	assert.Equal(t, "remote", items[1].Catalog)
+	assert.Equal(t, "remote", items[1].Location)
 }
 
 func TestWriteArtifactList_LatestOnlyAfterDedup(t *testing.T) {
@@ -547,16 +628,180 @@ func TestWriteArtifactList_LatestOnlyAfterDedup(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	// showAll=false → only latest version per name+kind
+	// showAll=false -> only the latest version per name+kind+origin. The built
+	// rows and the remote row have different origins, so each keeps its latest.
 	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
 	err = json.Unmarshal(out.Bytes(), &items)
 	require.NoError(t, err)
-	require.Len(t, items, 1, "should show only latest version")
+	require.Len(t, items, 2, "should show the latest version per origin")
 	assert.Equal(t, "2.0.0", items[0].Tag)
 	assert.Equal(t, "local", items[0].Catalog)
+	assert.Equal(t, "1.0.0", items[1].Tag)
+	assert.Equal(t, "remote", items[1].Catalog)
+}
+
+const (
+	testListRegistry = "ghcr.io/acme/solutions"
+	testListAlias    = "acme"
+	testListDigestA  = "sha256:aaaa"
+	testListDigestB  = "sha256:bbbb"
+)
+
+// listProvenanceCtx returns a context whose config maps testListAlias to
+// testListRegistry.
+func listProvenanceCtx() context.Context {
+	cfg := &appconfig.Config{Catalogs: []appconfig.CatalogConfig{
+		{Name: testListAlias, Type: appconfig.CatalogTypeOCI, URL: "oci://" + testListRegistry},
+	}}
+	return appconfig.WithConfig(context.Background(), cfg)
+}
+
+// provenanceRows returns a built artifact plus a cached copy and its remote row.
+func provenanceRows() []catalogpkg.ArtifactInfo {
+	v := semver.MustParse("1.0.0")
+	return []catalogpkg.ArtifactInfo{
+		{Reference: catalogpkg.Reference{Name: "built", Kind: catalogpkg.ArtifactKindSolution, Version: v}, Catalog: catalogpkg.LocalCatalogName, Digest: testListDigestA},
+		{Reference: catalogpkg.Reference{Name: "pulled", Kind: catalogpkg.ArtifactKindSolution, Version: v}, Catalog: catalogpkg.LocalCatalogName, Canonical: testListRegistry, Digest: testListDigestA},
+		{Reference: catalogpkg.Reference{Name: "pulled", Kind: catalogpkg.ArtifactKindSolution, Version: v}, Catalog: testListAlias, Canonical: testListRegistry},
+	}
+}
+
+// fakeListResolver returns a fixed digest or error for every reference.
+type fakeListResolver struct {
+	digest string
+	err    error
+}
+
+func (f fakeListResolver) Resolve(_ context.Context, ref catalogpkg.Reference) (catalogpkg.ArtifactInfo, error) {
+	if f.err != nil {
+		return catalogpkg.ArtifactInfo{}, f.err
+	}
+	return catalogpkg.ArtifactInfo{Reference: ref, Digest: f.digest}, nil
+}
+
+func renderJSON(t *testing.T, ctx context.Context, w *writer.Writer, artifacts []catalogpkg.ArtifactInfo, opts listRenderOptions) []ArtifactListItem {
+	t.Helper()
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+	require.NoError(t, renderArtifactList(ctx, w, artifacts, outputOpts, opts))
+	var items []ArtifactListItem
+	require.NoError(t, json.Unmarshal(out.Bytes(), &items))
+	return items
+}
+
+func TestRenderArtifactList_ProvenanceColumns(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, &settings.Run{})
+	items := renderJSON(t, listProvenanceCtx(), w, provenanceRows(), listRenderOptions{})
+
+	require.Len(t, items, 2)
+	assert.Equal(t, "built", items[0].Name)
+	assert.Equal(t, catalogpkg.LocalCatalogName, items[0].Catalog)
+	assert.Empty(t, items[0].Registry)
+	assert.Equal(t, "local", items[0].Location)
+	assert.False(t, items[0].Stale)
+
+	assert.Equal(t, "pulled", items[1].Name)
+	assert.Equal(t, testListAlias, items[1].Catalog)
+	assert.Equal(t, testListRegistry, items[1].Registry)
+	assert.Equal(t, "local, remote", items[1].Location)
+	assert.Equal(t, []string{"local", "remote"}, items[1].Locations)
+}
+
+func TestRenderArtifactList_StaleCachedCopy(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, &settings.Run{})
+	items := renderJSON(t, listProvenanceCtx(), w, provenanceRows(), listRenderOptions{
+		resolvers: map[string]catalogpkg.DigestResolver{testListRegistry: fakeListResolver{digest: testListDigestB}},
+	})
+
+	require.Len(t, items, 3)
+	var stale, remote *ArtifactListItem
+	for i := range items {
+		if items[i].Name != "pulled" {
+			continue
+		}
+		if items[i].Stale {
+			stale = &items[i]
+		} else {
+			remote = &items[i]
+		}
+	}
+	require.NotNil(t, stale)
+	require.NotNil(t, remote)
+	assert.Equal(t, "local (stale)", stale.Location)
+	assert.Equal(t, []string{"local"}, stale.Locations)
+	assert.Equal(t, testListAlias, stale.Catalog, "stale cached copy still shows its catalog alias")
+	assert.Equal(t, testListDigestA, stale.Digest)
+	assert.Equal(t, "remote", remote.Location)
+	assert.Equal(t, testListDigestB, remote.Digest)
+}
+
+func TestRenderArtifactList_VerifyErrorIsNonFatal(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, &settings.Run{Verbose: true})
+	items := renderJSON(t, listProvenanceCtx(), w, provenanceRows(), listRenderOptions{
+		resolvers: map[string]catalogpkg.DigestResolver{testListRegistry: fakeListResolver{err: assert.AnError}},
+	})
+
+	require.Len(t, items, 2)
+	assert.Equal(t, "local, remote", items[1].Location, "unverified rows stay merged")
+	assert.Contains(t, errBuf.String(), assert.AnError.Error())
+}
+
+func TestRenderArtifactList_CatalogFilter(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		filter string
+		want   []string
+	}{
+		"local selects built and cached": {filter: catalogpkg.LocalCatalogName, want: []string{"built", "pulled"}},
+		"alias selects its registry":     {filter: testListAlias, want: []string{"pulled"}},
+		"alias is case-insensitive":      {filter: "ACME", want: []string{"pulled"}},
+		"unknown catalog selects none":   {filter: "other", want: nil},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ioStreams, _, _ := terminal.NewTestIOStreams()
+			w := writer.New(ioStreams, &settings.Run{})
+			items := renderJSON(t, listProvenanceCtx(), w, provenanceRows(), listRenderOptions{catalogFilter: tc.filter})
+			var names []string
+			for _, it := range items {
+				names = append(names, it.Name)
+			}
+			assert.Equal(t, tc.want, names)
+		})
+	}
+}
+
+// TestRenderArtifactList_CatalogFilterEmptiesDegraded verifies that a listing
+// emptied by --catalog is non-fatal even when the remote listing was degraded.
+func TestRenderArtifactList_CatalogFilterEmptiesDegraded(t *testing.T) {
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	w := writer.New(ioStreams, &settings.Run{})
+
+	rows := provenanceRows()
+	err := renderArtifactList(listProvenanceCtx(), w, rows, outputOpts, listRenderOptions{
+		degraded:       staleDegraded(t),
+		rawResultCount: len(rows),
+		catalogFilter:  "other",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, outBuf.String(), "No artifacts found in catalog.")
+	assert.Contains(t, errBuf.String(), "incomplete")
 }
 
 func TestWriteArtifactList_EmptyRespectsQuiet(t *testing.T) {
@@ -605,6 +850,8 @@ func TestCommandList_EmbedderBinaryName(t *testing.T) {
 
 	require.NotNil(t, cmd)
 	assert.Equal(t, "list", cmd.Use)
+	assert.Contains(t, cmd.Long, "mycli catalog list --catalog local")
+	assert.NotContains(t, cmd.Long, "scafctl ")
 	assert.NotNil(t, cmd.RunE)
 }
 
