@@ -24,6 +24,21 @@ type Output struct {
 	Count      int      `json:"count" yaml:"count"`
 }
 
+// RefsColumnOrder pins the column order for -o csv so the header row matches
+// the struct's logical field order instead of kvx's alphabetical fallback.
+var RefsColumnOrder = []string{"source", "sourceType", "references", "count"}
+
+// ToMap flattens Output for kvx's CSV writer, which renders slice cells via
+// %v; References is joined so the single CSV row stays readable.
+func (o Output) ToMap() map[string]any {
+	return map[string]any{
+		"source":     o.Source,
+		"sourceType": o.SourceType,
+		"references": strings.Join(o.References, ", "),
+		"count":      o.Count,
+	}
+}
+
 // ReadStdin reads all content from the given reader, trimming trailing newlines.
 func ReadStdin(r io.Reader) (string, error) {
 	if r == nil {

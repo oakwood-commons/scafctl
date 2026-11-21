@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestCommandRefs_Template(t *testing.T) {
@@ -209,7 +210,7 @@ func TestCommandRefs_Validation(t *testing.T) {
 		{
 			name:        "invalid output format",
 			args:        []string{"--template", "{{ ._.foo }}", "-o", "xml"},
-			expectedErr: "unknown output format: xml",
+			expectedErr: "invalid output format: xml",
 		},
 	}
 
@@ -240,7 +241,7 @@ func TestCommandRefs_TextOutput(t *testing.T) {
 		ErrOut: errOut,
 	}
 
-	cliParams := &settings.Run{}
+	cliParams := &settings.Run{NoColor: true}
 	cmd := CommandRefs(cliParams, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"--template", "{{ ._.config.host }}:{{ ._.port.value }}"})
 
@@ -265,7 +266,7 @@ func TestCommandRefs_NoReferencesTextOutput(t *testing.T) {
 		ErrOut: errOut,
 	}
 
-	cliParams := &settings.Run{}
+	cliParams := &settings.Run{NoColor: true}
 	cmd := CommandRefs(cliParams, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"--template", "static content"})
 
@@ -275,7 +276,67 @@ func TestCommandRefs_NoReferencesTextOutput(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 
-	assert.Contains(t, out.String(), "No resolver references found.")
+	assert.Contains(t, out.String(), "No resolver references found in template.")
+}
+
+func TestCommandRefs_YAMLOutput(t *testing.T) {
+	out := &bytes.Buffer{}
+	errOut := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{
+		Out:    out,
+		ErrOut: errOut,
+	}
+
+	cmd := CommandRefs(&settings.Run{}, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"--template", "{{ ._.config.host }}:{{ ._.port.value }}", "-o", "yaml"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	var result refslib.Output
+	err = yaml.Unmarshal(out.Bytes(), &result)
+	require.NoError(t, err)
+
+	assert.Equal(t, "template", result.SourceType)
+	assert.ElementsMatch(t, []string{"config", "port"}, result.References)
+	assert.Equal(t, 2, result.Count)
+}
+
+func TestCommandRefs_CSVOutput(t *testing.T) {
+	out := &bytes.Buffer{}
+	errOut := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{
+		Out:    out,
+		ErrOut: errOut,
+	}
+
+	cmd := CommandRefs(&settings.Run{}, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"--template", "{{ ._.config.host }}:{{ ._.port.value }}", "-o", "csv"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	output := out.String()
+	// Header follows RefsColumnOrder; References are joined into one cell.
+	assert.Contains(t, output, "source,sourceType,references,count")
+	assert.Contains(t, output, "config, port")
+}
+
+func TestCommandRefs_QuietOutput(t *testing.T) {
+	out := &bytes.Buffer{}
+	errOut := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{
+		Out:    out,
+		ErrOut: errOut,
+	}
+
+	cmd := CommandRefs(&settings.Run{}, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"--template", "{{ ._.config.host }}", "-o", "quiet"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	assert.Empty(t, out.String())
 }
 
 func TestExtractResolverName(t *testing.T) {
