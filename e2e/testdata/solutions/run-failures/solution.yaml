@@ -1,0 +1,119 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: run-failures
+  version: 1.0.0
+  description: >-
+    One failure per class, each gated by a parameter so a single fixture drives
+    the exit-code matrix. Default (no parameters) succeeds.
+
+spec:
+  resolvers:
+    mode:
+      description: Selects which failure class to trigger
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            continueOnError: true
+            inputs:
+              key: mode
+          - provider: static
+            inputs:
+              value: none
+
+    count:
+      description: Integer input, used for invalid-input checks
+      type: int
+      resolve:
+        with:
+          - provider: parameter
+            continueOnError: true
+            inputs:
+              key: count
+          - provider: static
+            inputs:
+              value: 1
+
+    checked:
+      description: Fails validation when mode is "validation"
+      type: string
+      dependsOn: [mode]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.mode == 'validation' ? 'BAD' : 'good'"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[a-z]+$"
+              message: "must be lowercase"
+
+    broken:
+      description: Fails to resolve when mode is "resolve"
+      type: string
+      dependsOn: [mode]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "string(_.mode == 'resolve' ? 1 / 0 : 1)"
+
+    slowUrl:
+      description: Slow endpoint for the timeout class (pass with -r slowUrl=...)
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            continueOnError: true
+            inputs:
+              key: slowUrl
+          - provider: static
+            inputs:
+              value: "http://127.0.0.1:1/unused"
+
+  workflow:
+    actions:
+      ok:
+        description: Always succeeds
+        provider: file
+        inputs:
+          operation: write
+          path: ok.txt
+          content: ok
+
+      fail-hard:
+        description: Fails (reads a missing file) when mode is "action"
+        provider: file
+        dependsOn: [ok]
+        when:
+          expr: "_.mode == 'action'"
+        inputs:
+          operation: read
+          path: does-not-exist.txt
+
+      fail-soft:
+        description: Fails but continues when mode is "partial"
+        provider: file
+        dependsOn: [ok]
+        continueOnError: true
+        when:
+          expr: "_.mode == 'partial'"
+        inputs:
+          operation: read
+          path: does-not-exist.txt
+
+      slow:
+        description: Exceeds its timeout when mode is "timeout"
+        provider: http
+        dependsOn: [ok]
+        timeout: 1s
+        when:
+          expr: "_.mode == 'timeout'"
+        inputs:
+          url:
+            rslvr: slowUrl
+          method: GET
