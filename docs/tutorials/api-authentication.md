@@ -245,6 +245,7 @@ The HTTP provider will:
 2. Look up the "entra" handler from `auth.RegistryFromContext(ctx)`
 3. Build `TokenOptions` with:
    - `Scope`: from the `scope` input
+   - `Hostname`: for handlers advertising `token_hostname`, resolved from the `hostname` input (via `auth.handlers.<name>.hostname`) or derived from the `scheme://host[:port]` origin of `url`
    - `ServerContext`: `auth.Delegate` (acting on behalf of the caller)
    - `Assertion`: the caller's raw bearer token (enables OBO exchange)
    - `Caller`: `CallerUser` or `CallerMachine` (from JWT `idtyp` claim)
@@ -368,6 +369,7 @@ The caller type is only populated when the `authProvider` input matches the OIDC
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | "scope is required when authProvider X is set" | Handler has `CapScopesOnTokenRequest` but no `scope` provided | Add `scope` field to the HTTP provider inputs |
+| "hostname input is not supported by authProvider X" | `hostname` input set for a handler without `token_hostname` | Omit `hostname` or use a `token_hostname`-capable auth handler |
 | "auth provider X not found" | No handler registered with that name | Check `auth.handlers` config section |
 | "no auth registry in context for provider X" | Auth registry not wired into execution context | Ensure server setup registers the auth registry |
 | "authProvider X token is empty in request headers" | `X-Authorization-X` header present but empty | 

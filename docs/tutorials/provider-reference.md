@@ -1596,8 +1596,9 @@ HTTP client for API calls with built-in pagination support for fetching data acr
 | `body` | any | ❌ | Request body. A string is sent verbatim; an object or array is serialized to compact JSON and `Content-Type` defaults to `application/json` when not otherwise set |
 | `timeout` | int | ❌ | Timeout in seconds (max 300) |
 | `retry` | object | ❌ | Retry configuration |
-| `auth` | string | ❌ | Auth provider (e.g., `entra`, `github`) |
+| `authProvider` | string | ❌ | Auth provider (e.g., `entra`, `github`, `openshift`) |
 | `scope` | string | ❌ | OAuth scope for authentication |
+| `hostname` | string | ❌ | Target endpoint URL or configured hostname alias for per-endpoint token routing when `authProvider` advertises `token_hostname` (defaults to the scheme and host of `url`) |
 | `pagination` | object | ❌ | Pagination configuration (see below) |
 | `autoParseJson` | bool | ❌ | Parse response body as JSON when Content-Type is `application/json`. Enables direct field access (e.g., `_.result.body.items`) |
 | `poll` | object | ❌ | Polling configuration — re-execute request until a condition is met (see below) |
@@ -1944,9 +1945,9 @@ The HTTP provider enforces several security measures:
 
 - **SSRF protection**: Requests to private, loopback, and link-local addresses are blocked by default. The check runs at dial time against the resolved IP, so a hostname that resolves into private space is blocked too. To reach an on-premises endpoint, name its range in `httpClient.allowedPrivateCIDRs` (`httpClient.allowPrivateIPs: true` unblocks every private range at once and is the blunter option). Cloud metadata addresses such as `169.254.169.254` can never be exempted via direct policy settings. Proxy routing (`HTTP_PROXY`/`HTTPS_PROXY`) is disabled by default for exactly this reason -- a proxied request is dialed to the proxy, not the target, so it can only be checked once against a local DNS answer before hand-off, which a proxy with different resolution (or `httpClient.trustProxyResolution: true`, for a target that fails to resolve locally at all) could defeat. Set `httpClient.trustedProxy: true` only once the configured proxy is known to enforce an equivalent egress policy itself; only then does the metadata guarantee depend on that proxy rather than on this client.
 - **Response body size limit**: Each response is limited to `httpClient.maxResponseBodySize` (default: 100 MB). This prevents denial-of-service via unbounded responses from malicious or misconfigured servers. Applies to both direct requests and each page in paginated requests.
-- **Redirect validation**: Every redirect hop is checked at dial time, so a redirect from a public URL into private space is refused. A maximum of 10 redirects is enforced.
-- **Pagination host validation**: Pagination next URLs must stay on the same hostname as the original request to prevent open redirect attacks.
-- **Token security**: Authentication tokens are injected via the `Authorization` header and are never logged. Token refresh on 401 responses is handled transparently.
+- **Redirect validation**: Every redirect hop is checked at dial time, so a redirect from a public URL into private space is refused. Redirects that leave the original origin (changing scheme, hostname, or port, such as subdomain hops or `https`-to-`http` downgrades) automatically strip any `Authorization` header. A maximum of 10 redirects is enforced.
+- **Pagination origin validation**: Pagination next URLs must stay on the same origin (scheme, hostname, and port) as the original request and must not contain embedded userinfo, preventing open-redirect and credential-leakage attacks.
+- **Token security**: Authentication tokens are injected via the `Authorization` header and are never logged. For handlers advertising `token_hostname`, the target origin (or explicit `hostname` input) is forwarded on both initial acquisition and transparent 401 refresh.
 
 ```yaml
 # Override the default response body size limit (e.g. for large API responses)

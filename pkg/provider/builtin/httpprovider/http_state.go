@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -203,29 +202,29 @@ func (p *HTTPProvider) dispatchStateOperation(ctx context.Context, operation str
 		}
 	}
 
-	// Handle authentication
-	authProvider, _ := inputs["authProvider"].(string)
-	scope, _ := inputs["scope"].(string)
-	if authProvider != "" {
-		if err := p.injectAuthHeader(ctx, authProvider, scope, timeoutDuration, headers); err != nil {
-			return nil, err
-		}
+	// Build httpc client and wire authentication through the shared token pipeline.
+	authProvider, _ := inputs[fieldAuthProvider].(string)
+	scope, _ := inputs[fieldScope].(string)
+	hostname, _ := inputs[fieldHostname].(string)
+	if hostname != "" && authProvider == "" {
+		return nil, fmt.Errorf("%s: hostname requires authProvider to be set", ProviderName)
 	}
-
-	// Build httpc client
 	retryCfg := parseRetryConfig(inputs)
 	httpcCfg := buildHTTPClientConfig(ctx, timeoutDuration, retryCfg)
 
-	// Wire 401 token-refresh when an auth provider is configured.
 	if authProvider != "" {
-		httpcCfg.OnUnauthorized = p.buildOnUnauthorized(ctx, authProvider, scope, timeoutDuration)
+		token, err := getToken(ctx, authProvider, scope, urlStr, hostname, timeoutDuration, httpcCfg)
+		if err != nil {
+			return nil, err
+		}
+		setAuthorizationHeader(headers, formatAuthHeader(token))
 	}
 
-	client := httpc.NewClient(httpcCfg)
+	client := newHTTPClient(httpcCfg)
 	// See the matching comment in http.go: each client owns an idle connection
 	// pool that leaks for the process lifetime unless it is released. This
 	// client cannot be shared between executions because OnUnauthorized above
-	// captures the current request's context.
+	// captures the current request's context and token options.
 	defer func() { _ = client.Close() }()
 
 	switch operation {
@@ -246,52 +245,5 @@ func setHeaders(req *http.Request, headers map[string]any) {
 		if strValue, ok := value.(string); ok {
 			req.Header.Set(key, strValue)
 		}
-	}
-}
-
-// injectAuthHeader obtains an auth token and injects it into the headers map.
-func (p *HTTPProvider) injectAuthHeader(ctx context.Context, authProviderName, scope string, timeoutDuration time.Duration, headers map[string]any) error {
-	handler, err := auth.GetHandler(ctx, authProviderName)
-	if err != nil {
-		return fmt.Errorf("%s: %w", ProviderName, err)
-	}
-
-	requiresScope := auth.HasCapability(handler.Capabilities(), auth.CapScopesOnTokenRequest)
-	if scope == "" && requiresScope {
-		return fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProviderName)
-	}
-	if scope != "" && !requiresScope {
-		scope = ""
-	}
-
-	minValidFor := timeoutDuration + 60*time.Second
-	token, err := handler.GetToken(ctx, auth.TokenOptions{
-		Scope:       scope,
-		MinValidFor: minValidFor,
-	})
-	if err != nil {
-		return fmt.Errorf("%s: failed to get auth token: %w", ProviderName, err)
-	}
-
-	headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
-	return nil
-}
-
-// buildOnUnauthorized returns an httpc.OnUnauthorized callback for 401 retry.
-func (p *HTTPProvider) buildOnUnauthorized(_ context.Context, authProviderName, scope string, timeoutDuration time.Duration) func(context.Context) (string, error) {
-	return func(unauthCtx context.Context) (string, error) {
-		handler, handlerErr := auth.GetHandler(unauthCtx, authProviderName)
-		if handlerErr != nil {
-			return "", handlerErr
-		}
-		token, tokenErr := handler.GetToken(unauthCtx, auth.TokenOptions{
-			Scope:        scope,
-			MinValidFor:  timeoutDuration + 60*time.Second,
-			ForceRefresh: true,
-		})
-		if tokenErr != nil {
-			return "", tokenErr
-		}
-		return fmt.Sprintf("%s %s", token.TokenType, token.AccessToken), nil
 	}
 }

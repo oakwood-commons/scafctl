@@ -311,22 +311,22 @@ key is close to a valid one (a likely typo), a suggestion is included:
 ```bash
 # Typo in key name
 scafctl run provider http urll=https://example.com
-# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
+# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, data, headers, hostname, method, operation, pagination, poll, retry, scope, timeout, url)
 
 # Completely unknown key
 scafctl run provider http unknown=value
-# Error: provider "http" does not accept input "unknown" (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
+# Error: provider "http" does not accept input "unknown" (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, data, headers, hostname, method, operation, pagination, poll, retry, scope, timeout, url)
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # Typo in key name
 scafctl run provider http urll=https://example.com
-# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
+# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, data, headers, hostname, method, operation, pagination, poll, retry, scope, timeout, url)
 
 # Completely unknown key
 scafctl run provider http unknown=value
-# Error: provider "http" does not accept input "unknown" (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
+# Error: provider "http" does not accept input "unknown" (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, data, headers, hostname, method, operation, pagination, poll, retry, scope, timeout, url)
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -635,6 +635,7 @@ Provider Inputs (http):
   autoParseJson  boolean               When true and the response Content-Type is application/json, automatically parse the body into a structured object
   body           any                   Request body for POST/PUT/PATCH requests (string sent verbatim; object/array serialized to JSON)
   headers        any                   HTTP headers as key-value pairs
+  hostname       string                Target endpoint URL or configured hostname alias for per-endpoint token routing
   method         string                HTTP method
   pagination     object                Pagination configuration for automatically following paginated API responses
   poll           object                Polling configuration for re-executing the request until a condition is met

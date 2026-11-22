@@ -218,8 +218,9 @@ list now takes precedence over it.
 ### Redirect and Pagination Safety
 
 - Every redirect hop is checked at dial time, so a redirect into private space is refused even when the original URL was public
+- Redirects that change scheme, hostname, or port (including subdomain redirects and `https`-to-`http` downgrades) automatically strip the `Authorization` header so credentials never leak to another origin
 - Maximum 10 redirects are permitted before the request fails
-- Pagination next URLs must stay on the same hostname as the original request
+- Pagination next URLs must stay on the same origin (scheme, hostname, and port) as the original request and must not contain URL userinfo
 
 ### TLS Verification
 

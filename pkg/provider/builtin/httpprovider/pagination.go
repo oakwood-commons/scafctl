@@ -270,6 +270,7 @@ type paginatedResponse struct {
 	StatusCode int
 	Body       string
 	Headers    map[string]any
+	FinalURL   string
 }
 
 // executePaginated performs paginated HTTP requests using the configured strategy.
@@ -453,7 +454,7 @@ func (p *HTTPProvider) executePaginated(
 			currentOffset += pagCfg.pageSize()
 		} else {
 			// URL-based pagination: resolve the next page URL via strategy.
-			nextURL, stop, err := p.resolveNextPage(ctx, pagCfg, currentURL, resp, responseCtx)
+			nextURL, stop, err := p.resolveNextPage(ctx, pagCfg, urlStr, currentURL, resp, responseCtx)
 			if err != nil {
 				return nil, fmt.Errorf("%s: page %d failed to resolve next page: %w", ProviderName, pageCount, err)
 			}
@@ -528,11 +529,26 @@ func (p *HTTPProvider) doRequest(
 		}
 	}
 
+	finalURL := urlStr
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+
 	return &paginatedResponse{
 		StatusCode: resp.StatusCode,
 		Body:       string(respBody),
 		Headers:    respHeaders,
+		FinalURL:   finalURL,
 	}, nil
+}
+
+// responseBaseURL returns the final post-redirect response URL when available,
+// falling back to currentURL for synthetic test responses.
+func responseBaseURL(currentURL string, resp *paginatedResponse) string {
+	if resp != nil && resp.FinalURL != "" {
+		return resp.FinalURL
+	}
+	return currentURL
 }
 
 // resolveNextPage determines the URL for the next page based on the pagination strategy.
@@ -540,21 +556,22 @@ func (p *HTTPProvider) doRequest(
 func (p *HTTPProvider) resolveNextPage(
 	ctx context.Context,
 	pagCfg *paginationConfig,
-	currentURL string,
+	originURL, currentURL string,
 	resp *paginatedResponse,
 	responseCtx map[string]any,
 ) (string, bool, error) {
+	baseURL := responseBaseURL(currentURL, resp)
 	switch pagCfg.Strategy {
 	case StrategyOffset:
 		return resolveOffsetNext(currentURL, pagCfg, responseCtx)
 	case StrategyPageNumber:
 		return resolvePageNumberNext(currentURL, pagCfg, responseCtx)
 	case StrategyCursor:
-		return resolveCursorNext(ctx, currentURL, pagCfg, responseCtx)
+		return resolveCursorNext(ctx, originURL, currentURL, baseURL, pagCfg, responseCtx)
 	case StrategyLinkHeader:
-		return resolveLinkHeaderNext(currentURL, resp)
+		return resolveLinkHeaderNextWithOrigin(originURL, baseURL, resp)
 	case StrategyCustom:
-		return resolveCustomNext(ctx, currentURL, pagCfg, responseCtx)
+		return resolveCustomNext(ctx, originURL, currentURL, baseURL, pagCfg, responseCtx)
 	default:
 		return "", true, fmt.Errorf("unknown pagination strategy: %q", pagCfg.Strategy)
 	}
@@ -645,7 +662,7 @@ func isNullOrEmpty(result any) bool {
 }
 
 // resolveCursorNext extracts the cursor/token from the response and builds the next URL.
-func resolveCursorNext(ctx context.Context, currentURL string, pagCfg *paginationConfig, responseCtx map[string]any) (string, bool, error) {
+func resolveCursorNext(ctx context.Context, originURL, currentURL, baseURL string, pagCfg *paginationConfig, responseCtx map[string]any) (string, bool, error) {
 	// If nextURLPath is set, extract the full URL from the response body
 	if pagCfg.NextURLPath != "" {
 		result, err := evaluateCELForPagination(ctx, pagCfg.NextURLPath, responseCtx)
@@ -659,10 +676,11 @@ func resolveCursorNext(ctx context.Context, currentURL string, pagCfg *paginatio
 		if !ok || nextURL == "" {
 			return "", true, nil // No more pages
 		}
-		if err := validateNextURLHost(currentURL, nextURL); err != nil {
+		resolvedURL, err := resolveNextURL(originURL, baseURL, nextURL)
+		if err != nil {
 			return "", true, err
 		}
-		return nextURL, false, nil
+		return resolvedURL, false, nil
 	}
 
 	// Extract cursor token from response body
@@ -699,6 +717,10 @@ var linkHeaderRegex = regexp.MustCompile(`<([^>]+)>;\s*rel="next"`)
 
 // resolveLinkHeaderNext extracts the next URL from the Link response header (RFC 8288).
 func resolveLinkHeaderNext(currentURL string, resp *paginatedResponse) (string, bool, error) {
+	return resolveLinkHeaderNextWithOrigin(currentURL, responseBaseURL(currentURL, resp), resp)
+}
+
+func resolveLinkHeaderNextWithOrigin(originURL, baseURL string, resp *paginatedResponse) (string, bool, error) {
 	linkHeader, ok := resp.Headers["Link"]
 	if !ok {
 		return "", true, nil // No Link header = no more pages
@@ -728,14 +750,15 @@ func resolveLinkHeaderNext(currentURL string, resp *paginatedResponse) (string, 
 	}
 
 	nextURL := matches[1]
-	if err := validateNextURLHost(currentURL, nextURL); err != nil {
+	resolvedURL, err := resolveNextURL(originURL, baseURL, nextURL)
+	if err != nil {
 		return "", true, err
 	}
-	return nextURL, false, nil
+	return resolvedURL, false, nil
 }
 
 // resolveCustomNext uses CEL expressions to determine the next page URL.
-func resolveCustomNext(ctx context.Context, currentURL string, pagCfg *paginationConfig, responseCtx map[string]any) (string, bool, error) {
+func resolveCustomNext(ctx context.Context, originURL, currentURL, baseURL string, pagCfg *paginationConfig, responseCtx map[string]any) (string, bool, error) {
 	// If nextURL expression is set, evaluate it for the full URL
 	if pagCfg.NextURL != "" {
 		result, err := evaluateCELForPagination(ctx, pagCfg.NextURL, responseCtx)
@@ -749,10 +772,11 @@ func resolveCustomNext(ctx context.Context, currentURL string, pagCfg *paginatio
 		if !ok || nextURL == "" {
 			return "", true, nil
 		}
-		if err := validateNextURLHost(currentURL, nextURL); err != nil {
+		resolvedURL, err := resolveNextURL(originURL, baseURL, nextURL)
+		if err != nil {
 			return "", true, err
 		}
-		return nextURL, false, nil
+		return resolvedURL, false, nil
 	}
 
 	// If nextParams expression is set, evaluate it for query parameter updates

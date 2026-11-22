@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -60,5 +61,33 @@ func BenchmarkHTTPProvider_Execute_GET(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		_, _ = p.Execute(ctx, inputs)
+	}
+}
+
+func BenchmarkDeriveOriginHostname(b *testing.B) {
+	rawURL := "https://api.cluster-a.example.com:6443/apis/apps/v1/namespaces/default/deployments?limit=50"
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = deriveOriginHostname(rawURL)
+	}
+}
+
+func BenchmarkStripCrossOriginAuthOnRedirect(b *testing.B) {
+	origURL, _ := url.Parse("https://api.cluster-a.example.com:6443/v1/items")
+	destURL, _ := url.Parse("https://api.cluster-b.example.com:6443/v1/items")
+	via := []*http.Request{{URL: origURL}}
+	hook := stripCrossOriginAuthOnRedirect(nil)
+	req := &http.Request{
+		URL:    destURL,
+		Header: http.Header{"Authorization": []string{"Bearer token"}},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		req.Header.Set("Authorization", "Bearer token")
+		_ = hook(req, via)
 	}
 }

@@ -31,6 +31,20 @@ spec:
               method: GET
               authProvider: nonexistent-handler-for-test
 
+    # This resolver verifies that passing hostname to an authProvider that does
+    # not advertise the token_hostname capability fails closed with a clear error.
+    unsupportedHostname:
+      description: HTTP call with hostname on non-token_hostname handler fails closed
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/data'"
+              method: GET
+              authProvider: static-oauth
+              hostname: cluster-a
+
     # This resolver verifies that an HTTP call without authProvider works normally.
     noAuth:
       description: HTTP call without authProvider succeeds normally
@@ -133,3 +147,18 @@ spec:
             message: "Should fail when auth handler is unavailable"
           - expression: __stderr.contains("nonexistent-handler-for-test")
             message: "Error should mention the missing handler name"
+
+      unsupported-hostname-error:
+        description: Clear error when hostname input is used with a handler lacking token_hostname
+        command: [run, resolver]
+        args: ["-o", "json", "--config", "config.yaml", "unsupportedHostname"]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\nauth:\\n  customOAuth2:\\n    - name: static-oauth\\n      authorizeURL: https://auth.example.com/oauth/authorize\\n      tokenURL: https://auth.example.com/oauth/token\\n      clientID: test-client\\n' > config.yaml"
+        tags: [delegation, error-handling]
+        assertions:
+          - expression: __exitCode != 0
+            message: "Should fail closed when handler lacks token_hostname"
+          - expression: __stderr.contains("hostname input is not supported")
+            message: "Error should explain that hostname input is unsupported"
+          - expression: __stderr.contains("token_hostname")
+            message: "Error should name the missing token_hostname capability"
