@@ -170,8 +170,8 @@ varies by fleet) and leaves `defaultHandler` and `authType` unset so Phase 4's
 two-path routing auto-detects each cluster at login time (`oauth` -> `openshift`,
 `oidc` -> `entra` with the emitted `audience`). With this configuration,
 `kube login <cluster>` needs neither `--server`, `--handler`, nor `--audience`
-for either cluster type, and one-off users with only a URL or static aliases
-keep working unchanged.
+for OAuth clusters or for OIDC clusters with a populated client ID, and one-off
+users with only a URL or static aliases keep working unchanged.
 
 When deriving `audience` by string concatenation from optional JSON fields, the
 transform must guard missing keys, `null` values, and empty strings together
@@ -182,7 +182,11 @@ pending), so a `has()`-only chain compiles cleanly and then fails at evaluation
 time with `no such overload` on `"api://" + null + "/.default"`, selecting
 `_[k].oidc.clientID` without `_[k].oidc != null && has(_[k].oidc.clientID)`
 fails with `no such key: clientID` on `"oidc": null` or `"oidc": {}`, and
-`!= ""` prevents `"clientID": ""` from emitting `"api:///.default"`.
+`!= ""` prevents `"clientID": ""` from emitting `"api:///.default"`. These
+guards keep inventory evaluation working across the fleet; OAuth clusters ignore
+the resulting empty `audience`, whereas auto-routing an OIDC cluster whose
+client ID is missing, `null`, or empty still fails fast with `ErrNoAudience`
+unless `--audience` or a static alias supplies one.
 
 **Uniform OpenShift OAuth override:** Fleets that are 100% uniform OpenShift
 OAuth can opt in to stamping fixed handler metadata on every entry instead:

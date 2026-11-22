@@ -156,9 +156,12 @@ together (`has(...)`, `!= null`, and `!= ""`):
   `_[k].oidc.clientID` without `_[k].oidc != null && has(_[k].oidc.clientID)`
   fails with `no such key: clientID` when `oidc` is `null` or `{}`.
 - Checking `_[k].oidc.clientID != ""` prevents an empty `"clientID": ""` from
-  producing the malformed audience `"api:///.default"`. Clusters without an OIDC
-  client ID emit `""`, leaving `OIDCAudience` unset while `authType` remains
-  auto-detected.
+  producing the malformed audience `"api:///.default"`. Clusters with a missing,
+  `null`, or empty client ID emit `""`, keeping inventory resolution healthy for
+  the rest of the fleet while leaving `OIDCAudience` unset -- OAuth clusters
+  route cleanly, whereas auto-routing an OIDC cluster without a resolved
+  audience still fails fast with `ErrNoAudience` unless `--audience` or a static
+  alias supplies one.
 
 **Uniform OpenShift OAuth fleets (opt-in override):** If every cluster in your
 inventory is 100% uniform OpenShift OAuth, you can stamp `defaultHandler` and
