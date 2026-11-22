@@ -146,13 +146,148 @@ func TestValidateNextURLHost(t *testing.T) {
 
 func TestResolveNextURL(t *testing.T) {
 	t.Parallel()
-	resolved, err := resolveNextURL("https://api.example.com:6443/v1/items?page=1", "/v1/items?page=2")
+	resolved, err := resolveNextURL("https://api.example.com:6443/v1/items?page=1", "https://api.example.com:6443/v1/items?page=1", "/v1/items?page=2")
 	require.NoError(t, err)
 	assert.Equal(t, "https://api.example.com:6443/v1/items?page=2", resolved)
 
-	abs, err := resolveNextURL("https://api.example.com:6443/v1/items?page=1", "https://api.example.com:6443/v1/items?page=2")
+	// Post-redirect trailing-slash base resolves relative link to /v1/items/page2 instead of /v1/page2.
+	afterRedirect, err := resolveNextURL("https://api.example.com:6443/v1/items", "https://api.example.com:6443/v1/items/", "page2")
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.example.com:6443/v1/items/page2", afterRedirect)
+
+	// Cross-origin redirect base + relative link is rejected against the initial trusted origin.
+	_, err = resolveNextURL("https://api.example.com:6443/v1/items", "https://other.example.com:6443/v1/items/", "page2")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cross-origin pagination is not permitted")
+
+	abs, err := resolveNextURL("https://api.example.com:6443/v1/items?page=1", "", "https://api.example.com:6443/v1/items?page=2")
 	require.NoError(t, err)
 	assert.Equal(t, "https://api.example.com:6443/v1/items?page=2", abs)
+}
+
+func TestHTTPProvider_Pagination_RedirectRelativeLinkAndCrossOriginRedirectRejection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("same-origin redirect to trailing slash resolves relative next links across all 3 strategies", func(t *testing.T) {
+		t.Parallel()
+		strategies := []struct {
+			name       string
+			pagination map[string]any
+		}{
+			{
+				name: "linkHeader",
+				pagination: map[string]any{
+					"strategy":    "linkHeader",
+					"maxPages":    5,
+					"collectPath": "body.items",
+				},
+			},
+			{
+				name: "cursor",
+				pagination: map[string]any{
+					"strategy":    "cursor",
+					"maxPages":    5,
+					"nextURLPath": "body.next",
+					"collectPath": "body.items",
+				},
+			},
+			{
+				name: "custom",
+				pagination: map[string]any{
+					"strategy":    "custom",
+					"maxPages":    5,
+					"nextURL":     "has(body.next) ? body.next : ''",
+					"collectPath": "body.items",
+				},
+			},
+		}
+
+		for _, tc := range strategies {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/v1/items":
+						// Canonicalize to trailing slash via 302 redirect.
+						http.Redirect(w, r, "/v1/items/", http.StatusFound)
+					case "/v1/items/":
+						w.Header().Set("Content-Type", "application/json")
+						w.Header().Set("Link", `<page2>; rel="next"`)
+						w.WriteHeader(http.StatusOK)
+						_, _ = w.Write([]byte(`{"items":["a"],"next":"page2"}`))
+					case "/v1/items/page2":
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusOK)
+						_, _ = w.Write([]byte(`{"items":["b"]}`))
+					default:
+						// Would hit "/v1/page2" if resolved against pre-redirect URL!
+						w.WriteHeader(http.StatusNotFound)
+					}
+				}))
+				defer srv.Close()
+
+				p := NewHTTPProvider()
+				out, err := p.Execute(testContext(t), map[string]any{
+					"url":           srv.URL + "/v1/items",
+					"method":        "GET",
+					"autoParseJson": true,
+					"acceptableStatusCodes": []any{
+						200,
+					},
+					"pagination": tc.pagination,
+				})
+				require.NoError(t, err)
+				data := out.Data.(map[string]any)
+				assert.Equal(t, 2, data["pages"])
+				assert.Equal(t, []any{"a", "b"}, data["body"])
+			})
+		}
+	})
+
+	t.Run("cross-origin redirect followed by relative next link is rejected before page 2", func(t *testing.T) {
+		t.Parallel()
+		page2Hit := false
+		otherSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/items/page2" {
+				page2Hit = true
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Link", `<page2>; rel="next"`)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"items":["from-other"],"next":"page2"}`))
+		}))
+		defer otherSrv.Close()
+
+		originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, otherSrv.URL+"/v1/items/", http.StatusFound)
+		}))
+		defer originSrv.Close()
+
+		mockHandler := auth.NewMockHandler("github")
+		mockHandler.SetToken(&auth.Token{
+			AccessToken: "secret-pagination-token",
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+		})
+		reg := auth.NewRegistry()
+		require.NoError(t, reg.Register(mockHandler))
+		ctx := testContextWithCLIAuth(t, reg)
+
+		p := NewHTTPProvider()
+		_, err := p.Execute(ctx, map[string]any{
+			"url":          originSrv.URL + "/v1/items",
+			"method":       "GET",
+			"authProvider": "github",
+			"pagination": map[string]any{
+				"strategy":    "linkHeader",
+				"maxPages":    3,
+				"collectPath": "body.items",
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cross-origin pagination is not permitted")
+		assert.False(t, page2Hit, "relative next link after cross-origin redirect must not fetch page 2 on untrusted origin")
+	})
 }
 
 func TestHTTPProvider_Pagination_BlocksCrossPortNextLinkWithAuth(t *testing.T) {

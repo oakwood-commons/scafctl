@@ -1689,9 +1689,10 @@ func TestHTTPProvider_Execute_Provider_401Retry(t *testing.T) {
 // CapTokenHostname.
 type clusterAwareAuthHandler struct {
 	*auth.MockHandler
-	mu     sync.Mutex
-	tokens map[string]*auth.Token
-	calls  []auth.TokenOptions
+	mu       sync.Mutex
+	tokens   map[string]*auth.Token
+	calls    []auth.TokenOptions
+	profiles []string
 }
 
 func newClusterAwareAuthHandler(name string, tokens map[string]*auth.Token) *clusterAwareAuthHandler {
@@ -1703,10 +1704,11 @@ func newClusterAwareAuthHandler(name string, tokens map[string]*auth.Token) *clu
 	}
 }
 
-func (h *clusterAwareAuthHandler) GetToken(_ context.Context, opts auth.TokenOptions) (*auth.Token, error) {
+func (h *clusterAwareAuthHandler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.calls = append(h.calls, opts)
+	h.profiles = append(h.profiles, auth.ProfileFromContext(ctx))
 	tok, ok := h.tokens[opts.Hostname]
 	if !ok || tok == nil {
 		return nil, fmt.Errorf("%w: no session for %q", auth.ErrNotAuthenticated, opts.Hostname)
@@ -1719,6 +1721,14 @@ func (h *clusterAwareAuthHandler) recordedCalls() []auth.TokenOptions {
 	defer h.mu.Unlock()
 	out := make([]auth.TokenOptions, len(h.calls))
 	copy(out, h.calls)
+	return out
+}
+
+func (h *clusterAwareAuthHandler) recordedProfiles() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]string, len(h.profiles))
+	copy(out, h.profiles)
 	return out
 }
 
@@ -1897,6 +1907,42 @@ func TestHTTPProvider_Execute_AuthProvider_ExplicitHostnameTunnelAndCapabilityGa
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "hostname requires authProvider to be set")
+
+	// 6. Profile-qualified authProvider ("openshift@work") resolves the bare
+	// handler, resolves aliases under "openshift", and propagates profile="work"
+	// across initial GetToken and 401 refresh.
+	attempts := 0
+	profileSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer profileSrv.Close()
+
+	_, err = p.Execute(ctx, map[string]any{
+		"url":          profileSrv.URL + "/api/v1/namespaces",
+		"method":       "GET",
+		"authProvider": "openshift@work",
+		"hostname":     "cluster-a",
+	})
+	require.NoError(t, err)
+	profiles := clusterHandler.recordedProfiles()
+	require.GreaterOrEqual(t, len(profiles), 3)
+	assert.Equal(t, []string{"work", "work"}, profiles[len(profiles)-2:])
+
+	// 7. Built-in profile selector ("github@built-in") overrides ambient profile.
+	ambientCtx := auth.WithProfile(ctx, "other-profile")
+	_, err = p.Execute(ambientCtx, map[string]any{
+		"url":          tunnelSrv.URL + "/user",
+		"method":       "GET",
+		"authProvider": "github@built-in",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "", nonHostnameHandler.LastContextProfile)
 }
 
 func TestHTTPProvider_Execute_AuthProvider_DefaultsEmptyTokenTypeAndOverridesLowercaseAuthHeader(t *testing.T) {

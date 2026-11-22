@@ -39,6 +39,10 @@ const maxBodyBytes = 1048576
 // maxHostnameLength caps the optional hostname input length (URL or alias).
 const maxHostnameLength = 2048
 
+// maxAuthProviderLength caps the authProvider input length, accommodating
+// profile-qualified "handler@profile" selectors.
+const maxAuthProviderLength = 128
+
 // Field name constants for input/output map keys.
 const (
 	fieldURL                   = "url"
@@ -303,9 +307,9 @@ func NewHTTPProvider() *HTTPProvider {
 						schemahelper.WithExample(`'{"query":"{ items(page: ' + string(__page) + ', size: ' + string(__pageSize) + ') { results { id } } }"}'`),
 						schemahelper.WithMaxLength(*ptrs.IntPtr(50000))),
 				}),
-				fieldAuthProvider: schemahelper.StringProp("Authentication provider to use for this request (e.g., 'entra'). When set, the provider will automatically obtain and inject an access token.",
+				fieldAuthProvider: schemahelper.StringProp("Authentication provider to use for this request (e.g., 'entra' or 'github@work'). When set, the provider will automatically obtain and inject an access token.",
 					schemahelper.WithExample("entra"),
-					schemahelper.WithMaxLength(*ptrs.IntPtr(50))),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(maxAuthProviderLength))),
 				fieldScope: schemahelper.StringProp("OAuth scope for authentication. Required for auth providers that support per-request scopes (e.g., Entra). Not used for providers with scopes fixed at login time (e.g., GitHub).",
 					schemahelper.WithExample("https://graph.microsoft.com/.default"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
@@ -703,12 +707,40 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	return executeFunc()
 }
 
+// resolveAuthProviderContext splits an optional "handler@profile" selector in
+// authProvider, validates any explicit profile suffix, and returns a context
+// carrying that resolved profile alongside the bare handler name for registry
+// and hostname-config lookups.
+func resolveAuthProviderContext(ctx context.Context, authProvider string) (context.Context, string, error) {
+	handlerName, profile := auth.ParseProfileKey(authProvider)
+	if idx := strings.Index(authProvider, auth.ProfileSeparator); idx >= 0 {
+		if handlerName == "" {
+			return ctx, "", fmt.Errorf("%s: auth provider name must not be empty in %q", ProviderName, authProvider)
+		}
+		rawProfile := authProvider[idx+1:]
+		if rawProfile == "" {
+			return ctx, "", fmt.Errorf("%s: invalid profile in authProvider %q: profile name must not be empty", ProviderName, authProvider)
+		}
+		if profile != "" {
+			if err := auth.ValidateProfileName(profile); err != nil {
+				return ctx, "", fmt.Errorf("%s: invalid profile in authProvider %q: %w", ProviderName, authProvider, err)
+			}
+		}
+		ctx = auth.WithProfile(ctx, profile)
+		ctx = auth.WithProfileResolved(ctx)
+	}
+	return ctx, handlerName, nil
+}
+
 func handlerToken(ctx context.Context, authProvider, scope, requestURL, explicitHostname string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
-	authRegistry := auth.RegistryFromContext(ctx)
-	if authRegistry == nil {
+	if auth.RegistryFromContext(ctx) == nil {
 		return nil, fmt.Errorf("%s: no auth registry in context for provider %q", ProviderName, authProvider)
 	}
-	handler, err := authRegistry.GetContext(ctx, authProvider)
+	authCtx, handlerName, err := resolveAuthProviderContext(ctx, authProvider)
+	if err != nil {
+		return nil, err
+	}
+	handler, err := auth.GetHandler(authCtx, authProvider)
 	if err != nil {
 		return nil, fmt.Errorf("%s: auth provider %q not found: %w", ProviderName, authProvider, err)
 	}
@@ -725,7 +757,7 @@ func handlerToken(ctx context.Context, authProvider, scope, requestURL, explicit
 	var tokenHostname string
 	if auth.HasCapability(caps, auth.CapTokenHostname) {
 		if explicitHostname != "" {
-			resolved, resolveErr := hostnameresolver.Resolve(ctx, authProvider, explicitHostname)
+			resolved, resolveErr := hostnameresolver.Resolve(authCtx, handlerName, explicitHostname)
 			if resolveErr != nil {
 				return nil, fmt.Errorf("%s: failed to resolve hostname %q for authProvider %q: %w", ProviderName, explicitHostname, authProvider, resolveErr)
 			}
@@ -746,9 +778,9 @@ func handlerToken(ctx context.Context, authProvider, scope, requestURL, explicit
 		MinValidFor: timeoutDuration + 60*time.Second,
 	}
 
-	tokenOpts = tokenOptionChain(ctx, authProvider, tokenOpts, withServerContext, withAssertion, withCallerType, withTokenHostname(tokenHostname))
+	tokenOpts = tokenOptionChain(authCtx, handlerName, tokenOpts, withServerContext, withAssertion, withCallerType, withTokenHostname(tokenHostname))
 
-	token, err := handler.GetToken(ctx, tokenOpts)
+	token, err := handler.GetToken(authCtx, tokenOpts)
 	if err != nil {
 		return nil, fmt.Errorf("%s: failed to get auth token for %q: %w", ProviderName, authProvider, err)
 	}
@@ -758,9 +790,13 @@ func handlerToken(ctx context.Context, authProvider, scope, requestURL, explicit
 
 	// Only wire 401 refresh when the token came from a refreshable source.
 	httpcCfg.OnUnauthorized = func(unauthCtx context.Context) (string, error) {
+		refreshCtx, _, profileErr := resolveAuthProviderContext(unauthCtx, authProvider)
+		if profileErr != nil {
+			return "", profileErr
+		}
 		refreshOpts := tokenOpts
 		refreshOpts.ForceRefresh = true
-		t, refreshErr := handler.GetToken(unauthCtx, refreshOpts)
+		t, refreshErr := handler.GetToken(refreshCtx, refreshOpts)
 		if refreshErr != nil {
 			return "", refreshErr
 		}

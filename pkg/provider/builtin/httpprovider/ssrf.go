@@ -150,22 +150,40 @@ func validateNextURLHost(originalURL, nextURL string) error {
 	return nil
 }
 
-// resolveNextURL validates nextURL against currentURL's origin and resolves
-// relative references against currentURL while leaving absolute URLs intact.
-func resolveNextURL(currentURL, nextURL string) (string, error) {
-	if err := validateNextURLHost(currentURL, nextURL); err != nil {
-		return "", err
-	}
+// resolveNextURL resolves relative pagination links against baseURL (the final
+// response URL after any redirects, falling back to originURL when empty) and
+// validates the resulting URL against originURL (the initial trusted request
+// origin) while leaving absolute same-origin URLs intact.
+func resolveNextURL(originURL, baseURL, nextURL string) (string, error) {
 	next, err := url.Parse(nextURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid next URL: %w", err)
 	}
-	if next.Scheme == "" && next.Host == "" {
-		orig, origErr := url.Parse(currentURL)
-		if origErr != nil {
-			return "", fmt.Errorf("invalid original URL: %w", origErr)
+	if next.User != nil {
+		return "", fmt.Errorf("pagination next URL must not contain userinfo")
+	}
+	if next.Scheme == "" && next.Host == "" && !strings.HasPrefix(nextURL, "//") {
+		effectiveBase := baseURL
+		if effectiveBase == "" {
+			effectiveBase = originURL
 		}
-		return orig.ResolveReference(next).String(), nil
+		base, baseErr := url.Parse(effectiveBase)
+		if baseErr != nil {
+			return "", fmt.Errorf("invalid base URL: %w", baseErr)
+		}
+		if _, _, _, ok := effectiveOrigin(base); !ok {
+			return "", fmt.Errorf("invalid base URL: missing scheme or host")
+		}
+		baseCopy := *base
+		baseCopy.User = nil
+		resolved := baseCopy.ResolveReference(next).String()
+		if err := validateNextURLHost(originURL, resolved); err != nil {
+			return "", err
+		}
+		return resolved, nil
+	}
+	if err := validateNextURLHost(originURL, nextURL); err != nil {
+		return "", err
 	}
 	return nextURL, nil
 }

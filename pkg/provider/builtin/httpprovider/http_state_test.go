@@ -610,6 +610,107 @@ func TestHTTPProvider_StateSave_401RefreshReplaysBodyAndPreservesHostname(t *tes
 	assert.True(t, calls[1].ForceRefresh)
 }
 
+func TestHTTPProvider_StateOperations_ProfileQualifiedAuthProvider(t *testing.T) {
+	t.Parallel()
+
+	sd := state.NewData()
+	sd.Parameters["env"] = "prod"
+	encodedState, err := json.Marshal(sd)
+	require.NoError(t, err)
+
+	loadAttempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer profiled-state-token", r.Header.Get("Authorization"))
+		switch r.Method {
+		case http.MethodGet:
+			loadAttempts++
+			if loadAttempts == 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(encodedState)
+		case http.MethodPut:
+			w.WriteHeader(http.StatusOK)
+		case http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer server.Close()
+
+	clusterHandler := newClusterAwareAuthHandler("openshift", map[string]*auth.Token{
+		"https://api.cluster-a.example.com:6443": {
+			AccessToken: "profiled-state-token",
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+		},
+	})
+	githubHandler := auth.NewMockHandler("github")
+	githubHandler.SetToken(&auth.Token{
+		AccessToken: "profiled-state-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	})
+
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(clusterHandler))
+	require.NoError(t, reg.Register(githubHandler))
+
+	cfg := &config.Config{
+		HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: ptrs.BoolPtr(true)},
+		Auth: config.GlobalAuthConfig{
+			Handlers: map[string]config.HandlerConfig{
+				"openshift": {
+					Hostname: &config.HostnameConfig{
+						Aliases: map[string]string{
+							"cluster-a": "https://api.cluster-a.example.com:6443",
+						},
+					},
+				},
+			},
+		},
+	}
+	ctx := auth.WithRegistry(config.WithConfig(context.Background(), cfg), reg)
+	p := NewHTTPProvider()
+
+	// 1. state_load with "openshift@work" + alias + 401 refresh preserves profile="work" and Hostname.
+	loadOut, err := p.Execute(ctx, map[string]any{
+		"operation":    "state_load",
+		"url":          server.URL + "/state",
+		"authProvider": "openshift@work",
+		"hostname":     "cluster-a",
+	})
+	require.NoError(t, err)
+	assert.True(t, loadOut.Data.(map[string]any)["success"].(bool))
+	assert.Equal(t, []string{"work", "work"}, clusterHandler.recordedProfiles())
+	calls := clusterHandler.recordedCalls()
+	require.Len(t, calls, 2)
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", calls[0].Hostname)
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", calls[1].Hostname)
+
+	// 2. state_save with "github@work" propagates profile="work".
+	saveOut, err := p.Execute(ctx, map[string]any{
+		"operation":    "state_save",
+		"url":          server.URL + "/state",
+		"authProvider": "github@work",
+		"data":         sd,
+	})
+	require.NoError(t, err)
+	assert.True(t, saveOut.Data.(map[string]any)["success"].(bool))
+	assert.Equal(t, "work", githubHandler.LastContextProfile)
+
+	// 3. state_delete with "github@built-in" normalizes to the unnamed built-in profile.
+	delOut, err := p.Execute(auth.WithProfile(ctx, "ambient"), map[string]any{
+		"operation":    "state_delete",
+		"url":          server.URL + "/state",
+		"authProvider": "github@built-in",
+	})
+	require.NoError(t, err)
+	assert.True(t, delOut.Data.(map[string]any)["success"].(bool))
+	assert.Equal(t, "", githubHandler.LastContextProfile)
+}
+
 func BenchmarkHTTPProvider_StateLoad(b *testing.B) {
 	sd := state.NewData()
 	sd.Parameters["x"] = "y"

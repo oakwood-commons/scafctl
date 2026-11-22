@@ -270,3 +270,20 @@ func TestHandlerToken_WithoutCapTokenHostname_RejectsExplicitHostname(t *testing
 	assert.Contains(t, err.Error(), `http: hostname input is not supported by authProvider "github" (handler does not advertise token_hostname capability)`)
 	assert.Empty(t, mockHandler.GetTokenCalls)
 }
+
+func TestResolveAuthProviderContext_InvalidSelectors(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"@work",
+		"github@",
+		"github@bad/profile",
+		"github@two@parts",
+	}
+	for _, selector := range cases {
+		t.Run(selector, func(t *testing.T) {
+			t.Parallel()
+			_, _, err := resolveAuthProviderContext(context.Background(), selector)
+			require.Error(t, err)
+		})
+	}
+}
