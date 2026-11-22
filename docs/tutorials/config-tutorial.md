@@ -169,7 +169,7 @@ scafctl config get httpClient.timeout
 
 ### Write Values
 
-> **Warning (`config.d` drop-in fragments):** When non-empty `config.d/*.yaml` fragments are loaded, `scafctl config set` only persists `logging.*`, `settings.*`, and `httpClient` private-IP/proxy policy keys (`allowPrivateIPs`, `trustProxyResolution`, `trustedProxy`, `allowedPrivateCIDRs`) to `config.yaml`. For other sections (such as `apiServer.*`, `resolver.*`, or `httpClient.timeout`), edit `config.yaml` or a `config.d/*.yaml` fragment directly so changes survive reload.
+> **Warning (`config.d` drop-in fragments):** When non-empty `config.d/*.yaml` fragments are loaded, `scafctl config set` only persists `logging.level`, `logging.format`, `logging.timestamps`, `logging.enableProfiling`, `settings.quiet`, `settings.noColor`, `settings.defaultCatalog`, `httpClient.allowPrivateIPs`, `httpClient.trustProxyResolution`, `httpClient.trustedProxy`, and `httpClient.allowedPrivateCIDRs` to `config.yaml`. For any other key (such as `settings.disableOfficialAuthHandlers`, `apiServer.*`, `resolver.*`, or `httpClient.timeout`), edit `config.yaml` or a `config.d/*.yaml` fragment directly so changes survive reload.
 
 {{< tabs "config-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
@@ -649,9 +649,7 @@ Credential fields (`credential.clientSecret` for `serverFlow: "client_credential
 
 ### Token Pass-Through
 
-Configure which provider-specific tokens can be forwarded from API request headers:
-
-> **Warning (`config.d` drop-in fragments):** As with `apiServer.auth.handlers.*`, when non-empty `config.d/*.yaml` fragments are loaded, `scafctl config set apiServer.*` reports success without persisting changes to `config.yaml`. Configure `apiServer.tokenPassThrough` directly in YAML (`~/.config/scafctl/config.yaml` or a `~/.config/scafctl/config.d/*.yaml` fragment) instead:
+Configure which provider-specific tokens can be forwarded from API request headers in `~/.config/scafctl/config.yaml` (or a `~/.config/scafctl/config.d/*.yaml` fragment). Because `scafctl config set` parses arguments as scalar values rather than YAML lists (and does not persist `apiServer.*` keys when non-empty `config.d` fragments are loaded), set `allowedHeaders` in YAML rather than via `scafctl config set`:
 
 ```yaml
 apiServer:
@@ -661,23 +659,17 @@ apiServer:
       - "Artifactory"
 ```
 
+Inspect the effective token pass-through configuration from the CLI:
+
 {{< tabs "config-tutorial-cmd-17" >}}
 {{% tab "Bash" %}}
 ```bash
-# Warning: if non-empty config.d/*.yaml fragments are present, edit config.yaml directly instead (see above).
-# Allow GitHub and Artifactory tokens to be passed through
-scafctl config set apiServer.tokenPassThrough.allowedHeaders '["Github", "Artifactory"]'
-
 # View the token pass-through config
 scafctl config get apiServer.tokenPassThrough
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-# Warning: if non-empty config.d/*.yaml fragments are present, edit config.yaml directly instead (see above).
-# Allow GitHub and Artifactory tokens to be passed through
-scafctl config set apiServer.tokenPassThrough.allowedHeaders '["Github", "Artifactory"]'
-
 # View the token pass-through config
 scafctl config get apiServer.tokenPassThrough
 ```
