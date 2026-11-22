@@ -169,6 +169,8 @@ scafctl config get httpClient.timeout
 
 ### Write Values
 
+> **Warning (`config.d` drop-in fragments):** When non-empty `config.d/*.yaml` fragments are loaded, `scafctl config set` only persists `logging.*`, `settings.*`, and `httpClient` private-IP/proxy policy keys (`allowPrivateIPs`, `trustProxyResolution`, `trustedProxy`, `allowedPrivateCIDRs`) to `config.yaml`. For other sections (such as `apiServer.*`, `resolver.*`, or `httpClient.timeout`), edit `config.yaml` or a `config.d/*.yaml` fragment directly so changes survive reload.
+
 {{< tabs "config-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
 ```bash
@@ -584,9 +586,30 @@ The `apiServer` section includes configuration for server-mode auth handlers and
 
 Configure the Entra auth handler plugin under `apiServer.auth.handlers.entra` for server-identity (`client_credentials` or `workload_identity`) and delegated (`obo` / machine) token flows:
 
+> **Warning (`config.d` drop-in fragments):** When non-empty `config.d/*.yaml` fragments are loaded, `scafctl config set apiServer.*` reports success without persisting the new server-handler settings to `config.yaml`, so a reload (`scafctl serve`) loses the changes and may run without the intended Entra handler. If you use `config.d` fragments, configure `apiServer.auth.handlers.entra` directly in YAML (`~/.config/scafctl/config.yaml` or a `~/.config/scafctl/config.d/*.yaml` fragment) instead of using the shell commands below:
+
+```yaml
+apiServer:
+  auth:
+    handlers:
+      entra:
+        tenantId: "your-tenant-id"
+        clientId: "your-client-id"
+        serverFlow: "client_credentials"
+        credential:
+          clientSecret: "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
+        # Optional; omit delegated to deny delegation
+        delegated:
+          userFlow: "obo"
+          machine: true
+```
+
+When no non-empty `config.d` fragments are present, you can also set the same fields from the CLI:
+
 {{< tabs "config-tutorial-cmd-16" >}}
 {{% tab "Bash" %}}
 ```bash
+# Warning: if non-empty config.d/*.yaml fragments are present, edit config.yaml directly instead (see above).
 # Set up Entra server-mode handler for token acquisition and delegation
 scafctl config set apiServer.auth.handlers.entra.tenantId "your-tenant-id"
 scafctl config set apiServer.auth.handlers.entra.clientId "your-client-id"
@@ -603,6 +626,7 @@ scafctl config get apiServer.auth.handlers.entra
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
+# Warning: if non-empty config.d/*.yaml fragments are present, edit config.yaml directly instead (see above).
 # Set up Entra server-mode handler for token acquisition and delegation
 scafctl config set apiServer.auth.handlers.entra.tenantId "your-tenant-id"
 scafctl config set apiServer.auth.handlers.entra.clientId "your-client-id"
@@ -627,9 +651,20 @@ Credential fields (`credential.clientSecret` for `serverFlow: "client_credential
 
 Configure which provider-specific tokens can be forwarded from API request headers:
 
+> **Warning (`config.d` drop-in fragments):** As with `apiServer.auth.handlers.*`, when non-empty `config.d/*.yaml` fragments are loaded, `scafctl config set apiServer.*` reports success without persisting changes to `config.yaml`. Configure `apiServer.tokenPassThrough` directly in YAML (`~/.config/scafctl/config.yaml` or a `~/.config/scafctl/config.d/*.yaml` fragment) instead:
+
+```yaml
+apiServer:
+  tokenPassThrough:
+    allowedHeaders:
+      - "Github"
+      - "Artifactory"
+```
+
 {{< tabs "config-tutorial-cmd-17" >}}
 {{% tab "Bash" %}}
 ```bash
+# Warning: if non-empty config.d/*.yaml fragments are present, edit config.yaml directly instead (see above).
 # Allow GitHub and Artifactory tokens to be passed through
 scafctl config set apiServer.tokenPassThrough.allowedHeaders '["Github", "Artifactory"]'
 
@@ -639,6 +674,7 @@ scafctl config get apiServer.tokenPassThrough
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
+# Warning: if non-empty config.d/*.yaml fragments are present, edit config.yaml directly instead (see above).
 # Allow GitHub and Artifactory tokens to be passed through
 scafctl config set apiServer.tokenPassThrough.allowedHeaders '["Github", "Artifactory"]'
 
