@@ -115,7 +115,8 @@ type GroupsProvider interface {
 | `scopes_on_login` | `auth.CapScopesOnLogin` | Handler accepts scopes during login |
 | `scopes_on_token_request` | `auth.CapScopesOnTokenRequest` | Handler accepts scopes on each token request |
 | `tenant_id` | `auth.CapTenantID` | Handler uses a tenant ID (multi-tenant IDPs) |
-| `hostname` | `auth.CapHostname` | Handler supports hostname-based routing (the `--hostname` flag value is forwarded to the handler via `LoginOptions.Hostname`) |
+| `hostname` | `auth.CapHostname` | Handler supports hostname-based routing at login (the `--hostname` flag value is forwarded to the handler via `LoginOptions.Hostname`) |
+| `token_hostname` | `auth.CapTokenHostname` | Handler supports per-endpoint token selection via `TokenOptions.Hostname` (used by `auth token --server`, Kubernetes exec credentials, and the `http` provider) |
 | `federated_token` | `auth.CapFederatedToken` | Handler supports federated token exchange |
 
 ### Identity Types
@@ -131,7 +132,7 @@ type GroupsProvider interface {
 | Type | Fields | Purpose |
 | ------ | -------- | --------- |
 | `LoginOptions` | `TenantID`, `Hostname`, `Scopes`, `Flow`, `Timeout`, `DeviceCodeCallback` | Input to `Login()` |
-| `TokenOptions` | `Scope`, `MinValidFor`, `ForceRefresh` | Input to `GetToken()` / `InjectAuth()` |
+| `TokenOptions` | `Scope`, `MinValidFor`, `ForceRefresh`, `Hostname`, `ServerContext`, `Assertion`, `Caller` | Input to `GetToken()` / `InjectAuth()` |
 | `Result` | `Claims`, `ExpiresAt` | Output from `Login()` |
 | `Status` | `Authenticated`, `Claims`, `ExpiresAt`, `LastRefresh`, `TenantID`, `IdentityType`, `ClientID`, `TokenFile`, `Scopes` | Output from `Status()` |
 | `Token` | `AccessToken`, `TokenType`, `ExpiresAt`, `Scope`, `CachedAt`, `Flow`, `SessionID` | Output from `GetToken()` |

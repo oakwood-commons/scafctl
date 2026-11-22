@@ -108,9 +108,10 @@ spec:
     #   timeout (0-300s, default 30)   -- prevents hanging requests
     #   url pattern (^https?://.*)     -- rejects non-HTTP schemes
     #   response body size limit       -- configurable, prevents memory exhaustion
-    #   pagination host validation     -- next-page URLs must stay on the original host
+    #   pagination origin validation   -- next-page URLs must match original scheme and host:port
+    #   redirect auth stripping        -- Authorization is stripped on cross-origin, port, or scheme redirects
     #   TLS verification               -- enabled by default (InsecureSkipVerify=false)
-    #   authProvider                   -- auto-injects OAuth token with freshness buffer
+    #   authProvider / hostname        -- auto-injects OAuth/per-endpoint token with freshness buffer
     # -----------------------------------------------------------------------
     safe-http:
       description: Fetch from a public URL with timeout and SSRF protection

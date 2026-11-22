@@ -659,10 +659,11 @@ func resolveCursorNext(ctx context.Context, currentURL string, pagCfg *paginatio
 		if !ok || nextURL == "" {
 			return "", true, nil // No more pages
 		}
-		if err := validateNextURLHost(currentURL, nextURL); err != nil {
+		resolvedURL, err := resolveNextURL(currentURL, nextURL)
+		if err != nil {
 			return "", true, err
 		}
-		return nextURL, false, nil
+		return resolvedURL, false, nil
 	}
 
 	// Extract cursor token from response body
@@ -728,10 +729,11 @@ func resolveLinkHeaderNext(currentURL string, resp *paginatedResponse) (string, 
 	}
 
 	nextURL := matches[1]
-	if err := validateNextURLHost(currentURL, nextURL); err != nil {
+	resolvedURL, err := resolveNextURL(currentURL, nextURL)
+	if err != nil {
 		return "", true, err
 	}
-	return nextURL, false, nil
+	return resolvedURL, false, nil
 }
 
 // resolveCustomNext uses CEL expressions to determine the next page URL.
@@ -749,10 +751,11 @@ func resolveCustomNext(ctx context.Context, currentURL string, pagCfg *paginatio
 		if !ok || nextURL == "" {
 			return "", true, nil
 		}
-		if err := validateNextURLHost(currentURL, nextURL); err != nil {
+		resolvedURL, err := resolveNextURL(currentURL, nextURL)
+		if err != nil {
 			return "", true, err
 		}
-		return nextURL, false, nil
+		return resolvedURL, false, nil
 	}
 
 	// If nextParams expression is set, evaluate it for query parameter updates

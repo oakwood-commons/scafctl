@@ -42,6 +42,7 @@ scafctl run resolver -f examples/providers/http-get.yaml
 | [http-empty-body.yaml](http-empty-body.yaml) | Non-JSON and empty response bodies |
 | [http-poll.yaml](http-poll.yaml) | Polling until a condition is met |
 | [http-entra.yaml](http-entra.yaml) | Microsoft Graph API with Entra auth |
+| [http-hostname.yaml](http-hostname.yaml) | Multi-cluster token routing and local tunnel `hostname` override |
 | [github-api.yaml](github-api.yaml) | GitHub API with authentication |
 | [http-pagination-cursor.yaml](http-pagination-cursor.yaml) | Cursor-based pagination |
 | [http-pagination-link-header.yaml](http-pagination-link-header.yaml) | Link header pagination (RFC 8288) |

@@ -48,6 +48,22 @@ spec:
               url: "http://169.254.169.254/latest/meta-data/"
               method: GET
 
+    # Pagination: next link changing port or scheme must fail closed
+    crossOriginPagination:
+      description: Paginated request whose next link switches port must be rejected
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/cross-port-next'"
+              method: GET
+              pagination:
+                strategy: cursor
+                maxPages: 3
+                nextURLPath: "body.next"
+                collectPath: "body.items"
+
     mockBaseUrl:
       description: Base URL of mock server from env
       resolve:
@@ -83,6 +99,12 @@ spec:
               body: "ok"
               headers:
                 Content-Type: text/plain
+            - path: /api/cross-port-next
+              method: GET
+              status: 200
+              body: '{"items":[{"id":1}],"next":"http://127.0.0.1:9/api/page2"}'
+              headers:
+                Content-Type: application/json
 
     cases:
       _base:
@@ -168,3 +190,15 @@ spec:
             message: "Cloud metadata must be unreachable under every configuration"
           - expression: __stderr.contains("metadata") || __stderr.contains("blocked")
             message: "Error should report the metadata address was blocked"
+
+      pagination-cross-port-blocked:
+        description: Pagination rejects a next link that changes port on the same host
+        extends: [_base]
+        args: ["crossOriginPagination", "-o", "json", "--config", "config.yaml"]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n  maxResponseBodySize: 104857600\\n' > config.yaml"
+        assertions:
+          - expression: __exitCode != 0
+            message: "Pagination switching port must fail"
+          - expression: __stderr.contains("cross-origin pagination is not permitted")
+            message: "Error should report cross-origin pagination rejection"

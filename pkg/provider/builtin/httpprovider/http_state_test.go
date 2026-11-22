@@ -10,8 +10,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
+	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -440,6 +446,168 @@ func TestHTTPProvider_StateWhatIf(t *testing.T) {
 			assert.Contains(t, msg, tt.contains)
 		})
 	}
+}
+
+func TestHTTPProvider_StateAuth_ForwardsHostnameAndRefreshes(t *testing.T) {
+	t.Parallel()
+
+	sd := state.NewData()
+	sd.Parameters["cluster"] = "alpha"
+	body, err := json.Marshal(sd)
+	require.NoError(t, err)
+
+	attempts := 0
+	var lastAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		lastAuth = r.Header.Get("Authorization")
+		if attempts == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	handler := newClusterAwareAuthHandler("cluster-oidc", map[string]*auth.Token{
+		"https://api.cluster-a.example.com:6443": {
+			AccessToken: "state-cluster-a-token",
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+		},
+	})
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(handler))
+
+	cfg := &config.Config{
+		HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: ptrs.BoolPtr(true)},
+		Auth: config.GlobalAuthConfig{
+			Handlers: map[string]config.HandlerConfig{
+				"cluster-oidc": {
+					Hostname: &config.HostnameConfig{
+						Aliases: map[string]string{
+							"cluster-a": "https://api.cluster-a.example.com:6443",
+						},
+					},
+				},
+			},
+		},
+	}
+	ctx := auth.WithRegistry(config.WithConfig(context.Background(), cfg), reg)
+	p := NewHTTPProvider()
+
+	res, err := p.Execute(ctx, map[string]any{
+		"operation":    "state_load",
+		"url":          server.URL + "/state",
+		"authProvider": "cluster-oidc",
+		"hostname":     "cluster-a",
+	})
+	require.NoError(t, err)
+	assert.True(t, res.Data.(map[string]any)["success"].(bool))
+	assert.Equal(t, "Bearer state-cluster-a-token", lastAuth)
+	assert.Equal(t, 2, attempts)
+
+	calls := handler.recordedCalls()
+	require.Len(t, calls, 2)
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", calls[0].Hostname)
+	assert.Equal(t, sdkauth.ServerContextDelegated, calls[0].ServerContext)
+	assert.False(t, calls[0].ForceRefresh)
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", calls[1].Hostname)
+	assert.True(t, calls[1].ForceRefresh)
+}
+
+func TestHTTPProvider_StateAuth_HeaderPassThrough(t *testing.T) {
+	t.Parallel()
+	var receivedAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	ctx := middleware.WithContextTokens(testContext(t), map[string]string{"Github": "passthrough-state-token"})
+	p := NewHTTPProvider()
+
+	res, err := p.Execute(ctx, map[string]any{
+		"operation":    "state_delete",
+		"url":          server.URL + "/state",
+		"authProvider": "github",
+	})
+	require.NoError(t, err)
+	assert.True(t, res.Data.(map[string]any)["success"].(bool))
+	assert.Equal(t, "Bearer passthrough-state-token", receivedAuth)
+
+	// Setting hostname without authProvider fails closed on state operations too.
+	_, err = p.Execute(testContext(t), map[string]any{
+		"operation": "state_load",
+		"url":       server.URL + "/state",
+		"hostname":  "cluster-a",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hostname requires authProvider to be set")
+}
+
+func TestHTTPProvider_StateSave_401RefreshReplaysBodyAndPreservesHostname(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	var lastAuth string
+	var lastBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		body, readErr := io.ReadAll(r.Body)
+		require.NoError(t, readErr)
+		if attempts == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		lastAuth = r.Header.Get("Authorization")
+		lastBody = body
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// Handler intentionally omits TokenType ("") to verify Bearer default on refresh too.
+	handler := newClusterAwareAuthHandler("cluster-save", map[string]*auth.Token{
+		server.URL: {
+			AccessToken: "save-cluster-token",
+			ExpiresAt:   time.Now().Add(time.Hour),
+		},
+	})
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(handler))
+	ctx := testContextWithCLIAuth(t, reg)
+
+	sd := state.NewData()
+	sd.Parameters["region"] = "us-east-1"
+
+	p := NewHTTPProvider()
+	res, err := p.Execute(ctx, map[string]any{
+		"operation":    "state_save",
+		"url":          server.URL + "/state",
+		"authProvider": "cluster-save",
+		"data":         sd,
+		"headers": map[string]any{
+			"authorization": "Bearer stale-header",
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, res.Data.(map[string]any)["success"].(bool))
+	assert.Equal(t, 2, attempts)
+	assert.Equal(t, "Bearer save-cluster-token", lastAuth)
+
+	var decoded state.Data
+	require.NoError(t, json.Unmarshal(lastBody, &decoded))
+	assert.Equal(t, "us-east-1", decoded.Parameters["region"])
+
+	calls := handler.recordedCalls()
+	require.Len(t, calls, 2)
+	assert.Equal(t, server.URL, calls[0].Hostname)
+	assert.False(t, calls[0].ForceRefresh)
+	assert.Equal(t, server.URL, calls[1].Hostname)
+	assert.True(t, calls[1].ForceRefresh)
 }
 
 func BenchmarkHTTPProvider_StateLoad(b *testing.B) {

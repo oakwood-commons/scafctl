@@ -1,0 +1,58 @@
+# Per-Cluster Token Routing and Local Tunnel Hostname Override
+#
+# When authProvider advertises the token_hostname capability (for example, an
+# OpenShift or multi-cluster OIDC auth handler), the http provider automatically
+# derives TokenOptions.Hostname from the request URL's scheme://host[:port]
+# origin so each cluster request receives its matching token.
+#
+# When reaching a cluster through a local port-forward or proxy where url uses
+# 127.0.0.1, set inputs.hostname to the cluster's API server URL or a configured
+# auth.handlers.<name>.hostname alias.
+#
+# Prerequisites:
+#   scafctl auth login openshift --hostname https://api.cluster-a.example.com:6443 --save-alias cluster-a
+#   scafctl auth login openshift --hostname https://api.cluster-b.example.com:6443 --save-alias cluster-b
+#
+# Run:
+#   scafctl run resolver -f examples/providers/http-hostname.yaml -o json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: http-hostname-example
+  displayName: HTTP Per-Cluster Hostname Auth Example
+  category: providers
+  tags:
+    - http
+    - auth
+    - hostname
+    - provider-example
+  description: Multi-cluster HTTP requests using automatic origin derivation and explicit tunnel hostname override
+
+spec:
+  resolvers:
+    clusterAVersion:
+      description: Direct request whose origin selects the cluster-a token automatically
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.cluster-a.example.com:6443/version
+              method: GET
+              authProvider: openshift
+              autoParseJson: true
+
+    clusterBViaTunnel:
+      description: Request through a local port-forward using a hostname alias for token selection
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://127.0.0.1:16443/api/v1/namespaces
+              method: GET
+              authProvider: openshift
+              hostname: cluster-b
+              autoParseJson: true

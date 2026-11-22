@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	hostnameresolver "github.com/oakwood-commons/scafctl/pkg/auth/hostname"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -34,12 +36,18 @@ const (
 // bodies to bound memory use during serialization and request replay.
 const maxBodyBytes = 1048576
 
+// maxHostnameLength caps the optional hostname input length (URL or alias).
+const maxHostnameLength = 2048
+
 // Field name constants for input/output map keys.
 const (
 	fieldURL                   = "url"
 	fieldMethod                = "method"
 	fieldHeaders               = "headers"
 	fieldBody                  = "body"
+	fieldAuthProvider          = "authProvider"
+	fieldScope                 = "scope"
+	fieldHostname              = "hostname"
 	fieldStatusCode            = "statusCode"
 	fieldSuccess               = "success"
 	fieldAcceptableStatusCodes = "acceptableStatusCodes"
@@ -295,12 +303,15 @@ func NewHTTPProvider() *HTTPProvider {
 						schemahelper.WithExample(`'{"query":"{ items(page: ' + string(__page) + ', size: ' + string(__pageSize) + ') { results { id } } }"}'`),
 						schemahelper.WithMaxLength(*ptrs.IntPtr(50000))),
 				}),
-				"authProvider": schemahelper.StringProp("Authentication provider to use for this request (e.g., 'entra'). When set, the provider will automatically obtain and inject an access token.",
+				fieldAuthProvider: schemahelper.StringProp("Authentication provider to use for this request (e.g., 'entra'). When set, the provider will automatically obtain and inject an access token.",
 					schemahelper.WithExample("entra"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(50))),
-				"scope": schemahelper.StringProp("OAuth scope for authentication. Required for auth providers that support per-request scopes (e.g., Entra). Not used for providers with scopes fixed at login time (e.g., GitHub).",
+				fieldScope: schemahelper.StringProp("OAuth scope for authentication. Required for auth providers that support per-request scopes (e.g., Entra). Not used for providers with scopes fixed at login time (e.g., GitHub).",
 					schemahelper.WithExample("https://graph.microsoft.com/.default"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+				fieldHostname: schemahelper.StringProp("Target endpoint URL or configured hostname alias for per-endpoint token routing when authProvider advertises the token_hostname capability (for example, when calling an API through a local tunnel or proxy). Defaults to the scheme and host of url.",
+					schemahelper.WithExample("cluster-a"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(maxHostnameLength))),
 				"autoParseJson": schemahelper.BoolProp("When true and the response Content-Type is application/json, automatically parse the body into a structured object instead of returning it as a raw string. This allows direct field access in downstream CEL expressions (e.g., _.myApi.body.items) without manual parsing."),
 				fieldAcceptableStatusCodes: schemahelper.ArrayProp("Status codes treated as successful. Each entry may be an integer (200), a class shorthand (\"2xx\"), or an inclusive range (\"200-204\"). When set, any response whose status is not acceptable causes the request to fail (which the source-level onError policy can turn into a fallback). When omitted, only 2xx responses are successful and non-2xx responses are returned without error.",
 					schemahelper.WithItems(&jsonschema.Schema{Types: []string{"integer", "string"}}),
@@ -411,6 +422,17 @@ inputs:
   method: GET
   authProvider: entra
   scope: "https://graph.microsoft.com/.default"`,
+				},
+				{
+					Name:        "Request through local tunnel with per-cluster auth hostname",
+					Description: "Override the target endpoint selector when reaching a cluster API through a local port-forward or proxy with a token_hostname auth handler.",
+					YAML: `name: fetch-cluster-namespaces
+provider: http
+inputs:
+  url: "https://127.0.0.1:16443/api/v1/namespaces"
+  method: GET
+  authProvider: openshift
+  hostname: cluster-a`,
 				},
 				{
 					Name:        "Cursor-based pagination",
@@ -614,17 +636,21 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	}
 
 	// Build httpc client with timeout and user-supplied retry configuration.
-	authProvider, _ := inputs["authProvider"].(string)
-	scope, _ := inputs["scope"].(string)
+	authProvider, _ := inputs[fieldAuthProvider].(string)
+	scope, _ := inputs[fieldScope].(string)
+	hostname, _ := inputs[fieldHostname].(string)
+	if hostname != "" && authProvider == "" {
+		return nil, fmt.Errorf("%s: hostname requires authProvider to be set", ProviderName)
+	}
 	retryCfg := parseRetryConfig(inputs)
 	httpcCfg := buildHTTPClientConfig(ctx, timeoutDuration, retryCfg)
 
 	if authProvider != "" {
-		token, err := getToken(ctx, authProvider, scope, timeoutDuration, httpcCfg)
+		token, err := getToken(ctx, authProvider, scope, urlStr, hostname, timeoutDuration, httpcCfg)
 		if err != nil {
 			return nil, err
 		}
-		headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
+		setAuthorizationHeader(headers, formatAuthHeader(token))
 	}
 
 	// Parse pagination configuration
@@ -647,7 +673,7 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		return nil, fmt.Errorf("%s: %w", ProviderName, err)
 	}
 
-	httpClient := httpc.NewClient(httpcCfg)
+	httpClient := newHTTPClient(httpcCfg)
 	// Each client owns its transport, and therefore its own idle connection
 	// pool. Without this the pool survives for the life of the process and every
 	// execution adds another one. Close reclaims only idle connections, so
@@ -677,17 +703,18 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	return executeFunc()
 }
 
-func handlerToken(ctx context.Context, authProvider, scope string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
+func handlerToken(ctx context.Context, authProvider, scope, requestURL, explicitHostname string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
 	authRegistry := auth.RegistryFromContext(ctx)
 	if authRegistry == nil {
 		return nil, fmt.Errorf("%s: no auth registry in context for provider %q", ProviderName, authProvider)
 	}
-	handler, err := authRegistry.Get(authProvider)
+	handler, err := authRegistry.GetContext(ctx, authProvider)
 	if err != nil {
 		return nil, fmt.Errorf("%s: auth provider %q not found: %w", ProviderName, authProvider, err)
 	}
 
-	requiresScope := auth.HasCapability(handler.Capabilities(), auth.CapScopesOnTokenRequest)
+	caps := handler.Capabilities()
+	requiresScope := auth.HasCapability(caps, auth.CapScopesOnTokenRequest)
 	if scope == "" && requiresScope {
 		return nil, fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
 	}
@@ -695,12 +722,31 @@ func handlerToken(ctx context.Context, authProvider, scope string, timeoutDurati
 		scope = ""
 	}
 
+	var tokenHostname string
+	if auth.HasCapability(caps, auth.CapTokenHostname) {
+		if explicitHostname != "" {
+			resolved, resolveErr := hostnameresolver.Resolve(ctx, authProvider, explicitHostname)
+			if resolveErr != nil {
+				return nil, fmt.Errorf("%s: failed to resolve hostname %q for authProvider %q: %w", ProviderName, explicitHostname, authProvider, resolveErr)
+			}
+			tokenHostname = resolved
+		} else {
+			origin, originErr := deriveOriginHostname(requestURL)
+			if originErr != nil {
+				return nil, fmt.Errorf("%s: failed to derive token hostname for authProvider %q: %w", ProviderName, authProvider, originErr)
+			}
+			tokenHostname = origin
+		}
+	} else if explicitHostname != "" {
+		return nil, fmt.Errorf("%s: hostname input is not supported by authProvider %q (handler does not advertise token_hostname capability)", ProviderName, authProvider)
+	}
+
 	tokenOpts := auth.TokenOptions{
 		Scope:       scope,
 		MinValidFor: timeoutDuration + 60*time.Second,
 	}
 
-	tokenOpts = tokenOptionChain(ctx, authProvider, tokenOpts, withServerContext, withAssertion, withCallerType)
+	tokenOpts = tokenOptionChain(ctx, authProvider, tokenOpts, withServerContext, withAssertion, withCallerType, withTokenHostname(tokenHostname))
 
 	token, err := handler.GetToken(ctx, tokenOpts)
 	if err != nil {
@@ -721,10 +767,58 @@ func handlerToken(ctx context.Context, authProvider, scope string, timeoutDurati
 		if t == nil || t.AccessToken == "" {
 			return "", fmt.Errorf("%s: auth handler %q returned empty token on refresh", ProviderName, authProvider)
 		}
-		return fmt.Sprintf("%s %s", t.TokenType, t.AccessToken), nil
+		return formatAuthHeader(t), nil
 	}
 
 	return token, nil
+}
+
+// formatAuthHeader formats an auth.Token for the HTTP Authorization header,
+// defaulting an empty TokenType to "Bearer".
+func formatAuthHeader(token *auth.Token) string {
+	tokenType := strings.TrimSpace(token.TokenType)
+	if tokenType == "" {
+		tokenType = "Bearer"
+	}
+	return fmt.Sprintf("%s %s", tokenType, token.AccessToken)
+}
+
+// setAuthorizationHeader writes the canonical Authorization entry into headers,
+// deleting any pre-existing case-insensitive "authorization" keys first so map
+// iteration order cannot overwrite the injected credential.
+func setAuthorizationHeader(headers map[string]any, value string) {
+	for k := range headers {
+		if strings.EqualFold(k, "Authorization") {
+			delete(headers, k)
+		}
+	}
+	headers["Authorization"] = value
+}
+
+// deriveOriginHostname extracts the normalized scheme://host[:port] origin from
+// a request URL, stripping path, query, fragment, userinfo, and trailing slash.
+func deriveOriginHostname(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid request URL: %w", err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("request URL must include scheme and host")
+	}
+	return (&url.URL{
+		Scheme: strings.ToLower(u.Scheme),
+		Host:   strings.ToLower(u.Host),
+	}).String(), nil
+}
+
+// newHTTPClient creates an httpc.Client whose redirect hook strips Authorization
+// headers whenever a redirect leaves the initial request's exact origin.
+func newHTTPClient(cfg *httpc.ClientConfig) *httpc.Client {
+	client := httpc.NewClient(cfg)
+	if rc := client.RetryableClient(); rc != nil && rc.HTTPClient != nil {
+		rc.HTTPClient.CheckRedirect = stripCrossOriginAuthOnRedirect(rc.HTTPClient.CheckRedirect)
+	}
+	return client
 }
 
 // buildHTTPClientConfig translates provider timeout and retry config into an httpc.ClientConfig.
@@ -895,16 +989,19 @@ func extractHeaderToken(ctx context.Context, authProvider string) (bool, string)
 	return true, token
 }
 
-func getToken(ctx context.Context, authProvider, scope string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
+func getToken(ctx context.Context, authProvider, scope, requestURL, explicitHostname string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
 	// First, check if the token is provided in the request headers (e.g., via middleware).
 	if ok, token := extractHeaderToken(ctx, authProvider); ok {
 		if token == "" {
 			return nil, fmt.Errorf("%s: authProvider %q token is empty in request headers", ProviderName, authProvider)
 		}
+		if explicitHostname != "" {
+			return nil, fmt.Errorf("%s: hostname input is not supported when authProvider %q uses request-header token pass-through", ProviderName, authProvider)
+		}
 		return &auth.Token{AccessToken: token, TokenType: "Bearer"}, nil
 	}
 	// If not in headers, obtain the token from the auth provider.
-	return handlerToken(ctx, authProvider, scope, timeoutDuration, httpcCfg)
+	return handlerToken(ctx, authProvider, scope, requestURL, explicitHostname, timeoutDuration, httpcCfg)
 }
 
 func getAssertion(ctx context.Context, authProvider string) string {
@@ -957,6 +1054,15 @@ func withCallerType(ctx context.Context, authProvider string, opts auth.TokenOpt
 func withServerContext(_ context.Context, _ string, opts auth.TokenOptions) auth.TokenOptions {
 	opts.ServerContext = auth.Delegate
 	return opts
+}
+
+func withTokenHostname(hostname string) tokenOptionFunc {
+	return func(_ context.Context, _ string, opts auth.TokenOptions) auth.TokenOptions {
+		if hostname != "" {
+			opts.Hostname = hostname
+		}
+		return opts
+	}
 }
 
 func tokenOptionChain(ctx context.Context, authProvider string, opts auth.TokenOptions, f ...tokenOptionFunc) auth.TokenOptions {

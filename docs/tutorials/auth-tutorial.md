@@ -2109,19 +2109,42 @@ When you run this, scafctl:
 
 | Property | Description |
 |----------|-------------|
-| `authProvider` | The auth handler to use (e.g., `entra`) |
+| `authProvider` | The auth handler to use (e.g., `entra`, `openshift`) |
 | `scope` | The OAuth scope required for the API |
+| `hostname` | Optional target endpoint URL or configured alias for handlers advertising `token_hostname` (defaults to the scheme and host of `url`) |
 
-The token is validated to ensure it will remain valid for the duration of the request (timeout + 60 seconds buffer).
+The token is validated to ensure it will remain valid for the duration of the request (timeout + 60 seconds buffer). When `Authorization` is injected (or supplied in `headers`), redirects that change scheme, host, or port automatically strip `Authorization` so tokens are never sent to another origin.
 
 ### Automatic 401 Retry
 
 If the API returns HTTP 401 (Unauthorized), scafctl automatically:
 
-1. Requests a fresh token (bypassing the cache)
+1. Requests a fresh token (bypassing the cache, preserving any resolved `hostname`)
 2. Retries the request once with the new token
 
 This handles cases where a cached token has been revoked.
+
+### Per-Cluster Endpoints and Local Tunnels
+
+When `authProvider` advertises the `token_hostname` capability (for example, `openshift` logged into multiple clusters), the HTTP provider automatically derives the target origin (`scheme://host[:port]`) from `url` and forwards it as `TokenOptions.Hostname` so each request receives its matching cluster token.
+
+When calling a cluster API through a local port-forward, SSH tunnel, or proxy where `url` does not carry the real cluster hostname, set `hostname` to either the concrete API server URL or a configured hostname alias:
+
+```yaml
+spec:
+  resolvers:
+    namespaces:
+      type: object
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://127.0.0.1:16443/api/v1/namespaces"
+              method: GET
+              authProvider: openshift
+              hostname: cluster-a
+              autoParseJson: true
+```
 
 ### Azure Resource Manager Example
 

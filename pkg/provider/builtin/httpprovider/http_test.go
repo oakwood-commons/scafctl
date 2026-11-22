@@ -10,7 +10,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1680,4 +1682,440 @@ func TestHTTPProvider_Execute_Provider_401Retry(t *testing.T) {
 
 	data := output.Data.(map[string]any)
 	assert.Equal(t, 401, data["statusCode"])
+}
+
+// clusterAwareAuthHandler is a test auth.Handler that routes GetToken responses
+// by TokenOptions.Hostname, mirroring multi-cluster handlers advertising
+// CapTokenHostname.
+type clusterAwareAuthHandler struct {
+	*auth.MockHandler
+	mu     sync.Mutex
+	tokens map[string]*auth.Token
+	calls  []auth.TokenOptions
+}
+
+func newClusterAwareAuthHandler(name string, tokens map[string]*auth.Token) *clusterAwareAuthHandler {
+	base := auth.NewMockHandler(name)
+	base.CapabilitiesValue = []auth.Capability{auth.CapHostname, auth.CapTokenHostname}
+	return &clusterAwareAuthHandler{
+		MockHandler: base,
+		tokens:      tokens,
+	}
+}
+
+func (h *clusterAwareAuthHandler) GetToken(_ context.Context, opts auth.TokenOptions) (*auth.Token, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls = append(h.calls, opts)
+	tok, ok := h.tokens[opts.Hostname]
+	if !ok || tok == nil {
+		return nil, fmt.Errorf("%w: no session for %q", auth.ErrNotAuthenticated, opts.Hostname)
+	}
+	return tok, nil
+}
+
+func (h *clusterAwareAuthHandler) recordedCalls() []auth.TokenOptions {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]auth.TokenOptions, len(h.calls))
+	copy(out, h.calls)
+	return out
+}
+
+func TestNewHTTPProvider_HostnameSchemaProperty(t *testing.T) {
+	t.Parallel()
+	p := NewHTTPProvider()
+	prop, ok := p.Descriptor().Schema.Properties["hostname"]
+	require.True(t, ok, "http provider schema should expose hostname input")
+	assert.Contains(t, prop.Description, "token_hostname")
+	require.NotNil(t, prop.MaxLength)
+	assert.Equal(t, maxHostnameLength, *prop.MaxLength)
+}
+
+func TestHTTPProvider_Execute_AuthProvider_CapTokenHostname_MultiCluster(t *testing.T) {
+	t.Parallel()
+
+	var clusterAAuth, clusterBAuth string
+	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clusterAAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"cluster":"a"}`))
+	}))
+	defer srvA.Close()
+
+	srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clusterBAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"cluster":"b"}`))
+	}))
+	defer srvB.Close()
+
+	srvUnauthenticated := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srvUnauthenticated.Close()
+
+	handler := newClusterAwareAuthHandler("openshift", map[string]*auth.Token{
+		srvA.URL: {AccessToken: "token-for-cluster-a", TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)},
+		srvB.URL: {AccessToken: "token-for-cluster-b", TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)},
+	})
+
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(handler))
+	ctx := testContextWithCLIAuth(t, reg)
+
+	p := NewHTTPProvider()
+
+	outA, err := p.Execute(ctx, map[string]any{
+		"url":          srvA.URL + "/apis/apps/v1/deployments?limit=5",
+		"method":       "GET",
+		"authProvider": "openshift",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 200, outA.Data.(map[string]any)["statusCode"])
+	assert.Equal(t, "Bearer token-for-cluster-a", clusterAAuth)
+
+	outB, err := p.Execute(ctx, map[string]any{
+		"url":          srvB.URL + "/apis/apps/v1/deployments",
+		"method":       "GET",
+		"authProvider": "openshift",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 200, outB.Data.(map[string]any)["statusCode"])
+	assert.Equal(t, "Bearer token-for-cluster-b", clusterBAuth)
+
+	// Target cluster with no session must fail closed rather than returning another cluster's token.
+	_, err = p.Execute(ctx, map[string]any{
+		"url":          srvUnauthenticated.URL + "/api/v1/namespaces",
+		"method":       "GET",
+		"authProvider": "openshift",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, auth.ErrNotAuthenticated)
+
+	calls := handler.recordedCalls()
+	require.Len(t, calls, 3)
+	assert.Equal(t, srvA.URL, calls[0].Hostname)
+	assert.Equal(t, srvB.URL, calls[1].Hostname)
+	assert.Equal(t, srvUnauthenticated.URL, calls[2].Hostname)
+}
+
+func TestHTTPProvider_Execute_AuthProvider_ExplicitHostnameTunnelAndCapabilityGate(t *testing.T) {
+	t.Parallel()
+
+	var receivedAuth string
+	tunnelSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer tunnelSrv.Close()
+
+	clusterHandler := newClusterAwareAuthHandler("openshift", map[string]*auth.Token{
+		"https://api.cluster-a.example.com:6443": {
+			AccessToken: "tunnel-cluster-a-token",
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+		},
+	})
+
+	nonHostnameHandler := auth.NewMockHandler("github")
+	nonHostnameHandler.CapabilitiesValue = []auth.Capability{auth.CapScopesOnLogin, auth.CapHostname}
+	nonHostnameHandler.SetToken(&auth.Token{
+		AccessToken: "github-default-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	})
+
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(clusterHandler))
+	require.NoError(t, reg.Register(nonHostnameHandler))
+
+	cfg := &config.Config{
+		HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: ptrs.BoolPtr(true)},
+		Auth: config.GlobalAuthConfig{
+			Handlers: map[string]config.HandlerConfig{
+				"openshift": {
+					Hostname: &config.HostnameConfig{
+						Aliases: map[string]string{
+							"cluster-a": "https://api.cluster-a.example.com:6443",
+						},
+					},
+				},
+			},
+		},
+	}
+	ctx := auth.WithRegistry(config.WithConfig(context.Background(), cfg), reg)
+	p := NewHTTPProvider()
+
+	// 1. Explicit hostname alias resolves to cluster URL while dialing local tunnel.
+	out, err := p.Execute(ctx, map[string]any{
+		"url":          tunnelSrv.URL + "/api/v1/namespaces",
+		"method":       "GET",
+		"authProvider": "openshift",
+		"hostname":     "cluster-a",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 200, out.Data.(map[string]any)["statusCode"])
+	assert.Equal(t, "Bearer tunnel-cluster-a-token", receivedAuth)
+
+	// 2. Non-CapTokenHostname handler without hostname leaves Hostname empty.
+	_, err = p.Execute(ctx, map[string]any{
+		"url":          tunnelSrv.URL + "/user",
+		"method":       "GET",
+		"authProvider": "github",
+	})
+	require.NoError(t, err)
+	require.Len(t, nonHostnameHandler.GetTokenCalls, 1)
+	assert.Empty(t, nonHostnameHandler.GetTokenCalls[0].Hostname)
+
+	// 3. Non-CapTokenHostname handler with explicit hostname fails closed.
+	_, err = p.Execute(ctx, map[string]any{
+		"url":          tunnelSrv.URL + "/user",
+		"method":       "GET",
+		"authProvider": "github",
+		"hostname":     "cluster-a",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `hostname input is not supported by authProvider "github"`)
+
+	// 4. Unknown alias selector propagates ErrSelectorNotFound through Execute.
+	_, err = p.Execute(ctx, map[string]any{
+		"url":          tunnelSrv.URL + "/api/v1/namespaces",
+		"method":       "GET",
+		"authProvider": "openshift",
+		"hostname":     "nonexistent-alias",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `failed to resolve hostname "nonexistent-alias"`)
+
+	// 5. Setting hostname without authProvider fails closed.
+	_, err = p.Execute(ctx, map[string]any{
+		"url":      tunnelSrv.URL + "/api/v1/namespaces",
+		"method":   "GET",
+		"hostname": "cluster-a",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hostname requires authProvider to be set")
+}
+
+func TestHTTPProvider_Execute_AuthProvider_DefaultsEmptyTokenTypeAndOverridesLowercaseAuthHeader(t *testing.T) {
+	t.Parallel()
+	var receivedAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	mockHandler := auth.NewMockHandler("custom")
+	// TokenType intentionally omitted ("") to verify Bearer default.
+	mockHandler.SetToken(&auth.Token{
+		AccessToken: "raw-access-token",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	})
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(mockHandler))
+	ctx := testContextWithCLIAuth(t, reg)
+
+	p := NewHTTPProvider()
+	for range 10 {
+		_, err := p.Execute(ctx, map[string]any{
+			"url":          srv.URL,
+			"method":       "GET",
+			"authProvider": "custom",
+			"headers": map[string]any{
+				"authorization": "Bearer stale-caller-header",
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "Bearer raw-access-token", receivedAuth)
+	}
+}
+
+func TestHTTPProvider_Execute_RedirectStripsCrossOriginAuthAndPreservesOriginalHostnameOn401(t *testing.T) {
+	t.Parallel()
+
+	t.Run("same-origin redirect preserves Authorization", func(t *testing.T) {
+		t.Parallel()
+		var redirectedAuth string
+		var srvURL string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/start" {
+				http.Redirect(w, r, srvURL+"/final", http.StatusFound)
+				return
+			}
+			redirectedAuth = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+		srvURL = srv.URL
+
+		p := NewHTTPProvider()
+		_, err := p.Execute(testContext(t), map[string]any{
+			"url":    srv.URL + "/start",
+			"method": "GET",
+			"headers": map[string]any{
+				"Authorization": "Bearer secret-token",
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "Bearer secret-token", redirectedAuth)
+	})
+
+	t.Run("cross-port redirect strips Authorization and 401 refresh keeps original Hostname", func(t *testing.T) {
+		t.Parallel()
+		var targetReceivedAuth []string
+		var mu sync.Mutex
+
+		targetSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			targetReceivedAuth = append(targetReceivedAuth, r.Header.Get("Authorization"))
+			callNum := len(targetReceivedAuth)
+			mu.Unlock()
+			if callNum == 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}))
+		defer targetSrv.Close()
+
+		originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, targetSrv.URL+"/landed", http.StatusFound)
+		}))
+		defer originSrv.Close()
+
+		handler := newClusterAwareAuthHandler("openshift", map[string]*auth.Token{
+			originSrv.URL: {
+				AccessToken: "origin-cluster-secret",
+				TokenType:   "Bearer",
+				ExpiresAt:   time.Now().Add(time.Hour),
+			},
+			targetSrv.URL: {
+				AccessToken: "wrong-target-token",
+				TokenType:   "Bearer",
+				ExpiresAt:   time.Now().Add(time.Hour),
+			},
+		})
+		reg := auth.NewRegistry()
+		require.NoError(t, reg.Register(handler))
+		ctx := testContextWithCLIAuth(t, reg)
+
+		p := NewHTTPProvider()
+		out, err := p.Execute(ctx, map[string]any{
+			"url":          originSrv.URL + "/start",
+			"method":       "GET",
+			"authProvider": "openshift",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 200, out.Data.(map[string]any)["statusCode"])
+
+		// Neither initial redirect nor 401-retried redirect may leak Authorization to targetSrv.
+		mu.Lock()
+		gotAuths := append([]string(nil), targetReceivedAuth...)
+		mu.Unlock()
+		assert.Equal(t, []string{"", ""}, gotAuths)
+
+		// Both initial GetToken and ForceRefresh GetToken must keep originSrv.URL as Hostname.
+		calls := handler.recordedCalls()
+		require.Len(t, calls, 2)
+		assert.Equal(t, originSrv.URL, calls[0].Hostname)
+		assert.False(t, calls[0].ForceRefresh)
+		assert.Equal(t, originSrv.URL, calls[1].Hostname)
+		assert.True(t, calls[1].ForceRefresh)
+	})
+
+	t.Run("multi-hop bounce through another origin keeps Authorization stripped", func(t *testing.T) {
+		t.Parallel()
+		var finalAuth string
+		var originURL string
+		bounceSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, originURL+"/final", http.StatusFound)
+		}))
+		defer bounceSrv.Close()
+
+		originSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/start" {
+				http.Redirect(w, r, bounceSrv.URL+"/hop", http.StatusFound)
+				return
+			}
+			finalAuth = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer originSrv.Close()
+		originURL = originSrv.URL
+
+		p := NewHTTPProvider()
+		_, err := p.Execute(testContext(t), map[string]any{
+			"url":    originSrv.URL + "/start",
+			"method": "GET",
+			"headers": map[string]any{
+				"Authorization": "Bearer bounce-secret",
+			},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, finalAuth)
+	})
+
+	t.Run("subdomain and https-to-http downgrade redirects strip Authorization", func(t *testing.T) {
+		t.Parallel()
+		cases := []struct {
+			name     string
+			fromURL  string
+			location string
+		}{
+			{
+				name:     "subdomain redirect",
+				fromURL:  "https://api.example.com/v1/resource",
+				location: "https://untrusted.api.example.com/v1/resource",
+			},
+			{
+				name:     "https to http scheme downgrade",
+				fromURL:  "https://api.example.com/v1/resource",
+				location: "http://api.example.com/v1/resource",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				origReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, tc.fromURL, nil)
+				require.NoError(t, err)
+				origReq.Header.Set("Authorization", "Bearer top-secret")
+
+				nextURL, err := url.Parse(tc.location)
+				require.NoError(t, err)
+				redirectReq := &http.Request{
+					Method: http.MethodGet,
+					URL:    nextURL,
+					Header: http.Header{"Authorization": []string{"Bearer top-secret"}},
+				}
+
+				hook := stripCrossOriginAuthOnRedirect(nil)
+				require.NoError(t, hook(redirectReq, []*http.Request{origReq}))
+				assert.Empty(t, redirectReq.Header.Get("Authorization"))
+			})
+		}
+	})
+
+	t.Run("explicit default port 443 redirect preserves Authorization", func(t *testing.T) {
+		t.Parallel()
+		origReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://api.example.com/v1/resource", nil)
+		require.NoError(t, err)
+		origReq.Header.Set("Authorization", "Bearer same-origin-secret")
+
+		nextURL, err := url.Parse("https://api.example.com:443/v1/canonical")
+		require.NoError(t, err)
+		redirectReq := &http.Request{
+			Method: http.MethodGet,
+			URL:    nextURL,
+			Header: http.Header{"Authorization": []string{"Bearer same-origin-secret"}},
+		}
+
+		hook := stripCrossOriginAuthOnRedirect(nil)
+		require.NoError(t, hook(redirectReq, []*http.Request{origReq}))
+		assert.Equal(t, "Bearer same-origin-secret", redirectReq.Header.Get("Authorization"))
+	})
 }

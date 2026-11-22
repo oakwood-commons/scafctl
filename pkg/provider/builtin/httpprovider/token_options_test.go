@@ -143,3 +143,77 @@ func TestTokenOptionChain_EmptyFuncs(t *testing.T) {
 
 	assert.Equal(t, "original", result.Scope)
 }
+
+func TestWithTokenHostname(t *testing.T) {
+	t.Parallel()
+	opts := auth.TokenOptions{Scope: "scope"}
+	updated := withTokenHostname("https://api.cluster-a.example.com:6443")(context.Background(), "openshift", opts)
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", updated.Hostname)
+
+	unchanged := withTokenHostname("")(context.Background(), "openshift", updated)
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", unchanged.Hostname)
+}
+
+func TestDeriveOriginHostname(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		rawURL  string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:   "https with custom port and path",
+			rawURL: "https://api.cluster-a.example.com:6443/apis/v1/namespaces?limit=10#top",
+			want:   "https://api.cluster-a.example.com:6443",
+		},
+		{
+			name:   "normalizes uppercase scheme and host and strips userinfo and trailing slash",
+			rawURL: "HTTPS://admin:secret@API.Cluster-B.Example.COM:6443/",
+			want:   "https://api.cluster-b.example.com:6443",
+		},
+		{
+			name:   "preserves bracketed IPv6 with port",
+			rawURL: "https://[2001:DB8::1]:6443/api/v1/pods",
+			want:   "https://[2001:db8::1]:6443",
+		},
+		{
+			name:   "preserves loopback IPv6 with port",
+			rawURL: "https://[::1]:6443/version",
+			want:   "https://[::1]:6443",
+		},
+		{
+			name:   "standard https without explicit port",
+			rawURL: "https://api.example.com/v1/items",
+			want:   "https://api.example.com",
+		},
+		{
+			name:    "rejects relative URL",
+			rawURL:  "/api/v1/pods",
+			wantErr: true,
+		},
+		{
+			name:    "rejects missing host",
+			rawURL:  "https:///api/v1/pods",
+			wantErr: true,
+		},
+		{
+			name:    "rejects malformed URL",
+			rawURL:  "://bad-url",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := deriveOriginHostname(tt.rawURL)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
