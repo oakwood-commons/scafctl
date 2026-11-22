@@ -96,6 +96,32 @@ func TestGetToken_HeaderTokenRejectsExplicitHostname(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "request-header token pass-through")
+
+	// Qualified selector ("openshift@work") also matches bare "Openshift" header token
+	// and enforces explicit-hostname rejection.
+	_, err = getToken(ctx, "openshift@work", "", "https://127.0.0.1:16443/api/v1", "cluster-a", 30*time.Second, cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "request-header token pass-through")
+}
+
+func TestGetToken_QualifiedSelectorUsesBareHeaderTokenAndValidatesSelectorFirst(t *testing.T) {
+	t.Parallel()
+	tokens := map[string]string{"Github": "caller-gh-token"}
+	ctx := middleware.WithContextTokens(context.Background(), tokens)
+	cfg := &httpc.ClientConfig{}
+
+	// Qualified selectors succeed without an auth registry when caller token exists.
+	for _, selector := range []string{"github@work", "github@built-in"} {
+		tok, err := getToken(ctx, selector, "", "https://api.github.com/user", "", 30*time.Second, cfg)
+		require.NoError(t, err)
+		assert.Equal(t, "caller-gh-token", tok.AccessToken)
+		assert.Equal(t, "Bearer", tok.TokenType)
+	}
+
+	// Invalid profile selector fails before caller token lookup.
+	_, err := getToken(ctx, "github@bad/profile", "", "https://api.github.com/user", "", 30*time.Second, cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid profile")
 }
 
 func TestGetToken_HeaderTokenEmpty_Error(t *testing.T) {

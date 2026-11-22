@@ -39,9 +39,13 @@ const maxBodyBytes = 1048576
 // maxHostnameLength caps the optional hostname input length (URL or alias).
 const maxHostnameLength = 2048
 
-// maxAuthProviderLength caps the authProvider input length, accommodating
-// profile-qualified "handler@profile" selectors.
-const maxAuthProviderLength = 128
+// maxAuthHandlerNameLength matches CustomOAuth2Config.Name maxLength (64).
+const maxAuthHandlerNameLength = 64
+
+// maxAuthProviderLength caps the authProvider input length, accommodating a
+// maximum-length handler name, the '@' separator, and a maximum-length profile
+// name (64 + 1 + 64 = 129).
+const maxAuthProviderLength = maxAuthHandlerNameLength + len(auth.ProfileSeparator) + auth.MaxProfileNameLength
 
 // Field name constants for input/output map keys.
 const (
@@ -1026,8 +1030,14 @@ func extractHeaderToken(ctx context.Context, authProvider string) (bool, string)
 }
 
 func getToken(ctx context.Context, authProvider, scope, requestURL, explicitHostname string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
-	// First, check if the token is provided in the request headers (e.g., via middleware).
-	if ok, token := extractHeaderToken(ctx, authProvider); ok {
+	authCtx, handlerName, err := resolveAuthProviderContext(ctx, authProvider)
+	if err != nil {
+		return nil, err
+	}
+
+	// First, check if the token is provided in the request headers (e.g., via middleware)
+	// using the bare handler name, since HTTP header names cannot contain "@".
+	if ok, token := extractHeaderToken(authCtx, handlerName); ok {
 		if token == "" {
 			return nil, fmt.Errorf("%s: authProvider %q token is empty in request headers", ProviderName, authProvider)
 		}
@@ -1037,7 +1047,7 @@ func getToken(ctx context.Context, authProvider, scope, requestURL, explicitHost
 		return &auth.Token{AccessToken: token, TokenType: "Bearer"}, nil
 	}
 	// If not in headers, obtain the token from the auth provider.
-	return handlerToken(ctx, authProvider, scope, requestURL, explicitHostname, timeoutDuration, httpcCfg)
+	return handlerToken(authCtx, authProvider, scope, requestURL, explicitHostname, timeoutDuration, httpcCfg)
 }
 
 func getAssertion(ctx context.Context, authProvider string) string {

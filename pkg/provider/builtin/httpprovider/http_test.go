@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -1735,11 +1736,98 @@ func (h *clusterAwareAuthHandler) recordedProfiles() []string {
 func TestNewHTTPProvider_HostnameSchemaProperty(t *testing.T) {
 	t.Parallel()
 	p := NewHTTPProvider()
-	prop, ok := p.Descriptor().Schema.Properties["hostname"]
+	schema := p.Descriptor().Schema
+
+	prop, ok := schema.Properties["hostname"]
 	require.True(t, ok, "http provider schema should expose hostname input")
 	assert.Contains(t, prop.Description, "token_hostname")
 	require.NotNil(t, prop.MaxLength)
 	assert.Equal(t, maxHostnameLength, *prop.MaxLength)
+
+	authProp, ok := schema.Properties["authProvider"]
+	require.True(t, ok, "http provider schema should expose authProvider input")
+	require.NotNil(t, authProp.MaxLength)
+	assert.Equal(t, 129, maxAuthProviderLength)
+	assert.Equal(t, maxAuthProviderLength, *authProp.MaxLength)
+
+	validator := provider.NewSchemaValidator()
+	maxHandler := strings.Repeat("h", 64)
+	maxProfile := strings.Repeat("p", auth.MaxProfileNameLength)
+	validMaxSelector := maxHandler + "@" + maxProfile
+	require.Len(t, validMaxSelector, 129)
+
+	// 129-char selector (64 handler + '@' + 64 profile) passes for regular and state inputs.
+	require.NoError(t, validator.ValidateInputs(map[string]any{
+		"url":          "https://api.example.com/v1",
+		"authProvider": validMaxSelector,
+	}, schema))
+	require.NoError(t, validator.ValidateInputs(map[string]any{
+		"operation":    "state_load",
+		"url":          "https://api.example.com/state",
+		"authProvider": validMaxSelector,
+	}, schema))
+
+	// 130-char selector exceeds maxAuthProviderLength and fails schema validation.
+	tooLongSelector := validMaxSelector + "x"
+	require.Len(t, tooLongSelector, 130)
+	require.Error(t, validator.ValidateInputs(map[string]any{
+		"url":          "https://api.example.com/v1",
+		"authProvider": tooLongSelector,
+	}, schema))
+	require.Error(t, validator.ValidateInputs(map[string]any{
+		"operation":    "state_load",
+		"url":          "https://api.example.com/state",
+		"authProvider": tooLongSelector,
+	}, schema))
+}
+
+func TestHTTPProvider_Execute_QualifiedAuthProviderWithPassThroughToken(t *testing.T) {
+	t.Parallel()
+	var receivedAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	// Context carries a pass-through header token for "Github" and NO auth registry.
+	ctx := middleware.WithContextTokens(testContext(t), map[string]string{
+		"Github": "caller-github-token",
+	})
+	p := NewHTTPProvider()
+
+	// (a) "github@work" and "github@built-in" match the bare "Github" caller token without a registry.
+	for _, selector := range []string{"github@work", "github@built-in"} {
+		receivedAuth = ""
+		out, err := p.Execute(ctx, map[string]any{
+			"url":          srv.URL + "/repos",
+			"method":       "GET",
+			"authProvider": selector,
+		})
+		require.NoError(t, err, "selector %s should use caller pass-through token", selector)
+		assert.Equal(t, 200, out.Data.(map[string]any)["statusCode"])
+		assert.Equal(t, "Bearer caller-github-token", receivedAuth)
+	}
+
+	// (b) "github@work" + caller pass-through token + explicit hostname fails closed.
+	_, err := p.Execute(ctx, map[string]any{
+		"url":          srv.URL + "/repos",
+		"method":       "GET",
+		"authProvider": "github@work",
+		"hostname":     "cluster-a",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "request-header token pass-through")
+
+	// (c) Invalid profile selector fails closed even when caller token is present.
+	_, err = p.Execute(ctx, map[string]any{
+		"url":          srv.URL + "/repos",
+		"method":       "GET",
+		"authProvider": "github@bad/profile",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid profile")
 }
 
 func TestHTTPProvider_Execute_AuthProvider_CapTokenHostname_MultiCluster(t *testing.T) {

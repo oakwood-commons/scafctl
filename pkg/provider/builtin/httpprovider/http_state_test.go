@@ -539,6 +539,39 @@ func TestHTTPProvider_StateAuth_HeaderPassThrough(t *testing.T) {
 	assert.True(t, res.Data.(map[string]any)["success"].(bool))
 	assert.Equal(t, "Bearer passthrough-state-token", receivedAuth)
 
+	// Profile-qualified selector ("github@work" and "github@built-in") resolves
+	// the bare "Github" caller token without needing an auth registry.
+	for _, selector := range []string{"github@work", "github@built-in"} {
+		receivedAuth = ""
+		res, err = p.Execute(ctx, map[string]any{
+			"operation":    "state_delete",
+			"url":          server.URL + "/state",
+			"authProvider": selector,
+		})
+		require.NoError(t, err)
+		assert.True(t, res.Data.(map[string]any)["success"].(bool))
+		assert.Equal(t, "Bearer passthrough-state-token", receivedAuth)
+	}
+
+	// Profile-qualified selector + caller pass-through token + explicit hostname rejects.
+	_, err = p.Execute(ctx, map[string]any{
+		"operation":    "state_delete",
+		"url":          server.URL + "/state",
+		"authProvider": "github@work",
+		"hostname":     "cluster-a",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "request-header token pass-through")
+
+	// Invalid profile selector rejects even when caller token is present.
+	_, err = p.Execute(ctx, map[string]any{
+		"operation":    "state_delete",
+		"url":          server.URL + "/state",
+		"authProvider": "github@bad/profile",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid profile")
+
 	// Setting hostname without authProvider fails closed on state operations too.
 	_, err = p.Execute(testContext(t), map[string]any{
 		"operation": "state_load",
