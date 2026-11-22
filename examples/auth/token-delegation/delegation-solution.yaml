@@ -4,7 +4,7 @@
 # authentication. The authProvider input tells the HTTP provider to
 # automatically acquire and inject a bearer token.
 #
-# In API mode: tokens are delegated via the DelegatorRegistry
+# In API mode: tokens are acquired via server-mode auth handlers (apiServer.auth.handlers)
 # In CLI mode: tokens are acquired via auth handlers (interactive login)
 
 apiVersion: scafctl.io/v1

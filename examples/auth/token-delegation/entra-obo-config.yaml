@@ -24,25 +24,19 @@ apiServer:
       tenantId: "00000000-0000-0000-0000-000000000000"
       clientId: "11111111-1111-1111-1111-111111111111"
 
-  # Server identity used for token delegation
-  identity:
-    entra:
-      tenantId: "00000000-0000-0000-0000-000000000000"
-      clientId: "11111111-1111-1111-1111-111111111111"
-      credential:
-        # Use env:// to read the secret from an environment variable
-        type: secret
-        clientSecret: "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
-      # Security boundary: only permit these delegation flows
-      allowedFlows:
-        flows:
-          - obo
-          - client_credentials
-      # Token caching and deduplication settings
-      tokenManager:
-        cacheSize: 1024
-        expiryBuffer: "10m"
-        cleanupInterval: "5m"
-        expiryThreshold: "30m"
-        slowThreshold: "500ms"
-        retryFollowerOnError: true
+    # Server-mode Entra auth handler used for server and delegated token acquisition
+    # (forwarded to the Entra plugin's ActivateServerMode RPC at startup)
+    handlers:
+      entra:
+        tenantId: "00000000-0000-0000-0000-000000000000"
+        clientId: "11111111-1111-1111-1111-111111111111"
+        # authority: "https://login.microsoftonline.com"  # optional
+        serverFlow: "client_credentials"  # or "workload_identity"
+        credential:
+          # Use env:// or file:// SecretRef URI
+          clientSecret: "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
+          # wifToken: "file:///var/run/secrets/tokens/token"  # when serverFlow is "workload_identity"
+        # Optional delegation routing; omit delegated to deny all delegated requests
+        delegated:
+          userFlow: "obo"
+          machine: true

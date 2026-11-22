@@ -197,7 +197,7 @@ When already authenticated this prints a message and exits `0`. Without the flag
 
 ### Specifying a Tenant
 
-By default, scafctl uses the "organizations" tenant (any work/school account). To authenticate with a specific tenant:
+By default, scafctl uses the `"common"` tenant (work/school and personal Microsoft accounts; set `"organizations"` to restrict to work/school accounts). To authenticate with a specific tenant:
 
 {{< tabs "auth-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
@@ -401,7 +401,7 @@ scafctl auth login entra --flow service-principal
 | `AZURE_TENANT_ID` | Directory (tenant) ID |
 | `AZURE_CLIENT_SECRET` | Client secret value |
 
-**Note:** When `AZURE_CLIENT_SECRET` is set, scafctl automatically uses the service principal flow.
+**Note:** When `AZURE_CLIENT_SECRET` (or `auth.entra.clientSecret` in your config file, at top level or under `auth.entra.profiles.<name>`) is set alongside client and tenant IDs, `scafctl auth login entra` automatically selects the service principal flow (unless workload identity credentials are also present). During `auth status`, `auth token`, and solution runs, an active stored interactive user session takes precedence over service principal credentials -- run `scafctl auth logout entra` or use `--profile` to isolate them. Config fields (`clientId`, `tenantId`, `clientSecret`) take precedence over the `AZURE_*` environment variables.
 
 ### Workload Identity Authentication (Kubernetes)
 
@@ -444,6 +444,8 @@ scafctl auth login entra --flow workload-identity
 | `AZURE_TENANT_ID` | Directory (tenant) ID |
 | `AZURE_FEDERATED_TOKEN_FILE` | Path to the projected service account token |
 | `AZURE_AUTHORITY_HOST` | (Optional) Azure AD authority URL |
+
+You can also configure workload identity credentials in `config.yaml` via `auth.entra.federatedTokenFile` or `auth.entra.federatedToken` (at top level or under `auth.entra.profiles.<name>`); matching config keys take precedence over the `AZURE_*` environment variables.
 
 #### Testing Workload Identity Locally
 
@@ -2937,31 +2939,58 @@ Invoke-RestMethod -Uri 'https://graph.microsoft.com/v1.0/me' -Headers @{ Authori
 
 ## Configuration
 
-You can configure authentication defaults in your config file (`~/.config/scafctl/config.yaml` or `~/.scafctl/config.yaml`):
+You can configure CLI authentication defaults in your config file (`~/.config/scafctl/config.yaml` or `~/.scafctl/config.yaml`):
 
 ```yaml
 auth:
   entra:
-    # Default tenant (use "organizations" for any work/school account)
+    # Default tenant (defaults to "common"; use "organizations" for work/school only, or a tenant GUID)
     tenantId: "08e70e8e-d05c-4449-a2c2-67bd0a9c4e79"
-    
-    # Custom application ID (optional - uses scafctl's public client by default)
+
+    # Custom application ID (optional - uses the Azure CLI public client ID by default)
     clientId: "your-app-client-id"
-    
-    # Default scopes requested during login
+
+    # Optional: custom authority URL (e.g., for sovereign clouds; must use https://)
+    # authority: "https://login.microsoftonline.com"
+
+    # Default scopes requested during interactive/device-code login
+    # ("offline_access" is always requested automatically for interactive and device-code logins)
     defaultScopes:
       - "openid"
       - "profile"
-      - "offline_access"
+
+    # Optional: default interactive login flow ("interactive" or "device_code")
+    # defaultFlow: "interactive"
+
+    # Optional: non-interactive credentials (work at top level or under profiles.<name>,
+    # and take precedence over AZURE_CLIENT_SECRET / AZURE_FEDERATED_TOKEN* env vars)
+    # clientSecret: "your-client-secret"
+    # federatedTokenFile: "/var/run/secrets/tokens/token"
+    # federatedToken: "raw-jwt-for-testing"
+
+    # Optional: HTTP client overrides for CLI token and Microsoft Graph requests
+    # httpClient:
+    #   timeout: "30s"
+    #   retryMax: 3
 ```
 
 ### Configuration Reference
 
 | Field | Description | Default |
 | ------- | ------------- | --------- |
-| `auth.entra.tenantId` | Default Azure tenant ID | `organizations` |
-| `auth.entra.clientId` | Azure application (client) ID | scafctl public client |
-| `auth.entra.defaultScopes` | Scopes requested during login | `openid`, `profile`, `offline_access` |
+| `auth.entra.tenantId` | Default Azure tenant ID (`common`, `organizations`, or a tenant GUID/domain) | `common` |
+| `auth.entra.clientId` | Azure application (client) ID | Azure CLI public client |
+| `auth.entra.authority` | Azure AD authority URL (`https://` with host) | `https://login.microsoftonline.com` |
+| `auth.entra.defaultScopes` | Scopes requested during interactive/device-code login (`offline_access` is always added; ignored by service-principal and workload-identity logins) | `openid`, `profile` |
+| `auth.entra.defaultFlow` | Default login flow when no `--flow` flag or non-interactive credentials are present (`interactive` or `device_code`) | `interactive` |
+| `auth.entra.clientSecret` | Service principal client secret (top-level or per-profile; overrides `AZURE_CLIENT_SECRET`) | _(empty)_ |
+| `auth.entra.federatedTokenFile` | Workload identity projected token file path (top-level or per-profile; overrides `AZURE_FEDERATED_TOKEN_FILE`) | _(empty)_ |
+| `auth.entra.federatedToken` | Raw workload identity token for testing (top-level or per-profile; overrides `AZURE_FEDERATED_TOKEN`) | _(empty)_ |
+| `auth.entra.httpClient` | HTTP client overrides (`timeout`, `retryMax`, `retryWaitMin`, `retryWaitMax`, etc.) for CLI token and Graph requests; response caching and compression remain off unless explicitly enabled | plugin HTTP defaults |
+| `auth.entra.activeProfile` | Default named profile resolved by the host when no explicit profile is specified | _(empty)_ |
+| `auth.entra.profiles.<name>` | Named profile overrides supporting all fields above (`clientId`, `tenantId`, `authority`, `defaultScopes`, `defaultFlow`, `clientSecret`, `federatedTokenFile`, `federatedToken`, `httpClient`) | inherits from `auth.entra` |
+
+> **CLI mode vs. API server mode:** `auth.entra` configures CLI mode only (`ConfigureAuthHandler`). Top-level `clientSecret`, `federatedTokenFile`, `federatedToken`, and `httpClient` are honored at both the top level (without a profile) and inside `auth.entra.profiles.<name>`. When running `scafctl serve`, the API server ignores `auth.entra` and activates handlers exclusively from `apiServer.auth.handlers.entra` (`ServerConfig`, which uses `credential.clientSecret` / `credential.wifToken` `SecretRef` URIs and does not accept `httpClient` or top-level credential fields). See [API Mode Authentication](api-authentication.md) for server-mode configuration.
 
 ### Using a Custom Application
 

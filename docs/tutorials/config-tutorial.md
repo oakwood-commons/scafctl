@@ -458,13 +458,14 @@ shown as `(not present)`.
 | `plugins.fetchCooldown` | duration | `5m` | Cooldown between failed plugin auto-fetch retries |
 | `settings.disableOfficialAuthHandlers` | bool | `false` | Disable auto-resolution of the official auth handlers (`entra`, `github`, `gcp`) |
 | `settings.disableThirdPartyAuthHandlers` | bool | `false` | Disable catalog-by-name resolution of non-official auth handlers (official-only policy) |
-| `auth.entra.*` | object | — | Entra (Azure AD) auth handler config |
+| `auth.entra.*` | object | -- | Entra (Azure AD) CLI auth handler config (`tenantId` defaults to `common`; supports `clientId`, `authority`, `defaultScopes`, `defaultFlow`, `clientSecret`, `federatedTokenFile`, `federatedToken`, `httpClient`, `activeProfile`, `profiles`) |
 | `auth.github.hostname` | string | `github.com` | GitHub hostname (or GHES hostname) |
 | `auth.github.clientId` | string | built-in | OAuth App client ID |
 | `auth.github.defaultScopes` | []string | `[gist, read:org, repo, workflow]` | Default OAuth scopes |
 | `auth.handlers.<name>.plugin.ref` | string | handler name | Catalog artifact name for a pinned third-party auth handler |
 | `auth.handlers.<name>.plugin.version` | string | `latest` | Version constraint for a pinned third-party auth handler |
-| `auth.handlers.<name>.trustedVerificationDomains` | []string | — | Per-handler trusted device-code verification domains (required trust source for third-party handlers) |
+| `auth.handlers.<name>.trustedVerificationDomains` | []string | -- | Per-handler trusted device-code verification domains (required trust source for third-party handlers) |
+| `apiServer.auth.handlers.<name>` | object | -- | Server-mode settings forwarded to an auth handler plugin's `ActivateServerMode` RPC during `scafctl serve` |
 
 ### Config File Location
 
@@ -577,46 +578,48 @@ scafctl config unset logging.level
 
 ## API Server: Token Delegation
 
-The `apiServer` section includes configuration for token delegation when running in API mode (`scafctl serve`). These settings control how the server exchanges or forwards tokens to downstream providers.
+The `apiServer` section includes configuration for server-mode auth handlers and token pass-through when running in API mode (`scafctl serve`). These settings control how the server acquires, exchanges, or forwards tokens to downstream providers.
 
-### Server Identity (Entra ID)
+### Server-Mode Auth Handler (Entra ID)
 
-Configure the server's identity for OBO and client credentials flows:
+Configure the Entra auth handler plugin under `apiServer.auth.handlers.entra` for server-identity (`client_credentials` or `workload_identity`) and delegated (`obo` / machine) token flows:
 
 {{< tabs "config-tutorial-cmd-16" >}}
 {{% tab "Bash" %}}
 ```bash
-# Set up Entra identity for token delegation
-scafctl config set apiServer.identity.entra.tenantId "your-tenant-id"
-scafctl config set apiServer.identity.entra.clientId "your-client-id"
-scafctl config set apiServer.identity.entra.credential.type "secret"
-scafctl config set apiServer.identity.entra.credential.clientSecret "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
+# Set up Entra server-mode handler for token acquisition and delegation
+scafctl config set apiServer.auth.handlers.entra.tenantId "your-tenant-id"
+scafctl config set apiServer.auth.handlers.entra.clientId "your-client-id"
+scafctl config set apiServer.auth.handlers.entra.serverFlow "client_credentials"
+scafctl config set apiServer.auth.handlers.entra.credential.clientSecret "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
 
-# Configure allowed delegation flows
-scafctl config set apiServer.identity.entra.allowedFlows.flows '["obo", "client_credentials"]'
+# Configure delegated caller flows (optional; omit delegated to deny delegation)
+scafctl config set apiServer.auth.handlers.entra.delegated.userFlow "obo"
+scafctl config set apiServer.auth.handlers.entra.delegated.machine true
 
-# View the identity config
-scafctl config get apiServer.identity
+# View the Entra server-mode handler config
+scafctl config get apiServer.auth.handlers.entra
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-# Set up Entra identity for token delegation
-scafctl config set apiServer.identity.entra.tenantId "your-tenant-id"
-scafctl config set apiServer.identity.entra.clientId "your-client-id"
-scafctl config set apiServer.identity.entra.credential.type "secret"
-scafctl config set apiServer.identity.entra.credential.clientSecret "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
+# Set up Entra server-mode handler for token acquisition and delegation
+scafctl config set apiServer.auth.handlers.entra.tenantId "your-tenant-id"
+scafctl config set apiServer.auth.handlers.entra.clientId "your-client-id"
+scafctl config set apiServer.auth.handlers.entra.serverFlow "client_credentials"
+scafctl config set apiServer.auth.handlers.entra.credential.clientSecret "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
 
-# Configure allowed delegation flows
-scafctl config set apiServer.identity.entra.allowedFlows.flows '["obo", "client_credentials"]'
+# Configure delegated caller flows (optional; omit delegated to deny delegation)
+scafctl config set apiServer.auth.handlers.entra.delegated.userFlow "obo"
+scafctl config set apiServer.auth.handlers.entra.delegated.machine true
 
-# View the identity config
-scafctl config get apiServer.identity
+# View the Entra server-mode handler config
+scafctl config get apiServer.auth.handlers.entra
 ```
 {{% /tab %}}
 {{< /tabs >}}
 
-The credential `clientSecret` field uses `SecretRef` URI format:
+Credential fields (`credential.clientSecret` for `serverFlow: "client_credentials"`, or `credential.wifToken` for `serverFlow: "workload_identity"`) use `SecretRef` URI format:
 - `env://VAR_NAME` -- reads from an environment variable
 - `file:///path/to/secret` -- reads from a file
 
@@ -647,13 +650,13 @@ scafctl config get apiServer.tokenPassThrough
 
 When configured, callers send tokens via `X-Authorization-<Suffix>` headers (e.g., `X-Authorization-Github`). The server makes these available to providers via the `authProvider` input field. When `tokenPassThrough` is omitted entirely, only `Github` is allowed by default.
 
-For a complete guide, see the [Token Delegation Tutorial](token-delegation-tutorial.md).
+For a complete guide, see [API Mode Authentication](api-authentication.md).
 
 ## Next Steps
 
-- [Token Delegation Tutorial](token-delegation-tutorial.md) -- Configure OBO, client credentials, and pass-through delegation
-- [Authentication Tutorial](auth-tutorial.md) — Set up GitHub and Entra authentication
-- [Exec Provider Tutorial](exec-provider-tutorial.md) — Cross-platform shell execution
-- [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output
-- [Cache Tutorial](cache-tutorial.md) — Manage cached data
-- [Catalog Tutorial](catalog-tutorial.md) — Build and manage solutions in the catalog
+- [API Mode Authentication](api-authentication.md) -- Configure OBO, client credentials, and pass-through delegation
+- [Authentication Tutorial](auth-tutorial.md) -- Set up GitHub and Entra authentication
+- [Exec Provider Tutorial](exec-provider-tutorial.md) -- Cross-platform shell execution
+- [Logging & Debugging Tutorial](logging-tutorial.md) -- Control log verbosity, format, and output
+- [Cache Tutorial](cache-tutorial.md) -- Manage cached data
+- [Catalog Tutorial](catalog-tutorial.md) -- Build and manage solutions in the catalog

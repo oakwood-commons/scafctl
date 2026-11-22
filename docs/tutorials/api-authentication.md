@@ -75,7 +75,7 @@ Handlers declare capabilities that control validation:
 ## Prerequisites
 
 - scafctl installed and configured
-- Auth handlers configured in the `auth.handlers` config section
+- Auth handlers configured for server mode under `apiServer.auth.handlers`
 - For API mode: Azure Entra OIDC configured for caller validation (optional)
 - Credentials stored securely (env vars, files, or token cache)
 
@@ -107,14 +107,44 @@ apiServer:
   auth:
     handlers:
       entra:
-        clientSecret: "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
+        clientId: "00000000-0000-0000-0000-000000000000"
+        tenantId: "00000000-0000-0000-0000-000000000001"
+        # authority: "https://login.microsoftonline.com"  # optional
+        serverFlow: "client_credentials"  # or "workload_identity"
+        credential:
+          clientSecret: "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
+          # wifToken: "file:///var/run/secrets/tokens/token"  # when serverFlow is "workload_identity"
+        delegated:  # optional; omitted = delegation denied
+          userFlow: "obo"
+          machine: false
       github:
-        appId: 
-        installationId: 
-        privateKeyPath: "/path/to/private-key.pem"
+        # hostname: "github.com"  # optional (or GHES hostname)
+        serverFlow: "github_app"  # or "pat"
+        credential:
+          app:
+            clientId: "Iv23li00000000000000"
+            installationId: 12345678
+            privateKey: "file:///path/to/private-key.pem"
+          # pat:
+          #   token: "env://GITHUB_TOKEN"  # when serverFlow is "pat"
+        delegated: false  # set true to allow HTTP provider (auth.Delegate) requests using this credential
 ```
 
-These settings are marshaled to JSON and forwarded to the respective plugin's `ActivateServerMode` RPC at startup. The host (`scafctl`) does not validate or interpret the values -- **the schema under each handler name is defined entirely by the plugin**. Consult your plugin's documentation for the exact fields it expects.
+These settings are marshaled to JSON and forwarded to the respective plugin's `ActivateServerMode` RPC at startup. The host (`scafctl`) does not validate or interpret the values -- **the schema under each handler name is defined entirely by the plugin**. Both the `entra` and `github` plugins decode their `ServerConfig` with `DisallowUnknownFields`, so any unrecognized or CLI-only key (such as a top-level `clientSecret`, `federatedTokenFile`, `federatedToken`, `appId`, `privateKeyPath`, or `httpClient`) fails `scafctl serve` startup.
+
+**Entra `ServerConfig` fields (`apiServer.auth.handlers.entra`):**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `clientId` | Yes | Azure application (client) ID |
+| `tenantId` | Yes | Azure tenant ID (GUID or domain) |
+| `authority` | No | Authority URL (`https://` with host; defaults to `https://login.microsoftonline.com`) |
+| `serverFlow` | Yes | Server credential flow: `"client_credentials"` or `"workload_identity"` |
+| `credential.clientSecret` | When `serverFlow: "client_credentials"` | `SecretRef` URI (`env://VAR` or `file:///path`) for the client secret |
+| `credential.wifToken` | When `serverFlow: "workload_identity"` | `SecretRef` URI (`env://VAR` or `file:///path`) for the projected federated token (re-read per request for rotation) |
+| `delegated` | No | Delegation routing for `auth.Delegate` requests. Omitted = all delegated requests denied; when present, at least one of `userFlow` or `machine` must be enabled |
+| `delegated.userFlow` | No | Flow for user callers (`CallerUser`): `"obo"`, or matching `serverFlow` (`"client_credentials"` / `"workload_identity"`). Empty denies user delegation |
+| `delegated.machine` | No | When `true`, machine callers (`CallerMachine`) acquire tokens using `serverFlow` |
 
 ### The ServerMode Optional Interface
 
@@ -147,38 +177,54 @@ The logic:
 
 This means only handlers you explicitly configure for server mode are available during API request processing.
 
-### Auth Handlers (Token Acquisition)
+### CLI-Mode vs. Server-Mode Handler Configuration
 
-Auth handlers are configured in the top-level `auth.handlers` section. These handlers manage identity, credentials, and token acquisition for both CLI and API mode.
+CLI authentication (`scafctl auth login`, `scafctl run ...`) and API server mode (`scafctl serve`) use **separate configuration sections and schemas**:
 
-> **Note**: The configuration fields shown below are illustrative examples. Each auth handler plugin defines its own configuration schema -- these are not enforced or validated by scafctl itself.
+- **CLI mode** reads top-level `auth.entra`, `auth.github`, and `auth.gcp` (plus `auth.handlers.<name>` for third-party or host-resolved handlers) and forwards them via `ConfigureAuthHandler`. Server-only keys (`serverFlow`, `credential`, `delegated`) are not part of the CLI schema and are ignored there.
+- **Server mode** reads `apiServer.auth.handlers.<name>` and forwards it via `ActivateServerMode`. It is self-contained and ignores `auth.entra` / `auth.github`.
 
-**Entra (Azure AD)** (example):
+**Entra CLI configuration (`auth.entra`)** -- CLI keys only:
 
 ```yaml
+auth:
   entra:
-    tenantId: ""
-    clientId: ""
-    serverFlow: "workload_identity"
-    credential:
-      wifToken: "file:///var/run/secrets/openshift/serviceaccount/token"
-    delegated:
-      userFlow: "obo"
-      machine: false
+    tenantId: "common"
+    clientId: "00000000-0000-0000-0000-000000000000"
+    # authority: "https://login.microsoftonline.com"
+    defaultScopes:
+      - "openid"
+      - "profile"
+    # defaultFlow: "interactive"  # or "device_code"
+    # Non-interactive CLI credentials (top-level or under profiles.<name>; override AZURE_* env vars):
+    # clientSecret: "..."
+    # federatedTokenFile: "/var/run/secrets/tokens/token"
+    # HTTP client overrides for CLI token and Graph requests:
+    # httpClient:
+    #   timeout: "30s"
+    #   retryMax: 3
 ```
 
-**GitHub** (example):
+**GitHub CLI configuration (`auth.github`)** -- CLI keys only:
 
 ```yaml
 auth:
   github:
-    serverFlow: "github_app"
-    credential:
-      app:
-        clientId: ""              
-        privateKey: "file:///path/to/private-key.pem"
-    delegated: false
+    hostname: "github.com"
+    clientId: "Ov23li00000000000000"
+    defaultScopes:
+      - "gist"
+      - "read:org"
+      - "repo"
+      - "workflow"
+    # GitHub App installation flow for CLI mode:
+    # appId: 123456
+    # installationId: 12345678
+    # privateKeyPath: "/path/to/private-key.pem"
 ```
+
+> **Note (`httpClient` and top-level credentials):** In CLI mode, the Entra plugin honors `auth.entra.httpClient` as well as top-level `clientSecret`, `federatedTokenFile`, and `federatedToken` (with per-profile overrides under `auth.entra.profiles.<name>`). In server mode, `apiServer.auth.handlers.entra` does **not** read `auth.entra`, rejects `httpClient` and top-level credential fields (`DisallowUnknownFields`), and instead requires `SecretRef` URIs under `credential.clientSecret` or `credential.wifToken`.
+
 ### Catalog Authentication in API Mode
 
 When the API server fetches solutions or plugins from authenticated OCI registries (e.g., `ghcr.io`, `*.azurecr.io`, `*.pkg.dev`), it uses `BridgeAuthToRegistry` with `ServerContext: auth.Server`. This means the server's own identity is used -- not the API caller's token.
@@ -370,14 +416,15 @@ The caller type is only populated when the `authProvider` input matches the OIDC
 |---------|-------|-----|
 | "scope is required when authProvider X is set" | Handler has `CapScopesOnTokenRequest` but no `scope` provided | Add `scope` field to the HTTP provider inputs |
 | "hostname input is not supported by authProvider X" | `hostname` input set for a handler without `token_hostname` | Omit `hostname` or use a `token_hostname`-capable auth handler |
-| "auth provider X not found" | No handler registered with that name | Check `auth.handlers` config section |
+| "auth provider X not found" | No handler registered with that name | Ensure the handler plugin is installed and configured under `apiServer.auth.handlers` |
+| "failed to parse server config: json: unknown field ..." | Unrecognized or CLI-only key under `apiServer.auth.handlers.<name>` | Use the plugin's `ServerConfig` schema (e.g., `credential.clientSecret` instead of top-level `clientSecret`) |
 | "no auth registry in context for provider X" | Auth registry not wired into execution context | Ensure server setup registers the auth registry |
-| "authProvider X token is empty in request headers" | `X-Authorization-X` header present but empty | 
+| "authProvider X token is empty in request headers" | `X-Authorization-X` header present but empty | Send a non-empty bearer token in the `X-Authorization-X` header |
 | 401 from downstream API | Token expired or insufficient scope | Check handler token cache, verify scope is correct |
 
 ## Next Steps
 
 - [API Server Tutorial](api-server-tutorial.md) -- Full API server setup
 - [Authentication Tutorial](auth-tutorial.md) -- CLI-mode auth handlers
-- [HTTP Provider Tutorial](http-provider-tutorial.md) -- HTTP provider reference
+- [Provider Reference (HTTP)](provider-reference.md#http) -- HTTP provider reference
 - [Configuration Tutorial](config-tutorial.md) -- Config file management
