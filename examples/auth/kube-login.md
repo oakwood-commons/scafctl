@@ -127,8 +127,42 @@ kube:
         defaultHandler: openshift
 ```
 
-A fleet inventory that stamps the handler and auth type on every entry (reuses
-the hostname inventory contract -- source, CEL transform, ttl):
+A dynamic fleet inventory for mixed OAuth and OIDC clusters (reuses the hostname
+inventory contract -- `source`, CEL `transform`, `ttl`). Derive `audience` when
+the inventory carries OIDC metadata and omit `defaultHandler` and `authType` so
+`kube login` auto-detects each cluster's auth method (`oauth` -> `openshift`,
+`oidc` -> `entra` with the emitted `audience`):
+
+```yaml
+kube:
+  clusters:
+    resolver:
+      source:
+        url: https://clusters.example.com/
+      transform: '_.map(k, {"name": k, "url": _[k].apiServerURL, "audience": has(_[k].oidc) && _[k].oidc != null && has(_[k].oidc.clientID) && _[k].oidc.clientID != null && _[k].oidc.clientID != "" ? "api://" + _[k].oidc.clientID + "/.default" : ""})'
+      ttl: 10m
+```
+
+Adapt the inventory field path (`_[k].oidc.clientID`) and audience format to
+your endpoint's JSON schema. When deriving `audience` by string concatenation
+from optional JSON fields, guard missing keys, `null` values, and empty strings
+together (`has(...)`, `!= null`, and `!= ""`):
+
+- CEL's `has()` checks key presence only and returns `true` for present-but-null
+  JSON values (for example `"oidc": null` or `"oidc": {"clientID": null}` on
+  clusters whose OIDC app registration is pending). A `has()`-only chain
+  compiles cleanly and then fails at evaluation time with `no such overload`
+  when evaluating `"api://" + null + "/.default"`, while selecting
+  `_[k].oidc.clientID` without `_[k].oidc != null && has(_[k].oidc.clientID)`
+  fails with `no such key: clientID` when `oidc` is `null` or `{}`.
+- Checking `_[k].oidc.clientID != ""` prevents an empty `"clientID": ""` from
+  producing the malformed audience `"api:///.default"`. Clusters without an OIDC
+  client ID emit `""`, leaving `OIDCAudience` unset while `authType` remains
+  auto-detected.
+
+**Uniform OpenShift OAuth fleets (opt-in override):** If every cluster in your
+inventory is 100% uniform OpenShift OAuth, you can stamp `defaultHandler` and
+`authType` directly on every entry to skip auth-type probing:
 
 ```yaml
 kube:
@@ -140,11 +174,18 @@ kube:
       ttl: 10m
 ```
 
-With either configured, all of these work:
+> **Note:** Stamping `authType` (and `defaultHandler`) disables OIDC
+> auto-detection fleet-wide -- `kube login` skips auth-type probing when
+> `authType` is set and routes every cluster through the stamped handler, so any
+> OIDC-backed cluster in the inventory would be sent down the `openshift` OAuth
+> path instead of `entra`. Use this override only when the entire inventory is
+> genuinely uniform OpenShift OAuth.
+
+With static aliases or a resolver configured, all of these work:
 
 ```bash
-scafctl kube login lab                      # static alias
-scafctl kube login cluster-a                    # from inventory
+scafctl kube login lab                                 # static alias
+scafctl kube login cluster-a                           # from inventory (auto-detected OAuth or OIDC)
 scafctl kube login https://api.x:6443 --handler oidc   # direct URL, no config
 ```
 
