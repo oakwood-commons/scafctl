@@ -655,4 +655,45 @@ actions:
 	renderEnv := graph.Actions["preview_act"].MaterializedInputs["env"].(map[string]any)
 	assert.Equal(t, redact.RedactedPlaceholder, renderEnv["PIN_EXPR"])
 	assert.Equal(t, "ok", renderEnv["PUBLIC"])
+
+	// RedactGraphInputs also masks ForEachMetadata.Item (including actions with NO materialized
+	// inputs) and inputs referencing __item / item alias when forEach.in is sensitive or tracked!
+	var forEachWF Workflow
+	require.NoError(t, yaml.Unmarshal([]byte(`
+actions:
+  no_inputs_loop:
+    forEach:
+      in:
+        rslvr: sensitivePinList
+    provider: typed-action
+  aliased_loop:
+    forEach:
+      in:
+        rslvr: sensitivePinList
+      item: pinVal
+    provider: typed-action
+    inputs:
+      env:
+        PIN_STR:
+          expr: "string(pinVal)"
+  tracked_loop:
+    forEach:
+      in:
+        - "host=tracked_secret_host_1234"
+    provider: typed-action
+`), &forEachWF))
+	loopGraph, loopErr := BuildGraph(context.Background(), &forEachWF, map[string]any{
+		"sensitivePinList": []any{94, 95},
+	}, nil)
+	require.NoError(t, loopErr)
+	loopTracker := redact.NewTracker()
+	loopTracker.Track("tracked_secret_host_1234")
+	RedactGraphInputs(loopGraph, loopTracker, map[string]bool{"sensitivePinList": true})
+
+	assert.Equal(t, redact.RedactedPlaceholder, loopGraph.Actions["no_inputs_loop[0]"].ForEachMetadata.Item)
+	assert.Equal(t, redact.RedactedPlaceholder, loopGraph.Actions["no_inputs_loop[1]"].ForEachMetadata.Item)
+	assert.Equal(t, redact.RedactedPlaceholder, loopGraph.Actions["aliased_loop[0]"].ForEachMetadata.Item)
+	aliasedEnv := loopGraph.Actions["aliased_loop[0]"].MaterializedInputs["env"].(map[string]any)
+	assert.Equal(t, redact.RedactedPlaceholder, aliasedEnv["PIN_STR"])
+	assert.Equal(t, "host=[REDACTED]", loopGraph.Actions["tracked_loop[0]"].ForEachMetadata.Item)
 }

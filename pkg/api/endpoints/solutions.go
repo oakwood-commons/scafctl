@@ -21,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/executionregistry"
 	"github.com/oakwood-commons/scafctl/pkg/redact"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
@@ -220,14 +221,21 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		}
 
 		ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
-		var resolverData map[string]any
+		var (
+			resolverData    map[string]any
+			resolverExecCtx *resolver.Context
+		)
 		if sol.Spec.HasResolvers() {
-			resolverData, _ = execute.ResolversForPreview(ctx, sol, nil, executionRegistry)
+			if previewRes, previewErr := execute.ResolversWithContextForPreview(ctx, sol, nil, executionRegistry); previewErr == nil && previewRes != nil {
+				resolverData = previewRes.Data
+				resolverExecCtx = previewRes.Context
+			}
 		}
 		opts := dryrun.Options{
-			Registry:     executionRegistry,
-			ResolverData: resolverData,
-			Verbose:      input.Body.Verbose,
+			Registry:        executionRegistry,
+			ResolverData:    resolverData,
+			ResolverContext: resolverExecCtx,
+			Verbose:         input.Body.Verbose,
 		}
 		report, err := dryrun.Generate(ctx, sol, opts)
 		if err != nil {

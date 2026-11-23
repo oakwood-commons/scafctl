@@ -31,17 +31,40 @@ func WithSensitiveResolvers(names map[string]bool) ExecutorOption {
 	}
 }
 
-// RedactGraphInputs scrubs all materialized action inputs in graph in place
-// using both structural ValueRef analysis (covering sensitive/credential-backed
-// resolvers even when <4 bytes or coerced to non-string types) and tracker
-// substring redaction. Intended for render and preview commands that serialize
-// graph.Actions[*].MaterializedInputs without executing providers.
+// RedactGraphInputs scrubs all materialized action inputs and forEach item
+// metadata in graph in place using both structural ValueRef analysis (covering
+// sensitive/credential-backed resolvers even when <4 bytes or coerced to
+// non-string types) and tracker substring redaction. Intended for render,
+// dry-run, and preview commands that inspect graph.Actions without executing.
 func RedactGraphInputs(graph *Graph, tracker *redact.Tracker, sensitiveResolvers map[string]bool) {
 	if graph == nil || len(graph.Actions) == 0 {
 		return
 	}
 	for _, ea := range graph.Actions {
-		if ea == nil || len(ea.MaterializedInputs) == 0 {
+		if ea == nil {
+			continue
+		}
+
+		effectiveSensitive, itemTainted := effectiveSensitiveVarsForAction(ea, sensitiveResolvers)
+
+		if ea.ForEachMetadata != nil {
+			metaCopy := *ea.ForEachMetadata
+			if itemTainted {
+				metaCopy.Item = redact.RedactedPlaceholder
+			} else {
+				var inVR *spec.ValueRef
+				if ea.Action != nil && ea.ForEach != nil {
+					inVR = ea.ForEach.In
+				}
+				metaCopy.Item = maskForEachItemBySpec(inVR, metaCopy.Index, metaCopy.Item, sensitiveResolvers)
+				if tracker != nil {
+					metaCopy.Item = tracker.RedactAny(metaCopy.Item)
+				}
+			}
+			ea.ForEachMetadata = &metaCopy
+		}
+
+		if len(ea.MaterializedInputs) == 0 {
 			continue
 		}
 		masked := make(map[string]any, len(ea.MaterializedInputs))
@@ -50,7 +73,7 @@ func RedactGraphInputs(graph *Graph, tracker *redact.Tracker, sensitiveResolvers
 			if ea.Action != nil && ea.Inputs != nil {
 				vr = ea.Inputs[k]
 			}
-			mVal, _ := maskValueByRef(vr, val, sensitiveResolvers, nil, 0)
+			mVal, _ := maskValueByRef(vr, val, effectiveSensitive, nil, 0)
 			masked[k] = mVal
 		}
 		if tracker != nil {
@@ -58,6 +81,50 @@ func RedactGraphInputs(graph *Graph, tracker *redact.Tracker, sensitiveResolvers
 		}
 		ea.MaterializedInputs = masked
 	}
+}
+
+func effectiveSensitiveVarsForAction(ea *ExpandedAction, sensitiveResolvers map[string]bool) (map[string]bool, bool) {
+	if ea == nil || ea.Action == nil || ea.ForEach == nil || ea.ForEach.In == nil {
+		return sensitiveResolvers, false
+	}
+	inVR := ea.ForEach.In
+	itemTainted := false
+	if inVR.Literal != nil {
+		if slice, ok := inVR.Literal.([]any); ok && ea.ForEachMetadata != nil &&
+			ea.ForEachMetadata.Index >= 0 && ea.ForEachMetadata.Index < len(slice) {
+			itemTainted = literalSpecIsTainted(slice[ea.ForEachMetadata.Index], sensitiveResolvers, nil, 0)
+		} else {
+			itemTainted = literalSpecIsTainted(inVR.Literal, sensitiveResolvers, nil, 0)
+		}
+	} else {
+		itemTainted = valueRefIsSecret(inVR, sensitiveResolvers, nil)
+	}
+	if !itemTainted {
+		return sensitiveResolvers, false
+	}
+	cp := make(map[string]bool, len(sensitiveResolvers)+2)
+	for k, v := range sensitiveResolvers {
+		if v {
+			cp[k] = true
+		}
+	}
+	cp["__item"] = true
+	if ea.ForEach.Item != "" {
+		cp[ea.ForEach.Item] = true
+	}
+	return cp, true
+}
+
+func maskForEachItemBySpec(inVR *spec.ValueRef, index int, item any, sensitiveResolvers map[string]bool) any {
+	if inVR == nil || inVR.Literal == nil {
+		return item
+	}
+	slice, ok := inVR.Literal.([]any)
+	if !ok || index < 0 || index >= len(slice) {
+		return item
+	}
+	masked, _ := maskLiteralBySpec(slice[index], item, sensitiveResolvers, nil, 0)
+	return masked
 }
 
 // maskResolvedActionInputs builds a copy of resolvedInputs suitable for
@@ -74,6 +141,7 @@ func (e *Executor) maskResolvedActionInputs(
 		return nil, nil
 	}
 
+	effectiveSensitive, _ := effectiveSensitiveVarsForAction(action, e.sensitiveResolvers)
 	masked := make(map[string]any, len(resolvedInputs))
 	secretProps := make(map[string]bool)
 
@@ -81,7 +149,7 @@ func (e *Executor) maskResolvedActionInputs(
 		def := e.calls[action.Call]
 		taintedArgs := make(map[string]bool)
 		for argName, argVR := range action.Args {
-			if valueRefIsSecret(argVR, e.sensitiveResolvers, nil) {
+			if valueRefIsSecret(argVR, effectiveSensitive, nil) {
 				taintedArgs[argName] = true
 			}
 		}
@@ -91,7 +159,7 @@ func (e *Executor) maskResolvedActionInputs(
 					continue
 				}
 				defVR := spec.ValueRef{Literal: paramDef.Default}
-				if valueRefIsSecret(&defVR, e.sensitiveResolvers, nil) {
+				if valueRefIsSecret(&defVR, effectiveSensitive, nil) {
 					taintedArgs[argName] = true
 				}
 			}
@@ -101,7 +169,7 @@ func (e *Executor) maskResolvedActionInputs(
 			if def != nil && def.Inputs != nil {
 				defVR = def.Inputs[k]
 			}
-			mVal, isSec := maskValueByRef(defVR, val, e.sensitiveResolvers, taintedArgs, 0)
+			mVal, isSec := maskValueByRef(defVR, val, effectiveSensitive, taintedArgs, 0)
 			masked[k] = mVal
 			if isSec {
 				secretProps[k] = true
@@ -113,7 +181,7 @@ func (e *Executor) maskResolvedActionInputs(
 			if action != nil && action.Action != nil && action.Inputs != nil {
 				vr = action.Inputs[k]
 			}
-			mVal, isSec := maskValueByRef(vr, val, e.sensitiveResolvers, nil, 0)
+			mVal, isSec := maskValueByRef(vr, val, effectiveSensitive, nil, 0)
 			masked[k] = mVal
 			if isSec {
 				secretProps[k] = true

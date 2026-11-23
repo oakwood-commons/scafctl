@@ -759,19 +759,20 @@ func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, 
 	// live execution path. Resolver providers are side-effect-free, so we
 	// get real data for WhatIf message generation safely.
 	resolvers := sol.Spec.ResolversToSlice()
-	resolverData, _, err := o.executeResolvers(resolverCtx, sol, resolvers, params, reg, withSeededResults(stateSeed))
+	resolverData, resExecCtx, err := o.executeResolvers(resolverCtx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if err != nil {
 		// Non-fatal — report will include warnings about missing resolver data.
 		resolverData = make(map[string]any)
 	}
 
 	report, err := dryrun.Generate(actionCtx, sol, dryrun.Options{
-		Registry:     reg,
-		ResolverData: resolverData,
-		Verbose:      o.Verbose,
-		Workflow:     workflow,
-		StateData:    stateData,
-		Cwd:          cwd,
+		Registry:        reg,
+		ResolverData:    resolverData,
+		ResolverContext: resExecCtx,
+		Verbose:         o.Verbose,
+		Workflow:        workflow,
+		StateData:       stateData,
+		Cwd:             cwd,
 	})
 	if err != nil {
 		return o.exitWithCode(resolverCtx, fmt.Errorf("dry-run failed: %w", err), exitcode.GeneralError)

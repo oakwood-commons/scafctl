@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/redact"
@@ -241,15 +242,46 @@ func RedactSensitiveValues(snapshot *Snapshot, resolvers []ResolverLike) {
 	}
 }
 
-// SaveSnapshot saves a snapshot to a JSON file with owner-only (0600) permissions.
+// SaveSnapshot saves a snapshot to a JSON file, enforcing owner-only (0600)
+// permissions even when overwriting a pre-existing file with broader permissions.
 func SaveSnapshot(snapshot *Snapshot, filePath string) error {
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal snapshot: %w", err)
 	}
 
-	if err := os.WriteFile(filePath, data, 0o600); err != nil {
+	// Open without O_TRUNC first so an existing 0644 file's permissions are
+	// tightened to 0600 before new snapshot bytes are written to the inode.
+	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, 0o600) //nolint:gosec // filePath is caller-supplied CLI --snapshot-file destination
+	if err != nil {
 		return fmt.Errorf("failed to write snapshot file: %w", err)
+	}
+
+	writeErr := func() error {
+		if runtime.GOOS != "windows" {
+			if err := f.Chmod(0o600); err != nil {
+				return err
+			}
+		}
+		if err := f.Truncate(0); err != nil {
+			return err
+		}
+		if _, err := f.Write(data); err != nil {
+			return err
+		}
+		return nil
+	}()
+	closeErr := f.Close()
+	if writeErr != nil {
+		return fmt.Errorf("failed to write snapshot file: %w", writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("failed to write snapshot file: %w", closeErr)
+	}
+	if runtime.GOOS == "windows" {
+		if err := os.Chmod(filePath, 0o600); err != nil {
+			return fmt.Errorf("failed to write snapshot file: %w", err)
+		}
 	}
 
 	return nil

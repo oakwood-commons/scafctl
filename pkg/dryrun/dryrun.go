@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/redact"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
@@ -86,6 +87,40 @@ type Options struct {
 	// When set, this workflow is used instead of sol.Spec.Workflow,
 	// allowing callers to pass a filtered workflow without mutating the solution.
 	Workflow *action.Workflow `json:"-" yaml:"-"`
+	// ResolverContext optionally carries resolver execution metadata so dry-run
+	// masks CredentialBacked resolvers (including numeric and <4-byte values)
+	// alongside resolvers declared sensitive: true on the solution.
+	ResolverContext *resolver.Context `json:"-" yaml:"-"`
+	// SensitiveResolvers optionally supplies extra resolver names to mask
+	// structurally before generating WhatIf descriptions or MaterializedInputs.
+	SensitiveResolvers map[string]bool `json:"-" yaml:"-"`
+}
+
+func sensitiveResolverSet(sol *solution.Solution, resolverCtx *resolver.Context, extra map[string]bool) map[string]bool {
+	names := make(map[string]bool)
+	for k, v := range extra {
+		if v {
+			names[k] = true
+		}
+	}
+	if sol != nil {
+		for name, r := range sol.Spec.Resolvers {
+			if r != nil && r.Sensitive {
+				names[name] = true
+			}
+		}
+	}
+	if resolverCtx != nil {
+		for name, res := range resolverCtx.GetAllResults() {
+			if res != nil && res.CredentialBacked {
+				names[name] = true
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
 }
 
 // Generate builds a structured WhatIf dry-run report from a solution and
@@ -122,6 +157,7 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 		if err != nil {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("action graph build failed: %v", err))
 		} else {
+			action.RedactGraphInputs(graph, tracker, sensitiveResolverSet(sol, opts.ResolverContext, opts.SensitiveResolvers))
 			report.TotalActions = len(graph.Actions)
 			report.TotalPhases = graph.TotalPhases()
 

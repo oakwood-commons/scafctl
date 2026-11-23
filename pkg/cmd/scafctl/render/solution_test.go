@@ -672,6 +672,16 @@ spec:
           - provider: static
             inputs:
               value: 9876
+    secretList:
+      type: array
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - 9494
+                - 9595
   workflow:
     actions:
       deploy:
@@ -679,6 +689,14 @@ spec:
         inputs:
           message:
             expr: "'deploy --pin=' + string(_.secretPin)"
+      fanout:
+        forEach:
+          in:
+            rslvr: secretList
+        provider: message
+        inputs:
+          message:
+            tkn: github
 `
 	require.NoError(t, os.WriteFile(path, []byte(solYAML), 0o600))
 	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
@@ -688,5 +706,7 @@ spec:
 
 	require.NoError(t, cmd.Execute())
 	assert.NotContains(t, outBuf.String(), "9876")
+	assert.NotContains(t, outBuf.String(), "9494")
+	assert.NotContains(t, outBuf.String(), "9595")
 	assert.Contains(t, outBuf.String(), "[REDACTED]")
 }

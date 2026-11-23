@@ -88,6 +88,16 @@ spec:
             inputs:
               value:
                 scrt: mcp-short-pin
+    sensitive_pins:
+      type: array
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - 94
+                - 95
   workflow:
     actions:
       write_secret:
@@ -97,6 +107,14 @@ spec:
           path: ` + filepath.ToSlash(outFile) + `
           content:
             tmpl: "{{ .secret_header }}:{{ .numeric_pin }}"
+      loop_pins:
+        forEach:
+          in:
+            rslvr: sensitive_pins
+        provider: message
+        inputs:
+          message:
+            tkn: github
       notify:
         dependsOn:
           - write_secret
@@ -146,6 +164,9 @@ spec:
 		writeSecret := actionsMap["write_secret"].(map[string]any)
 		writeInputs := writeSecret["inputs"].(map[string]any)
 		assert.Equal(t, "[REDACTED]", writeInputs["content"])
+		loop0 := actionsMap["loop_pins[0]"].(map[string]any)
+		loop0FE := loop0["forEach"].(map[string]any)
+		assert.Equal(t, "[REDACTED]", loop0FE["item"])
 	})
 
 	t.Run("preview_action shows symbolic deferred inputs and placeholders", func(t *testing.T) {
@@ -160,6 +181,20 @@ spec:
 		assert.Contains(t, text, "tkn:github")
 		assert.NotContains(t, text, rawSecret)
 		assert.NotContains(t, text, rawToken)
+
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		actions := parsed["actions"].([]any)
+		foundLoop0 := false
+		for _, rawAct := range actions {
+			act := rawAct.(map[string]any)
+			if act["name"] == "loop_pins[0]" {
+				foundLoop0 = true
+				fe := act["forEach"].(map[string]any)
+				assert.Equal(t, "[REDACTED]", fe["item"])
+			}
+		}
+		assert.True(t, foundLoop0, "expected loop_pins[0] in preview_action output")
 	})
 
 	t.Run("dry_run_solution never touches live credentials or writes files", func(t *testing.T) {

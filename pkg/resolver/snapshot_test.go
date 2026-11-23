@@ -661,4 +661,20 @@ func TestCaptureAndSaveSnapshot_CredentialBackedScrubbingAndPermissions(t *testi
 	info, err := os.Stat(tmpFile)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	// Overwriting an existing 0644 snapshot file must tighten its permissions to 0600!
+	existingBroadFile := filepath.Join(t.TempDir(), "legacy-0644-snap.json")
+	require.NoError(t, os.WriteFile(existingBroadFile, []byte(`{"stale":true,"padding":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}`), 0o644)) //nolint:gosec // intentional 0644 fixture to test overwrite chmod
+	require.NoError(t, os.Chmod(existingBroadFile, 0o644))                                                                                    //nolint:gosec // bypass umask so fixture starts 0644
+	beforeInfo, err := os.Stat(existingBroadFile)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), beforeInfo.Mode().Perm())
+
+	require.NoError(t, SaveSnapshot(snap, existingBroadFile))
+	afterInfo, err := os.Stat(existingBroadFile)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), afterInfo.Mode().Perm())
+	reloaded, err := LoadSnapshot(existingBroadFile)
+	require.NoError(t, err)
+	assert.Equal(t, "<redacted>", reloaded.Resolvers["credPin"].Value)
 }
