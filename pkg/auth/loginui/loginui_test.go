@@ -17,6 +17,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/oakwood-commons/kvx/pkg/core"
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,16 +28,20 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
-// mockHandler is a minimal auth.Handler for exercising the plain-text login
-// path. Only Login, Name, and DisplayName carry behaviour; the rest return
-// zero values.
+// mockHandler is a minimal auth.Handler for exercising login presentation paths.
 type mockHandler struct {
-	name      string
-	loginFunc func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error)
+	name        string
+	displayName string
+	loginFunc   func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error)
 }
 
-func (m *mockHandler) Name() string        { return m.name }
-func (m *mockHandler) DisplayName() string { return m.name }
+func (m *mockHandler) Name() string { return m.name }
+func (m *mockHandler) DisplayName() string {
+	if m.displayName != "" {
+		return m.displayName
+	}
+	return m.name
+}
 
 func (m *mockHandler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
 	return m.loginFunc(ctx, opts)
@@ -69,8 +74,6 @@ func TestRunLogin_PlainSuccess(t *testing.T) {
 	handler := &mockHandler{
 		name: "gcp",
 		loginFunc: func(_ context.Context, opts auth.LoginOptions) (*auth.Result, error) {
-			// The plain path installs a device-code callback that prints
-			// instructions; exercise it.
 			if opts.DeviceCodeCallback != nil {
 				callbackFired = true
 				opts.DeviceCodeCallback("CODE123", "https://verify.example", "")
@@ -125,9 +128,6 @@ func TestRunLogin_PlainCancelled(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrUserCancelled)
 }
 
-// TestRunStatusTUI_EarlyCompletion exercises the device-code TUI path when the
-// login finishes before a device code is surfaced, which returns without ever
-// launching the interactive TUI (untestable without a PTY).
 func TestRunStatusTUI_EarlyCompletion(t *testing.T) {
 	t.Parallel()
 
@@ -161,10 +161,6 @@ func TestRunStatusTUI_EarlyCompletion(t *testing.T) {
 	})
 }
 
-// TestRunLogin_PlainDeviceCodeCallback asserts the live behavior of the
-// plain renderer's device-code callback: the code line is printed only when
-// the handler actually surfaced a user code (browser/interactive logins send
-// an authorization URL with no code).
 func TestRunLogin_PlainDeviceCodeCallback(t *testing.T) {
 	t.Parallel()
 
@@ -213,9 +209,6 @@ func TestRunLogin_PlainDeviceCodeCallback(t *testing.T) {
 	})
 }
 
-// TestRunLogin_PlainURLOncePerRun asserts the #879 dedupe floor: a handler
-// that re-fires the device-code callback never prints the authorize URL
-// (or the block heading) more than once per login run.
 func TestRunLogin_PlainURLOncePerRun(t *testing.T) {
 	t.Parallel()
 
@@ -240,9 +233,6 @@ func TestRunLogin_PlainURLOncePerRun(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(out, waitingMessage))
 }
 
-// TestRunLogin_PlainDeviceCodeFallbackPrints asserts a changed prompt (an
-// interactive login falling back to device code) is not suppressed by the
-// dedupe: only identical prompts collapse.
 func TestRunLogin_PlainDeviceCodeFallbackPrints(t *testing.T) {
 	t.Parallel()
 
@@ -265,10 +255,7 @@ func TestRunLogin_PlainDeviceCodeFallbackPrints(t *testing.T) {
 	assert.Contains(t, out, "Enter the code: WXYZ-1234")
 }
 
-// TestRunLogin_InteractiveRendersPlain asserts interactive (browser) flows
-// take the plain-text path on a non-interactive session: the device-code
-// callback prints instructions and no paste-back prompt is offered.
-func TestRunLogin_InteractiveRendersPlain(t *testing.T) {
+func TestRunLogin_InteractiveRendersPlainOnNonTTY(t *testing.T) {
 	t.Parallel()
 
 	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
@@ -278,8 +265,6 @@ func TestRunLogin_InteractiveRendersPlain(t *testing.T) {
 	handler := &mockHandler{
 		name: "entra",
 		loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
-			// Non-interactive test streams: the login UI must not have
-			// installed a paste-back prompt.
 			if auth.PasteBackFromContext(ctx) != nil {
 				pasteBackSeen = true
 			}
@@ -297,9 +282,6 @@ func TestRunLogin_InteractiveRendersPlain(t *testing.T) {
 	assert.Contains(t, outBuf.String(), "https://auth.example")
 }
 
-// TestRunLogin_PlainDeviceCodeNonTTYUsesUnifiedCopy pins the non-TTY (remote
-// workspace) presentation to the same unified copy as every other surface
-// (#879): it is the only layout those sessions ever see.
 func TestRunLogin_PlainDeviceCodeNonTTYUsesUnifiedCopy(t *testing.T) {
 	t.Parallel()
 
@@ -319,12 +301,8 @@ func TestRunLogin_PlainDeviceCodeNonTTYUsesUnifiedCopy(t *testing.T) {
 	assert.Contains(t, out, signInHeading)
 	assert.Contains(t, out, "  https://auth.example/authorize?x=1")
 	assert.Contains(t, out, waitingMessage)
-	assert.NotContains(t, out, pasteBackPromptText, "no paste hint without an interactive session")
 }
 
-// TestRunLogin_QuietInteractiveStaysSilent preserves the #877 --quiet rule:
-// a quiet interactive login renders no block and never installs a
-// paste-back prompt that could block invisibly.
 func TestRunLogin_QuietInteractiveStaysSilent(t *testing.T) {
 	t.Parallel()
 
@@ -352,9 +330,6 @@ func TestRunLogin_QuietInteractiveStaysSilent(t *testing.T) {
 	assert.Empty(t, errBuf.String())
 }
 
-// TestRunInteractiveTUI_EarlyCompletion covers the hybrid runner when the
-// login finishes before a URL is surfaced; it returns without ever
-// launching the TUI (whose terminal interaction needs a PTY).
 func TestRunInteractiveTUI_EarlyCompletion(t *testing.T) {
 	t.Parallel()
 
@@ -389,52 +364,6 @@ func TestRunInteractiveTUI_EarlyCompletion(t *testing.T) {
 	})
 }
 
-// TestRunInteractiveTUI_PasteBeforeURL covers the plain handoff taken with
-// no TUI: the handler requests paste-back before surfacing the URL, so the
-// prompt owns the screen, prints the unified block (heading + URL + paste
-// hint) exactly once, and never launches the TUI.
-func TestRunInteractiveTUI_PasteBeforeURL(t *testing.T) {
-	t.Parallel()
-
-	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
-	w := writer.New(ioStreams, settings.NewCliParams())
-	authURL := "https://login.example/authorize?client_id=abc"
-
-	var promptErr error
-	handler := &mockHandler{
-		name: "entra",
-		loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
-			prompt := auth.PasteBackFromContext(ctx)
-			if prompt == nil {
-				// Capture for the test goroutine; require.Goexit on the
-				// login goroutine would hang the runner's select.
-				promptErr = errors.New("hybrid runner installs a paste-back prompt")
-				return nil, promptErr
-			}
-			// No DeviceCodeCallback: the URL arrives only via the prompt.
-			// The test streams are not a TTY, so the read errors -- but
-			// only after the paste block rendered.
-			_, promptErr = prompt(ctx, authURL, "http://localhost:8400/callback")
-			return &auth.Result{Claims: &auth.Claims{Username: "alice"}}, nil
-		},
-	}
-
-	result, err := runInteractiveTUI(context.Background(), w, "scafctl", handler, auth.LoginOptions{}, w.IOStreams())
-	require.NoError(t, err)
-	require.Error(t, promptErr, "the non-TTY read must fail after rendering the block")
-	require.NotNil(t, result)
-
-	out := outBuf.String()
-	assert.Equal(t, 1, strings.Count(out, authURL), "authorize URL prints exactly once")
-	assert.Equal(t, 1, strings.Count(out, signInHeading))
-	assert.Equal(t, 1, strings.Count(out, pasteBackPromptText))
-	assert.NotContains(t, out, waitingMessage, "the prompt owns the screen; no plain waiting line")
-	assert.NotContains(t, out, "💡")
-}
-
-// syncBuffer is a mutex-guarded bytes.Buffer. The stub-driven runner tests
-// print from several goroutines (runner, prompt, handler), and a plain
-// bytes.Buffer would race against a test-side poll of the rendered output.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -452,22 +381,7 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// stubInteractiveRunner drives runInteractiveTUI with the tui.Run seam
-// replaced, which makes the TUI lifecycle deterministic without a PTY. The
-// returned wait function blocks until the runner finishes; only after
-// calling it are the result and error safe to read. out is safe to poll
-// from the test goroutine at any time (the runner prints to it from its
-// own goroutine).
-//
-// Every stub test keeps the same invariants that make the interleavings
-// race-free: the outcome stays gated until the test main goroutine has
-// proof (via the stub or a poll of out) that the runner passed the URL
-// select and any post-exit probe, and the paste prompt is invoked from its
-// own goroutine.
-//
-// These tests do not run in parallel: they replace the package-level
-// runStatusScreen seam.
-func stubInteractiveRunner(t *testing.T, handler *mockHandler, stub func(any, tui.Config, ...tea.ProgramOption) error) (wait func() (*auth.Result, error), out *syncBuffer) {
+func stubInteractiveRunner(t *testing.T, binaryName string, handler *mockHandler, stub func(any, tui.Config, ...tea.ProgramOption) error) (wait func() (*auth.Result, error), out *syncBuffer) {
 	t.Helper()
 	out = &syncBuffer{}
 	errOut := &bytes.Buffer{}
@@ -489,7 +403,7 @@ func stubInteractiveRunner(t *testing.T, handler *mockHandler, stub func(any, tu
 	doneRun := make(chan struct{})
 	go func() {
 		defer close(doneRun)
-		result, err = runInteractiveTUI(context.Background(), w, "scafctl", handler, auth.LoginOptions{Flow: auth.FlowInteractive}, w.IOStreams())
+		result, err = runInteractiveTUI(context.Background(), w, binaryName, handler, auth.LoginOptions{Flow: auth.FlowInteractive}, w.IOStreams())
 	}()
 	return func() (*auth.Result, error) {
 		select {
@@ -501,86 +415,234 @@ func stubInteractiveRunner(t *testing.T, handler *mockHandler, stub func(any, tu
 	}, out
 }
 
-// gatedOutcomeHandler fires the URL callback, publishes the paste prompt,
-// and parks until the test closes the gate.
-func gatedOutcomeHandler(promptCh chan auth.PasteBackFunc, outcomeGate chan struct{}) *mockHandler {
-	return &mockHandler{
-		name: "entra",
+// TestRunInteractiveTUI_StaysActiveWhilePasteBackParked verifies that a plugin
+// calling PromptAuthResponse immediately alongside its localhost callback
+// server does not tear down or skip the kvx status TUI: the TUI stays active,
+// displays a concise scheme://host/path summary while Copy URL / Open URL stay
+// bound to the full URL, and flashes "Authenticated as ..." when the browser
+// callback finishes first.
+func TestRunInteractiveTUI_StaysActiveWhilePasteBackParked(t *testing.T) {
+	fullAuthURL := "https://login.example.com/common/oauth2/v2.0/authorize?client_id=abc&redirect_uri=http%3A%2F%2Flocalhost%3A45189&code_challenge=xyz&state=st1"
+	outcomeGate := make(chan struct{})
+	pasteErrCh := make(chan error, 1)
+
+	handler := &mockHandler{
+		name:        "entra",
+		displayName: "Microsoft Entra ID",
 		loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
-			opts.DeviceCodeCallback("", "https://auth.example", "")
-			select {
-			case promptCh <- auth.PasteBackFromContext(ctx):
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			pasteCtx, cancelPaste := context.WithCancel(ctx)
+			defer cancelPaste()
+
+			prompt := auth.PasteBackFromContext(ctx)
+			if prompt != nil {
+				go func() {
+					_, err := prompt(pasteCtx, fullAuthURL, "http://localhost:45189")
+					pasteErrCh <- err
+				}()
 			}
+			opts.DeviceCodeCallback("", fullAuthURL, "")
+
 			select {
 			case <-outcomeGate:
+				// Simulate localhost browser callback arriving first and cancelling pasteCtx.
+				cancelPaste()
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
-			return &auth.Result{Claims: &auth.Claims{Username: "alice"}}, nil
+			return &auth.Result{Claims: &auth.Claims{Email: "alice@example.com"}}, nil
 		},
 	}
-}
-
-// TestRunInteractiveTUI_UserQuitFallsBackToPlain pins the quit handoff: the
-// TUI exits without the login finishing or a paste request, and the runner
-// reprints the unified URL block so the URL stays visible while the login
-// continues in plain text.
-func TestRunInteractiveTUI_UserQuitFallsBackToPlain(t *testing.T) {
-	promptCh := make(chan auth.PasteBackFunc, 1)
-	outcomeGate := make(chan struct{})
-	handler := gatedOutcomeHandler(promptCh, outcomeGate)
 
 	tuiUp := make(chan struct{})
-	stubEnd := make(chan struct{})
-	stub := func(data any, _ tui.Config, _ ...tea.ProgramOption) error {
-		assert.Equal(t, "https://auth.example", data.(map[string]any)["url"])
-		assert.Equal(t, "Sign in to entra", data.(map[string]any)["title"])
+	stub := func(data any, cfg tui.Config, _ ...tea.ProgramOption) error {
+		m := data.(map[string]any)
+		assert.Equal(t, "Sign in to Microsoft Entra ID", m["title"])
+		assert.Equal(t, fullAuthURL, m["url"], "full authorization URL preserved for Copy/Open actions")
+		assert.Equal(t, "https://login.example.com/common/oauth2/v2.0/authorize", m["endpoint"], "concise endpoint summary strips PKCE query")
+
+		require.NotNil(t, cfg.DisplaySchema)
+		require.NotNil(t, cfg.DisplaySchema.Status)
+		st := cfg.DisplaySchema.Status
+		require.Len(t, st.DisplayFields, 1)
+		assert.Equal(t, "URL", st.DisplayFields[0].Label)
+		assert.Equal(t, "endpoint", st.DisplayFields[0].Field)
+		require.Len(t, st.Actions, 2)
+		assert.Equal(t, "Copy URL", st.Actions[0].Label)
+		assert.Equal(t, "url", st.Actions[0].Field)
+		assert.Equal(t, "Open URL", st.Actions[1].Label)
+		assert.Equal(t, "url", st.Actions[1].Field)
+		require.NotNil(t, st.Input, "inline status input must be configured")
+		assert.True(t, st.Input.Masked, "inline status input must be masked")
+		assert.NotEmpty(t, st.Input.Label)
+		assert.NotEmpty(t, st.Input.Placeholder)
+		require.NotNil(t, cfg.OnStatusInput, "OnStatusInput must be wired")
+		assert.Equal(t, "mycli", cfg.AppName, "embedder binary name forwarded to kvx")
+
 		close(tuiUp)
-		<-stubEnd
+		select {
+		case r := <-cfg.Done:
+			assert.NoError(t, r.Err)
+			assert.Equal(t, "Authenticated as alice@example.com", r.Message)
+		case <-time.After(5 * time.Second):
+			return errors.New("timed out waiting for status completion")
+		}
 		return nil
 	}
 
-	wait, out := stubInteractiveRunner(t, handler, stub)
-
-	prompt, ok := <-promptCh
-	require.True(t, ok, "the hybrid runner installs a paste-back prompt")
-	require.NotNil(t, prompt)
-	<-tuiUp // The URL select resolved; the TUI is "running".
-
-	// Release the "user quit" exit. The outcome stays gated, so the
-	// runner's outcome probe can only resolve to "no outcome".
-	close(stubEnd)
-
-	// The fallback block printing is the park-proof: it happens after the
-	// probe resolved and before the runner's outcome wait, so once the
-	// block is on screen the quit handoff is complete and ungating the
-	// outcome cannot flip any decision.
-	require.Eventually(t, func() bool {
-		rendered := out.String()
-		return strings.Contains(rendered, signInHeading) && strings.Contains(rendered, waitingMessage)
-	}, 5*time.Second, 5*time.Millisecond)
-
+	wait, out := stubInteractiveRunner(t, "mycli", handler, stub)
+	<-tuiUp
 	close(outcomeGate)
 
 	result, err := wait()
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, "alice", result.Claims.DisplayIdentity())
+	assert.Equal(t, "alice@example.com", result.Claims.DisplayIdentity())
+	assert.Empty(t, out.String(), "no plain-text URL or paste prompt printed on stdout")
 
-	outStr := out.String()
-	assert.Equal(t, 1, strings.Count(outStr, "https://auth.example"), "URL prints exactly once")
-	assert.Equal(t, 1, strings.Count(outStr, signInHeading))
-	assert.Equal(t, 1, strings.Count(outStr, waitingMessage))
-	assert.NotContains(t, outStr, pasteBackPromptText, "no paste hint without a paste request")
-	assert.NotContains(t, outStr, "💡")
+	select {
+	case pasteErr := <-pasteErrCh:
+		assert.ErrorIs(t, pasteErr, context.Canceled, "parked PasteBackFunc unblocks cleanly when browser callback finishes")
+	case <-time.After(5 * time.Second):
+		t.Fatal("PasteBackFunc goroutine did not unblock")
+	}
 }
 
-// TestRunInteractiveTUI_DeviceCodeResolvedByHandler pins that a handler
-// resolving an interactive/empty flow to device code keeps its user code:
-// the status box shows it with a copy-code action, and the quit fallback
-// block prints it.
+// TestRunInteractiveTUI_InlinePastePreValidationAndRetry verifies that invalid
+// pastes submitted via OnStatusInput return a validation error without
+// consuming the one-shot PasteBackFunc, allowing inline retry until a valid
+// loopback redirect URL (including scheme-less Chromium pastes) is submitted.
+func TestRunInteractiveTUI_InlinePastePreValidationAndRetry(t *testing.T) {
+	fullAuthURL := "https://login.example.com/authorize?client_id=abc&state=xyz"
+
+	handler := &mockHandler{
+		name: "entra",
+		loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+			opts.DeviceCodeCallback("", fullAuthURL, "")
+			prompt := auth.PasteBackFromContext(ctx)
+			if prompt == nil {
+				return nil, errors.New("expected PasteBackFunc in context")
+			}
+			pasted, err := prompt(ctx, fullAuthURL, "http://localhost:45189/callback")
+			if err != nil {
+				return nil, err
+			}
+			if pasted != "http://localhost:45189/callback?code=AUTH_CODE_123&state=xyz" {
+				return nil, fmt.Errorf("unexpected pasted value: %s", pasted)
+			}
+			return &auth.Result{Claims: &auth.Claims{Email: "remote@example.com"}}, nil
+		},
+	}
+
+	stub := func(_ any, cfg tui.Config, _ ...tea.ProgramOption) error {
+		// Bad pastes must return errors without unblocking PasteBackFunc, even if
+		// OnStatusInput fires right as PromptAuthResponse is registering its URI.
+		err := cfg.OnStatusInput("http://localhost:9999/callback?code=wrongport")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "http://localhost:45189/callback")
+		require.Error(t, cfg.OnStatusInput("not-a-url"))
+		require.Error(t, cfg.OnStatusInput(fullAuthURL), "pasting the authorize URL itself must be rejected")
+		require.Error(t, cfg.OnStatusInput("http://localhost:45189/callback?state=only"), "missing code/error/#access_token must be rejected")
+		require.Error(t, cfg.OnStatusInput("http://localhost:45189/callback-evil?code=AUTH_CODE_123"), "segment boundary lookalike must be rejected")
+
+		// Valid scheme-less Chromium paste normalizes to http:// and resolves PasteBackFunc.
+		require.NoError(t, cfg.OnStatusInput("localhost:45189/callback?code=AUTH_CODE_123&state=xyz"))
+
+		select {
+		case r := <-cfg.Done:
+			assert.NoError(t, r.Err)
+			assert.Equal(t, "Authenticated as remote@example.com", r.Message)
+		case <-time.After(5 * time.Second):
+			return errors.New("timed out waiting for completion after valid paste")
+		}
+		return nil
+	}
+
+	wait, out := stubInteractiveRunner(t, "scafctl", handler, stub)
+	result, err := wait()
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "remote@example.com", result.Claims.DisplayIdentity())
+	assert.Empty(t, out.String())
+}
+
+// TestRunInteractiveTUI_PasteOnlyHandlerStillLaunchesTUI verifies that even if
+// a plugin calls PromptAuthResponse without firing DeviceCodeCallback first,
+// the authorization URL from PromptAuthResponse launches the kvx status TUI.
+func TestRunInteractiveTUI_PasteOnlyHandlerStillLaunchesTUI(t *testing.T) {
+	authURL := "https://login.example.com/oauth/authorize?client_id=123"
+	handler := &mockHandler{
+		name: "entra",
+		loginFunc: func(ctx context.Context, _ auth.LoginOptions) (*auth.Result, error) {
+			prompt := auth.PasteBackFromContext(ctx)
+			if prompt == nil {
+				return nil, errors.New("missing prompt")
+			}
+			val, err := prompt(ctx, authURL, "http://localhost:8400/callback")
+			if err != nil {
+				return nil, err
+			}
+			if !strings.Contains(val, "code=ok") {
+				return nil, errors.New("missing code")
+			}
+			return &auth.Result{Claims: &auth.Claims{Username: "alice"}}, nil
+		},
+	}
+
+	stub := func(data any, cfg tui.Config, _ ...tea.ProgramOption) error {
+		m := data.(map[string]any)
+		assert.Equal(t, "https://login.example.com/oauth/authorize", m["endpoint"])
+		require.NoError(t, cfg.OnStatusInput("http://localhost:8400/callback?code=ok"))
+		r := <-cfg.Done
+		assert.Equal(t, "Authenticated as alice", r.Message)
+		return nil
+	}
+
+	wait, out := stubInteractiveRunner(t, "scafctl", handler, stub)
+	result, err := wait()
+	require.NoError(t, err)
+	assert.Equal(t, "alice", result.Claims.DisplayIdentity())
+	assert.Empty(t, out.String())
+}
+
+// TestRunInteractiveTUI_UserQuitCancelsLogin verifies that exiting the TUI
+// early (Esc / Ctrl+C) cancels the in-flight login context and unblocks any
+// parked PasteBackFunc with ErrUserCancelled.
+func TestRunInteractiveTUI_UserQuitCancelsLogin(t *testing.T) {
+	pasteUnblocked := make(chan error, 1)
+	handler := &mockHandler{
+		name: "entra",
+		loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+			opts.DeviceCodeCallback("", "https://auth.example/authorize?client_id=1", "")
+			prompt := auth.PasteBackFromContext(ctx)
+			if prompt != nil {
+				go func() {
+					_, err := prompt(ctx, "https://auth.example/authorize?client_id=1", "http://localhost:8400/callback")
+					pasteUnblocked <- err
+				}()
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+
+	stub := func(_ any, _ tui.Config, _ ...tea.ProgramOption) error {
+		return nil // simulate user pressing Esc / Ctrl+C
+	}
+
+	wait, out := stubInteractiveRunner(t, "scafctl", handler, stub)
+	_, err := wait()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, auth.ErrUserCancelled)
+	assert.Empty(t, out.String(), "user quit must not dump a plain URL block")
+
+	select {
+	case pErr := <-pasteUnblocked:
+		assert.ErrorIs(t, pErr, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("parked PasteBackFunc did not unblock on TUI quit")
+	}
+}
+
 func TestRunInteractiveTUI_DeviceCodeResolvedByHandler(t *testing.T) {
 	outcomeGate := make(chan struct{})
 	handler := &mockHandler{
@@ -596,6 +658,7 @@ func TestRunInteractiveTUI_DeviceCodeResolvedByHandler(t *testing.T) {
 		},
 	}
 
+	tuiUp := make(chan struct{})
 	stub := func(data any, cfg tui.Config, _ ...tea.ProgramOption) error {
 		m := data.(map[string]any)
 		assert.Equal(t, "ABCD-EFGH", m["code"])
@@ -603,13 +666,16 @@ func TestRunInteractiveTUI_DeviceCodeResolvedByHandler(t *testing.T) {
 		require.Len(t, st.DisplayFields, 2)
 		assert.Equal(t, "code", st.DisplayFields[1].Field)
 		assert.Equal(t, "code", st.Actions[0].Field)
-		return nil // user quit
+		assert.Nil(t, st.Input, "device-code fallback has no redirect paste input")
+		assert.Nil(t, cfg.OnStatusInput)
+		close(tuiUp)
+		r := <-cfg.Done
+		assert.Equal(t, "Authenticated as bob", r.Message)
+		return nil
 	}
 
-	wait, out := stubInteractiveRunner(t, handler, stub)
-	require.Eventually(t, func() bool {
-		return strings.Contains(out.String(), "Enter the code: ABCD-EFGH")
-	}, 5*time.Second, 5*time.Millisecond)
+	wait, _ := stubInteractiveRunner(t, "scafctl", handler, stub)
+	<-tuiUp
 	close(outcomeGate)
 
 	result, err := wait()
@@ -617,26 +683,32 @@ func TestRunInteractiveTUI_DeviceCodeResolvedByHandler(t *testing.T) {
 	assert.Equal(t, "bob", result.Claims.DisplayIdentity())
 }
 
-// TestRunInteractiveTUI_TUIStartErrorFallsBackToPlain pins the degradation
-// path: when the status screen cannot even start, the login continues with
-// the unified plain block instead of failing.
 func TestRunInteractiveTUI_TUIStartErrorFallsBackToPlain(t *testing.T) {
-	promptCh := make(chan auth.PasteBackFunc, 1)
 	outcomeGate := make(chan struct{})
-	handler := gatedOutcomeHandler(promptCh, outcomeGate)
+	handler := &mockHandler{
+		name: "entra",
+		loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+			opts.DeviceCodeCallback("", "https://auth.example/authorize", "")
+			select {
+			case <-outcomeGate:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &auth.Result{Claims: &auth.Claims{Username: "alice"}}, nil
+		},
+	}
 
 	tuiUp := make(chan struct{})
-	stubEnd := make(chan struct{})
 	stub := func(_ any, _ tui.Config, _ ...tea.ProgramOption) error {
 		close(tuiUp)
-		<-stubEnd
 		return errors.New("tui boom")
 	}
 
-	wait, out := stubInteractiveRunner(t, handler, stub)
-
+	wait, out := stubInteractiveRunner(t, "scafctl", handler, stub)
 	<-tuiUp
-	close(stubEnd)
+	require.Eventually(t, func() bool {
+		return strings.Contains(out.String(), signInHeading)
+	}, 5*time.Second, 5*time.Millisecond)
 	close(outcomeGate)
 
 	result, err := wait()
@@ -645,106 +717,11 @@ func TestRunInteractiveTUI_TUIStartErrorFallsBackToPlain(t *testing.T) {
 	assert.Equal(t, "alice", result.Claims.DisplayIdentity())
 	outStr := out.String()
 	assert.Contains(t, outStr, signInHeading)
-	assert.Contains(t, outStr, "https://auth.example")
+	assert.Contains(t, outStr, "https://auth.example/authorize")
 	assert.Contains(t, outStr, waitingMessage)
-	assert.NotContains(t, outStr, "tui boom", "the display failure must not fail the login")
+	assert.NotContains(t, outStr, "tui boom")
 }
 
-// TestRunInteractiveTUI_PasteDuringTUIHandsOffToPlain pins the core #879
-// hybrid handoff end to end: the plugin requests paste-back while the status
-// TUI is up, the TUI exits with the handoff message, and the paste prompt
-// takes over the plain screen (URL block + paste hint, no fallback block).
-func TestRunInteractiveTUI_PasteDuringTUIHandsOffToPlain(t *testing.T) {
-	promptCh := make(chan auth.PasteBackFunc, 1)
-	outcomeGate := make(chan struct{})
-	handler := gatedOutcomeHandler(promptCh, outcomeGate)
-
-	tuiUp := make(chan struct{})
-	handoffSeen := make(chan struct{})
-	stub := func(_ any, cfg tui.Config, _ ...tea.ProgramOption) error {
-		close(tuiUp)
-		// Simulate the engine: run until the paste request drives the
-		// Done channel, then exit cleanly.
-		select {
-		case r := <-cfg.Done:
-			assert.Equal(t, pasteExitMessage, r.Message)
-			close(handoffSeen)
-		case <-time.After(5 * time.Second):
-			return errors.New("no paste exit message arrived")
-		}
-		return nil
-	}
-
-	wait, out := stubInteractiveRunner(t, handler, stub)
-
-	prompt, ok := <-promptCh
-	require.True(t, ok)
-	require.NotNil(t, prompt)
-
-	<-tuiUp
-
-	pasteDone := make(chan struct{})
-	go func() {
-		defer close(pasteDone)
-		// The test streams are not a TTY, so the read errors -- but only
-		// after the paste block rendered.
-		_, err := prompt(context.Background(), "https://auth.example", "http://localhost:8400/callback")
-		assert.Error(t, err)
-	}()
-
-	<-handoffSeen // The TUI exited for the paste handoff.
-	<-pasteDone   // The prompt rendered and its read failed (non-TTY).
-	close(outcomeGate)
-
-	result, err := wait()
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, "alice", result.Claims.DisplayIdentity())
-
-	outStr := out.String()
-	assert.Equal(t, 1, strings.Count(outStr, "https://auth.example"), "URL prints exactly once across the handoff")
-	assert.Equal(t, 1, strings.Count(outStr, signInHeading))
-	assert.Equal(t, 1, strings.Count(outStr, pasteBackPromptText))
-	assert.NotContains(t, outStr, waitingMessage, "the handoff block replaces the waiting line")
-	assert.NotContains(t, outStr, "💡")
-}
-
-// TestRunInteractiveTUI_OutcomeCompletesDuringTUI pins the success handoff:
-// the login finishes while the TUI is up, the outcome drives the Done
-// channel ("Authenticated as ..."), and the runner returns the result
-// without printing any further block.
-func TestRunInteractiveTUI_OutcomeCompletesDuringTUI(t *testing.T) {
-	promptCh := make(chan auth.PasteBackFunc, 1)
-	outcomeGate := make(chan struct{})
-	handler := gatedOutcomeHandler(promptCh, outcomeGate)
-
-	tuiUp := make(chan struct{})
-	stub := func(_ any, cfg tui.Config, _ ...tea.ProgramOption) error {
-		close(tuiUp)
-		select {
-		case r := <-cfg.Done:
-			assert.Equal(t, fmt.Sprintf(successMessageFmt, "alice"), r.Message)
-		case <-time.After(5 * time.Second):
-			return errors.New("no success message arrived")
-		}
-		return nil
-	}
-
-	wait, out := stubInteractiveRunner(t, handler, stub)
-
-	<-tuiUp
-	close(outcomeGate)
-
-	result, err := wait()
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, "alice", result.Claims.DisplayIdentity())
-	assert.Empty(t, out.String(), "the success handoff prints nothing")
-}
-
-// TestRunInteractiveTUI_CancelledWithoutOutcome covers cancellation while
-// the hybrid waits without a URL outcome: the runner returns
-// ErrUserCancelled without launching the TUI.
 func TestRunInteractiveTUI_CancelledWithoutOutcome(t *testing.T) {
 	t.Parallel()
 
@@ -752,8 +729,6 @@ func TestRunInteractiveTUI_CancelledWithoutOutcome(t *testing.T) {
 	w := writer.New(ioStreams, settings.NewCliParams())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	// Cancel up front: without a URL the only armed channel is ctx.Done,
-	// so no TUI is ever launched.
 	cancel()
 	handler := &mockHandler{
 		name: "entra",
@@ -766,128 +741,197 @@ func TestRunInteractiveTUI_CancelledWithoutOutcome(t *testing.T) {
 	_, err := runInteractiveTUI(ctx, w, "scafctl", handler, auth.LoginOptions{}, w.IOStreams())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, auth.ErrUserCancelled)
-	assert.Empty(t, outBuf.String(), "no URL block after cancellation")
+	assert.Empty(t, outBuf.String())
 }
 
-// TestNewPasteBackPrompt_Render asserts the host-authored paste block in
-// both of its modes: when a URL block is already on the plain screen only
-// the paste hint renders (#879 dedupe), and without one (the TUI handoff)
-// the full block prints with the same unified heading.
-func TestNewPasteBackPrompt_Render(t *testing.T) {
+// TestBuildInteractiveStatusTUI_Snapshot verifies the rendered kvx status
+// screen snapshot at 100 columns: concise endpoint URL (without raw PKCE
+// query clutter), waiting spinner, frame-1 auto-focused inline input label +
+// placeholder, and safe modifier/function action keys in the footer.
+func TestBuildInteractiveStatusTUI_Snapshot(t *testing.T) {
+	done := make(chan tui.StatusResult, 1)
+	ps := newPasteSession()
+	fullURL := "https://login.example.com/common/oauth2/v2.0/authorize?client_id=00000000-0000-0000-0000-000000000000&code_challenge=SUPERLONGPKCECHALLENGE&state=SECRETSTATE"
+	cfg, data := buildInteractiveStatusTUI("scafctl", "Microsoft Entra ID", deviceCodeData{verificationURI: fullURL}, done, func(raw string) error {
+		return ps.submit(context.Background(), raw)
+	})
+	cfg.Width = 100
+	cfg.Height = 20
+	cfg.NoColor = true
+
+	root, err := core.LoadObject(data)
+	require.NoError(t, err)
+	snap := tui.RenderSnapshot(root, cfg)
+
+	assert.Contains(t, snap, "Sign in to Microsoft Entra ID")
+	assert.Contains(t, snap, "https://login.example.com/common/oauth2/v2.0/authorize")
+	assert.NotContains(t, snap, "SUPERLONGPKCECHALLENGE", "raw PKCE query parameters must not clutter the status card")
+	assert.Contains(t, snap, waitingMessage)
+	assert.Contains(t, snap, pasteInputLabel)
+	assert.Contains(t, snap, pasteInputPlaceholder)
+	assert.Contains(t, snap, "Copy URL")
+	assert.Contains(t, snap, "Open URL")
+}
+
+func TestValidateStatusPasteInput(t *testing.T) {
 	t.Parallel()
 
-	authURL := "https://login.example/authorize?client_id=abc"
+	okCases := []struct {
+		name        string
+		raw         string
+		expectedURI string
+		want        string
+	}{
+		{
+			name:        "full http localhost with code",
+			raw:         "http://localhost:45189/callback?code=abc&state=xyz",
+			expectedURI: "http://localhost:45189/callback",
+			want:        "http://localhost:45189/callback?code=abc&state=xyz",
+		},
+		{
+			name:        "scheme-less localhost port from Chromium",
+			raw:         "  localhost:45189/?code=abc&state=xyz  ",
+			expectedURI: "http://localhost:45189",
+			want:        "http://localhost:45189/?code=abc&state=xyz",
+		},
+		{
+			name:        "uppercase scheme-less LOCALHOST normalized",
+			raw:         "LOCALHOST:8400/callback?code=MixedCaseCode",
+			expectedURI: "http://localhost:8400/callback",
+			want:        "http://localhost:8400/callback?code=MixedCaseCode",
+		},
+		{
+			name:        "uppercase full URL LOCALHOST canonicalized",
+			raw:         "http://LOCALHOST:8400/callback?code=MixedCaseCode",
+			expectedURI: "http://localhost:8400/callback",
+			want:        "http://localhost:8400/callback?code=MixedCaseCode",
+		},
+		{
+			name:        "scheme-less 127.0.0.2 loopback IP normalized",
+			raw:         "127.0.0.2:8400/callback?code=abc",
+			expectedURI: "http://127.0.0.2:8400/callback",
+			want:        "http://127.0.0.2:8400/callback?code=abc",
+		},
+		{
+			name:        "scheme-less 127.0.0.1 with error param",
+			raw:         "127.0.0.1:8400/callback?error=access_denied",
+			expectedURI: "http://127.0.0.1:8400/callback",
+			want:        "http://127.0.0.1:8400/callback?error=access_denied",
+		},
+		{
+			name:        "scheme-less IPv6 loopback with fragment access_token",
+			raw:         "[::1]:8400/callback#access_token=tok123&token_type=Bearer",
+			expectedURI: "http://[::1]:8400/callback",
+			want:        "http://[::1]:8400/callback#access_token=tok123&token_type=Bearer",
+		},
+		{
+			name:        "no expectedRedirectURI yet still validates loopback and code",
+			raw:         "localhost:51234/?code=early",
+			expectedURI: "",
+			want:        "http://localhost:51234/?code=early",
+		},
+	}
 
-	t.Run("hint only after a URL block", func(t *testing.T) {
-		t.Parallel()
-		ioStreams, outBuf, _ := terminal.NewTestIOStreams()
-		w := writer.New(ioStreams, settings.NewCliParams())
-		h := newPasteHandoff()
+	for _, tc := range okCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := validateStatusPasteInput(tc.raw, tc.expectedURI)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 
-		// The user quit the TUI early: the runner reprinted the URL block.
-		h.printURLBlockFallback(w, authURL, "")
+	errCases := []struct {
+		name        string
+		raw         string
+		expectedURI string
+	}{
+		{"empty", "   ", "http://localhost:8400/callback"},
+		{"exceeds max length", "http://localhost:8400/cb?code=" + strings.Repeat("x", maxPasteRedirectURLLen), ""},
+		{"plain garbage", "not-a-url-SECRET123", ""},
+		{"external authorization URL", "https://login.example.com/oauth2/authorize?code=SECRET123", ""},
+		{"non-loopback IP", "http://192.168.1.10:8400/callback?code=SECRET123", ""},
+		{"userinfo spoofing", "http://evil@localhost:8400/callback?code=SECRET123", ""},
+		{"missing code error and access_token", "http://localhost:8400/callback?state=SECRET123", ""},
+		{"empty code value", "http://localhost:8400/callback?code=&state=SECRET123", ""},
+		{"empty fragment access_token", "http://localhost:8400/callback#access_token=", ""},
+		{"port mismatch against expectedRedirectURI", "http://localhost:9999/callback?code=SECRET123", "http://localhost:8400/callback"},
+		{"path mismatch against expectedRedirectURI", "http://localhost:8400/other?code=SECRET123", "http://localhost:8400/callback"},
+		{"scheme-less rejected when expectedRedirectURI uses https", "localhost:8400/callback?code=SECRET123", "https://localhost:8400/callback"},
+	}
 
-		prompt := newPasteBackPrompt(w, ioStreams, h)
-		_, err := prompt(context.Background(), authURL, "http://localhost:8400/callback")
-		// The test streams hold no TTY, so the read fails -- but only after
-		// the prompt text was rendered.
-		require.Error(t, err)
-		out := outBuf.String()
-		assert.Equal(t, 1, strings.Count(out, authURL), "paste prompt refrains from repeating the URL")
-		assert.Equal(t, 1, strings.Count(out, signInHeading))
-		assert.Contains(t, out, pasteBackPromptText)
-	})
-
-	t.Run("full block when no URL was printed", func(t *testing.T) {
-		t.Parallel()
-		ioStreams, outBuf, _ := terminal.NewTestIOStreams()
-		w := writer.New(ioStreams, settings.NewCliParams())
-		h := newPasteHandoff()
-
-		prompt := newPasteBackPrompt(w, ioStreams, h)
-		_, err := prompt(context.Background(), authURL, "http://localhost:8400/callback")
-		require.Error(t, err)
-		out := outBuf.String()
-		assert.Contains(t, out, signInHeading)
-		assert.Contains(t, out, authURL)
-		assert.Contains(t, out, pasteBackPromptText)
-		assert.Equal(t, 1, strings.Count(out, authURL))
-	})
-
-	t.Run("cancellation surfaces as the context error", func(t *testing.T) {
-		t.Parallel()
-		ioStreams, _, _ := terminal.NewTestIOStreams()
-		w := writer.New(ioStreams, settings.NewCliParams())
-		h := newPasteHandoff()
-		prompt := newPasteBackPrompt(w, ioStreams, h)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		_, err := prompt(ctx, authURL, "")
-		assert.ErrorIs(t, err, context.Canceled)
-	})
+	for _, tc := range errCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := validateStatusPasteInput(tc.raw, tc.expectedURI)
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "SECRET123", "validation errors must never echo pasted secrets")
+		})
+	}
 }
 
-// TestPasteHandoff_RequestDrivesTUIDown pins the hybrid handoff mechanics:
-// the first request makes the running TUI exit via its Done channel, later
-// requests are no-ops, and markTuiDown releases a waiting prompt exactly
-// once (and is idempotent).
-func TestPasteHandoff_RequestDrivesTUIDown(t *testing.T) {
+func TestSummarizeAuthorizationURL(t *testing.T) {
 	t.Parallel()
 
-	done := make(chan tui.StatusResult, 2)
-	h := newPasteHandoff()
-	assert.False(t, h.engaged())
-
-	h.markTuiUp(done)
-	h.requestPaste()
-	h.requestPaste()
-
-	assert.True(t, h.engaged())
-	select {
-	case r := <-done:
-		assert.Equal(t, pasteExitMessage, r.Message)
-		assert.NoError(t, r.Err)
-	default:
-		t.Fatal("expected the TUI Done channel to receive the exit message")
-	}
-	select {
-	case <-done:
-		t.Fatal("a second request must not send a second exit message")
-	default:
-	}
-
-	h.markTuiDown()
-	h.markTuiDown()
-	select {
-	case <-h.tuiDown:
-	default:
-		t.Fatal("markTuiDown must release the waiting prompt")
-	}
+	assert.Equal(t, "", summarizeAuthorizationURL("  "))
+	assert.Equal(t,
+		"https://login.example.com/tenant/oauth2/v2.0/authorize",
+		summarizeAuthorizationURL("https://login.example.com/tenant/oauth2/v2.0/authorize?client_id=1&state=secret#frag"),
+	)
+	assert.Equal(t,
+		"https://auth.example.com",
+		summarizeAuthorizationURL("https://auth.example.com/?client_id=1"),
+	)
+	assert.Equal(t,
+		"not-abs",
+		summarizeAuthorizationURL("not-abs?secret=1"),
+	)
 }
 
-// TestPasteHandoff_PlainRequestReleasesPrompt covers the no-TUI case: a
-// paste request with the screen already plain releases the prompt itself.
-func TestPasteHandoff_PlainRequestReleasesPrompt(t *testing.T) {
+func TestPasteSession_ActivationAndDuplicateSubmit(t *testing.T) {
 	t.Parallel()
 
-	h := newPasteHandoff()
-	h.requestPaste()
-	select {
-	case <-h.tuiDown:
-	default:
-		t.Fatal("request without a TUI must close tuiDown directly")
-	}
-	assert.True(t, h.engaged())
+	ps := newPasteSession()
+	// Before PromptAuthResponse activates, submissions fail cleanly without locking the channel.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	require.Error(t, ps.submit(ctx, "http://localhost:8400/cb?code=premature"))
 
-	// Marking a (never-launched) TUI down afterwards stays safe.
-	h.markTuiDown()
+	deactivate := ps.activate("http://localhost:8400/cb")
+	require.NoError(t, ps.submit(context.Background(), "http://localhost:8400/cb?code=first"))
+	err := ps.submit(context.Background(), "http://localhost:8400/cb?code=second")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already been submitted")
+
+	deactivate()
+	err = ps.submit(context.Background(), "http://localhost:8400/cb?code=afterclose")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not active")
 }
 
-// TestCaptureOutcome_ForwardsToDone pins the outcome forwarder: the login
-// outcome becomes a TUI Done message (success names the identity, error
-// carries the error), a full Done buffer drops the send without losing the
-// captured result, and closed() reports without blocking.
+func BenchmarkValidateStatusPasteInput(b *testing.B) {
+	raw := "localhost:45189/callback?code=0.AXEA_some_long_authorization_code&state=some_state"
+	expected := "http://localhost:45189/callback"
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := validateStatusPasteInput(raw, expected); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSummarizeAuthorizationURL(b *testing.B) {
+	raw := "https://login.example.com/common/oauth2/v2.0/authorize?client_id=00000000-0000-0000-0000-000000000000&redirect_uri=http%3A%2F%2Flocalhost%3A45189&code_challenge=xyz&state=abc"
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if got := summarizeAuthorizationURL(raw); got == "" {
+			b.Fatal("empty summary")
+		}
+	}
+}
+
 func TestCaptureOutcome_ForwardsToDone(t *testing.T) {
 	t.Parallel()
 
@@ -954,7 +998,7 @@ func TestCaptureOutcome_ForwardsToDone(t *testing.T) {
 	t.Run("a full done buffer drops the send but keeps the outcome", func(t *testing.T) {
 		t.Parallel()
 		outcomeChan := make(chan loginOutcome, 1)
-		done := make(chan tui.StatusResult, 1) // exactly one slot
+		done := make(chan tui.StatusResult, 1)
 		done <- tui.StatusResult{Message: "occupied"}
 		outcomeChan <- loginOutcome{result: &auth.Result{Claims: &auth.Claims{Username: "alice"}}}
 		oc := captureOutcome(outcomeChan, done)
@@ -962,7 +1006,7 @@ func TestCaptureOutcome_ForwardsToDone(t *testing.T) {
 		require.Eventually(t, oc.closed, 5*time.Second, 10*time.Millisecond)
 		select {
 		case r := <-done:
-			assert.Equal(t, "occupied", r.Message, "the dropped send must not evict the queued result")
+			assert.Equal(t, "occupied", r.Message)
 		default:
 			t.Fatal("pre-queued result expected")
 		}
@@ -974,13 +1018,10 @@ func TestCaptureOutcome_ForwardsToDone(t *testing.T) {
 	})
 }
 
-// TestCaptureOutcome_WaitCancelled pins the cancellation arm: a cancelled
-// context surfaces as ErrUserCancelled rather than a hang or a raw
-// context error from the login goroutine.
 func TestCaptureOutcome_WaitCancelled(t *testing.T) {
 	t.Parallel()
 
-	outcomeChan := make(chan loginOutcome, 1) // never receives
+	outcomeChan := make(chan loginOutcome, 1)
 	done := make(chan tui.StatusResult, 2)
 	oc := captureOutcome(outcomeChan, done)
 
@@ -1001,12 +1042,10 @@ func TestLoginIdentity(t *testing.T) {
 func TestLoginError(t *testing.T) {
 	t.Parallel()
 
-	// Cancelled context maps to ErrUserCancelled regardless of the wrapped error.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	assert.ErrorIs(t, loginError(ctx, errors.New("ignored")), auth.ErrUserCancelled)
 
-	// Live context wraps the underlying error as an authentication failure.
 	underlying := errors.New("bad token")
 	err := loginError(context.Background(), underlying)
 	assert.ErrorIs(t, err, underlying)
@@ -1020,8 +1059,6 @@ func TestInteractiveTerminal_DevNullIsNotTTY(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = devNull.Close() })
 
-	// /dev/null is a character device but not a terminal: paste-back must
-	// stay off so the prompt is never written somewhere invisible.
 	assert.False(t, interactiveTerminal(&terminal.IOStreams{In: devNull, Out: devNull, ErrOut: devNull}))
 	assert.False(t, isTTY(&bytes.Buffer{}))
 }

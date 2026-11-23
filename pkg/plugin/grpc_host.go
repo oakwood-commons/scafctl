@@ -456,13 +456,14 @@ func (h *HostServiceServer) PromptAuthResponse(ctx context.Context, req *proto.P
 		return nil, status.Errorf(codes.Internal, "reading pasted redirect URL: %v", err)
 	}
 
-	if err := validatePastedRedirectURL(value, req.RedirectUri); err != nil {
+	normalized, err := normalizePastedRedirectURL(value, req.RedirectUri)
+	if err != nil {
 		// The value (which may embed an authorization code) is not included
 		// in the message.
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	return &proto.PromptAuthResponseResponse{Value: value}, nil
+	return &proto.PromptAuthResponseResponse{Value: normalized}, nil
 }
 
 // isLoopbackHost reports whether an URL hostname is a loopback endpoint:
@@ -519,27 +520,63 @@ func validateExpectedRedirectURI(redirectURI string) error {
 // validatePastedRedirectURL checks that a pasted value looks like the
 // expected redirect URL. Errors never embed the value itself.
 func validatePastedRedirectURL(value, redirectURI string) error {
-	if value == "" {
-		return errors.New("empty redirect URL: paste the full address from the browser's address bar")
-	}
+	_, err := normalizePastedRedirectURL(value, redirectURI)
+	return err
+}
+
+// normalizePastedRedirectURL trims, normalizes, and validates a pasted redirect
+// URL against redirectURI, returning the canonical absolute URL safe to pass to
+// plugins. Errors never embed the pasted value itself.
+//
+// Chromium-based browsers omit the "http://" scheme when copying a loopback
+// URL from the address bar (e.g. "localhost:8400/callback?code=..."). When
+// redirectURI uses "http://" on a loopback host and the trimmed input lacks
+// "://" while starting with the expected loopback host/port, "http://" is
+// restored before parsing.
+func normalizePastedRedirectURL(value, redirectURI string) (string, error) {
 	if len(value) > promptPasteMaxLen {
-		return fmt.Errorf("pasted redirect URL exceeds the maximum length of %d characters", promptPasteMaxLen)
+		return "", fmt.Errorf("pasted redirect URL exceeds the maximum length of %d characters", promptPasteMaxLen)
 	}
-	parsed, err := url.Parse(value)
-	if err != nil || !parsed.IsAbs() || parsed.Scheme == "" || parsed.Host == "" {
-		return errors.New("pasted value is not an absolute URL (e.g. http://localhost:8400/callback?code=...)")
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", errors.New("empty redirect URL: paste the full address from the browser's address bar")
+	}
+	var want *url.URL
+	if validateExpectedRedirectURI(redirectURI) == nil {
+		want, _ = url.Parse(redirectURI)
+	}
+	if want != nil && want.Scheme == "http" && isLoopbackHost(want.Hostname()) && !strings.Contains(trimmed, "://") &&
+		len(trimmed) >= len(want.Host) && strings.EqualFold(trimmed[:len(want.Host)], want.Host) &&
+		(len(trimmed) == len(want.Host) || trimmed[len(want.Host)] == '/' || trimmed[len(want.Host)] == '?' || trimmed[len(want.Host)] == '#') {
+		trimmed = "http://" + want.Host + trimmed[len(want.Host):]
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || !parsed.IsAbs() || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil {
+		return "", errors.New("pasted value is not an absolute URL (e.g. http://localhost:8400/callback?code=...)")
 	}
 	if err := validateExpectedRedirectURI(redirectURI); err != nil {
-		return err
+		return "", err
 	}
-	want, _ := url.Parse(redirectURI) // validated above
-	if parsed.Scheme != want.Scheme || parsed.Host != want.Host {
-		return fmt.Errorf("pasted URL does not match the expected redirect address %s", redirectURI)
+	if !strings.EqualFold(parsed.Scheme, want.Scheme) || !strings.EqualFold(parsed.Host, want.Host) {
+		return "", fmt.Errorf("pasted URL does not match the expected redirect address %s", redirectURI)
 	}
-	if !strings.HasPrefix(strings.TrimSuffix(parsed.Path, "/"), strings.TrimSuffix(want.Path, "/")) {
-		return fmt.Errorf("pasted URL does not match the expected redirect address %s", redirectURI)
+	wantPath := strings.TrimSuffix(want.Path, "/")
+	gotPath := strings.TrimSuffix(parsed.Path, "/")
+	if wantPath != "" && gotPath != wantPath && !strings.HasPrefix(gotPath, wantPath+"/") {
+		return "", fmt.Errorf("pasted URL does not match the expected redirect address %s", redirectURI)
 	}
-	return nil
+
+	// Canonicalize scheme and host casing to match redirectURI while preserving
+	// path, raw query, and fragment bytes verbatim.
+	if idx := strings.Index(trimmed, "://"); idx >= 0 {
+		afterScheme := trimmed[idx+3:]
+		hostEnd := strings.IndexAny(afterScheme, "/?#")
+		if hostEnd < 0 {
+			hostEnd = len(afterScheme)
+		}
+		trimmed = want.Scheme + "://" + want.Host + afterScheme[hostEnd:]
+	}
+	return trimmed, nil
 }
 
 // HostServiceClient wraps the HostService gRPC client (used by plugins).

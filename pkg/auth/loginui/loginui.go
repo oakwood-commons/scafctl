@@ -2,21 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package loginui renders the interactive login experience shared by the
-// 'auth login' and 'kube login' commands. Terminal runs show the kvx
-// status-screen TUI: the device-code flow permanently, and browser
-// (interactive) flows in a hybrid arrangement -- the box displays the
-// sign-in URL with copy/open actions while the login is in flight, and the
-// flow exits cleanly to the unified plain-text paste block the moment a
-// paste-back response is requested (or the user quits the box, which falls
-// back to the same plain flow). Every non-terminal run, and every flow that
-// cannot render a prompt, uses the unified plain layout (#879): the
-// authorize URL appears exactly once under one heading, and the paste
-// hint is the only text appended when paste-back engages.
-//
-// The TUI and the paste prompt never share the keyboard (#877): the
-// paste-back line read (auth.PasteBackFunc, bridged to
-// HostService.PromptAuthResponse) needs line-oriented stdin, so it is only
-// started after tui.Run has returned and the terminal is plain again.
+// 'auth login' and 'kube login' commands. Interactive terminal runs show the
+// kvx status-screen TUI for both device-code and browser flows: browser flows
+// display a concise endpoint summary with copy/open actions for the full
+// authorization URL alongside an auto-focused masked inline input for pasting
+// localhost redirect URLs in remote SSH or dev-container sessions. Non-terminal
+// and quiet sessions fall back to a clean plain-text layout without installing
+// an interactive paste prompt.
 //
 // RunLogin returns the login Result and never prints the final success line or
 // error text — callers render their own output. This lets both commands share
@@ -25,48 +17,49 @@ package loginui
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
-	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
 	skvx "github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"golang.org/x/term"
 )
 
-// The sign-in copy is host-authored and unified across every surface that
-// renders a login URL (#879): the plain block, the plain paste hint, and the
-// hybrid handoff block all use the same heading, so a login reads as one
-// instruction flow (URL -> sign-in -> paste hint -> hidden input).
 const (
 	// signInHeading is the single heading under which a sign-in URL is
-	// printed. It matches the wording the paste hint refers back to.
+	// printed on plain-text fallback surfaces.
 	signInHeading = "To sign in, use a web browser to open the page:"
-	// pasteBackPromptText is the only line added when paste-back engages.
-	// By contract the prompt wording is written by the host only --
-	// plugins supply URLs, never text -- so a handler cannot use
-	// PromptAuthResponse to phish for input.
-	pasteBackPromptText = "If your browser shows a connection error after sign-in, paste the full address from its address bar (input is hidden):"
 	// waitingMessage closes the URL block while the login is in flight.
 	waitingMessage = "Waiting for authentication..."
-	// pasteExitMessage is flashed by the status TUI while it exits for the
-	// plain paste handoff.
-	pasteExitMessage = "Opening the manual paste prompt..."
+	// pasteInputLabel explains the inline redirect URL input rendered inside
+	// the interactive login status TUI for remote SSH / Codespaces sessions.
+	pasteInputLabel = "Remote / SSH / Codespaces: paste redirect URL if localhost fails:"
+	// pasteInputPlaceholder illustrates the expected loopback callback URL shape.
+	pasteInputPlaceholder = "http://localhost:<port>/?code=..."
+	// maxPasteRedirectURLLen bounds accepted redirect URL input length.
+	maxPasteRedirectURLLen = 8192
+	// pasteActivationGrace bounds how long OnStatusInput waits for an in-flight
+	// HostService.PromptAuthResponse call to register its expected redirect URI
+	// when DeviceCodeCallback arrives slightly ahead of the reverse gRPC call.
+	pasteActivationGrace = 250 * time.Millisecond
+	// deviceCodeDoneDelay is how long the device-code TUI displays its
+	// completion flash before returning the terminal.
+	deviceCodeDoneDelay = "2s"
 	// interactiveDoneDelay is how long the interactive status TUI shows its
-	// exit message (paste handoff or "Authenticated as ...") before
-	// returning the terminal. It is shorter than the device-code TUI's
-	// delay so the paste block appears promptly.
+	// completion message ("Authenticated as ...") before exiting.
 	interactiveDoneDelay = "400ms"
-	// authenticatedMessage is the status flash when a login completes;
-	// successMessageFmt names the logged-in identity below it.
+	// authenticatedMessage is the fallback status flash when a login completes.
 	authenticatedMessage = "Authenticated successfully!"
 	// successMessageFmt formats the TUI's success exit message.
 	successMessageFmt = "Authenticated as %s"
@@ -86,10 +79,9 @@ type loginOutcome struct {
 }
 
 // RunLogin executes an interactive login for the given handler, presenting
-// the kvx status-screen TUI on terminals (device-code flow permanently,
-// browser flows in a hybrid arrangement with the paste-back prompt) and the
-// unified plain-text instructions everywhere else. It installs a SIGINT
-// handler that cancels the login.
+// the kvx status-screen TUI on interactive terminals and plain-text
+// instructions everywhere else. It installs a SIGINT handler that cancels the
+// login.
 //
 // It returns the login Result on success. Callers render their own success
 // output; RunLogin does not print the final "logged in" line. Errors are
@@ -134,23 +126,14 @@ func RunLogin(ctx context.Context, w *writer.Writer, binaryName string, handler 
 		// Non-interactive flows fall through to the plain-text path below.
 	}
 
-	// Hybrid (#879, option c): an interactive session that can actually
-	// render the paste-back prompt (an interactive terminal on a platform
-	// with cancellation-safe reads, not --quiet) presents the status TUI
-	// first; the paste prompt takes over as clean plain text the moment it
-	// becomes relevant. The condition is exactly the one under which the
-	// paste-back prompt is offered at all, so a session that cannot prompt
-	// (non-TTY, redirected stderr, --quiet) keeps the plain renderer and
-	// never installs a prompt -- --quiet can never block on an invisible
-	// prompt (#877).
-	if interactiveFlow && !w.IsQuiet() && interactiveTerminal(ioStreams) && input.InteractiveLineSupported() {
+	if interactiveFlow && !w.IsQuiet() && interactiveTerminal(ioStreams) {
 		return runInteractiveTUI(ctx, w, binaryName, handler, opts, ioStreams)
 	}
 
 	// Plain-text login path (non-terminal sessions, --quiet, and flows that
-	// never render a status screen). A handler that re-fires the callback
-	// with the same prompt never duplicates the block; a different prompt
-	// (e.g. an interactive login falling back to device code) still prints.
+	// never render a status screen). Non-interactive sessions do not install a
+	// PasteBackFunc so PromptAuthResponse returns Unavailable immediately
+	// rather than blocking on an invisible prompt.
 	var (
 		lastMu     sync.Mutex
 		lastPrompt *deviceCodeData
@@ -178,8 +161,7 @@ func RunLogin(ctx context.Context, w *writer.Writer, binaryName string, handler 
 
 // printSignInBlock renders the unified plain sign-in block: one heading, the
 // URL once, the user code when the handler surfaced one (device-code logins
-// only), and the waiting line. The block is deliberately unstyled -- no
-// icons or bullets -- so the instructions read as one coherent flow (#879).
+// only), and the waiting line.
 func printSignInBlock(w *writer.Writer, verificationURI, userCode string) {
 	w.Plainln("")
 	w.Plainln(signInHeading)
@@ -193,12 +175,6 @@ func printSignInBlock(w *writer.Writer, verificationURI, userCode string) {
 }
 
 // runStatusTUI runs the device-code login flow using the kvx status-screen TUI.
-// It:
-//  1. Starts handler.Login in a goroutine with a DeviceCodeCallback that captures
-//     the verification URL and user code.
-//  2. Waits for the device code before launching the TUI (avoids empty-data start).
-//  3. Launches tui.Run with a DisplaySchema status view and a Done channel that
-//     receives the login outcome when the goroutine completes.
 func runStatusTUI(
 	ctx context.Context,
 	w *writer.Writer,
@@ -268,7 +244,7 @@ func runStatusTUI(
 			WaitMessage:    waitingMessage,
 			SuccessMessage: authenticatedMessage,
 			DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
-			DoneDelay:      "2s",
+			DoneDelay:      deviceCodeDoneDelay,
 			DisplayFields: []tui.StatusFieldDisplay{
 				{Label: "URL", Field: "url"},
 				{Label: "Code", Field: "code"},
@@ -304,7 +280,6 @@ func runStatusTUI(
 	}
 
 	// TUI exited normally (done channel received, DoneDelay elapsed).
-	// The outcomeReady channel should already be closed at this point.
 	select {
 	case <-outcomeReady:
 		// Outcome is captured - continue to post-display.
@@ -319,115 +294,92 @@ func runStatusTUI(
 	return capturedOutcome.result, nil
 }
 
-// pasteHandoff coordinates the switch from an interactive login's status TUI
-// to the plain-text paste prompt. A raw-mode TUI and the paste prompt's
-// line-oriented stdin read can never be active at once (#877), so the paste
-// function first requests the handoff, then blocks on tuiDown until the
-// runner has taken the TUI down (or reports that none was ever launched),
-// and only then prints and reads.
-type pasteHandoff struct {
-	mu sync.Mutex
-	// requested is set by the first paste request; later requests are
-	// no-ops (the handoff already happened).
-	requested bool
-	// urlPrinted reports whether a sign-in URL block is already visible on
-	// the plain screen; the paste prompt then renders the hint only.
-	urlPrinted bool
-	// doneCh is the running status TUI's Done channel while the TUI is up;
-	// nil otherwise.
-	doneCh chan<- tui.StatusResult
-	// tuiDown is closed exactly once when the screen is plain (either the
-	// TUI exited, it was never launched, or no TUI could be launched).
-	tuiDown   chan struct{}
-	closeDown sync.Once
+// pasteSession coordinates the in-TUI redirect URL input (OnStatusInput) with
+// the background PasteBackFunc invoked by HostService.PromptAuthResponse.
+// Submitted values wait briefly for an active PromptAuthResponse window and are
+// pre-validated against its expected redirect URI before entering the one-shot
+// channel so malformed or premature pastes surface an inline warning flash and
+// allow retry without consuming the plugin's single RPC call.
+type pasteSession struct {
+	mu                  sync.Mutex
+	expectedRedirectURI string
+	active              bool
+	ready               chan struct{}
+	readyOnce           sync.Once
+	submitted           chan string
 }
 
-func newPasteHandoff() *pasteHandoff {
-	return &pasteHandoff{tuiDown: make(chan struct{})}
-}
-
-// markTuiUp records the running TUI's Done channel: paste requests from now
-// on drive the TUI down by sending it an exit message.
-func (h *pasteHandoff) markTuiUp(done chan<- tui.StatusResult) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.doneCh = done
-}
-
-// markTuiDown releases any waiting paste prompt: the terminal is plain.
-// Safe to call multiple times.
-func (h *pasteHandoff) markTuiDown() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.doneCh = nil
-	h.closeDown.Do(func() { close(h.tuiDown) })
-}
-
-// engaged reports whether a paste request already drove the handoff.
-func (h *pasteHandoff) engaged() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.requested
-}
-
-// requestPaste asks for the plain-text paste handoff. While the status TUI
-// is up it makes the TUI exit cleanly (the message flashes briefly, then
-// tui.Run returns and the runner calls markTuiDown); with the screen already
-// plain it releases the prompt directly.
-func (h *pasteHandoff) requestPaste() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.requested {
-		return
+func newPasteSession() *pasteSession {
+	return &pasteSession{
+		ready:     make(chan struct{}),
+		submitted: make(chan string, 1),
 	}
-	h.requested = true
-	if h.doneCh != nil {
+}
+
+// activate marks the paste-back prompt window open with redirectURI and returns
+// a deactivation callback to run when PasteBackFunc exits.
+func (ps *pasteSession) activate(redirectURI string) func() {
+	ps.mu.Lock()
+	if redirectURI != "" {
+		ps.expectedRedirectURI = redirectURI
+	}
+	ps.active = true
+	ps.mu.Unlock()
+	ps.readyOnce.Do(func() { close(ps.ready) })
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			ps.mu.Lock()
+			ps.active = false
+			ps.mu.Unlock()
+		})
+	}
+}
+
+func (ps *pasteSession) state() (active bool, expectedRedirectURI string) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	return ps.active, ps.expectedRedirectURI
+}
+
+// submit validates a redirect URL pasted into the status TUI input before
+// delivering it to the waiting PasteBackFunc.
+func (ps *pasteSession) submit(ctx context.Context, raw string) error {
+	select {
+	case <-ps.ready:
+	default:
+		timer := time.NewTimer(pasteActivationGrace)
 		select {
-		case h.doneCh <- tui.StatusResult{Message: pasteExitMessage}:
-		default:
+		case <-ps.ready:
+			timer.Stop()
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
 		}
-		return
 	}
-	h.closeDown.Do(func() { close(h.tuiDown) })
-}
 
-// printURLBlockFallback renders the plain sign-in block for a user who quit
-// the status TUI early: the URL stays visible for the rest of the login and
-// the waiting line explains what happens next. It holds the handoff lock
-// while printing so a concurrent paste prompt cannot interleave.
-func (h *pasteHandoff) printURLBlockFallback(w *writer.Writer, verificationURI, userCode string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.urlPrinted = true
-	printSignInBlock(w, verificationURI, userCode)
-}
-
-// announcePaste renders the paste instructions right before the hidden read.
-// When the sign-in URL is not already on the plain screen (the handoff from
-// the TUI, whose alt screen is wiped on exit), the URL block prints first
-// with the same heading, keeping the flow identical to the non-TTY layout.
-func (h *pasteHandoff) announcePaste(w *writer.Writer, authorizationURL string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.urlPrinted {
-		h.urlPrinted = true
-		w.Plainln("")
-		w.Plainln(signInHeading)
-		w.Plainln("  " + authorizationURL)
-		w.Plainln("")
+	active, expectedURI := ps.state()
+	if !active {
+		return errors.New("redirect URL paste-back is not active for this login")
 	}
-	w.Plainln(pasteBackPromptText)
+
+	normalized, err := validateStatusPasteInput(raw, expectedURI)
+	if err != nil {
+		return err
+	}
+	select {
+	case ps.submitted <- normalized:
+		return nil
+	default:
+		return errors.New("redirect URL has already been submitted")
+	}
 }
 
-// outcomeCapture owns the login outcome channel on behalf of a phase that no
-// longer selects on it directly: it consumes the single outcome, forwards a
-// StatusResult to the TUI's Done channel (non-blocking -- the TUI may have
-// already exited), and makes the outcome readable via wait/closed.
-//
-// captured is safe to read after ready is closed because close(ready)
-// happens-before any receive on it. The closure precedes the Done forward,
-// so a consumer of the forwarded message (the TUI, or a test stub) can rely
-// on the outcome being published.
+// outcomeCapture owns the login outcome channel: it consumes the single
+// outcome, forwards a StatusResult to the TUI's Done channel (non-blocking in
+// case the TUI already exited), and exposes the outcome via wait/closed.
 type outcomeCapture struct {
 	captured loginOutcome
 	ready    chan struct{}
@@ -463,8 +415,7 @@ func (oc *outcomeCapture) closed() bool {
 	}
 }
 
-// wait blocks for the outcome (or a cancelled login, which the login
-// goroutine then reports as its error).
+// wait blocks for the outcome or context cancellation.
 func (oc *outcomeCapture) wait(ctx context.Context) (*auth.Result, error) {
 	select {
 	case <-oc.ready:
@@ -478,30 +429,25 @@ func (oc *outcomeCapture) wait(ctx context.Context) (*auth.Result, error) {
 }
 
 // runStatusScreen is tui.Run as a test seam: tests replace it to assert how
-// the status screen is launched and to drive the TUI-exit handoff
+// the status screen is configured and to drive completion or submission
 // deterministically without a PTY. Production code never reassigns it.
 var runStatusScreen = tui.Run
 
-// runInteractiveTUI runs a paste-capable interactive (browser) login in the
-// hybrid arrangement (#879, option c):
+// runInteractiveTUI runs an interactive browser login inside the kvx status TUI
+// with an auto-focused masked inline input for redirect URL paste-back:
 //
 //  1. Starts handler.Login in a goroutine with a DeviceCodeCallback that
-//     captures the authorize URL (browser flows send no user code), and a
-//     paste-back prompt that coordinates with this runner.
-//  2. Waits for the URL before launching the TUI, then shows the kvx status
-//     box with copy/open URL actions.
-//  3. When the login completes, the outcome drives the Done channel and the
-//     box shows "Authenticated as ..." before exiting. When the plugin
-//     requests a paste-back response, the paste prompt makes the TUI exit
-//     with a short handoff message and prints the unified plain paste block
-//     after tui.Run has returned. When the user quits the box early, the
-//     plain sign-in block prints and the login continues in plain text --
-//     also the manual way to reach the paste prompt.
-//
-// Paste-back requests that arrive before the URL (a handler that skips the
-// URL callback) are served directly in plain text without ever launching the
-// TUI. The TUI and the paste read never share stdin: ReadInteractiveLine
-// only starts after markTuiDown.
+//     captures the authorize URL and an in-memory PasteBackFunc backed by
+//     pasteSession.
+//  2. Launches the kvx status screen displaying a concise scheme://host/path
+//     endpoint summary while keeping Copy URL and Open URL bound to the full
+//     authorization URL, plus StatusDisplayConfig.Input (Masked: true) and
+//     cfg.OnStatusInput for remote SSH / Codespaces redirect URL paste-back.
+//  3. When the localhost browser callback completes first, PasteBackFunc
+//     cancels cleanly via its RPC context and the TUI flashes "Authenticated as
+//     ..." before exiting. When the user pastes a redirect URL into the TUI,
+//     OnStatusInput pre-validates it before resolving PasteBackFunc so typos or
+//     wrong URLs flash a retryable warning inline without consuming the RPC.
 func runInteractiveTUI(
 	ctx context.Context,
 	w *writer.Writer,
@@ -510,19 +456,14 @@ func runInteractiveTUI(
 	opts auth.LoginOptions,
 	ioStreams *terminal.IOStreams,
 ) (*auth.Result, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	urlChan := make(chan deviceCodeData, 1)
 	outcomeChan := make(chan loginOutcome, 1)
-	// done has cap 2 because it has exactly two senders (the outcome
-	// forwarder and one paste request), which keeps both non-blocking
-	// sends drop-free.
-	done := make(chan tui.StatusResult, 2)
-	handoff := newPasteHandoff()
+	done := make(chan tui.StatusResult, 1)
+	ps := newPasteSession()
 
-	// Only the first URL drives the display: the URL prints exactly once
-	// per login run even if the handler re-fires the callback.
-	// A handler that resolves to device code internally (an empty or
-	// interactive flow without a client secret) supplies a user code; it is
-	// carried through so the box and the fallback block show it.
 	opts.DeviceCodeCallback = func(userCode, verificationURI, _ string) {
 		select {
 		case urlChan <- deviceCodeData{userCode: userCode, verificationURI: verificationURI}:
@@ -530,7 +471,23 @@ func runInteractiveTUI(
 		}
 	}
 
-	ctx = auth.WithPasteBack(ctx, newPasteBackPrompt(w, ioStreams, handoff))
+	ctx = auth.WithPasteBack(ctx, func(pasteCtx context.Context, authorizationURL, redirectURI string) (string, error) {
+		defer ps.activate(redirectURI)()
+		if authorizationURL != "" {
+			select {
+			case urlChan <- deviceCodeData{verificationURI: authorizationURL}:
+			default:
+			}
+		}
+		select {
+		case val := <-ps.submitted:
+			return val, nil
+		case <-pasteCtx.Done():
+			return "", pasteCtx.Err()
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	})
 
 	go func() {
 		result, err := handler.Login(ctx, opts)
@@ -539,14 +496,10 @@ func runInteractiveTUI(
 
 	w.Verbosef("Initiating authentication with %s...", handler.DisplayName())
 
-	// Wait for the sign-in URL, an early completion, or cancellation. A
-	// paste request alongside this wait cannot strand a prompt: with no
-	// TUI up it releases itself (requestPaste closes tuiDown).
 	var prompt deviceCodeData
 	select {
 	case prompt = <-urlChan:
 	case outcome := <-outcomeChan:
-		// Login completed before a URL was shown (unusual).
 		if outcome.err != nil {
 			return nil, loginError(ctx, outcome.err)
 		}
@@ -555,41 +508,74 @@ func runInteractiveTUI(
 		return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
 	}
 
-	// From here on the outcome is owned by the capture goroutine.
 	oc := captureOutcome(outcomeChan, done)
 
-	// Register the TUI's Done channel first (before checking for an
-	// in-flight paste request) so a request racing this check always
-	// either drives the TUI down cleanly or finds the screen already
-	// released -- it can never print under a TUI that launches afterward,
-	// nor wait on a tuiDown that only a TUI exit would close.
-	handoff.markTuiUp(done)
-	defer handoff.markTuiDown()
+	cfg, data := buildInteractiveStatusTUI(binaryName, handler.DisplayName(), prompt, done, func(raw string) error {
+		return ps.submit(ctx, raw)
+	})
 
-	// A paste request that arrived during the wait owns the plain screen
-	// (its prompt renders on its own); never launch the TUI on top of it.
-	if handoff.engaged() {
-		handoff.markTuiDown()
+	teaOpts := tui.WithIO(ioStreams.In, ioStreams.Out)
+	if runErr := runStatusScreen(data, cfg, teaOpts...); runErr != nil {
+		if ctx.Err() != nil {
+			return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+		}
+		// If the TUI could not start (e.g. an unusable terminal configuration),
+		// fall back to printing the plain sign-in block so a local browser
+		// callback can still complete the login.
+		printSignInBlock(w, prompt.verificationURI, prompt.userCode)
 		return oc.wait(ctx)
 	}
 
+	if oc.closed() {
+		return oc.wait(ctx)
+	}
+
+	// User exited the TUI early (Esc or Ctrl+C) before authentication completed.
+	cancel()
+	return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
+}
+
+// buildInteractiveStatusTUI constructs the tui.Config (including DisplaySchema)
+// and data map for an interactive login status screen.
+func buildInteractiveStatusTUI(
+	binaryName string,
+	handlerDisplayName string,
+	prompt deviceCodeData,
+	done <-chan tui.StatusResult,
+	onSubmit tui.StatusInputSubmitFunc,
+) (tui.Config, map[string]any) {
 	authURL := prompt.verificationURI
 	data := map[string]any{
-		"title": fmt.Sprintf("Sign in to %s", handler.DisplayName()),
-		"url":   authURL,
+		"title":    fmt.Sprintf("Sign in to %s", handlerDisplayName),
+		"url":      authURL,
+		"endpoint": summarizeAuthorizationURL(authURL),
 	}
-	fields := []tui.StatusFieldDisplay{{Label: "URL", Field: "url"}}
+
+	fields := []tui.StatusFieldDisplay{{Label: "URL", Field: "endpoint"}}
 	copyAction := tui.StatusActionConfig{
 		Label: "Copy URL",
 		Type:  "copy-value",
 		Field: "url",
 		Keys:  tui.StatusKeyBindings{Vim: "c", Emacs: "alt+c", Function: "f2"},
 	}
+
+	var statusInput *tui.StatusInputConfig
+	var statusSubmit tui.StatusInputSubmitFunc
+
 	if prompt.userCode != "" {
+		// Handler resolved interactive/empty flow internally to device code.
 		data["code"] = prompt.userCode
 		fields = append(fields, tui.StatusFieldDisplay{Label: "Code", Field: "code"})
 		copyAction.Label = "Copy code"
 		copyAction.Field = "code"
+	} else {
+		statusInput = &tui.StatusInputConfig{
+			Label:       pasteInputLabel,
+			Placeholder: pasteInputPlaceholder,
+			Masked:      true,
+			MaxLength:   maxPasteRedirectURLLen,
+		}
+		statusSubmit = onSubmit
 	}
 
 	schema := &tui.DisplaySchema{
@@ -601,6 +587,7 @@ func runInteractiveTUI(
 			DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
 			DoneDelay:      interactiveDoneDelay,
 			DisplayFields:  fields,
+			Input:          statusInput,
 			Actions: []tui.StatusActionConfig{
 				copyAction,
 				{
@@ -617,73 +604,146 @@ func runInteractiveTUI(
 	cfg.AppName = binaryName
 	cfg.DisplaySchema = schema
 	cfg.Done = done
+	cfg.OnStatusInput = statusSubmit
 
-	teaOpts := tui.WithIO(ioStreams.In, ioStreams.Out)
-	if runErr := runStatusScreen(data, cfg, teaOpts...); runErr != nil {
-		if ctx.Err() != nil {
-			return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
-		}
-		// The status TUI could not even start (an unusable terminal type,
-		// say). The login never needed it to succeed: keep going with the
-		// unified plain block, where the paste prompt stays fully
-		// functional.
-		if !handoff.engaged() {
-			handoff.printURLBlockFallback(w, authURL, prompt.userCode)
-		}
-		handoff.markTuiDown()
-		return oc.wait(ctx)
-	}
-
-	if oc.closed() {
-		// The outcome drove the TUI exit (success or error flash).
-		return oc.wait(ctx)
-	}
-
-	// The TUI exited without the login finishing. Either a paste request
-	// drove the exit (the prompt takes over the plain screen), or the user
-	// quit the box: fall back to the plain block so the URL stays visible
-	// and keep waiting in plain text. A cancelled login prints nothing
-	// more -- the cancellation notice already went to stderr.
-	if !handoff.engaged() && ctx.Err() == nil {
-		handoff.printURLBlockFallback(w, authURL, prompt.userCode)
-	}
-	handoff.markTuiDown()
-
-	return oc.wait(ctx)
+	return cfg, data
 }
 
-// newPasteBackPrompt builds the PasteBackFunc installed into interactive
-// logins: it renders the host-authored paste instructions and reads the
-// pasted redirect URL with a cancellation-safe terminal read (the RPC
-// context cancels when the plugin's own localhost callback arrives first,
-// and the read leaves no reader behind to steal the next input). The pasted
-// value is never written anywhere: it carries an authorization code, so the
-// read does not echo it (like a password prompt) and it is never logged.
-func newPasteBackPrompt(w *writer.Writer, ioStreams *terminal.IOStreams, handoff *pasteHandoff) auth.PasteBackFunc {
-	return func(ctx context.Context, authorizationURL, _ string) (string, error) {
-		// Make the screen plain before anything prints or reads: a
-		// raw-mode status TUI owns stdin exclusively (#877).
-		handoff.requestPaste()
-		select {
-		case <-handoff.tuiDown:
-			// Screen is plain: safe to print and read.
-		case <-ctx.Done():
-			// The callback arrived (or the login was canceled): the
-			// prompt goes away and the half-typed line is discarded.
-			return "", ctx.Err()
-		}
-		handoff.announcePaste(w, authorizationURL)
-		line, err := input.ReadInteractiveLine(ctx, ioStreams.In, io.Discard)
-		// No echo means the terminal never saw a newline: end the prompt line.
-		w.PlainStderr("")
-		if err != nil {
-			if ctx.Err() != nil {
-				return "", ctx.Err()
-			}
-			return "", fmt.Errorf("reading pasted address: %w", err)
-		}
-		return strings.TrimSpace(line), nil
+// summarizeAuthorizationURL formats an authorization URL as a concise
+// "scheme://host/path" display string (omitting query parameters, fragments,
+// and userinfo) so long OAuth PKCE URLs fit cleanly inside the status card
+// while Copy URL and Open URL remain bound to the full URL.
+func summarizeAuthorizationURL(rawURL string) string {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return ""
 	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || !parsed.IsAbs() || parsed.Scheme == "" || parsed.Host == "" {
+		if idx := strings.IndexAny(trimmed, "?#"); idx >= 0 {
+			return trimmed[:idx]
+		}
+		return trimmed
+	}
+	path := parsed.EscapedPath()
+	if path == "/" {
+		path = ""
+	}
+	return parsed.Scheme + "://" + parsed.Host + path
+}
+
+// validateStatusPasteInput normalizes and validates a redirect URL submitted
+// from the interactive status TUI before delivering it to PasteBackFunc.
+// Returned errors never embed the pasted value itself.
+func validateStatusPasteInput(raw, expectedRedirectURI string) (string, error) {
+	if len(raw) > maxPasteRedirectURLLen {
+		return "", fmt.Errorf("pasted redirect URL exceeds maximum length of %d characters", maxPasteRedirectURLLen)
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", errors.New("paste the full redirect URL from your browser's address bar")
+	}
+
+	var want *url.URL
+	if expectedRedirectURI != "" {
+		if parsedWant, err := url.Parse(expectedRedirectURI); err == nil && parsedWant.IsAbs() && parsedWant.Host != "" {
+			want = parsedWant
+		}
+	}
+
+	normalized := normalizeSchemeLessLoopbackURL(trimmed, want)
+	parsed, err := url.Parse(normalized)
+	if err != nil || !parsed.IsAbs() || (!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) || parsed.Host == "" || parsed.User != nil {
+		return "", errors.New("expected a localhost redirect URL (e.g. http://localhost:<port>/?code=...)")
+	}
+	if !isLoopbackRedirectHost(parsed.Hostname()) {
+		return "", errors.New("expected a localhost redirect URL, not an external address")
+	}
+
+	if want != nil {
+		wantPath := strings.TrimSuffix(want.Path, "/")
+		gotPath := strings.TrimSuffix(parsed.Path, "/")
+		if !strings.EqualFold(parsed.Scheme, want.Scheme) || !strings.EqualFold(parsed.Host, want.Host) ||
+			(wantPath != "" && gotPath != wantPath && !strings.HasPrefix(gotPath, wantPath+"/")) {
+			return "", fmt.Errorf("pasted URL does not match expected redirect %s", expectedRedirectURI)
+		}
+	}
+
+	if !hasOAuthRedirectPayload(parsed) {
+		return "", errors.New("redirect URL must contain code=, error=, or #access_token=")
+	}
+
+	return canonicalizeLoopbackSchemeAndHost(normalized, want), nil
+}
+
+// normalizeSchemeLessLoopbackURL restores the "http://" scheme when a browser
+// strips it while copying a loopback URL (localhost, 127.0.0.0/8, or [::1])
+// from the address bar.
+func normalizeSchemeLessLoopbackURL(trimmed string, want *url.URL) string {
+	if strings.Contains(trimmed, "://") {
+		return trimmed
+	}
+	if want != nil && !strings.EqualFold(want.Scheme, "http") {
+		return trimmed
+	}
+	candidate := "http://" + trimmed
+	parsed, err := url.Parse(candidate)
+	if err != nil || parsed.Host == "" || parsed.User != nil || !isLoopbackRedirectHost(parsed.Hostname()) {
+		return trimmed
+	}
+	return candidate
+}
+
+// canonicalizeLoopbackSchemeAndHost lowercases the URL scheme and host (or
+// aligns them with want when present) while preserving path, raw query, and
+// fragment bytes verbatim.
+func canonicalizeLoopbackSchemeAndHost(rawURL string, want *url.URL) string {
+	idx := strings.Index(rawURL, "://")
+	if idx < 0 {
+		return rawURL
+	}
+	afterScheme := rawURL[idx+3:]
+	hostEnd := strings.IndexAny(afterScheme, "/?#")
+	if hostEnd < 0 {
+		hostEnd = len(afterScheme)
+	}
+	scheme := strings.ToLower(rawURL[:idx])
+	host := strings.ToLower(afterScheme[:hostEnd])
+	if want != nil {
+		scheme = want.Scheme
+		host = want.Host
+	}
+	return scheme + "://" + host + afterScheme[hostEnd:]
+}
+
+// isLoopbackRedirectHost reports whether host is "localhost" or a loopback IP
+// address (such as 127.0.0.1 or ::1).
+func isLoopbackRedirectHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// hasOAuthRedirectPayload reports whether parsed carries a non-empty OAuth
+// authorization response parameter (code=, error=, or #access_token=).
+func hasOAuthRedirectPayload(parsed *url.URL) bool {
+	if parsed.RawQuery != "" {
+		q := parsed.Query()
+		if q.Get("code") != "" || q.Get("error") != "" {
+			return true
+		}
+	}
+	if parsed.Fragment != "" {
+		fq := (&url.URL{RawQuery: parsed.Fragment}).Query()
+		if fq.Get("access_token") != "" || fq.Get("code") != "" || fq.Get("error") != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // interactiveTerminal reports whether stdin, stdout, and stderr are all

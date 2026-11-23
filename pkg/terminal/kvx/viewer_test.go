@@ -273,11 +273,10 @@ func TestApplyWhereFilter_InvalidExpr(t *testing.T) {
 	assert.Contains(t, err.Error(), "where filter failed")
 }
 
-// TestApplyWhereFilter_NoOpOnNonList pins the object/scalar/nil behavior:
-// kvx.EvaluateWhere hard-errors on non-list data, but scafctl exposes -w
-// uniformly across ~50 kvx-driven commands. Single-object commands
-// (config schema, config view, auth token, ...) must not fail on -w just
-// because the shared helper registered it.
+// TestApplyWhereFilter_NoOpOnNonList pins the object/scalar/byte-slice/nil
+// behavior: Engine.FilterWhere reports core.ErrNotList on non-list data, and
+// applyWhereFilter returns the original input unchanged so single-object
+// commands (config schema, config view, auth token, ...) do not error on -w.
 func TestApplyWhereFilter_NoOpOnNonList(t *testing.T) {
 	t.Parallel()
 
@@ -287,6 +286,7 @@ func TestApplyWhereFilter_NoOpOnNonList(t *testing.T) {
 	}{
 		{"map", map[string]any{"name": "solo", "ok": true}},
 		{"typed struct", struct{ Name string }{Name: "solo"}},
+		{"byte slice", []byte("binary-payload")},
 		{"string", "solo"},
 		{"int", 42},
 		{"bool", true},
@@ -303,19 +303,6 @@ func TestApplyWhereFilter_NoOpOnNonList(t *testing.T) {
 				"non-list input must be returned unchanged")
 		})
 	}
-}
-
-func TestIsListShaped(t *testing.T) {
-	t.Parallel()
-
-	assert.True(t, isListShaped([]any{1, 2, 3}))
-	assert.True(t, isListShaped([]map[string]any{{"a": 1}}))
-	assert.True(t, isListShaped([3]int{1, 2, 3}))
-
-	assert.False(t, isListShaped(nil))
-	assert.False(t, isListShaped(map[string]any{"k": "v"}))
-	assert.False(t, isListShaped("scalar"))
-	assert.False(t, isListShaped(42))
 }
 
 func TestResolveDisplaySchema_Valid(t *testing.T) {

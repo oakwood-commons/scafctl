@@ -222,8 +222,8 @@ github.com/oakwood-commons/celexp v0.1.0 h1:U3R2Ta/1SHb1+ECQmua2084QiYvqF6+KEevJ
 github.com/oakwood-commons/celexp v0.1.0/go.mod h1:rlPDWHCP7O8vgXdtiNE7OQ1kXYgx2+78ojI8S1oJCWE=
 github.com/oakwood-commons/httpc v0.3.0 h1:tcLf3naVcNuajO3irGoX4+gYcofe63ZxEx/G9fx2Q6Y=
 github.com/oakwood-commons/httpc v0.3.0/go.mod h1:/b4+JOpD/Ym+L8ajYjQTAX0ltzSporVmCft9nNxPg8E=
-github.com/oakwood-commons/kvx v0.17.0 h1:ii4O0aIKR1c1h0oAyDmC7WM9DakjdbNbphFiMd9xxgQ=
-github.com/oakwood-commons/kvx v0.17.0/go.mod h1:9V23NUWeCZW6HH9EN1QDWI8zpjvBdOWr+ZAeXB77ltw=
+github.com/oakwood-commons/kvx v0.18.0 h1:IQOUuMnrOyiCZtNF53iSCQUD2mjHQdGCiKMMH6LySuk=
+github.com/oakwood-commons/kvx v0.18.0/go.mod h1:9V23NUWeCZW6HH9EN1QDWI8zpjvBdOWr+ZAeXB77ltw=
 github.com/oakwood-commons/scafctl-plugin-sdk v0.18.0 h1:BdIaqQWr2VAZzJyz03hI/2l3oRoVvMHI22MlJC8O7xI=
 github.com/oakwood-commons/scafctl-plugin-sdk v0.18.0/go.mod h1:8KmqfRbT9S4DZoVl1B6gM5MJD8RuHOzSuBnltVtaYoA=
 github.com/oklog/run v1.2.0 h1:O8x3yXwah4A73hJdlrwo/2X6J62gE5qTMusH0dvz60E=

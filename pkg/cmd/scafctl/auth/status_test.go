@@ -4,15 +4,19 @@
 package auth
 
 import (
+	"bytes"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -520,4 +524,121 @@ func TestCommandStatus_JSONOutput_NoInternalFields(t *testing.T) {
 	output := buf.String()
 	assert.NotContains(t, output, "_expiresAtTime")
 	assert.Contains(t, output, "authenticated")
+}
+
+func TestAuthHandlersTable_RendersBorderedAt100Columns(t *testing.T) {
+	ctx, _ := newTestContext(t)
+	ctx = auth.WithProfile(ctx, "test")
+
+	mock := auth.NewMockHandler("entra")
+	mock.DisplayNameValue = "Microsoft Entra ID"
+	mock.SetAuthenticated(&auth.Claims{Email: "user@example.com"})
+	mock.StatusResult.Flow = auth.FlowInteractive
+	mock.StatusResult.ExpiresAt = time.Now().Add(90 * 24 * time.Hour)
+
+	row := buildStatusResult(ctx, settings.NewCliParams(), "entra", mock, mock.StatusResult)
+	for k := range row {
+		if strings.HasPrefix(k, "_") {
+			delete(row, k)
+		}
+	}
+	rows := []map[string]any{row}
+
+	hints := authHandlerColumnHints(hasClusterScopedRows(rows))
+	assert.True(t, hints["kind"].Hidden, "redundant kind column must be hidden under Auth Handlers")
+	assert.Equal(t, authHandlerProfileMaxWidth, hints["profile"].MaxWidth)
+	assert.Equal(t, authHandlerFlowMaxWidth, hints["flow"].MaxWidth)
+	assert.True(t, hints["user"].Flex, "user column must be Flex")
+
+	for _, width := range []int{90, 100, 120} {
+		var out bytes.Buffer
+		err := kvx.View(rows,
+			kvx.WithIO(nil, &out),
+			kvx.WithNoColor(true),
+			kvx.WithDimensions(width, 24),
+			kvx.WithColumnOrder([]string{"handler", "profile", "status", "user", "flow", "expiresIn"}),
+			kvx.WithColumnarMode(tui.ColumnarModeAlways),
+			kvx.WithSchemaJSON(authStatusSchema),
+			kvx.WithColumnHints(hints),
+		)
+		require.NoError(t, err, "width=%d", width)
+
+		rendered := out.String()
+		assert.Contains(t, rendered, "╭", "width=%d must render bordered kvx table", width)
+		assert.Contains(t, rendered, "Handler")
+		assert.Contains(t, rendered, "Profile")
+		assert.Contains(t, rendered, "Status")
+		assert.Contains(t, rendered, "User")
+		assert.Contains(t, rendered, "Flow")
+		assert.Contains(t, rendered, "Expires")
+		assert.Contains(t, rendered, "user@example.com")
+		assert.NotContains(t, rendered, "Kind", "hidden Kind column must not render in Auth Handlers table")
+		assert.NotContains(t, rendered, "expiresIn:", "table must not collapse into vertical key/value cards")
+	}
+}
+
+func TestAuthHandlersTable_PreservesWiderProfileForClusterScopedRows(t *testing.T) {
+	ctx, _ := newTestContext(t)
+	now := time.Now()
+
+	mock := auth.NewMockHandler("openshift")
+	mock.CapabilitiesValue = []auth.Capability{auth.CapInstanceHostname}
+	mock.SetAuthenticated(&auth.Claims{Email: "user@example.com"})
+	mock.ListCachedTokensResult = []*auth.CachedTokenInfo{
+		{
+			Handler:   "openshift",
+			Hostname:  "https://api.cluster-a.example.com:6443",
+			Flow:      auth.FlowInteractive,
+			ExpiresAt: now.Add(2 * time.Hour),
+			CachedAt:  now,
+		},
+	}
+
+	base := buildStatusResult(ctx, settings.NewCliParams(), "openshift", mock, mock.StatusResult)
+	base["profile"] = "work"
+	rows := expandInstanceRows(ctx, "openshift", mock, mock.StatusResult, base)
+	require.True(t, hasClusterScopedRows(rows))
+
+	for _, r := range rows {
+		for k := range r {
+			if strings.HasPrefix(k, "_") {
+				delete(r, k)
+			}
+		}
+	}
+
+	hints := authHandlerColumnHints(true)
+	assert.Equal(t, authHandlerClusterProfileMaxWidth, hints["profile"].MaxWidth, "cluster-scoped rows preserve wider profile cap")
+
+	// Also verify "<profile> / <cluster>" string detection without internal marker.
+	assert.True(t, hasClusterScopedRows(rows))
+
+	var out bytes.Buffer
+	err := kvx.View(rows,
+		kvx.WithIO(nil, &out),
+		kvx.WithNoColor(true),
+		kvx.WithDimensions(100, 24),
+		kvx.WithColumnOrder([]string{"handler", "profile", "status", "user", "flow", "expiresIn"}),
+		kvx.WithColumnarMode(tui.ColumnarModeAlways),
+		kvx.WithSchemaJSON(authStatusSchema),
+		kvx.WithColumnHints(hints),
+	)
+	require.NoError(t, err)
+
+	rendered := out.String()
+	assert.Contains(t, rendered, "╭", "cluster-scoped rows at 100 columns must still render as bordered table")
+	assert.Contains(t, rendered, "work / api.cluster-a.", "cluster-scoped profile column must preserve >20-char cluster label at 100 columns")
+	assert.NotContains(t, rendered, "expiresIn:")
+
+	var wideOut bytes.Buffer
+	require.NoError(t, kvx.View(rows,
+		kvx.WithIO(nil, &wideOut),
+		kvx.WithNoColor(true),
+		kvx.WithDimensions(120, 24),
+		kvx.WithColumnOrder([]string{"handler", "profile", "status", "user", "flow", "expiresIn"}),
+		kvx.WithColumnarMode(tui.ColumnarModeAlways),
+		kvx.WithSchemaJSON(authStatusSchema),
+		kvx.WithColumnHints(hints),
+	))
+	assert.Contains(t, wideOut.String(), "work / api.cluster-a.example.com (active)")
 }

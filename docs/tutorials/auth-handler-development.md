@@ -844,9 +844,11 @@ Authorization code + PKCE logins redirect the browser to
 `http://localhost:<port>` on the machine running scafctl. In remote workspaces
 (DevSpaces, Codespaces) that redirect cannot arrive, so the SDK v0.18.0 host
 offers `HostServiceClient.PromptAuthResponse(ctx, handler, authURL, redirectURI)`:
-the host renders its own paste-back prompt, the user pastes the full address
-from the browser's address bar, and the host returns the pasted URL verbatim
-(extract the `code` query parameter and continue the code exchange).
+the host renders its own paste-back prompt, the user pastes the redirect
+address from the browser's address bar, and the host returns the validated
+redirect URL (restoring `http://` when a browser strips the scheme from a
+loopback `localhost` / `127.0.0.1` / `[::1]` paste; extract the `code` query
+parameter and continue the code exchange).
 
 Call it only during your `Login`, and shape the flow as:
 
@@ -869,10 +871,11 @@ Call it only during your `Login`, and shape the flow as:
    `InvalidArgument` -- re-prompt or surface a clear error.
 
 The host never logs the pasted value, writes all prompt text itself (you
-supply only URLs), and requires an interactive terminal. On a terminal the
-login shows a status box with the authorization URL first; calling
-`PromptAuthResponse` makes that box exit and the host renders its plain
-paste prompt, so calling the RPC is also what switches the display.
+supply only URLs), and requires an interactive terminal. On an interactive
+terminal the login keeps the `kvx` status box active with a concise endpoint
+summary, `Copy URL` / `Open URL` actions, and an inline masked redirect-URL
+input that pre-validates user submissions before resolving `PromptAuthResponse`
+(so accidental typos can be retried inline without consuming your RPC call).
 
 ### gRPC Serialization
 

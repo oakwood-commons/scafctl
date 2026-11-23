@@ -111,9 +111,11 @@ func TestCommandLogin_Success(t *testing.T) {
 	require.Len(t, mock.LoginCalls, 1)
 	assert.Equal(t, auth.FlowDeviceCode, mock.LoginCalls[0].Flow)
 
-	// Verify output
+	// Verify output has a plain blank separator line and no bare info prefix icon
 	output := buf.String()
 	assert.Contains(t, output, "Logged in to Microsoft Entra ID as test@example.com")
+	assert.NotContains(t, output, "ℹ", "executeLogin must not emit a bare info icon line before the login result")
+	assert.True(t, len(output) > 0 && output[0] == '\n', "executeLogin should emit a plain blank line before the login result")
 }
 
 func TestCommandLogin_AlreadyAuthenticated(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/oakwood-commons/kvx/pkg/core"
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"golang.org/x/term"
@@ -569,6 +571,29 @@ func (o *OutputOptions) buildViewerOptions() []Option {
 	}
 
 	return kvxOpts
+}
+
+// applyWhereFilter applies a per-item CEL boolean filter to list data via kvx's
+// Engine.FilterWhere. Typed Go struct slices are normalized using their json
+// and yaml struct tags, zero-match results produce a non-nil empty slice ([] in
+// JSON/YAML), and non-list inputs (maps, structs, scalars, []byte, nil) return
+// the original data unchanged when Engine.FilterWhere reports core.ErrNotList.
+func applyWhereFilter(where string, data any) (any, error) {
+	if where == "" {
+		return data, nil
+	}
+	engine, err := core.New()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create CEL engine for where filter: %w", err)
+	}
+	filtered, err := engine.FilterWhere(where, data)
+	if err != nil {
+		if errors.Is(err, core.ErrNotList) {
+			return data, nil
+		}
+		return nil, fmt.Errorf("where filter failed: %w", err)
+	}
+	return filtered, nil
 }
 
 // writeStructured handles JSON/YAML output with optional expression and where filtering.

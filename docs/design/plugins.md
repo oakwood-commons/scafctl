@@ -313,7 +313,8 @@ than an empty list. As with the other auth callbacks, the request is gated by
 `AllowedAuthHandlers`.
 
 `PromptAuthResponse` asks the host to prompt the user for the redirect URL of
-an authorization code + PKCE login and returns the pasted value verbatim. It
+an authorization code + PKCE login and returns the validated redirect URL
+(normalizing scheme-less loopback pastes when `redirect_uri` uses `http://`). It
 is valid only during an active `Login` for the calling handler; outside a
 login or in a non-interactive session (no terminal, piped stdin, MCP/CI) the
 host returns `Unavailable`, and hosts that predate the RPC return
