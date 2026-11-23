@@ -320,8 +320,8 @@ func TestHandler_GetToken_FromCache(t *testing.T) {
 func TestHandler_GetToken_Refresh(t *testing.T) {
 	srv := newTestOAuthServer(t)
 	defer srv.Close()
-	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) { cfg.ClientSecret = "test-secret" })
-	_ = store.Set(context.Background(), secretKeyPrefix+"test-provider."+secretKeyRefreshSuffix, []byte("good-refresh"))
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) { cfg.ClientSecret = "test-secret" })
+	require.NoError(t, h.storeRefreshToken(context.Background(), "good-refresh"))
 	token, err := h.GetToken(context.Background(), auth.TokenOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "refreshed-access-token", token.AccessToken)
@@ -1066,13 +1066,13 @@ func TestHandler_GetToken_ResolvesActiveProfile(t *testing.T) {
 	srv := newTestOAuthServer(t)
 	defer srv.Close()
 
-	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
 		cfg.Name = "github"
 		cfg.ClientSecret = "test-secret"
 	})
 
 	// Store a refresh token under the "work" profile key.
-	_ = store.Set(context.Background(), secretKeyPrefix+"github.work."+secretKeyRefreshSuffix, []byte("good-refresh"))
+	require.NoError(t, h.storeRefreshToken(auth.WithProfile(context.Background(), "work"), "good-refresh"))
 
 	// Build a context with config-level activeProfile but NO explicit WithProfile.
 	ctx := config.WithConfig(context.Background(), &config.Config{
@@ -1091,14 +1091,14 @@ func TestHandler_GetToken_ExplicitProfileTakesPrecedence(t *testing.T) {
 	srv := newTestOAuthServer(t)
 	defer srv.Close()
 
-	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
 		cfg.Name = "github"
 		cfg.ClientSecret = "test-secret"
 	})
 
 	// Store refresh token ONLY under the "explicit" profile.
 	// The "config" profile has no token — if GetToken mistakenly uses it, the test fails.
-	_ = store.Set(context.Background(), secretKeyPrefix+"github.explicit."+secretKeyRefreshSuffix, []byte("good-refresh"))
+	require.NoError(t, h.storeRefreshToken(auth.WithProfile(context.Background(), "explicit"), "good-refresh"))
 
 	// Context has config-level activeProfile="config" but explicit WithProfile="explicit".
 	ctx := config.WithConfig(context.Background(), &config.Config{
@@ -1118,13 +1118,13 @@ func TestHandler_GetToken_GlobalFlagProfileResolved(t *testing.T) {
 	srv := newTestOAuthServer(t)
 	defer srv.Close()
 
-	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
 		cfg.Name = "github"
 		cfg.ClientSecret = "test-secret"
 	})
 
 	// Store refresh token under the "flag" profile.
-	_ = store.Set(context.Background(), secretKeyPrefix+"github.flag."+secretKeyRefreshSuffix, []byte("good-refresh"))
+	require.NoError(t, h.storeRefreshToken(auth.WithProfile(context.Background(), "flag"), "good-refresh"))
 
 	// Context has global --auth-profile flag set but no explicit WithProfile.
 	ctx := auth.WithGlobalProfile(context.Background(), "flag")
@@ -1138,12 +1138,12 @@ func TestHandler_GetToken_NoProfileFallsBackToDefault(t *testing.T) {
 	srv := newTestOAuthServer(t)
 	defer srv.Close()
 
-	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
 		cfg.ClientSecret = "test-secret"
 	})
 
 	// Store refresh token under default (no profile) key.
-	_ = store.Set(context.Background(), secretKeyPrefix+"test-provider."+secretKeyRefreshSuffix, []byte("good-refresh"))
+	require.NoError(t, h.storeRefreshToken(context.Background(), "good-refresh"))
 
 	// No profile anywhere — should use default key as before.
 	token, err := h.GetToken(context.Background(), auth.TokenOptions{})
@@ -1155,13 +1155,13 @@ func TestHandler_GetToken_ProfileResolvedSkipsReResolution(t *testing.T) {
 	srv := newTestOAuthServer(t)
 	defer srv.Close()
 
-	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
 		cfg.Name = "github"
 		cfg.ClientSecret = "test-secret"
 	})
 
 	// Store refresh token ONLY under the default (built-in) profile key.
-	_ = store.Set(context.Background(), secretKeyPrefix+"github."+secretKeyRefreshSuffix, []byte("good-refresh"))
+	require.NoError(t, h.storeRefreshToken(context.Background(), "good-refresh"))
 
 	// Config has activeProfile="work", but the caller marked profile as resolved
 	// (simulating "auth token --profile built-in" which normalizes to default).
@@ -2151,8 +2151,8 @@ func TestHandler_DCR_PersistsAcrossProcessRestart_And_SessionLifecycle(t *testin
 	cfgEx.TokenExchange = &config.TokenExchangeConfig{URL: srv.URL + "/exchange", TokenJSONPath: "token"}
 	hEx, err := New(cfgEx, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
 	require.NoError(t, err)
-	_ = store.Set(ctx, secretKeyPrefix+"dcr-exchange."+secretKeyRefreshSuffix, []byte("dcr-refresh-1"))
 	_ = store.Set(ctx, secretKeyPrefix+"dcr-exchange."+dynamicClientSecretKey, store.Data[secretKeyPrefix+"dcr-svc."+dynamicClientSecretKey])
+	require.NoError(t, hEx.storeRefreshToken(ctx, "dcr-refresh-1"))
 	_, err = hEx.GetToken(ctx, auth.TokenOptions{ForceRefresh: true})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "token_exchange")
@@ -2329,7 +2329,6 @@ func TestHandler_Logout_PreventsInFlightMintAndRefreshFromRepopulatingCache(t *t
 
 		store := secrets.NewMockStore()
 		ctx := context.Background()
-		require.NoError(t, store.Set(ctx, secretKeyPrefix+"race-refresh."+secretKeyRefreshSuffix, []byte("initial-refresh")))
 
 		h, err := New(config.CustomOAuth2Config{
 			Name:         "race-refresh",
@@ -2338,6 +2337,7 @@ func TestHandler_Logout_PreventsInFlightMintAndRefreshFromRepopulatingCache(t *t
 			ClientSecret: "csec",
 		}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
 		require.NoError(t, err)
+		require.NoError(t, h.storeRefreshToken(ctx, "initial-refresh"))
 
 		errCh := make(chan error, 1)
 		go func() {
@@ -2753,7 +2753,6 @@ func TestHandler_RefreshToken_RotationPersistence_And_ConcurrentSingleUseSeriali
 
 	store := secrets.NewMockStore()
 	ctx := context.Background()
-	require.NoError(t, store.Set(ctx, secretKeyPrefix+"rot-idp."+secretKeyRefreshSuffix, []byte("refresh-gen-1")))
 
 	h, err := New(config.CustomOAuth2Config{
 		Name:         "rot-idp",
@@ -2762,6 +2761,7 @@ func TestHandler_RefreshToken_RotationPersistence_And_ConcurrentSingleUseSeriali
 		ClientSecret: "csec",
 	}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
 	require.NoError(t, err)
+	require.NoError(t, h.storeRefreshToken(ctx, "refresh-gen-1"))
 
 	// 1. Two consecutive refreshes with ForceRefresh must persist and submit rotated tokens.
 	tok1, err := h.GetToken(ctx, auth.TokenOptions{Scope: "read", ForceRefresh: true})
@@ -2931,6 +2931,474 @@ func TestHandler_ConfidentialTokenExchange_URLEncodesBasicAuthCredentials(t *tes
 
 	expectedPair := url.QueryEscape(rawClientID) + ":" + url.QueryEscape(rawClientSecret)
 	assert.Equal(t, expectedPair, string(decodedBytes))
+}
+
+type deleteOnCorruptStore struct {
+	*secrets.MockStore
+	corruptKey       string
+	corruptErr       error
+	failSet          bool
+	cancelAfterGetFn context.CancelFunc
+	checkCtxOnGetSet bool
+}
+
+func (s *deleteOnCorruptStore) Get(ctx context.Context, name string) ([]byte, error) {
+	if s.checkCtxOnGetSet {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if s.corruptKey != "" && name == s.corruptKey {
+		s.corruptKey = ""
+		_ = s.Delete(context.WithoutCancel(ctx), name)
+		if s.cancelAfterGetFn != nil {
+			s.cancelAfterGetFn()
+		}
+		return nil, s.corruptErr
+	}
+	return s.MockStore.Get(ctx, name)
+}
+
+func (s *deleteOnCorruptStore) Set(ctx context.Context, name string, value []byte) error {
+	if s.checkCtxOnGetSet {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if s.failSet {
+		return errors.New("disk read-only")
+	}
+	return s.MockStore.Set(ctx, name, value)
+}
+
+func TestHandler_BlockedLogin_CannotUndoCompletedLogout(t *testing.T) {
+	t.Parallel()
+
+	t.Run("OAuth Login blocked at token endpoint does not overwrite Logout", func(t *testing.T) {
+		t.Parallel()
+		entered := make(chan struct{})
+		release := make(chan struct{})
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			close(entered)
+			<-release
+			writeJSON(w, tokenResponse{
+				AccessToken:  "late-login-token",
+				TokenType:    "Bearer",
+				ExpiresIn:    3600,
+				RefreshToken: "late-login-refresh",
+			})
+		}))
+		defer srv.Close()
+
+		store := secrets.NewMockStore()
+		h, err := New(config.CustomOAuth2Config{
+			Name:         "race-oauth-login",
+			TokenURL:     srv.URL + "/token",
+			ClientID:     "cid",
+			ClientSecret: "csec",
+			DefaultFlow:  "client_credentials",
+		}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		errCh := make(chan error, 1)
+		go func() {
+			_, lErr := h.Login(ctx, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+			errCh <- lErr
+		}()
+
+		<-entered
+		require.NoError(t, h.Logout(ctx))
+		close(release)
+
+		loginErr := <-errCh
+		require.ErrorIs(t, loginErr, auth.ErrNotAuthenticated)
+
+		st, stErr := h.Status(ctx)
+		require.NoError(t, stErr)
+		assert.False(t, st.Authenticated, "blocked OAuth Login must not undo Logout")
+
+		_, tokErr := h.GetToken(ctx, auth.TokenOptions{})
+		require.ErrorIs(t, tokErr, auth.ErrNotAuthenticated)
+	})
+
+	t.Run("patLogin blocked at VerifyURL does not overwrite Logout", func(t *testing.T) {
+		t.Parallel()
+		entered := make(chan struct{})
+		release := make(chan struct{})
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			close(entered)
+			<-release
+			writeJSON(w, map[string]any{"username": "robot-user"})
+		}))
+		defer srv.Close()
+
+		store := secrets.NewMockStore()
+		ctx := context.Background()
+		require.NoError(t, store.Set(ctx, "robot-pat", []byte("pat-secret-value")))
+
+		h, err := New(config.CustomOAuth2Config{
+			Name:           "race-pat-login",
+			Token:          "secret://robot-pat",
+			Username:       "acme+robot",
+			VerifyURL:      srv.URL + "/verify",
+			IdentityFields: &config.IdentityFieldMapping{Username: "username"},
+			DefaultFlow:    "pat",
+		}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		errCh := make(chan error, 1)
+		go func() {
+			_, lErr := h.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+			errCh <- lErr
+		}()
+
+		<-entered
+		require.NoError(t, h.Logout(ctx))
+		close(release)
+
+		loginErr := <-errCh
+		require.ErrorIs(t, loginErr, auth.ErrNotAuthenticated)
+
+		st, stErr := h.Status(ctx)
+		require.NoError(t, stErr)
+		assert.False(t, st.Authenticated, "blocked PAT Login must not undo Logout")
+
+		_, tokErr := h.GetToken(ctx, auth.TokenOptions{})
+		require.ErrorIs(t, tokErr, auth.ErrNotAuthenticated)
+	})
+}
+
+func TestHandler_ConfigFingerprintIsolation_PAT_And_Refresh(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PAT session is invalidated when token username or registry changes", func(t *testing.T) {
+		t.Parallel()
+		store := secrets.NewMockStore()
+		ctx := context.Background()
+		require.NoError(t, store.Set(ctx, "old-pat", []byte("old-registry-token")))
+		require.NoError(t, store.Set(ctx, "new-pat", []byte("new-registry-token")))
+
+		hOld, err := New(config.CustomOAuth2Config{
+			Name:        "reg-pat",
+			Token:       "secret://old-pat",
+			Username:    "oldorg+robot",
+			Registry:    "old-registry.example.com",
+			DefaultFlow: "pat",
+		}, WithSecretStore(store), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		_, err = hOld.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+		require.NoError(t, err)
+
+		// Restart with updated PAT SecretRef, username, and registry under the same handler name.
+		hNew, err := New(config.CustomOAuth2Config{
+			Name:        "reg-pat",
+			Token:       "secret://new-pat",
+			Username:    "neworg+robot",
+			Registry:    "new-registry.example.com",
+			DefaultFlow: "pat",
+		}, WithSecretStore(store), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		tok, err := hNew.GetToken(ctx, auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "new-registry-token", tok.AccessToken)
+		assert.Equal(t, "neworg+robot", hNew.RegistryUsernameForContext(ctx))
+
+		st, err := hNew.Status(ctx)
+		require.NoError(t, err)
+		assert.True(t, st.Authenticated)
+		assert.Equal(t, "neworg+robot", st.Claims.Username)
+	})
+
+	t.Run("Refresh token is not submitted to a different issuer or replaced DCR client", func(t *testing.T) {
+		t.Parallel()
+		var newIdPRefreshSubmitted atomic.Bool
+		var newIdPCCCalls atomic.Int32
+
+		srvOld := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, tokenResponse{
+				AccessToken:  "old-idp-access",
+				TokenType:    "Bearer",
+				ExpiresIn:    1,
+				RefreshToken: "old-idp-refresh-secret",
+			})
+		}))
+		defer srvOld.Close()
+
+		srvNew := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			if r.FormValue("grant_type") == "refresh_token" {
+				newIdPRefreshSubmitted.Store(true)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			newIdPCCCalls.Add(1)
+			writeJSON(w, tokenResponse{
+				AccessToken: "new-idp-access",
+				TokenType:   "Bearer",
+				ExpiresIn:   3600,
+			})
+		}))
+		defer srvNew.Close()
+
+		store := secrets.NewMockStore()
+		ctx := context.Background()
+
+		hOld, err := New(config.CustomOAuth2Config{
+			Name:         "repointed-oauth",
+			TokenURL:     srvOld.URL + "/token",
+			ClientID:     "cid-old",
+			ClientSecret: "csec-old",
+			DefaultFlow:  "client_credentials",
+		}, WithSecretStore(store), WithHTTPClient(srvOld.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		_, err = hOld.Login(ctx, auth.LoginOptions{})
+		require.NoError(t, err)
+
+		// Repoint same handler name at a new TokenURL: old refresh_token must NOT be sent to srvNew.
+		hNew, err := New(config.CustomOAuth2Config{
+			Name:         "repointed-oauth",
+			TokenURL:     srvNew.URL + "/token",
+			ClientID:     "cid-old",
+			ClientSecret: "csec-new",
+			DefaultFlow:  "client_credentials",
+		}, WithSecretStore(store), WithHTTPClient(srvNew.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		tok, err := hNew.GetToken(ctx, auth.TokenOptions{MinValidFor: 10 * time.Minute})
+		require.NoError(t, err)
+		assert.Equal(t, "new-idp-access", tok.AccessToken)
+		assert.False(t, newIdPRefreshSubmitted.Load(), "previous issuer refresh token must never be submitted to new TokenURL")
+		assert.Equal(t, int32(1), newIdPCCCalls.Load())
+	})
+
+	t.Run("DCR client replacement invalidates previous client refresh token", func(t *testing.T) {
+		t.Parallel()
+		var regSeq atomic.Int32
+		var staleRefreshSubmitted atomic.Bool
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/register":
+				n := regSeq.Add(1)
+				w.WriteHeader(http.StatusCreated)
+				exp := time.Now().Add(time.Hour).Unix()
+				if n == 1 {
+					// Already-expired client secret after login forces DCR replacement on next run.
+					exp = time.Now().Add(-10 * time.Second).Unix()
+				}
+				writeJSON(w, map[string]any{
+					"client_id":                fmt.Sprintf("dcr-client-%d", n),
+					"client_secret":            fmt.Sprintf("dcr-secret-%d", n),
+					"client_secret_expires_at": exp,
+				})
+			case "/token":
+				require.NoError(t, r.ParseForm())
+				if r.FormValue("grant_type") == "refresh_token" {
+					staleRefreshSubmitted.Store(true)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, tokenResponse{
+					AccessToken:  "access-for-" + r.FormValue("client_id"),
+					TokenType:    "Bearer",
+					ExpiresIn:    1,
+					RefreshToken: "refresh-for-" + r.FormValue("client_id"),
+				})
+			}
+		}))
+		defer srv.Close()
+
+		store := secrets.NewMockStore()
+		ctx := context.Background()
+		cfg := config.CustomOAuth2Config{
+			Name:        "dcr-rotate",
+			TokenURL:    srv.URL + "/token",
+			DefaultFlow: "client_credentials",
+			DynamicClientRegistration: &config.DynamicClientRegistrationConfig{
+				RegistrationEndpoint: srv.URL + "/register",
+			},
+		}
+
+		h1, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		_, err = h1.Login(ctx, auth.LoginOptions{})
+		require.NoError(t, err)
+
+		// Next process sees dcr-client-1 is expired, must reject dcr-client-1's refresh token,
+		// re-register dcr-client-2, and mint cleanly under dcr-client-2.
+		h2, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		tok, err := h2.GetToken(ctx, auth.TokenOptions{MinValidFor: 5 * time.Minute})
+		require.NoError(t, err)
+		assert.Equal(t, "access-for-dcr-client-2", tok.AccessToken)
+		assert.False(t, staleRefreshSubmitted.Load(), "refresh token bound to expired/replaced DCR client must not be submitted")
+	})
+}
+
+func TestHandler_CorruptedLogoutMarker_RemainsFailClosedAfterStoreAutoDelete(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	baseStore := secrets.NewMockStore()
+	require.NoError(t, baseStore.Set(ctx, "ambient-pat", []byte("ambient-pat-token")))
+
+	cfg := config.CustomOAuth2Config{
+		Name:        "corrupt-logout",
+		Token:       "secret://ambient-pat",
+		DefaultFlow: "pat",
+	}
+
+	stateKey := secretKeyPrefix + "corrupt-logout." + secretKeySessionStateSuffix
+	require.NoError(t, baseStore.Set(ctx, stateKey, []byte(sessionStateLoggedOut)))
+
+	// Simulate secrets.Store.Get auto-deleting an undecryptable entry before returning CorruptedSecretError.
+	delStore := &deleteOnCorruptStore{
+		MockStore:  baseStore,
+		corruptKey: stateKey,
+		corruptErr: secrets.NewCorruptedSecretError(stateKey, "decryption failed", errors.New("cipher: message authentication failed")),
+	}
+
+	h1, err := New(cfg, WithSecretStore(delStore), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	// 1st read triggers corruption + auto-delete in store; fails closed and persists corrupt tombstone.
+	_, err = h1.GetToken(ctx, auth.TokenOptions{})
+	require.Error(t, err)
+
+	// 2nd read on same handler still fails closed even though the original entry was deleted.
+	_, err = h1.GetToken(ctx, auth.TokenOptions{})
+	require.Error(t, err)
+	st1, stErr := h1.Status(ctx)
+	require.NoError(t, stErr)
+	assert.False(t, st1.Authenticated)
+
+	// 3rd read on a fresh Handler (new CLI process) also stays fail-closed via persisted corrupt tombstone.
+	h2, err := New(cfg, WithSecretStore(delStore), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	_, err = h2.GetToken(ctx, auth.TokenOptions{})
+	require.Error(t, err)
+	st2, stErr := h2.Status(ctx)
+	require.NoError(t, stErr)
+	assert.False(t, st2.Authenticated)
+
+	// Even when Set fails (read-only disk), consecutive reads on the same Handler stay fail-closed locally.
+	require.NoError(t, baseStore.Set(ctx, stateKey, []byte(sessionStateLoggedOut)))
+	roStore := &deleteOnCorruptStore{
+		MockStore:  baseStore,
+		corruptKey: stateKey,
+		corruptErr: errors.New("cipher: message authentication failed"),
+		failSet:    true,
+	}
+	hRO, err := New(cfg, WithSecretStore(roStore), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	_, err = hRO.GetToken(ctx, auth.TokenOptions{})
+	require.Error(t, err)
+	_, err = hRO.GetToken(ctx, auth.TokenOptions{})
+	require.Error(t, err, "local corrupt state must remain fail-closed when Set fails after auto-delete")
+
+	// Context cancellation on Get must NOT poison a healthy handler with sessionStateCorrupt.
+	healthyBase := secrets.NewMockStore()
+	require.NoError(t, healthyBase.Set(ctx, "ambient-pat", []byte("ambient-pat-token")))
+	ctxStore := &deleteOnCorruptStore{MockStore: healthyBase, checkCtxOnGetSet: true}
+	hCtx, err := New(cfg, WithSecretStore(ctxStore), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	canceledCtx, cancelNow := context.WithCancel(ctx)
+	cancelNow()
+	stCanceled, stCancelErr := hCtx.Status(canceledCtx)
+	require.NoError(t, stCancelErr)
+	assert.False(t, stCanceled.Authenticated)
+	tokHealthy, err := hCtx.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err, "prior canceled ctx must not poison sessionStates as corrupt")
+	assert.Equal(t, "ambient-pat-token", tokHealthy.AccessToken)
+
+	// Tombstone write succeeds even if caller ctx expires immediately after Store.Get auto-deletes corrupt entry.
+	expBase := secrets.NewMockStore()
+	require.NoError(t, expBase.Set(ctx, "ambient-pat", []byte("ambient-pat-token")))
+	require.NoError(t, expBase.Set(ctx, stateKey, []byte(sessionStateLoggedOut)))
+	callCtx, cancelAfterGet := context.WithCancel(ctx)
+	expStore := &deleteOnCorruptStore{
+		MockStore:        expBase,
+		corruptKey:       stateKey,
+		corruptErr:       secrets.NewCorruptedSecretError(stateKey, "decryption failed", errors.New("bad mac")),
+		cancelAfterGetFn: cancelAfterGet,
+		checkCtxOnGetSet: true,
+	}
+	hExp1, err := New(cfg, WithSecretStore(expStore), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	_, err = hExp1.GetToken(callCtx, auth.TokenOptions{})
+	require.Error(t, err)
+	hExp2, err := New(cfg, WithSecretStore(expStore), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	_, err = hExp2.GetToken(ctx, auth.TokenOptions{})
+	require.Error(t, err, "WithoutCancel tombstone write must persist across processes even when caller ctx expired")
+}
+
+func TestHandler_CrossFlowReLogin_ClearsStaleRefreshAndPATArtifacts(t *testing.T) {
+	t.Parallel()
+
+	var refreshSubmitted atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		if r.FormValue("grant_type") == "refresh_token" {
+			refreshSubmitted.Store(true)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, tokenResponse{
+			AccessToken: "cc-short-lived-token",
+			TokenType:   "Bearer",
+			ExpiresIn:   1,
+		})
+	}))
+	defer srv.Close()
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	userFile := filepath.Join(t.TempDir(), "pat-user")
+	require.NoError(t, os.WriteFile(userFile, []byte("acme+stored_robot"), 0o600))
+	require.NoError(t, store.Set(ctx, "hybrid-pat", []byte("pat-token-val")))
+
+	cfg := config.CustomOAuth2Config{
+		Name:             "hybrid-switch",
+		AuthorizeURL:     srv.URL + "/authorize",
+		TokenURL:         srv.URL + "/token",
+		ClientID:         "cid",
+		ClientSecret:     "csec",
+		Token:            "secret://hybrid-pat",
+		Username:         "file://" + userFile,
+		RegistryUsername: "$oauthtoken",
+	}
+
+	h1, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	// 1. Login with PAT, then check standalone RegistryUsernameForContext in a fresh process after file is removed.
+	_, err = h1.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(userFile))
+
+	hFreshPAT, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	assert.Equal(t, "acme+stored_robot", hFreshPAT.RegistryUsernameForContext(ctx))
+
+	// 2. Seed a valid refresh token as if from an earlier interactive login, then re-login with client_credentials (no refresh_token).
+	require.NoError(t, h1.storeRefreshToken(ctx, "interactive-user-refresh"))
+	_, err = h1.Login(ctx, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+
+	// Previous PAT artifacts and interactive refresh_token must be cleared so subsequent GetToken mints client_credentials cleanly.
+	_, patErr := store.Get(ctx, h1.profileSecretKey(ctx, secretKeyPATTokenSuffix))
+	assert.ErrorIs(t, patErr, secrets.ErrNotFound)
+
+	tok, err := h1.GetToken(ctx, auth.TokenOptions{MinValidFor: 5 * time.Minute})
+	require.NoError(t, err)
+	assert.Equal(t, "cc-short-lived-token", tok.AccessToken)
+	assert.False(t, refreshSubmitted.Load(), "re-login with client_credentials must clear stale refresh_token from earlier flow")
 }
 
 func BenchmarkHandler_PAT_GetToken(b *testing.B) {

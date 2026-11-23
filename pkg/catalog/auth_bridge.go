@@ -108,6 +108,7 @@ func RegistryUsername(ctx context.Context, handler auth.Handler, _ string) (stri
 			if username := cp.RegistryUsernameForContext(ctx); username != "" {
 				return username, nil
 			}
+			return RegistryUsernameDefault, nil
 		}
 		if p, ok := handler.(RegistryUsernameProvider); ok {
 			if username := p.RegistryUsername(); username != "" {

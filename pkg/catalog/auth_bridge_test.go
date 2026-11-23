@@ -287,6 +287,10 @@ func (h *contextualUsernameHandler) GetToken(ctx context.Context, _ auth.TokenOp
 	return &auth.Token{AccessToken: "tok-" + p, TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
+func (h *contextualUsernameHandler) RegistryUsername() string {
+	return h.usernames[""]
+}
+
 func (h *contextualUsernameHandler) RegistryUsernameForContext(ctx context.Context) string {
 	return h.usernames[auth.ProfileFromContext(ctx)]
 }
@@ -296,13 +300,16 @@ func TestBridgeAuthToRegistry_ContextualProfileUsername(t *testing.T) {
 	h := &contextualUsernameHandler{
 		MockHandler: auth.NewMockHandler("quay"),
 		usernames: map[string]string{
+			"":     "acme+default_robot",
 			"prod": "acme+prod_robot",
 			"dev":  "$oauthtoken",
+			"ci":   "",
 		},
 	}
 
 	prodCtx := auth.WithProfile(context.Background(), "prod")
 	devCtx := auth.WithProfile(context.Background(), "dev")
+	ciCtx := auth.WithProfile(context.Background(), "ci")
 
 	uProd, pProd, err := BridgeAuthToRegistry(prodCtx, h, "quay.io", "")
 	require.NoError(t, err)
@@ -313,6 +320,13 @@ func TestBridgeAuthToRegistry_ContextualProfileUsername(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "$oauthtoken", uDev)
 	assert.Equal(t, "tok-dev", pDev)
+
+	// Empty contextual username on a named profile must fall back to RegistryUsernameDefault,
+	// never consulting RegistryUsername() on the default profile.
+	uCI, pCI, err := BridgeAuthToRegistry(ciCtx, h, "registry.example.com", "")
+	require.NoError(t, err)
+	assert.Equal(t, RegistryUsernameDefault, uCI)
+	assert.Equal(t, "tok-ci", pCI)
 }
 
 func TestInferDefaultScope(t *testing.T) {
