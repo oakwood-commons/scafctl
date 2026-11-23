@@ -146,8 +146,9 @@ Resolution precedence, highest to lowest:
 4. **Dynamic inventory** -- `kube.clusters.resolver` fetches and CEL-transforms
    a cluster inventory. It reuses the auth hostname inventory engine
    (`pkg/auth/hostname`: fetch + transform + TTL cache); the transform yields
-   `{name, url}` entries plus the same optional per-cluster fields. Static
-   aliases win over inventory entries of the same name.
+   `{name, url}` entries plus optional per-cluster fields (`audience`,
+   `defaultHandler`, `authType`, `caData`, `consoleUrl`, `insecureSkipTls`).
+   Static aliases win over inventory entries of the same name.
 
 ~~~yaml
 kube:
@@ -159,14 +160,53 @@ kube:
     resolver:
       source:
         url: https://clusters.example.com/
+      transform: '_.map(k, {"name": k, "url": _[k].apiServerURL, "audience": has(_[k].oidc) && _[k].oidc != null && has(_[k].oidc.clientID) && _[k].oidc.clientID != null && _[k].oidc.clientID != "" ? "api://" + _[k].oidc.clientID + "/.default" : ""})'
+      ttl: 10m
+~~~
+
+For mixed OAuth and OIDC fleets (the recommended default), the transform derives
+`audience` where the inventory provides OIDC metadata (the exact field path
+varies by fleet) and leaves `defaultHandler` and `authType` unset so Phase 4's
+two-path routing auto-detects each cluster at login time (`oauth` -> `openshift`,
+`oidc` -> `entra` with the emitted `audience`). With this configuration,
+`kube login <cluster>` needs neither `--server`, `--handler`, nor `--audience`
+for OAuth clusters or for OIDC clusters with a populated client ID, and one-off
+users with only a URL or static aliases keep working unchanged.
+
+When deriving `audience` by string concatenation from optional JSON fields, the
+transform must guard missing keys, `null` values, and empty strings together
+(`has(...)`, `!= null`, and `!= ""`): CEL's `has()` tests key presence only and
+returns `true` for present-but-null JSON values (for example `"oidc": null` or
+`"oidc": {"clientID": null}` on clusters whose OIDC app registration is
+pending), so a `has()`-only chain compiles cleanly and then fails at evaluation
+time with `no such overload` on `"api://" + null + "/.default"`, selecting
+`_[k].oidc.clientID` without `_[k].oidc != null && has(_[k].oidc.clientID)`
+fails with `no such key: clientID` on `"oidc": null` or `"oidc": {}`, and
+`!= ""` prevents `"clientID": ""` from emitting `"api:///.default"`. These
+guards keep inventory evaluation working across the fleet; OAuth clusters ignore
+the resulting empty `audience`, whereas auto-routing an OIDC cluster whose
+client ID is missing, `null`, or empty still fails fast with `ErrNoAudience`
+unless `--audience` or a static alias supplies one.
+
+**Uniform OpenShift OAuth override:** Fleets that are 100% uniform OpenShift
+OAuth can opt in to stamping fixed handler metadata on every entry instead:
+
+~~~yaml
+kube:
+  clusters:
+    resolver:
+      source:
+        url: https://clusters.example.com/
       transform: '_.map(k, {"name": k, "url": _[k].apiServerURL, "defaultHandler": "openshift", "authType": "oauth"})'
       ttl: 10m
 ~~~
 
-Because a fleet transform can stamp the same `defaultHandler` and `authType` on
-every entry, `kube login <cluster>` then needs neither `--server` nor
-`--handler`. One-off users with only a URL or a handful of static aliases keep
-working unchanged.
+Stamping `authType` (and `defaultHandler`) disables OIDC auto-detection
+fleet-wide -- `resolveCluster` skips `DetectAuthType` whenever `authType` is
+non-empty and `resolveHandler` honors the stamped `defaultHandler` before the
+`AuthType` fallback, so any OIDC-backed cluster in the inventory would be routed
+through `openshift` OAuth rather than `entra`. Use this override only when every
+cluster in the inventory is genuinely uniform OpenShift OAuth.
 
 ### Runtime Model
 
