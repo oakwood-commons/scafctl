@@ -33,6 +33,9 @@ func RemoteCatalogsFromContext(ctx context.Context, lgr logr.Logger) []Catalog {
 		if catCfg.Type != config.CatalogTypeOCI || catCfg.URL == "" {
 			continue
 		}
+		if !catCfg.ServesArtifactKind(config.CatalogArtifactKindSolution) {
+			continue
+		}
 
 		registry, repository := ParseCatalogURL(catCfg.URL)
 		if registry == "" {

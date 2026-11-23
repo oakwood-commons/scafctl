@@ -6,6 +6,8 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -15,6 +17,7 @@ import (
 
 // fakePluginSource returns a fixed result (or error) and counts calls.
 type fakePluginSource struct {
+	mu        sync.Mutex
 	name      string
 	info      ArtifactInfo
 	platforms []string
@@ -25,7 +28,9 @@ type fakePluginSource struct {
 func (s *fakePluginSource) Name() string { return s.name }
 
 func (s *fakePluginSource) FetchByPlatform(_ context.Context, _ Reference, _ string) ([]byte, ArtifactInfo, error) {
+	s.mu.Lock()
 	s.calls++
+	s.mu.Unlock()
 	if s.err != nil {
 		return nil, ArtifactInfo{}, s.err
 	}
@@ -33,7 +38,9 @@ func (s *fakePluginSource) FetchByPlatform(_ context.Context, _ Reference, _ str
 }
 
 func (s *fakePluginSource) ListPlatforms(_ context.Context, _ Reference) ([]string, error) {
+	s.mu.Lock()
 	s.calls++
+	s.mu.Unlock()
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -41,7 +48,9 @@ func (s *fakePluginSource) ListPlatforms(_ context.Context, _ Reference) ([]stri
 }
 
 func (s *fakePluginSource) ResolveContentDigest(_ context.Context, _ Reference, _, _ string) (ContentDigestInfo, error) {
+	s.mu.Lock()
 	s.calls++
+	s.mu.Unlock()
 	if s.err != nil {
 		return ContentDigestInfo{}, s.err
 	}
@@ -49,7 +58,9 @@ func (s *fakePluginSource) ResolveContentDigest(_ context.Context, _ Reference, 
 }
 
 func (s *fakePluginSource) Find(_ context.Context, _ ArtifactQuery) (ArtifactInfo, error) {
+	s.mu.Lock()
 	s.calls++
+	s.mu.Unlock()
 	if s.err != nil {
 		return ArtifactInfo{}, s.err
 	}
@@ -64,28 +75,33 @@ func okSource(name string) *fakePluginSource {
 	return &fakePluginSource{name: name, info: ArtifactInfo{Catalog: name}, platforms: []string{name}}
 }
 
-// chainOps exercises every chain operation and returns the serving catalog.
-var chainOps = map[string]func(c *pluginSourceChain) (string, error){
-	"FetchByPlatform": func(c *pluginSourceChain) (string, error) {
-		_, info, err := c.FetchByPlatform(context.Background(), testRef("p", "1.0.0"), "linux/amd64")
-		return info.Catalog, err
-	},
-	"ListPlatforms": func(c *pluginSourceChain) (string, error) {
-		platforms, err := c.ListPlatforms(context.Background(), testRef("p", "1.0.0"))
-		if len(platforms) > 0 {
-			return platforms[0], err
-		}
-		return "", err
-	},
-	"ResolveContentDigest": func(c *pluginSourceChain) (string, error) {
-		info, err := c.ResolveContentDigest(context.Background(), testRef("p", "1.0.0"), "linux/amd64", MediaTypeProviderBinary)
-		return info.Catalog, err
-	},
-	"Find": func(c *pluginSourceChain) (string, error) {
-		info, err := c.Find(context.Background(), ArtifactQuery{Name: "p", Kind: ArtifactKindProvider})
-		return info.Catalog, err
-	},
+// chainOpsFor builds the 4-operation dispatch table targeting name@version.
+func chainOpsFor(name, version string) map[string]func(c *pluginSourceChain) (string, error) {
+	return map[string]func(c *pluginSourceChain) (string, error){
+		"FetchByPlatform": func(c *pluginSourceChain) (string, error) {
+			_, info, err := c.FetchByPlatform(context.Background(), testRef(name, version), "linux/amd64")
+			return info.Catalog, err
+		},
+		"ListPlatforms": func(c *pluginSourceChain) (string, error) {
+			platforms, err := c.ListPlatforms(context.Background(), testRef(name, version))
+			if len(platforms) > 0 {
+				return platforms[0], err
+			}
+			return "", err
+		},
+		"ResolveContentDigest": func(c *pluginSourceChain) (string, error) {
+			info, err := c.ResolveContentDigest(context.Background(), testRef(name, version), "linux/amd64", MediaTypeProviderBinary)
+			return info.Catalog, err
+		},
+		"Find": func(c *pluginSourceChain) (string, error) {
+			info, err := c.Find(context.Background(), ArtifactQuery{Name: name, Kind: ArtifactKindProvider, Version: version})
+			return info.Catalog, err
+		},
+	}
 }
+
+// chainOps exercises every chain operation and returns the serving catalog.
+var chainOps = chainOpsFor("p", "1.0.0")
 
 func TestPluginSourceChain(t *testing.T) {
 	t.Parallel()
@@ -175,7 +191,7 @@ func TestPluginFetcher_Catalogs(t *testing.T) {
 	t.Parallel()
 	local := newTestLocalCatalog(t)
 	mock := NewMockPluginSource("mock")
-	wrapped := newAllowlistPluginSource(NewMockPluginSource("wrapped"), nil)
+	wrapped := newAllowlistPluginSource(newKindFilterPluginSource(NewMockPluginSource("wrapped"), []ArtifactKind{ArtifactKindProvider}), nil)
 
 	f, err := NewPluginFetcher(logr.Discard(), local, okSource("not-a-catalog"), mock, wrapped)
 	require.NoError(t, err)
@@ -184,7 +200,249 @@ func TestPluginFetcher_Catalogs(t *testing.T) {
 	require.Len(t, cats, 3, "sources that are not catalogs are omitted")
 	assert.Same(t, local, cats[0], "localPlugin is unwrapped to its LocalCatalog")
 	assert.Same(t, mock, cats[1])
-	assert.Same(t, wrapped.inner, cats[2], "decorators are unwrapped")
+	assert.Equal(t, "wrapped", cats[2].Name(), "nested decorators are unwrapped")
+}
+
+func TestPluginSourceChain_BestEffortAndStrictModes(t *testing.T) {
+	t.Parallel()
+
+	for opName, op := range chainOps {
+		t.Run(opName, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("best-effort warns and falls through on unreachable remote", func(t *testing.T) {
+				t.Parallel()
+				var warnings []string
+				private := &fakePluginSource{
+					name: "corp",
+					err:  &UnreachableError{Catalog: "corp", Cause: errors.New("dial tcp 10.0.0.1:443: i/o timeout")},
+				}
+				official := okSource("official")
+
+				chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, func(msg string) {
+					warnings = append(warnings, msg)
+				}, nil, private, official)
+
+				got, err := op(chain)
+				require.NoError(t, err)
+				assert.Equal(t, "official", got)
+				assert.Equal(t, 1, private.calls)
+				assert.Equal(t, 1, official.calls)
+				require.Equal(t, []string{`catalog "corp" unavailable, trying next catalog...`}, warnings)
+
+				// Subsequent lookup against the same chain deduplicates the warning.
+				got2, err2 := op(chain)
+				require.NoError(t, err2)
+				assert.Equal(t, "official", got2)
+				assert.Len(t, warnings, 1, "warning must be deduplicated per catalog")
+			})
+
+			t.Run("best-effort warns and falls through on credential rejection", func(t *testing.T) {
+				t.Parallel()
+				var warnings []string
+				private := &fakePluginSource{
+					name: "corp",
+					err:  errCredentialsRejected,
+				}
+				official := okSource("official")
+
+				chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, func(msg string) {
+					warnings = append(warnings, msg)
+				}, nil, private, official)
+
+				got, err := op(chain)
+				require.NoError(t, err)
+				assert.Equal(t, "official", got)
+				require.Equal(t, []string{`catalog "corp" unauthenticated, trying next catalog...`}, warnings)
+			})
+
+			t.Run("best-effort surfaces unreachable cause when all subsequent catalogs report not-found", func(t *testing.T) {
+				t.Parallel()
+				var warnings []string
+				private := &fakePluginSource{
+					name: "corp",
+					err:  &UnreachableError{Catalog: "corp", Cause: errors.New("no route to host")},
+				}
+				official := notFoundSource("official")
+
+				chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, func(msg string) {
+					warnings = append(warnings, msg)
+				}, nil, private, official)
+
+				_, err := op(chain)
+				require.Error(t, err)
+				_, unreachable := IsCatalogUnreachable(err)
+				assert.True(t, unreachable, "expected unreachable cause preserved, got %v", err)
+				assert.NotErrorIs(t, err, ErrArtifactNotFound)
+				assert.Equal(t, 1, official.calls, "official must still have been checked")
+				assert.Len(t, warnings, 1)
+			})
+
+			t.Run("best-effort surfaces auth failure when all subsequent catalogs report not-found", func(t *testing.T) {
+				t.Parallel()
+				private := &fakePluginSource{
+					name: "corp",
+					err:  errCredentialsRejected,
+				}
+				official := notFoundSource("official")
+
+				chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, nil, nil, private, official)
+
+				_, err := op(chain)
+				require.Error(t, err)
+				assert.ErrorIs(t, err, errCredentialsRejected)
+				assert.NotErrorIs(t, err, ErrArtifactNotFound)
+				assert.Equal(t, 1, official.calls)
+			})
+
+			t.Run("best-effort still halts on corrupt local build", func(t *testing.T) {
+				t.Parallel()
+				local := newTestLocalCatalog(t)
+				storeCorruptPlugin(t, local, "p", "1.0.0")
+				official := okSource("official")
+
+				chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, nil, newLocalPlugin(local), official)
+				_, err := op(chain)
+				require.Error(t, err)
+				assert.Zero(t, official.calls, "corrupt local build must halt even in best-effort mode")
+			})
+
+			t.Run("best-effort still halts on wrapped corrupt local build", func(t *testing.T) {
+				t.Parallel()
+				local := newTestLocalCatalog(t)
+				storeCorruptPlugin(t, local, "corrupt-plugin", "2.0.0")
+				wrappedLocal := newAllowlistPluginSource(newLocalPlugin(local), []string{"corrupt-plugin"})
+				official := okSource("official")
+
+				chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, nil, nil, wrappedLocal, official)
+				_, err := chainOpsFor("corrupt-plugin", "2.0.0")[opName](chain)
+				require.Error(t, err)
+				assert.Zero(t, official.calls, "wrapped corrupt local build must halt even in best-effort mode")
+			})
+
+			t.Run("best-effort still halts on platform not found", func(t *testing.T) {
+				t.Parallel()
+				first := &fakePluginSource{name: "corp", err: &PlatformNotFoundError{Platform: "linux/amd64"}}
+				official := okSource("official")
+
+				chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, nil, nil, first, official)
+				_, err := op(chain)
+				assert.True(t, IsPlatformNotFound(err))
+				assert.Zero(t, official.calls)
+			})
+
+			t.Run("best-effort halts on ambiguous artifact without warning", func(t *testing.T) {
+				t.Parallel()
+				var warnings []string
+				first := &fakePluginSource{name: "corp", err: fmt.Errorf("conflict: %w", ErrAmbiguousArtifact)}
+				official := okSource("official")
+
+				chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, func(msg string) {
+					warnings = append(warnings, msg)
+				}, nil, first, official)
+				_, err := op(chain)
+				require.ErrorIs(t, err, ErrAmbiguousArtifact)
+				assert.Zero(t, official.calls)
+				assert.Empty(t, warnings)
+			})
+		})
+	}
+
+	t.Run("best-effort halts when caller context is canceled", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		var warnings []string
+		first := &fakePluginSource{name: "corp", err: context.Canceled}
+		official := okSource("official")
+		chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, func(msg string) {
+			warnings = append(warnings, msg)
+		}, nil, first, official)
+
+		_, err := chain.Find(ctx, ArtifactQuery{Name: "p", Kind: ArtifactKindProvider})
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Zero(t, official.calls)
+		assert.Empty(t, warnings)
+	})
+
+	t.Run("concurrent fallback warnings across distinct catalogs serialize onWarn safely", func(t *testing.T) {
+		t.Parallel()
+		var warnings []string
+		c1 := &fakePluginSource{name: "corp-1", err: &UnreachableError{Catalog: "corp-1", Cause: errors.New("down")}}
+		c2 := &fakePluginSource{name: "corp-2", err: errCredentialsRejected}
+		c3 := &fakePluginSource{name: "corp-3", err: &UnreachableError{Catalog: "corp-3", Cause: errors.New("down")}}
+		official := okSource("official")
+
+		// Unsynchronized slice append in onWarn will trigger -race if emitMu does not serialize callbacks.
+		chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, func(msg string) {
+			warnings = append(warnings, msg)
+		}, nil, c1, c2, c3, official)
+
+		var wg sync.WaitGroup
+		for i := range 8 {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				_, findErr := chain.Find(context.Background(), ArtifactQuery{
+					Name: fmt.Sprintf("plugin-%d", idx),
+					Kind: ArtifactKindProvider,
+				})
+				assert.NoError(t, findErr)
+			}(i)
+		}
+		wg.Wait()
+		assert.Len(t, warnings, 3, "each failing catalog must emit exactly one warning")
+	})
+}
+
+func TestPluginFetcher_StrictVsBestEffortAndWithCatalog(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	newBrokenCorp := func() *fakePluginSource {
+		return &fakePluginSource{
+			name: "corp",
+			err:  errCredentialsRejected,
+		}
+	}
+	newOfficial := func(pluginName string) *fakePluginSource {
+		return &fakePluginSource{
+			name:      "official",
+			info:      ArtifactInfo{Catalog: "official", Reference: testRef(pluginName, "1.2.0")},
+			platforms: []string{"linux/amd64"},
+		}
+	}
+
+	// Unpinned lookup resolves brand-new plugin name from official despite 401 on corp.
+	corp := newBrokenCorp()
+	official := newOfficial("brand-new-official-plugin")
+	bestEffortFetcher, err := NewPluginFetcher(logr.Discard(), nil, corp, official)
+	require.NoError(t, err)
+
+	info, err := bestEffortFetcher.ResolvePlugin(ctx, "brand-new-official-plugin", ArtifactKindProvider, "")
+	require.NoError(t, err)
+	assert.Equal(t, "official", info.Catalog)
+
+	// Explicit WithCatalog("corp") on the SAME fetcher fails closed with zero fallback.
+	_, err = bestEffortFetcher.ResolvePlugin(ctx, "brand-new-official-plugin", ArtifactKindProvider, "", WithCatalog("corp"))
+	require.ErrorIs(t, err, errCredentialsRejected)
+
+	// Strict fetcher (--strict / serve mode) fails closed on unpinned lookup too.
+	strictCorp := newBrokenCorp()
+	strictOfficial := newOfficial("brand-new-official-plugin")
+	strictFetcher, err := NewPluginFetcherWithOptions(
+		logr.Discard(),
+		nil,
+		[]PluginFetcherOption{WithFetcherChainMode(ChainModeStrict)},
+		strictCorp,
+		strictOfficial,
+	)
+	require.NoError(t, err)
+
+	_, err = strictFetcher.ResolvePlugin(ctx, "brand-new-official-plugin", ArtifactKindProvider, "")
+	require.ErrorIs(t, err, errCredentialsRejected)
+	assert.Zero(t, strictOfficial.calls, "strict mode must not fall through to official")
 }
 
 func TestNewLocalPlugin_Nil(t *testing.T) {
@@ -427,6 +685,25 @@ func BenchmarkPluginFetcher_ListPlatforms(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		if _, err := f.ListPlatforms(ctx, "p", ArtifactKindProvider, "1.0.0", scope); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkPluginSourceChain_BestEffortFallback(b *testing.B) {
+	unreach := &fakePluginSource{
+		name: "corp",
+		err:  &UnreachableError{Catalog: "corp", Cause: errors.New("unreachable")},
+	}
+	official := okSource("official")
+	chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, func(_ string) {}, nil, unreach, official)
+	ctx := b.Context()
+	query := ArtifactQuery{Name: "p", Kind: ArtifactKindProvider}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := chain.Find(ctx, query); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -249,6 +249,12 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 	}
 }
 
+// CatalogIndex returns the catalog topology and allowlist index derived from
+// the fetcher's configured catalog chain.
+func (f *Fetcher) CatalogIndex() *catalogindex.Index {
+	return f.catalogIndex
+}
+
 // errLocalBuild is the error returned for a local build when
 // disallowLocalBuilds is set.
 func errLocalBuild(reason string) error {
@@ -783,12 +789,26 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep pluginArtifact, locked *bu
 
 	// Determine whether the lock entry is usable for this dep's current
 	// constraint. Three dispositions:
-	//   locked.Version == constraint  → strict mode, use lock
-	//   locked.Constraint == constraint → constrained mode, re-resolve
-	//   neither matches               → stale lock, error
+	//   locked.Version == constraint  -> strict mode, use lock
+	//   locked.Constraint == constraint -> constrained mode, re-resolve
+	//   neither matches               -> stale lock, error
+	rawLocked := locked
 	locked, err = f.disposeLock(dep, locked)
 	if err != nil {
 		return FetchResult{}, withStage(StageLock, err)
+	}
+	// Defense-in-depth: when re-resolving a locked dependency in constrained or
+	// best-effort mode, keep it bound to the catalog recorded in the lock so an
+	// unreachable or unauthenticated locked catalog fails closed instead of
+	// falling through to another catalog in the chain.
+	if locked == nil && rawLocked != nil && dep.CatalogName() == "" {
+		lockedCat, catErr := f.lockedCatalogAlias(dep, rawLocked)
+		if catErr != nil {
+			return FetchResult{}, withStage(StageResolve, catErr)
+		}
+		if lockedCat != "" {
+			dep = boundArtifact{pluginArtifact: dep, catalog: lockedCat}
+		}
 	}
 	trace.SpanFromContext(ctx).SetAttributes(attrFromLock.Bool(locked != nil))
 
@@ -848,15 +868,10 @@ func (f *Fetcher) disposeLock(dep pluginArtifact, locked *bundler.LockPlugin) (*
 	}
 }
 
-// resolveFromLock resolves a plugin using its lock file entry. It derives the
-// catalog identity, selects the per-platform digest, and enforces allowlists.
-func (f *Fetcher) resolveFromLock(dep pluginArtifact, locked *bundler.LockPlugin) (resolvedPlugin, error) {
+func (f *Fetcher) lockedCatalogAlias(dep pluginArtifact, locked *bundler.LockPlugin) (string, error) {
 	if f.disallowLocalBuilds && locked.IsBuilt() {
-		return resolvedPlugin{}, errLocalBuild("the lock entry was locked from a local build")
+		return "", errLocalBuild("the lock entry was locked from a local build")
 	}
-	version := locked.Version
-	// A built entry has no portable origin; it is served by the local catalog
-	// by definition.
 	resolvedFrom := catalog.LocalCatalogName
 	if !locked.IsBuilt() {
 		resolvedFrom = f.aliasForCanonical(locked.ResolvedCanonical)
@@ -865,10 +880,21 @@ func (f *Fetcher) resolveFromLock(dep pluginArtifact, locked *bundler.LockPlugin
 		resolvedFrom = locked.ResolvedFrom
 		f.logger.V(1).Info("lock file catalog alias is stale or missing; using stored alias, which may differ from the current catalog configuration and cause digest verification to fail",
 			"name", dep.ArtifactName(),
-			"version", version,
+			"version", locked.Version,
 			"storedAlias", locked.ResolvedFrom,
 			"resolvedCanonical", locked.ResolvedCanonical)
 	}
+	return resolvedFrom, nil
+}
+
+// resolveFromLock resolves a plugin using its lock file entry. It derives the
+// catalog identity, selects the per-platform digest, and enforces allowlists.
+func (f *Fetcher) resolveFromLock(dep pluginArtifact, locked *bundler.LockPlugin) (resolvedPlugin, error) {
+	resolvedFrom, err := f.lockedCatalogAlias(dep, locked)
+	if err != nil {
+		return resolvedPlugin{}, err
+	}
+	version := locked.Version
 	// A dep bound to a catalog must be served from it; a lock entry recorded
 	// from another catalog (e.g. the source changed since the build) is stale.
 	if bound := dep.CatalogName(); bound != "" && !strings.EqualFold(bound, resolvedFrom) {

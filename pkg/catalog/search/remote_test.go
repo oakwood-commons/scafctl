@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEntriesFromIndex(t *testing.T) {
@@ -134,4 +136,55 @@ func BenchmarkEntriesFromIndex(b *testing.B) {
 	for b.Loop() {
 		EntriesFromIndex(artifacts, "bench")
 	}
+}
+
+func TestRegisteredCatalogsFromConfig(t *testing.T) {
+	t.Parallel()
+
+	// Nil config returns only the local filesystem catalog.
+	nilList := RegisteredCatalogsFromConfig(nil)
+	require.Len(t, nilList, 1)
+	assert.Equal(t, config.CatalogNameLocal, nilList[0].Name)
+	assert.Equal(t, config.CatalogTypeFilesystem, nilList[0].Type)
+
+	kinds := []string{config.CatalogArtifactKindSolution}
+	cfg := &config.Config{
+		Settings: config.Settings{DefaultCatalog: "corp"},
+		Catalogs: []config.CatalogConfig{
+			{Name: config.CatalogNameLocal, Type: config.CatalogTypeFilesystem},
+			{
+				Name:          "corp",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://registry.example.com/solutions",
+				ArtifactKinds: kinds,
+			},
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  config.DefaultOfficialCatalogURL,
+			},
+		},
+	}
+
+	got := RegisteredCatalogsFromConfig(cfg)
+	require.Len(t, got, 3)
+	// Sorted alphabetically: corp, local, official.
+	assert.Equal(t, "corp", got[0].Name)
+	assert.Equal(t, "registry.example.com", got[0].Registry)
+	assert.Equal(t, []string{"solution"}, got[0].ArtifactKinds)
+	assert.True(t, got[0].Default)
+	assert.Equal(t, "local", got[1].Name)
+	assert.Equal(t, "official", got[2].Name)
+
+	// Mutating original slice does not mutate returned CatalogInfo.
+	kinds[0] = "provider"
+	assert.Equal(t, []string{"solution"}, got[0].ArtifactKinds)
+
+	// DisableOfficialCatalog omits official.
+	disabledCfg := *cfg
+	disabledCfg.Settings.DisableOfficialCatalog = true
+	disabled := RegisteredCatalogsFromConfig(&disabledCfg)
+	require.Len(t, disabled, 2)
+	assert.Equal(t, "corp", disabled[0].Name)
+	assert.Equal(t, "local", disabled[1].Name)
 }

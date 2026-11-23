@@ -277,15 +277,24 @@ Add OCI registries to your config:
 ```yaml
 # ~/.config/scafctl/config.yaml
 catalogs:
+  - name: company-solutions
+    type: oci
+    url: registry.example.com/solutions
+    artifactKinds:
+      - solution
   - name: company-registry
     type: oci
-    url: registry.company.com/scafctl
+    url: registry.example.com/scafctl
   - name: community
     type: oci
     url: ghcr.io/scafctl-community
 ```
 
-The chain stops at the first catalog that has the requested artifact.
+The chain stops at the first catalog that has the requested artifact:
+
+- **Unpinned lookups (default)**: When a remote catalog is unreachable or rejects credentials, scafctl emits a warning and continues to the next catalog (such as `official`). Corrupt local builds and missing platforms still halt immediately.
+- **Pinned, locked, `--strict`, and `scafctl serve` mode**: Lookups bound via `solution.lock`, `source.registry`, `source.built`, `--catalog`, `--strict`, or the API server run fail-closed and never substitute a lower-priority catalog on error.
+- **`artifactKinds` filter**: Setting `artifactKinds` (valid values: `solution`, `provider`, `auth-handler`; empty means all kinds) skips catalogs that do not serve the requested kind without making any network requests.
 
 ### Pinning a plugin to a specific registry
 

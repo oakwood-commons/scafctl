@@ -258,6 +258,56 @@ func TestHandleCatalogListRegistered_OfficialDisabled(t *testing.T) {
 	assert.Equal(t, float64(1), body["count"].(float64))
 }
 
+func TestHandleCatalogListRegistered_IncludesArtifactKinds(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{Name: config.CatalogNameLocal, Type: config.CatalogTypeFilesystem},
+			{
+				Name:          "corp-solutions",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://registry.example.com/solutions",
+				ArtifactKinds: []string{config.CatalogArtifactKindSolution},
+			},
+			{
+				Name:          "corp-plugins",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://registry.example.com/plugins",
+				ArtifactKinds: []string{config.CatalogArtifactKindProvider},
+			},
+		},
+		Settings: config.Settings{
+			DefaultCatalog:         "corp-plugins",
+			DisableOfficialCatalog: true,
+		},
+	}
+
+	srv, err := NewServer(WithServerVersion("test"), WithServerConfig(cfg))
+	require.NoError(t, err)
+
+	// Registered list exposes artifactKinds.
+	result, err := srv.handleCatalogListRegistered(context.Background(), mcp.CallToolRequest{})
+	require.NoError(t, err)
+	var body struct {
+		Catalogs []search.CatalogInfo `json:"catalogs"`
+	}
+	unmarshalResult(t, result, &body)
+	byName := make(map[string]search.CatalogInfo, len(body.Catalogs))
+	for _, c := range body.Catalogs {
+		byName[c.Name] = c
+	}
+	assert.Equal(t, []string{"solution"}, byName["corp-solutions"].ArtifactKinds)
+	assert.Equal(t, []string{"provider"}, byName["corp-plugins"].ArtifactKinds)
+
+	// Solution remote builder skips plugin-only catalogs across default, all, and named scopes.
+	assert.Empty(t, srv.buildRemoteCatalogs(""), "plugin-only default catalog must be skipped for solution search")
+	assert.Empty(t, srv.buildRemoteCatalogs("corp-plugins"), "plugin-only named catalog must be skipped for solution search")
+	allSolRemotes := srv.buildRemoteCatalogs("all")
+	require.Len(t, allSolRemotes, 1)
+	assert.Equal(t, "corp-solutions", allSolRemotes[0].Name())
+}
+
 func TestDeduplicateResults(t *testing.T) {
 	t.Parallel()
 

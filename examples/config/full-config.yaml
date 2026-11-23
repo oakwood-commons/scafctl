@@ -440,7 +440,7 @@ catalogs:
 #
 #   - name: company-internal
 #     type: http
-#     url: https://catalog.company.com/v1
+#     url: https://catalog.example.com/v1
 #     auth:
 #       type: token
 #       tokenEnvVar: COMPANY_CATALOG_TOKEN
@@ -451,6 +451,10 @@ catalogs:
 #   - name: oci-registry
 #     type: oci
 #     url: oci://registry.example.com/catalogs
+#     # Restrict artifact kinds served by this catalog (solution, provider, auth-handler).
+#     # Omit or leave empty to serve all artifact kinds.
+#     artifactKinds:
+#       - solution
 #     metadata:
 #       team: platform
 #       environment: production

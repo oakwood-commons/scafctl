@@ -291,6 +291,10 @@ catalogs:
 #   - name: oci-registry
 #     type: oci
 #     url: oci://registry.example.com/catalogs
+#     # Optional: restrict which artifact kinds this catalog serves
+#     # Valid values: "solution", "provider", "auth-handler" (omit for all kinds)
+#     # artifactKinds:
+#     #   - solution
 #     metadata:
 #       team: platform
 #       environment: production

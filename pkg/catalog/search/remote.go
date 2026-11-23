@@ -9,14 +9,62 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 )
 
 // CatalogInfo describes a registered catalog for discovery purposes.
 type CatalogInfo struct {
-	Name     string `json:"name"               yaml:"name"               doc:"Catalog identifier" example:"official"`
-	Type     string `json:"type"               yaml:"type"               doc:"Catalog type (oci, filesystem)" example:"oci"`
-	Registry string `json:"registry,omitempty"  yaml:"registry,omitempty" doc:"OCI registry host" example:"ghcr.io"`
-	Default  bool   `json:"default,omitempty"   yaml:"default,omitempty"  doc:"Whether this is the default catalog"`
+	Name          string   `json:"name"                    yaml:"name"                    doc:"Catalog identifier" example:"official"`
+	Type          string   `json:"type"                    yaml:"type"                    doc:"Catalog type (oci, filesystem)" example:"oci"`
+	Registry      string   `json:"registry,omitempty"      yaml:"registry,omitempty"      doc:"OCI registry host" example:"ghcr.io"`
+	ArtifactKinds []string `json:"artifactKinds,omitempty" yaml:"artifactKinds,omitempty" doc:"Artifact kinds served by this catalog (empty means all kinds)" maxItems:"3"`
+	Default       bool     `json:"default,omitempty"       yaml:"default,omitempty"       doc:"Whether this is the default catalog"`
+}
+
+// RegisteredCatalogsFromConfig builds the sorted list of registered catalogs
+// for discovery tools, always including the local filesystem catalog and
+// omitting the official catalog when disabled.
+func RegisteredCatalogsFromConfig(cfg *config.Config) []CatalogInfo {
+	catalogs := []CatalogInfo{
+		{
+			Name: config.CatalogNameLocal,
+			Type: config.CatalogTypeFilesystem,
+		},
+	}
+	if cfg == nil {
+		return catalogs
+	}
+
+	defaultCatalog := cfg.Settings.DefaultCatalog
+	for _, catCfg := range cfg.Catalogs {
+		if catCfg.Name == config.CatalogNameLocal {
+			continue
+		}
+		if catCfg.Name == config.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog {
+			continue
+		}
+		var kinds []string
+		if len(catCfg.ArtifactKinds) > 0 {
+			kinds = make([]string, len(catCfg.ArtifactKinds))
+			copy(kinds, catCfg.ArtifactKinds)
+		}
+		info := CatalogInfo{
+			Name:          catCfg.Name,
+			Type:          catCfg.Type,
+			ArtifactKinds: kinds,
+			Default:       catCfg.Name == defaultCatalog,
+		}
+		if catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
+			registry, _ := catalog.ParseCatalogURL(catCfg.URL)
+			info.Registry = registry
+		}
+		catalogs = append(catalogs, info)
+	}
+
+	sort.Slice(catalogs, func(i, j int) bool {
+		return catalogs[i].Name < catalogs[j].Name
+	})
+	return catalogs
 }
 
 // RemoteIndex fetches the catalog index from a remote catalog and returns

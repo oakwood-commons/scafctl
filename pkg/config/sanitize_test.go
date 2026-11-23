@@ -57,10 +57,11 @@ func TestSanitizeConfig(t *testing.T) {
 		cfg := &Config{
 			Catalogs: []CatalogConfig{
 				{
-					Name:     "remote",
-					Type:     "oci",
-					URL:      "https://registry.example.com",
-					Insecure: true,
+					Name:          "remote",
+					Type:          "oci",
+					URL:           "https://registry.example.com",
+					Insecure:      true,
+					ArtifactKinds: []string{"solution", "provider"},
 					Auth: &AuthConfig{
 						Type:        "token",
 						TokenEnvVar: "MY_TOKEN",
@@ -73,6 +74,9 @@ func TestSanitizeConfig(t *testing.T) {
 		require.Len(t, sanitized.Catalogs, 1)
 		assert.Equal(t, "remote", sanitized.Catalogs[0].Name)
 		assert.True(t, sanitized.Catalogs[0].Insecure)
+		assert.Equal(t, []string{"solution", "provider"}, sanitized.Catalogs[0].ArtifactKinds)
+		sanitized.Catalogs[0].ArtifactKinds[0] = "mutated"
+		assert.Equal(t, "solution", cfg.Catalogs[0].ArtifactKinds[0], "sanitized slice must be cloned")
 		require.NotNil(t, sanitized.Catalogs[0].Auth)
 		assert.Equal(t, "token", sanitized.Catalogs[0].Auth.Type)
 		assert.Equal(t, "MY_TOKEN", sanitized.Catalogs[0].Auth.TokenEnvVar)

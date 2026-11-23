@@ -863,7 +863,7 @@ func TestInitOptions_Run_FullTemplateDocumentsSecuritySettings(t *testing.T) {
 
 	generated, err := os.ReadFile(outputPath)
 	require.NoError(t, err)
-	for _, key := range []string{"allowedPrivateCIDRs", "trustedProxy", "trustProxyResolution", "browser"} {
+	for _, key := range []string{"allowedPrivateCIDRs", "trustedProxy", "trustProxyResolution", "browser", "artifactKinds"} {
 		assert.Contains(t, string(generated), key,
 			"config init --full must document the %s control", key)
 	}

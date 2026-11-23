@@ -6,14 +6,19 @@ package plugins
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
@@ -274,4 +279,82 @@ func TestRunInstall_DryRun(t *testing.T) {
 	assert.Contains(t, output, "Dry run")
 	assert.Contains(t, output, "github")
 	assert.Contains(t, output, "exec")
+}
+
+func TestRunInstall_FallbackWarningAndLockedSolutionFailsClosed(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	unreachSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(unreachSrv.Close)
+	host := strings.TrimPrefix(unreachSrv.URL, "http://")
+
+	appCfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true},
+		Catalogs: []config.CatalogConfig{
+			{Name: "broken-corp", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/corp", Insecure: true},
+			{Name: "second", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/second", Insecure: true},
+		},
+	}
+
+	// 1. Standalone unpinned install emits fallback warning on stderr and leaves stdout clean.
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	lgr := logr.Discard()
+	ctx := config.WithConfig(logger.WithLogger(writer.WithWriter(context.Background(), w), &lgr), appCfg)
+
+	err := runInstall(ctx, &InstallOptions{
+		CliParams: cliParams,
+		IOStreams: ioStreams,
+		CacheDir:  t.TempDir(),
+		NoCache:   true,
+		Kind:      "provider",
+	}, []string{"exec"})
+	require.Error(t, err)
+	assert.Contains(t, stderr.String(), `catalog "broken-corp" unavailable, trying next catalog...`)
+
+	// 2. Solution install with solution.lock pins locked version+catalog and fails closed without fallback warning.
+	stderr.Reset()
+	dir := t.TempDir()
+	solFile := filepath.Join(dir, "solution.yaml")
+	solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: locked-sol
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: ^1.0.0
+spec: {}
+`
+	require.NoError(t, os.WriteFile(solFile, []byte(solYAML), 0o600))
+	require.NoError(t, bundler.WriteLockFile(filepath.Join(dir, bundler.DefaultLockFileName), &bundler.LockFile{
+		Version: bundler.LockFileVersion,
+		Plugins: []bundler.LockPlugin{
+			{
+				Name:              "exec",
+				Kind:              "provider",
+				Version:           "1.2.3",
+				Constraint:        "^1.0.0",
+				ResolvedFrom:      "broken-corp",
+				ResolvedCanonical: host + "/corp",
+				Digests:           map[string]string{"linux/amd64": "sha256:deadbeef", "darwin/arm64": "sha256:deadbeef"},
+			},
+		},
+	}))
+
+	err = runInstall(ctx, &InstallOptions{
+		CliParams: cliParams,
+		IOStreams: ioStreams,
+		File:      solFile,
+		CacheDir:  t.TempDir(),
+		NoCache:   true,
+	}, nil)
+	require.Error(t, err)
+	assert.NotContains(t, stderr.String(), "trying next catalog", "locked solution install must fail closed without falling through")
 }

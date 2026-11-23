@@ -6,13 +6,17 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -187,4 +191,57 @@ func TestCatalogListPluginsToolRegistered(t *testing.T) {
 	tools := srv.mcpServer.ListTools()
 	_, ok := tools["catalog_list_plugins"]
 	assert.True(t, ok, "catalog_list_plugins tool should be registered")
+}
+
+func TestHandleCatalogListPlugins_SkipsSolutionOnlyCatalog(t *testing.T) {
+	setTestXDG(t, t.TempDir())
+
+	unreachSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(unreachSrv.Close)
+	unreachHost := strings.TrimPrefix(unreachSrv.URL, "http://")
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:          "solutions-only",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://" + unreachHost + "/solutions",
+				Insecure:      true,
+				ArtifactKinds: []string{config.CatalogArtifactKindSolution},
+			},
+			{
+				Name:          "providers-only",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://" + unreachHost + "/providers",
+				Insecure:      true,
+				ArtifactKinds: []string{config.CatalogArtifactKindProvider},
+			},
+		},
+		Settings: config.Settings{
+			DefaultCatalog:         "solutions-only",
+			DisableOfficialCatalog: true,
+		},
+	}
+
+	srv, err := NewServer(WithServerVersion("test"), WithServerConfig(cfg))
+	require.NoError(t, err)
+
+	// Named solution-only catalog returns empty plugins with zero network calls.
+	env := decodePluginEnvelope(t, callListPlugins(t, srv, map[string]any{"catalog": "solutions-only"}))
+	assert.Empty(t, env.Plugins)
+	assert.Zero(t, env.Count)
+
+	// Named unreachable providers-only catalog surfaces an error instead of
+	// masking the failure behind the excluded auth-handler kind.
+	errResult := callListPlugins(t, srv, map[string]any{"catalog": "providers-only", "name": "exec"})
+	assert.True(t, errResult.IsError, "unreachable single-kind plugin catalog must surface an error")
+
+	// Plugin remote builder skips solutions-only and wraps providers-only in KindFilterCatalog.
+	allCats, excluded := srv.buildPluginRemoteCatalogs("all")
+	assert.False(t, excluded)
+	require.Len(t, allCats, 1)
+	assert.Equal(t, "providers-only", allCats[0].Name())
+	assert.IsType(t, &catalog.KindFilterCatalog{}, allCats[0])
 }

@@ -194,6 +194,38 @@ func TestNewSolutionFetcher(t *testing.T) {
 		assert.Nil(t, got)
 	})
 
+	t.Run("configured plugin-only catalog is rejected without dialing even with on-demand remotes", func(t *testing.T) {
+		t.Parallel()
+		var conns atomic.Int32
+		srv := httptest.NewUnstartedServer(http.NotFoundHandler())
+		srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+			if state == http.StateNew {
+				conns.Add(1)
+			}
+		}
+		srv.Start()
+		t.Cleanup(srv.Close)
+		host := srv.Listener.Addr().String()
+
+		cfg := &config.Config{
+			Catalogs: []config.CatalogConfig{
+				{
+					Name:          "plugins-only",
+					Type:          config.CatalogTypeOCI,
+					URL:           "oci://" + host + "/plugins",
+					ArtifactKinds: []string{config.CatalogArtifactKindProvider},
+				},
+			},
+		}
+		ctx := config.WithConfig(t.Context(), cfg)
+		f, err := newSolutionFetcher(ctx, logr.Discard(), t.TempDir(), fetcherConfig{onDemandRemotes: true})
+		require.NoError(t, err)
+
+		_, err = f.FetchSolution(ctx, catalog.Reference{Name: "app", Version: semver.MustParse("1.0.0"), Remote: host + "/plugins"})
+		require.ErrorIs(t, err, catalog.ErrArtifactNotFound)
+		assert.Zero(t, conns.Load(), "plugin-only catalog must not be dialed via on-demand remote factory")
+	})
+
 	t.Run("local catalog open failure", func(t *testing.T) {
 		t.Parallel()
 		blocker := filepath.Join(t.TempDir(), "file")
@@ -237,6 +269,16 @@ func TestDefaultRemoteID(t *testing.T) {
 		{
 			name: "unknown alias",
 			cfg:  &config.Config{Catalogs: catalogs, Settings: config.Settings{DefaultCatalog: "nope"}},
+		},
+		{
+			name: "plugin-only default catalog is excluded for solutions",
+			cfg: &config.Config{
+				Catalogs: []config.CatalogConfig{
+					{Name: "plugins-only", Type: config.CatalogTypeOCI, URL: "oci://reg.example.com/plugins", ArtifactKinds: []string{config.CatalogArtifactKindProvider}},
+				},
+				Settings: config.Settings{DefaultCatalog: "plugins-only"},
+			},
+			want: "",
 		},
 	}
 

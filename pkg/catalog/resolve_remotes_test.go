@@ -79,3 +79,29 @@ func TestRemoteCatalogsFromContext_PropagatesInsecure(t *testing.T) {
 	require.Len(t, remotes, 1)
 	assert.True(t, remotes[0].(*RemoteCatalog).insecure)
 }
+
+func TestRemoteCatalogsFromContext_SkipsNonSolutionArtifactKinds(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:          "plugins-only",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://registry.example.com/plugins",
+				ArtifactKinds: []string{config.CatalogArtifactKindProvider},
+			},
+			{
+				Name:          "solutions",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://registry.example.com/solutions",
+				ArtifactKinds: []string{config.CatalogArtifactKindSolution},
+			},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	remotes := RemoteCatalogsFromContext(ctx, logr.Discard())
+	require.Len(t, remotes, 1)
+	assert.Equal(t, "solutions", remotes[0].Name())
+}

@@ -1068,3 +1068,40 @@ func TestRunList_AllScope_SelectsEveryOCICatalog(t *testing.T) {
 	// The run still completes successfully and reports no artifacts.
 	assert.Contains(t, out, "No artifacts found")
 }
+
+func TestRunList_SkipsCatalogNotServingRequestedKind(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cfg := &appconfig.Config{
+		Catalogs: []appconfig.CatalogConfig{
+			{
+				Name:          "solutions-only",
+				Type:          appconfig.CatalogTypeOCI,
+				URL:           unreachableOCIURL,
+				ArtifactKinds: []string{appconfig.CatalogArtifactKindSolution},
+			},
+			{
+				Name:          "providers-only",
+				Type:          appconfig.CatalogTypeOCI,
+				URL:           unreachableOCIURL,
+				ArtifactKinds: []string{appconfig.CatalogArtifactKindProvider},
+			},
+			{
+				Name:          "invalid-kinds",
+				Type:          appconfig.CatalogTypeOCI,
+				URL:           unreachableOCIURL,
+				ArtifactKinds: []string{"bogus"},
+			},
+		},
+	}
+
+	out, err := runListWithConfig(t, cfg, "--catalog", "solutions-only", "--kind", "provider")
+	require.NoError(t, err)
+	assert.Contains(t, out, `Skipping remote catalog "solutions-only" (configured artifactKinds do not include requested kind).`)
+	assert.NotContains(t, out, `Searching remote catalog "solutions-only"`)
+
+	outInvalid, err := runListWithConfig(t, cfg, "--catalog", "invalid-kinds")
+	require.NoError(t, err)
+	assert.Contains(t, outInvalid, `Skipping remote catalog "invalid-kinds"`)
+	assert.NotContains(t, outInvalid, `Searching remote catalog "invalid-kinds"`)
+}

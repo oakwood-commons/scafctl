@@ -6,6 +6,9 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -512,4 +515,280 @@ func TestArtifactAllowlist(t *testing.T) {
 			assert.Equal(t, tc.wantAllowed, allowed)
 		})
 	}
+}
+
+func TestBuildPluginFetcher_ArtifactKindsSkipsSolutionOnlyCatalog(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:          "solutions-only",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://private.example.com/solutions",
+				ArtifactKinds: []string{config.CatalogArtifactKindSolution},
+			},
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  "oci://ghcr.io/oakwood-commons",
+			},
+		},
+	}
+
+	f, err := BuildPluginFetcher(cfg, nil, logr.Discard())
+	require.NoError(t, err)
+	assert.Equal(t, []string{LocalCatalogName, config.CatalogNameOfficial}, catalogNames(f.Catalogs()),
+		"solution-only catalog must be omitted from plugin fetcher")
+
+	rf, err := BuildRemotePluginFetcher(cfg, nil, logr.Discard())
+	require.NoError(t, err)
+	assert.Equal(t, []string{config.CatalogNameOfficial}, catalogNames(rf.Catalogs()),
+		"solution-only catalog must be omitted from remote plugin fetcher")
+}
+
+func TestBuildPluginFetcher_ArtifactKindsSinglePluginKind(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	// Plain HTTP server on 127.0.0.1 fails HTTPS handshake immediately (<1ms) as
+	// UnreachableError when contacted, whereas an unserved kind (auth-handler)
+	// returns ArtifactNotFoundError locally without dialing at all.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+
+	cfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true},
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:          "providers-only",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://" + host + "/providers",
+				Insecure:      true,
+				ArtifactKinds: []string{config.CatalogArtifactKindProvider},
+			},
+		},
+	}
+
+	f, err := BuildPluginFetcher(cfg, nil, logr.Discard(), WithoutLocalBuilds())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"providers-only"}, catalogNames(f.Catalogs()))
+
+	// Auth-handler lookup is filtered locally as not-found with zero network calls.
+	_, err = f.ResolvePlugin(t.Context(), "github", ArtifactKindAuthHandler, "")
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+
+	// Provider lookup reaches the remote catalog and reports unreachable.
+	_, err = f.ResolvePlugin(t.Context(), "exec", ArtifactKindProvider, "")
+	_, unreachable := IsCatalogUnreachable(err)
+	assert.True(t, unreachable, "expected provider lookup to contact catalog, got %v", err)
+}
+
+func TestBuildPluginFetcher_ChainModeBestEffortVsStrict(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	// Plain HTTP server on 127.0.0.1 fails HTTPS handshake immediately as UnreachableError ("unavailable").
+	unavailSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(unavailSrv.Close)
+	unavailHost := strings.TrimPrefix(unavailSrv.URL, "http://")
+
+	// TLS server rejecting bearer credentials produces errCredentialsRejected ("unauthenticated").
+	unauthSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}`))
+	}))
+	t.Cleanup(unauthSrv.Close)
+	unauthHost := strings.TrimPrefix(unauthSrv.URL, "https://")
+
+	authReg := auth.NewRegistry()
+	mockAuth := auth.NewMockHandler("corp-sso")
+	mockAuth.SetToken(&auth.Token{AccessToken: "expired-token"})
+	require.NoError(t, authReg.Register(mockAuth))
+
+	cfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true},
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:     "broken-private",
+				Type:     config.CatalogTypeOCI,
+				URL:      "oci://" + unavailHost + "/private",
+				Insecure: true,
+			},
+			{
+				Name:         "expired-auth",
+				Type:         config.CatalogTypeOCI,
+				URL:          "oci://" + unauthHost + "/corp",
+				AuthProvider: "corp-sso",
+				Insecure:     true,
+			},
+			{
+				Name:     "mirror",
+				Type:     config.CatalogTypeOCI,
+				URL:      "oci://" + unavailHost + "/mirror",
+				Insecure: true,
+			},
+		},
+	}
+
+	var bestEffortWarnings []string
+	bf, err := BuildPluginFetcher(cfg, authReg, logr.Discard(),
+		WithoutLocalBuilds(),
+		WithPluginWarningHandler(func(msg string) {
+			bestEffortWarnings = append(bestEffortWarnings, msg)
+		}),
+	)
+	require.NoError(t, err)
+	_, err = bf.ResolvePlugin(t.Context(), "exec", ArtifactKindProvider, "")
+	require.Error(t, err)
+	assert.Equal(t, []string{
+		`catalog "broken-private" unavailable, trying next catalog...`,
+		`catalog "expired-auth" unauthenticated, trying next catalog...`,
+	}, bestEffortWarnings,
+		"best-effort mode warns with unavailable/unauthenticated and skips trailing warning on last source")
+
+	var strictWarnings []string
+	sf, err := BuildPluginFetcher(cfg, authReg, logr.Discard(),
+		WithoutLocalBuilds(),
+		WithPluginChainMode(ChainModeStrict),
+		WithPluginWarningHandler(func(msg string) {
+			strictWarnings = append(strictWarnings, msg)
+		}),
+	)
+	require.NoError(t, err)
+	_, err = sf.ResolvePlugin(t.Context(), "exec", ArtifactKindProvider, "")
+	require.Error(t, err)
+	assert.Empty(t, strictWarnings, "strict mode halts immediately without fallback warnings")
+}
+
+func TestBuildCatalogChain_ArtifactKindsUnwrapsCleanly(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true},
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:          "providers-only",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://127.0.0.1:1/providers",
+				Insecure:      true,
+				ArtifactKinds: []string{config.CatalogArtifactKindProvider},
+			},
+		},
+	}
+
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard(), WithAllowedCatalogs([]string{"providers-only"}))
+	require.NoError(t, err)
+	require.Len(t, chain.Catalogs(), 1)
+
+	kf, ok := chain.Catalogs()[0].(*KindFilterCatalog)
+	require.True(t, ok, "catalog with artifactKinds must be wrapped in KindFilterCatalog")
+	assert.IsType(t, &RemoteCatalog{}, kf.Inner())
+
+	// Unserved solution kind returns not-found without dialing 127.0.0.1:1.
+	_, err = chain.Resolve(t.Context(), Reference{Name: "starter", Kind: ArtifactKindSolution})
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+
+	// BuildRemoteCatalogChain also wraps kind-restricted catalogs, and fails closed
+	// when ArtifactKinds contains only unrecognized values.
+	badCfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true},
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:          "invalid-kinds",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://127.0.0.1:1/bad",
+				Insecure:      true,
+				ArtifactKinds: []string{"bogus"},
+			},
+		},
+	}
+	remoteChain, err := BuildRemoteCatalogChain(badCfg, nil, logr.Discard())
+	require.NoError(t, err)
+	_, err = remoteChain.Resolve(t.Context(), Reference{Name: "starter", Kind: ArtifactKindSolution})
+	require.ErrorIs(t, err, ErrArtifactNotFound, "unrecognized non-empty artifactKinds must fail closed")
+
+	// BuildRemotePluginFetcher wraps single-plugin-kind catalogs and applies allowlists.
+	rpf, err := BuildRemotePluginFetcher(cfg, nil, logr.Discard(),
+		WithPerCatalogArtifacts(map[string]PluginPolicy{
+			"providers-only": {Plugins: []string{"allowed-prov"}},
+		}),
+	)
+	require.NoError(t, err)
+	_, err = rpf.ResolvePlugin(t.Context(), "github", ArtifactKindAuthHandler, "")
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+	_, err = rpf.ResolvePlugin(t.Context(), "blocked-prov", ArtifactKindProvider, "")
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+
+	// SelectSolutionRemoteCatalogs & SelectPluginRemoteCatalogs honor artifactKinds across scopes.
+	mixedCfg := &config.Config{
+		Settings: config.Settings{
+			DefaultCatalog:         "solutions-only",
+			DisableOfficialCatalog: false,
+		},
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:          "solutions-only",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://registry.example.com/solutions",
+				ArtifactKinds: []string{config.CatalogArtifactKindSolution},
+			},
+			{
+				Name:          "providers-only",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://registry.example.com/providers",
+				ArtifactKinds: []string{config.CatalogArtifactKindProvider},
+			},
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  config.DefaultOfficialCatalogURL,
+			},
+		},
+	}
+	assert.Nil(t, SelectSolutionRemoteCatalogs(nil, "", nil, logr.Discard()))
+	nilCats, nilExcl := SelectPluginRemoteCatalogs(nil, "", nil, logr.Discard())
+	assert.Nil(t, nilCats)
+	assert.False(t, nilExcl)
+
+	assert.Len(t, SelectSolutionRemoteCatalogs(mixedCfg, "", nil, logr.Discard()), 1)
+	assert.Len(t, SelectSolutionRemoteCatalogs(mixedCfg, "all", nil, logr.Discard()), 2)
+	assert.Len(t, SelectSolutionRemoteCatalogs(mixedCfg, "solutions-only", nil, logr.Discard()), 1)
+	assert.Empty(t, SelectSolutionRemoteCatalogs(mixedCfg, "providers-only", nil, logr.Discard()))
+
+	defPluginCats, excluded := SelectPluginRemoteCatalogs(mixedCfg, "", nil, logr.Discard())
+	assert.False(t, excluded)
+	require.Len(t, defPluginCats, 1)
+	assert.Equal(t, config.CatalogNameOfficial, defPluginCats[0].Name())
+
+	allPluginCats, excluded := SelectPluginRemoteCatalogs(mixedCfg, "all", nil, logr.Discard())
+	assert.False(t, excluded)
+	require.Len(t, allPluginCats, 2)
+
+	namedPluginCats, excluded := SelectPluginRemoteCatalogs(mixedCfg, "providers-only", nil, logr.Discard())
+	assert.False(t, excluded)
+	require.Len(t, namedPluginCats, 1)
+	assert.IsType(t, &KindFilterCatalog{}, namedPluginCats[0])
+
+	unknownCats, excluded := SelectPluginRemoteCatalogs(mixedCfg, "nonexistent", nil, logr.Discard())
+	assert.False(t, excluded)
+	assert.Nil(t, unknownCats)
+
+	exclCats, excluded := SelectPluginRemoteCatalogs(mixedCfg, "solutions-only", nil, logr.Discard())
+	assert.True(t, excluded)
+	assert.Empty(t, exclCats)
+
+	// DisableOfficialCatalog prevents official from being returned even by name or default.
+	disabledOfficialCfg := *mixedCfg
+	disabledOfficialCfg.Settings.DefaultCatalog = config.CatalogNameOfficial
+	disabledOfficialCfg.Settings.DisableOfficialCatalog = true
+	assert.Nil(t, SelectSolutionRemoteCatalogs(&disabledOfficialCfg, "", nil, logr.Discard()))
+	assert.Nil(t, SelectSolutionRemoteCatalogs(&disabledOfficialCfg, config.CatalogNameOfficial, nil, logr.Discard()))
+	offCats, offExcl := SelectPluginRemoteCatalogs(&disabledOfficialCfg, config.CatalogNameOfficial, nil, logr.Discard())
+	assert.Nil(t, offCats)
+	assert.False(t, offExcl)
 }

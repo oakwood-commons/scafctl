@@ -59,6 +59,23 @@ func TestEmitStartupWarnings_Empty(t *testing.T) {
 	assert.Empty(t, errBuf.String())
 }
 
+func TestBuildServerPluginFetcherOverrides_EnforcesStrictAndNoLocalBuilds(t *testing.T) {
+	t.Parallel()
+
+	perCat := map[string]catalog.PluginPolicy{
+		"corp": {AllowAll: true},
+	}
+	overrides := buildServerPluginFetcherOverrides([]string{"corp"}, perCat, nil, true)
+
+	assert.True(t, overrides.DisallowLocalBuilds, "server must disallow local plugin builds")
+	assert.True(t, overrides.NoCache)
+	assert.Equal(t, []string{"corp"}, overrides.AllowedCatalogs)
+	assert.Equal(t, []string{"corp"}, overrides.ChainAllowedCatalogs)
+	assert.Equal(t, perCat, overrides.PerCatalogArtifacts)
+	require.NotNil(t, overrides.ChainMode)
+	assert.Equal(t, catalog.ChainModeStrict, *overrides.ChainMode, "server must enforce strict plugin chain mode")
+}
+
 func TestCommandServe(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()

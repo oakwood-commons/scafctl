@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/go-logr/logr"
 )
@@ -78,6 +79,7 @@ var (
 	_ PluginSource = (*localPlugin)(nil)
 	_ PluginSource = (*pluginSourceChain)(nil)
 	_ PluginSource = (*allowlistPluginSource)(nil)
+	_ PluginSource = (*kindFilterPluginSource)(nil)
 )
 
 // wrappedPluginSource is implemented by PluginSource decorators so callers can
@@ -86,8 +88,39 @@ type wrappedPluginSource interface {
 	unwrapPluginSource() PluginSource
 }
 
-// PluginFetcher resolves and fetches plugin artifacts from a strict, ordered
-// chain of plugin sources.
+// PluginChainWarningFunc receives a human-readable warning message when a
+// remote catalog in a best-effort plugin chain is unavailable or
+// unauthenticated and resolution falls through to subsequent catalogs.
+// Implementations must be safe for concurrent use.
+type PluginChainWarningFunc func(msg string)
+
+// PluginFetcherOption configures a PluginFetcher at construction time.
+type PluginFetcherOption func(*pluginFetcherOptions)
+
+type pluginFetcherOptions struct {
+	mode   ChainMode
+	onWarn PluginChainWarningFunc
+}
+
+// WithFetcherChainMode sets the chain mode used when walking unpinned plugin
+// sources. Defaults to ChainModeBestEffort.
+func WithFetcherChainMode(mode ChainMode) PluginFetcherOption {
+	return func(o *pluginFetcherOptions) {
+		o.mode = mode
+	}
+}
+
+// WithFetcherWarningHandler sets an optional callback invoked at most once per
+// failing remote catalog when ChainModeBestEffort falls through past a non-404
+// error.
+func WithFetcherWarningHandler(fn PluginChainWarningFunc) PluginFetcherOption {
+	return func(o *pluginFetcherOptions) {
+		o.onWarn = fn
+	}
+}
+
+// PluginFetcher resolves and fetches plugin artifacts from an ordered chain of
+// plugin sources.
 type PluginFetcher struct {
 	chain     *pluginSourceChain // the ordered chain of every configured source
 	byCatalog map[string]PluginSource
@@ -96,11 +129,27 @@ type PluginFetcher struct {
 
 // NewPluginFetcher creates a PluginFetcher over an ordered set of plugin
 // sources: local (optional; built artifacts only) first, then remotes in
-// priority order. Calls that name no catalog walk that chain; WithCatalog
-// scopes a call to the one source with that name. Source names must be unique.
+// priority order. Calls that name no catalog walk that chain (defaulting to
+// ChainModeBestEffort); WithCatalog scopes a call to the one source with that
+// name. Source names must be unique.
 func NewPluginFetcher(logger logr.Logger, local *LocalCatalog, remotes ...PluginSource) (*PluginFetcher, error) {
+	return NewPluginFetcherWithOptions(logger, local, nil, remotes...)
+}
+
+// NewPluginFetcherWithOptions creates a PluginFetcher configured with
+// construction-time options such as chain mode and warning callbacks.
+func NewPluginFetcherWithOptions(logger logr.Logger, local *LocalCatalog, opts []PluginFetcherOption, remotes ...PluginSource) (*PluginFetcher, error) {
+	cfg := pluginFetcherOptions{
+		mode: ChainModeBestEffort,
+	}
+	for _, fn := range opts {
+		if fn != nil {
+			fn(&cfg)
+		}
+	}
+
 	logger = logger.WithName("plugin-fetcher")
-	chain := newPluginSourceChain(logger, newLocalPlugin(local), remotes...)
+	chain := newPluginSourceChainWithMode(logger, cfg.mode, cfg.onWarn, newLocalPlugin(local), remotes...)
 
 	byCatalog := make(map[string]PluginSource, len(chain.sources))
 	for _, src := range chain.sources {
@@ -138,14 +187,25 @@ func (f *PluginFetcher) Catalogs() []Catalog {
 	return cats
 }
 
-// newPluginSourceChain orders local (when non-nil) ahead of remotes.
+// newPluginSourceChain orders local (when non-nil) ahead of remotes in strict mode.
 func newPluginSourceChain(logger logr.Logger, local *localPlugin, remotes ...PluginSource) *pluginSourceChain {
+	return newPluginSourceChainWithMode(logger, ChainModeStrict, nil, local, remotes...)
+}
+
+// newPluginSourceChainWithMode orders local (when non-nil) ahead of remotes
+// using the specified ChainMode and optional warning callback.
+func newPluginSourceChainWithMode(logger logr.Logger, mode ChainMode, onWarn PluginChainWarningFunc, local *localPlugin, remotes ...PluginSource) *pluginSourceChain {
 	sources := make([]PluginSource, 0, len(remotes)+1)
 	if local != nil {
 		sources = append(sources, local)
 	}
 	sources = append(sources, remotes...)
-	return &pluginSourceChain{sources: sources, logger: logger.WithName("source-chain")}
+	return &pluginSourceChain{
+		sources: sources,
+		logger:  logger.WithName("source-chain"),
+		mode:    mode,
+		onWarn:  onWarn,
+	}
 }
 
 // targetCatalog selects the source an operation should run against. An empty
@@ -353,14 +413,21 @@ func (l *localPlugin) Find(ctx context.Context, query ArtifactQuery) (ArtifactIn
 	return l.source.Find(ctx, query)
 }
 
-// pluginSourceChain tries each source in priority order. It is always strict
-// (see ChainModeStrict): it moves past a source only when that source
-// definitively reports not-found, so a broken or unreachable higher-priority
-// source is never silently substituted by a lower-priority one. A
-// PlatformNotFoundError halts the chain immediately and is returned as-is.
+// pluginSourceChain tries each source in priority order. In ChainModeStrict it
+// moves past a source only when that source definitively reports not-found. In
+// ChainModeBestEffort it logs/emits a deduplicated warning and continues past
+// unavailable or unauthenticated remote sources, while still halting on corrupt
+// local builds, PlatformNotFoundError, invalid queries/references, and caller
+// context cancellation.
 type pluginSourceChain struct {
 	sources []PluginSource
 	logger  logr.Logger
+	mode    ChainMode
+	onWarn  PluginChainWarningFunc
+
+	warnMu sync.Mutex
+	warned map[string]bool
+	emitMu sync.Mutex
 }
 
 func (c *pluginSourceChain) Name() string {
@@ -373,7 +440,7 @@ func (c *pluginSourceChain) FetchByPlatform(ctx context.Context, ref Reference, 
 		info ArtifactInfo
 	}
 	subject := fmt.Sprintf("%s (%s)", ref.String(), platform)
-	r, err := walkPluginSources(c, subject, func(src PluginSource) (fetchResult, error) {
+	r, err := walkPluginSources(ctx, c, subject, func(src PluginSource) (fetchResult, error) {
 		data, info, err := src.FetchByPlatform(ctx, ref, platform)
 		return fetchResult{data: data, info: info}, err
 	})
@@ -381,35 +448,105 @@ func (c *pluginSourceChain) FetchByPlatform(ctx context.Context, ref Reference, 
 }
 
 func (c *pluginSourceChain) ListPlatforms(ctx context.Context, ref Reference) ([]string, error) {
-	return walkPluginSources(c, ref.String(), func(src PluginSource) ([]string, error) {
+	return walkPluginSources(ctx, c, ref.String(), func(src PluginSource) ([]string, error) {
 		return src.ListPlatforms(ctx, ref)
 	})
 }
 
 func (c *pluginSourceChain) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
 	subject := fmt.Sprintf("%s (%s)", ref.String(), platform)
-	return walkPluginSources(c, subject, func(src PluginSource) (ContentDigestInfo, error) {
+	return walkPluginSources(ctx, c, subject, func(src PluginSource) (ContentDigestInfo, error) {
 		return src.ResolveContentDigest(ctx, ref, platform, mediaType)
 	})
 }
 
 func (c *pluginSourceChain) Find(ctx context.Context, query ArtifactQuery) (ArtifactInfo, error) {
-	return walkPluginSources(c, query.String(), func(src PluginSource) (ArtifactInfo, error) {
+	return walkPluginSources(ctx, c, query.String(), func(src PluginSource) (ArtifactInfo, error) {
 		return src.Find(ctx, query)
 	})
 }
 
+// isLocalPluginSource reports whether src wraps a local built catalog source.
+// Local build errors always halt the chain regardless of mode so a corrupt
+// local development build never silently falls through to a remote catalog.
+func isLocalPluginSource(src PluginSource) bool {
+	for {
+		switch src.(type) {
+		case *localPlugin, *LocalCatalog:
+			return true
+		}
+		w, ok := src.(wrappedPluginSource)
+		if !ok {
+			return false
+		}
+		src = w.unwrapPluginSource()
+	}
+}
+
+// formatPluginChainWarning builds a concise, user-facing fallback warning for a
+// remote catalog that could not be queried in best-effort mode.
+func formatPluginChainWarning(catalogName string, err error) string {
+	if errors.Is(err, errCredentialsRejected) || isOCIAuthError(err) {
+		return fmt.Sprintf("catalog %q unauthenticated, trying next catalog...", catalogName)
+	}
+	return fmt.Sprintf("catalog %q unavailable, trying next catalog...", catalogName)
+}
+
+// warnFallback emits at most one fallback warning per catalog name over the
+// lifetime of c. warnMu guards only the deduplication map; emitMu serializes
+// logger and onWarn invocations across concurrent goroutines.
+func (c *pluginSourceChain) warnFallback(catalogName string, err error) {
+	c.warnMu.Lock()
+	if c.warned == nil {
+		c.warned = make(map[string]bool)
+	}
+	already := c.warned[catalogName]
+	c.warned[catalogName] = true
+	c.warnMu.Unlock()
+
+	if already {
+		return
+	}
+	msg := formatPluginChainWarning(catalogName, err)
+	c.emitMu.Lock()
+	defer c.emitMu.Unlock()
+	c.logger.Info(msg, "source", catalogName, "error", err)
+	if c.onWarn != nil {
+		c.onWarn(msg)
+	}
+}
+
+// shouldHaltPluginSource reports whether a non-404 error from src must stop the
+// chain. In ChainModeStrict every non-404 error halts. In ChainModeBestEffort,
+// local build sources, invalid queries/references, ambiguous local matches, and
+// caller context cancellation still halt, while remote catalog failures warn and
+// continue to the next source.
+func (c *pluginSourceChain) shouldHaltPluginSource(ctx context.Context, src PluginSource, err error) bool {
+	if c.mode != ChainModeBestEffort {
+		return true
+	}
+	if ctx.Err() != nil {
+		return true
+	}
+	if isLocalPluginSource(src) {
+		return true
+	}
+	if errors.Is(err, ErrInvalidQuery) || errors.Is(err, ErrInvalidReference) || errors.Is(err, ErrAmbiguousArtifact) {
+		return true
+	}
+	return false
+}
+
 // walkPluginSources runs action against each source in order and returns the
-// first success. A PlatformNotFoundError, or any other error that is not a
-// definitive not-found, halts the chain; the former is returned wrapped with
-// the subject and source. The final error
-// is built by aggregateChainError, so an all-miss chain still satisfies
-// errors.Is(err, ErrArtifactNotFound) and an unreachable source is reported
-// as such.
-func walkPluginSources[T any](c *pluginSourceChain, subject string, action func(PluginSource) (T, error)) (T, error) {
+// first success. A PlatformNotFoundError always halts the chain immediately.
+// For other non-404 errors, shouldHaltPluginSource decides whether to halt
+// (strict mode or local/caller error) or emit a deduplicated warning and try
+// subsequent sources (best-effort remote fallback). When no source succeeds,
+// aggregateChainError surfaces unreachable/auth causes ahead of plain 404s.
+func walkPluginSources[T any](ctx context.Context, c *pluginSourceChain, subject string, action func(PluginSource) (T, error)) (T, error) {
 	var zero T
 	outcomes := make([]catalogOutcome, 0, len(c.sources))
-	for _, src := range c.sources {
+	for i, src := range c.sources {
 		result, err := action(src)
 		if err == nil {
 			c.logger.V(1).Info("plugin source resolved", "source", src.Name(), "subject", subject)
@@ -419,9 +556,16 @@ func walkPluginSources[T any](c *pluginSourceChain, subject string, action func(
 			return zero, fmt.Errorf("%s from %s: %w", subject, src.Name(), err)
 		}
 		outcomes = append(outcomes, catalogOutcome{catalog: src.Name(), err: err})
-		if !errors.Is(err, ErrArtifactNotFound) {
+		if errors.Is(err, ErrArtifactNotFound) {
+			continue
+		}
+		if c.shouldHaltPluginSource(ctx, src, err) {
 			c.logger.V(1).Info("plugin source error (non-404), halting", "source", src.Name(), "subject", subject, "error", err)
 			return zero, aggregateChainError(subject, outcomes)
+		}
+		c.logger.V(1).Info("plugin source error (non-404), falling through", "source", src.Name(), "subject", subject, "error", err)
+		if i+1 < len(c.sources) {
+			c.warnFallback(src.Name(), err)
 		}
 	}
 	return zero, aggregateChainError(subject, outcomes)

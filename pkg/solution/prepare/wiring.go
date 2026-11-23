@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -90,10 +91,26 @@ func OptionsFromContext(ctx context.Context, w CLIWiring) ([]Option, error) {
 		opts = append(opts, WithClientOptions(authOpts...))
 	}
 
+	// Parse --lock-mode up front so invalid values fail fast before building
+	// catalog chains and so strict lock mode can select a strict plugin chain.
+	var parsedLockMode LockMode
+	if w.LockMode != "" {
+		var parseErr error
+		parsedLockMode, parseErr = ParseLockMode(w.LockMode)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+	}
+
 	// Wire plugin auto-fetch so that bundle.plugins declarations trigger
 	// automatic download from configured catalogs. A build failure is
 	// non-fatal: auto-fetch is simply disabled (see BuildPluginFetcher).
-	if fetcher, err := BuildPluginFetcher(ctx); err == nil {
+	var fetcherOverrides PluginFetcherOverrides
+	if w.Strict || parsedLockMode == LockModeStrict {
+		strictMode := catalog.ChainModeStrict
+		fetcherOverrides.ChainMode = &strictMode
+	}
+	if fetcher, err := BuildPluginFetcherWithConfig(ctx, fetcherOverrides); err == nil {
 		opts = append(opts, WithPluginFetcher(fetcher))
 	}
 
@@ -103,11 +120,7 @@ func OptionsFromContext(ctx context.Context, w CLIWiring) ([]Option, error) {
 
 	// Wire lock mode for BuildProviderDependency.
 	if w.LockMode != "" {
-		parsed, parseErr := ParseLockMode(w.LockMode)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		opts = append(opts, WithLockMode(parsed))
+		opts = append(opts, WithLockMode(parsedLockMode))
 	}
 
 	// Pass auth registry so auth handler plugins can be registered.

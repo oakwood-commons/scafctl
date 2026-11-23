@@ -12,7 +12,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/catalog/search"
-	"github.com/oakwood-commons/scafctl/pkg/config"
 )
 
 // registerCatalogSearchTools registers catalog search and discovery MCP tools.
@@ -70,7 +69,7 @@ func (s *Server) registerCatalogSearchTools() {
 	s.addTool(catalogListSolutionsTool, s.handleCatalogListSolutions)
 
 	catalogListRegisteredTool := mcp.NewTool("catalog_list_registered",
-		mcp.WithDescription("List all registered catalogs with their type, registry, and default status. Use this to discover which catalogs are available for search and listing."),
+		mcp.WithDescription("List all registered catalogs with their type, registry, artifactKinds, and default status. Use this to discover which catalogs are available for search and listing."),
 		mcp.WithTitleAnnotation("List Registered Catalogs"),
 		mcp.WithToolIcons(toolIcons["catalog"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -233,111 +232,17 @@ func (s *Server) listRemoteCatalogs(catalogFilter string) []search.SolutionEntry
 	return allEntries
 }
 
-// buildRemoteCatalogs creates RemoteCatalog instances for the requested scope.
-// catalogFilter: "" = default catalog (or official fallback), "all" = every
-// registered OCI catalog, specific name = that catalog only.
-// "local" should not reach here.
 func (s *Server) buildRemoteCatalogs(catalogFilter string) []*catalog.RemoteCatalog {
-	cfg := s.resolveConfig()
-	if cfg == nil {
-		return nil
-	}
+	return catalog.SelectSolutionRemoteCatalogs(s.resolveConfig(), catalogFilter, s.authReg, s.logger)
+}
 
-	credStore, err := catalog.NewCredentialStore(s.logger)
-	if err != nil {
-		s.logger.V(1).Info("credential store not available for remote search", "error", err)
-	}
-
-	var targets []config.CatalogConfig
-
-	switch {
-	case catalogFilter == "":
-		// Default: search only the default catalog (or official if no default is set).
-		if catCfg, ok := cfg.GetDefaultCatalog(); ok && catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
-			targets = append(targets, *catCfg)
-		} else {
-			// Fall back to the official catalog when no explicit default is configured.
-			if catCfg, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok &&
-				catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" &&
-				!cfg.Settings.DisableOfficialCatalog {
-				targets = append(targets, *catCfg)
-			}
-		}
-	case strings.EqualFold(catalogFilter, "all"):
-		// Explicit "all": search every registered OCI catalog.
-		for _, catCfg := range cfg.Catalogs {
-			if catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
-				if catCfg.Name == config.CatalogNameLocal {
-					continue
-				}
-				if catCfg.Name == config.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog {
-					continue
-				}
-				targets = append(targets, catCfg)
-			}
-		}
-	default:
-		// Specific catalog by name.
-		if catCfg, ok := cfg.GetCatalog(catalogFilter); ok && catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
-			targets = append(targets, *catCfg)
-		}
-	}
-
-	var result []*catalog.RemoteCatalog
-	for _, catCfg := range targets {
-		rc, buildErr := catalog.BuildRemoteCatalogFromConfig(catCfg, credStore, s.authReg, s.logger)
-		if buildErr != nil {
-			s.logger.V(1).Info("failed to build remote catalog, skipping",
-				"catalog", catCfg.Name, "error", buildErr)
-			continue
-		}
-		result = append(result, rc)
-	}
-	return result
+func (s *Server) buildPluginRemoteCatalogs(catalogFilter string) ([]catalog.Catalog, bool) {
+	return catalog.SelectPluginRemoteCatalogs(s.resolveConfig(), catalogFilter, s.authReg, s.logger)
 }
 
 // listRegisteredCatalogs returns info about all configured catalogs.
 func (s *Server) listRegisteredCatalogs() []search.CatalogInfo {
-	var catalogs []search.CatalogInfo
-
-	// Always include local.
-	catalogs = append(catalogs, search.CatalogInfo{
-		Name: config.CatalogNameLocal,
-		Type: "filesystem",
-	})
-
-	cfg := s.resolveConfig()
-	if cfg == nil {
-		return catalogs
-	}
-
-	defaultCatalog := cfg.Settings.DefaultCatalog
-
-	for _, catCfg := range cfg.Catalogs {
-		if catCfg.Name == config.CatalogNameLocal {
-			continue
-		}
-		if catCfg.Name == config.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog {
-			continue
-		}
-
-		info := search.CatalogInfo{
-			Name:    catCfg.Name,
-			Type:    catCfg.Type,
-			Default: catCfg.Name == defaultCatalog,
-		}
-		if catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
-			registry, _ := catalog.ParseCatalogURL(catCfg.URL)
-			info.Registry = registry
-		}
-		catalogs = append(catalogs, info)
-	}
-
-	sort.Slice(catalogs, func(i, j int) bool {
-		return catalogs[i].Name < catalogs[j].Name
-	})
-
-	return catalogs
+	return search.RegisteredCatalogsFromConfig(s.resolveConfig())
 }
 
 // deduplicateResults removes duplicate solution names, keeping the highest-scored entry.

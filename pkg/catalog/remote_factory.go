@@ -82,6 +82,35 @@ func ContextRemoteFactory(lgr logr.Logger) RemoteFactory {
 			return nil, fmt.Errorf("invalid remote %q: no registry", remoteID)
 		}
 
+		// If remoteID matches one or more configured OCI catalogs and none of them
+		// serves solution artifacts, fail closed without making network requests.
+		if cfg := config.FromContext(ctx); cfg != nil {
+			canonical := CanonicalRemoteCatalogID(registry, repository)
+			matchedConfigured := false
+			servesSolution := false
+			var excludedName string
+			for _, cat := range cfg.Catalogs {
+				if cat.Type != config.CatalogTypeOCI || cat.URL == "" {
+					continue
+				}
+				catReg, catRepo := ParseCatalogURL(cat.URL)
+				if CanonicalRemoteCatalogID(catReg, catRepo) != canonical {
+					continue
+				}
+				matchedConfigured = true
+				if cat.ServesArtifactKind(config.CatalogArtifactKindSolution) {
+					servesSolution = true
+					break
+				}
+				if excludedName == "" {
+					excludedName = cat.Name
+				}
+			}
+			if matchedConfigured && !servesSolution {
+				return nil, fmt.Errorf("catalog %q does not serve solution artifacts: %w", excludedName, ErrArtifactNotFound)
+			}
+		}
+
 		credStore, err := NewCredentialStore(lgr)
 		if err != nil {
 			lgr.V(1).Info("credential store not available, using anonymous auth", "remote", remoteID, "error", err)

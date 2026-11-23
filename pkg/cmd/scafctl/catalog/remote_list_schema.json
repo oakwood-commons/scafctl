@@ -39,6 +39,11 @@
         "layout": "table"
       },
       {
+        "title": "Artifact Kinds",
+        "fields": ["artifactKinds"],
+        "layout": "tags"
+      },
+      {
         "title": "Path",
         "fields": ["path"],
         "layout": "inline"
@@ -54,7 +59,7 @@
         "type": "string",
         "title": "Name",
         "description": "Catalog identifier",
-        "maxLength": 25,
+        "maxLength": 256,
         "x-kvx-priority": 10
       },
       "type": {
@@ -82,6 +87,13 @@
         "title": "Auth Scope",
         "description": "Authentication scope",
         "deprecated": true
+      },
+      "artifactKinds": {
+        "type": "array",
+        "items": { "type": "string" },
+        "title": "Kinds",
+        "description": "Artifact kinds served by this catalog (empty means all kinds)",
+        "x-kvx-priority": 5
       },
       "path": {
         "type": "string",

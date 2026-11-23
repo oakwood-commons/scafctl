@@ -35,6 +35,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
 // Option configures SolutionFromLoader.
@@ -336,7 +337,7 @@ func finishPrepare(
 		// bundle.plugins into a versioned composite registry, and build a
 		// ExecutionRegistry that routes lookups to the correct catalog+version.
 		// Undeclared external providers are rejected by validateExternalProviders.
-		execReg, vCleanup, vErr := buildExecutionRegistryCLI(ctx, sol, composite, catalogindex.FromContext(ctx), cfg)
+		execReg, vCleanup, vErr := buildExecutionRegistryCLI(ctx, sol, composite, pluginCatalogResolver(ctx, cfg.pluginFetcher), cfg)
 		if vErr != nil {
 			cleanup()
 			return nil, vErr
@@ -837,6 +838,13 @@ func bundleHasAuthHandlers(sol *solution.Solution) bool {
 	return false
 }
 
+func pluginCatalogResolver(ctx context.Context, fetcher *plugin.Fetcher) *catalogindex.Index {
+	if fetcher != nil && fetcher.CatalogIndex() != nil {
+		return fetcher.CatalogIndex()
+	}
+	return catalogindex.FromContext(ctx)
+}
+
 // registerBundleAuthHandlers fetches and registers any auth-handler-kind
 // plugins declared in the solution bundle into the shared auth registry. It is
 // used in pool mode, where the returned clients are owned by the long-lived
@@ -851,6 +859,20 @@ func registerBundleAuthHandlers(ctx context.Context, sol *solution.Solution, cfg
 	}
 	if len(authDeps) == 0 {
 		return nil, nil
+	}
+	lockFile := cfg.lockFile
+	if lockFile == nil && len(cfg.lockPlugins) > 0 {
+		lockFile = &bundler.LockFile{Version: bundler.LockFileVersion, Plugins: cfg.lockPlugins}
+	}
+	if lockFile != nil || cfg.lockMode == LockModeStrict || cfg.lockMode == LockModeConstrained {
+		resolver := pluginCatalogResolver(ctx, cfg.pluginFetcher)
+		for i, dep := range authDeps {
+			resolved, err := resolveByLockModeInternal(dep, lockFile, cfg.lockMode, resolver)
+			if err != nil {
+				return nil, fmt.Errorf("resolving auth handler plugin %q: %w", dep.ArtifactName(), err)
+			}
+			authDeps[i] = resolved
+		}
 	}
 	fetchResults, err := cfg.pluginFetcher.FetchPlugins(ctx, authDeps, cfg.lockPlugins)
 	if err != nil {
@@ -1025,11 +1047,17 @@ type PluginFetcherOverrides struct {
 	// DisallowLocalBuilds rejects locally built plugins (see
 	// plugin.FetcherConfig.DisallowLocalBuilds).
 	DisallowLocalBuilds bool
+	// ChainMode overrides the catalog chain mode for unpinned plugin lookups.
+	// ChainMode overrides the plugin catalog chain traversal mode.
+	// When nil, BuildPluginFetcher defaults to catalog.ChainModeBestEffort.
+	ChainMode *catalog.ChainMode
+	// BinaryName overrides settings.BinaryNameFromContext(ctx) when non-empty.
+	BinaryName string
 }
 
 // BuildPluginFetcherWithConfig creates a plugin.Fetcher from the context's
 // config and auth registry, applying optional overrides for policy fields.
-// Catalog, BinaryName, Logger, and Cache are always derived from context.
+// Catalog, BinaryName, Logger, and Cache are always derived from context unless overridden.
 func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOverrides) (*plugin.Fetcher, error) {
 	lgr := logger.FromContext(ctx)
 	var fetcherLogger logr.Logger
@@ -1053,6 +1081,14 @@ func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOve
 		// published plugin of the same name only to be rejected by the fetcher.
 		chainOpts = append(chainOpts, catalog.WithoutLocalBuilds())
 	}
+	if override.ChainMode != nil {
+		chainOpts = append(chainOpts, catalog.WithPluginChainMode(*override.ChainMode))
+	}
+	if w := writer.FromContext(ctx); w != nil {
+		chainOpts = append(chainOpts, catalog.WithPluginWarningHandler(func(msg string) {
+			w.WarnStderrf("%s", msg)
+		}))
+	}
 
 	catalogFetcher, err := catalog.BuildPluginFetcher(appCfg, authReg, fetcherLogger, chainOpts...)
 	if err != nil {
@@ -1060,24 +1096,25 @@ func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOve
 		return nil, fmt.Errorf("building plugin catalog fetcher: %w", err)
 	}
 
+	sigPolicy, err := ResolveSignaturePolicy(ctx, appCfg, override.SignaturePolicy, fetcherLogger)
+	if err != nil {
+		return nil, err
+	}
+
+	binName := override.BinaryName
+	if binName == "" {
+		binName = settings.BinaryNameFromContext(ctx)
+	}
+
 	cfg := plugin.FetcherConfig{
 		CatalogFetcher:      catalogFetcher,
 		Cache:               override.Cache,
-		BinaryName:          settings.BinaryNameFromContext(ctx),
+		BinaryName:          binName,
 		Logger:              fetcherLogger,
 		AllowedCatalogs:     override.AllowedCatalogs,
 		PerCatalogArtifacts: override.PerCatalogArtifacts,
-		SignaturePolicy:     override.SignaturePolicy,
+		SignaturePolicy:     sigPolicy,
 		DisallowLocalBuilds: override.DisallowLocalBuilds,
-	}
-	if cfg.SignaturePolicy == nil {
-		cfg.SignaturePolicy = plugin.SignaturePolicyFromContext(ctx)
-	}
-	if cfg.SignaturePolicy == nil {
-		cfg.SignaturePolicy = signaturePolicyFromConfig(appCfg, fetcherLogger)
-	}
-	if err := cfg.SignaturePolicy.Validate(); err != nil {
-		return nil, fmt.Errorf("plugin signature policy: %w", err)
 	}
 	if override.Platform != "" {
 		cfg.Platform = override.Platform
@@ -1086,6 +1123,23 @@ func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOve
 		cfg.NoCache = true
 	}
 	return plugin.NewFetcher(cfg), nil
+}
+
+// ResolveSignaturePolicy resolves and validates the effective plugin signature
+// policy in priority order: explicit override, context policy (embedder), then
+// application config.
+func ResolveSignaturePolicy(ctx context.Context, appCfg *config.Config, override *plugin.SignaturePolicy, lgr logr.Logger) (*plugin.SignaturePolicy, error) {
+	sigPolicy := override
+	if sigPolicy == nil {
+		sigPolicy = plugin.SignaturePolicyFromContext(ctx)
+	}
+	if sigPolicy == nil {
+		sigPolicy = signaturePolicyFromConfig(appCfg, lgr)
+	}
+	if err := sigPolicy.Validate(); err != nil {
+		return nil, fmt.Errorf("plugin signature policy: %w", err)
+	}
+	return sigPolicy, nil
 }
 
 // signaturePolicyFromConfig converts the app configuration's plugin signature

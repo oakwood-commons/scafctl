@@ -6,14 +6,23 @@ package prepare
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
 // applyOptions applies the given options to a fresh prepareConfig for
@@ -148,4 +157,90 @@ func TestOptionsFromContext_DebugLogging(t *testing.T) {
 	optsOn, err := OptionsFromContext(context.Background(), CLIWiring{DebugLogging: true})
 	require.NoError(t, err)
 	assert.NotEmpty(t, applyOptions(t, optsOn).clientOpts)
+}
+
+func TestBuildPluginFetcherWithConfig_WarningAndStrictChainMode(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	// Plain HTTP server on 127.0.0.1 fails HTTPS handshake immediately as UnreachableError.
+	unreachSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(unreachSrv.Close)
+	host := strings.TrimPrefix(unreachSrv.URL, "http://")
+
+	appCfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true},
+		Catalogs: []config.CatalogConfig{
+			{Name: "broken", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/broken", Insecure: true},
+			{Name: "second", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/second", Insecure: true},
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	ios := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	w := writer.New(ios, settings.NewCliParams())
+	ctx := config.WithConfig(writer.WithWriter(context.Background(), w), appCfg)
+
+	deps := []solution.PluginDependency{
+		{Name: "exec", Kind: solution.PluginKindProvider},
+		{Name: "git", Kind: solution.PluginKindProvider},
+	}
+
+	// Default (best-effort) emits warning to stderr safely across concurrent resolves, leaving stdout untouched.
+	fetcher, err := BuildPluginFetcherWithConfig(ctx, PluginFetcherOverrides{
+		DisallowLocalBuilds: true,
+	})
+	require.NoError(t, err)
+	_, err = fetcher.ResolvePlugins(ctx, deps)
+	require.Error(t, err)
+	assert.Empty(t, stdout.String(), "warnings must never write to stdout")
+	assert.Contains(t, stderr.String(), `catalog "broken" unavailable, trying next catalog...`)
+
+	// Strict chain mode halts immediately without emitting fallback warnings.
+	stderr.Reset()
+	strictMode := catalog.ChainModeStrict
+	strictFetcher, err := BuildPluginFetcherWithConfig(ctx, PluginFetcherOverrides{
+		DisallowLocalBuilds: true,
+		ChainMode:           &strictMode,
+	})
+	require.NoError(t, err)
+	_, err = strictFetcher.ResolvePlugins(ctx, deps)
+	require.Error(t, err)
+	assert.Empty(t, stderr.String(), "strict mode must halt without fallback warnings")
+
+	// OptionsFromContext wires ChainModeStrict when Strict or LockMode=="strict" is set.
+	stderr.Reset()
+	strictOpts, err := OptionsFromContext(ctx, CLIWiring{LockMode: "strict"})
+	require.NoError(t, err)
+	strictCfg := applyOptions(t, strictOpts)
+	require.NotNil(t, strictCfg.pluginFetcher)
+	_, err = strictCfg.pluginFetcher.ResolvePlugins(ctx, deps)
+	require.Error(t, err)
+	assert.Empty(t, stderr.String(), "OptionsFromContext with LockMode=strict must use ChainModeStrict")
+
+	// registerBundleAuthHandlers fails closed when a locked auth-handler's catalog is unreachable.
+	sol := &solution.Solution{}
+	sol.Bundle.Plugins = []solution.PluginDependency{
+		{Name: "corp-auth", Kind: solution.PluginKindAuthHandler, Version: "^1.0.0"},
+	}
+	prepCfg := &prepareConfig{
+		pluginFetcher: fetcher,
+		lockMode:      LockModeConstrained,
+		lockFile: &bundler.LockFile{
+			Version: bundler.LockFileVersion,
+			Plugins: []bundler.LockPlugin{
+				{
+					Name:              "corp-auth",
+					Kind:              string(solution.PluginKindAuthHandler),
+					Version:           "1.2.0",
+					Constraint:        "^1.0.0",
+					ResolvedFrom:      "broken",
+					ResolvedCanonical: host + "/broken",
+				},
+			},
+		},
+	}
+	_, err = registerBundleAuthHandlers(ctx, sol, prepCfg)
+	require.Error(t, err, "locked auth-handler must fail closed when its locked catalog is unreachable")
 }

@@ -245,6 +245,9 @@ scafctl catalog remote add primary --type filesystem --path ~/catalogs/main --de
 
 # Add with auth provider for automatic token injection
 scafctl catalog remote add corp --type oci --url oci://registry.example.com/artifacts --auth-provider github
+
+# Add a solution-only catalog (skipped during plugin lookups)
+scafctl catalog remote add solutions --type oci --url oci://registry.example.com/solutions --artifact-kind solution
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -260,6 +263,9 @@ scafctl catalog remote add primary --type filesystem --path ~/catalogs/main --de
 
 # Add with auth provider for automatic token injection
 scafctl catalog remote add corp --type oci --url oci://registry.example.com/artifacts --auth-provider github
+
+# Add a solution-only catalog (skipped during plugin lookups)
+scafctl catalog remote add solutions --type oci --url oci://registry.example.com/solutions --artifact-kind solution
 ```
 {{% /tab %}}
 {{< /tabs >}}

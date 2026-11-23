@@ -121,3 +121,32 @@ func TestEntraDefaultFlowDocTags(t *testing.T) {
 		})
 	}
 }
+
+func TestCatalogConfigArtifactKindsStructTags(t *testing.T) {
+	t.Parallel()
+
+	field, ok := reflect.TypeFor[CatalogConfig]().FieldByName("ArtifactKinds")
+	require.True(t, ok, "CatalogConfig must define ArtifactKinds")
+	assert.Equal(t, "artifactKinds,omitempty", field.Tag.Get("json"))
+	assert.Equal(t, "artifactKinds,omitempty", field.Tag.Get("yaml"))
+	assert.Equal(t, "artifactKinds", field.Tag.Get("mapstructure"))
+	assert.Equal(t, "3", field.Tag.Get("maxItems"))
+	assert.NotEmpty(t, field.Tag.Get("doc"))
+	assert.Empty(t, field.Tag.Get("example"), "array fields must not carry an example struct tag")
+}
+
+func TestNormalizeCatalogArtifactKinds(t *testing.T) {
+	t.Parallel()
+
+	got, err := NormalizeCatalogArtifactKinds(nil)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+
+	got, err = NormalizeCatalogArtifactKinds([]string{" solution ", "provider", "solution", "auth-handler"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"solution", "provider", "auth-handler"}, got)
+
+	_, err = NormalizeCatalogArtifactKinds([]string{"solution", "invalid"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `invalid artifact kind "invalid"`)
+}
