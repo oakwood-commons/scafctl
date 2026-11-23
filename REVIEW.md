@@ -124,6 +124,12 @@ Repo-specific:
   organization-specific reference (internal tool names, hostnames/domains,
   codenames, employee/user IDs, credentials) in the diff, including in docs,
   examples, and test fixtures.
+- **Secret and credential redaction**: whenever a change touches `sensitive:
+  true` resolvers, `scrt:`/`tkn:` `ValueRef`s, secrets, or auth tokens, verify
+  redaction holds across all sibling output surfaces (`run`, `dryrun`/`WhatIf`,
+  `render`, `snapshot` with `0600` permissions preserved on overwrite, REST
+  endpoints, MCP tools, `forEach` metadata, and short/numeric values) and never
+  re-evaluates pre-resolved untrusted strings as templates or expressions.
 - **PR title/body accuracy**: the repo squash-merges with
   `squash_merge_commit_title=PR_TITLE` / `squash_merge_commit_message=PR_BODY`
   -- the PR title must be a valid conventional-commit subject and the body
@@ -173,10 +179,16 @@ already present and reasonably detectable right now.
 
 ## Re-reviews (after a fix is pushed)
 
-Treat the new head as a complete review target -- run the full method above,
-not just a check of what changed since last time. Within that, prioritize
-the previous finding, the specific fix for it, and any implications of that
-fix (a common failure mode: fixing the reported occurrence while
-introducing or missing a sibling one) before the completeness pass. A
-re-review that only verifies the named fix and stops there is patch
-verification, not a review.
+Stick to what changed since your last review (`<last_reviewed_commit>..HEAD`)
+rather than re-reviewing the entire pull request from scratch:
+
+1. **Verify prior findings and their fixes**: confirm each previously reported
+   issue is resolved, and check the immediate implications of that fix (e.g.
+   whether the fix introduced a regression or missed a sibling occurrence of
+   the same defect in adjacent paths).
+2. **Scope file inspection to changed files + newly affected callers**: review
+   only the files modified since `<last_reviewed_commit>`, plus callers or
+   consumers of any interface whose signature or behavior changed in that
+   delta. **Do not re-read or re-audit untouched files** that already passed an
+   earlier review round.
+3. **Check PR body sync**: confirm the PR title and body still match `HEAD`.

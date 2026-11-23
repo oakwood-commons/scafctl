@@ -28,11 +28,12 @@ compatibility for removed behavior.
   a valid conventional-commit subject. **Whenever a new commit changes what the
   PR does, update the PR body in the same step** (`gh pr edit`) so the eventual
   squash commit stays accurate.
-- Copilot re-reviews every push (`review_on_push: true`), so each review fix
-  triggers a fresh review. Fix substantive findings (correctness, security,
-  fail-open logic, missing error handling, 0%-covered new logic); acknowledge
-  nitpicks in a reply within the thread and resolve them -- resolving does not
-  create a commit, so it does not trigger another review round.
+- Copilot reviews ready-for-review PRs on open (`review_on_push: false`).
+  Wait for CI checks to pass before requesting a re-review, and only request a
+  new Copilot round when a post-review fix makes substantive production changes
+  (verify small surgical fixes locally); acknowledge nitpicks in a reply within
+  the thread and resolve them -- resolving does not create a commit or trigger
+  another review round.
 
 ## Build, test, lint
 

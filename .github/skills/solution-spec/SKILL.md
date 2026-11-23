@@ -122,12 +122,16 @@ Used anywhere a value can be dynamic (resolver inputs, action inputs, messages):
 | Format | YAML | When to Use |
 |--------|------|-------------|
 | Literal | `key: value` | Static values known at authoring time |
-| Resolver | `key: {rslvr: resolver-name}` | Another resolver's raw output |
+| Resolver | `key: {rslvr: resolverName}` | Another resolver's raw output |
 | CEL | `key: {expr: "_.field.upperAscii()"}` | Data manipulation, conditionals, coercion |
 | Go Template | `key: {tmpl: "Hello {{.name}}"}` | Text rendering, multi-line, file content |
+| Secret | `key: {scrt: npm-token}` | Secret from the host secret store (auto-redacted across outputs) |
+| Auth Token | `key: {tkn: github}` or `key: {tkn: {handler: entra, scope: "...", profile: work, hostname: "...", minValidFor: 5m}}` | Short-lived auth token from an auth handler (auto-redacted across outputs) |
 
 **Decision guide**: literal for static; `rslvr` for a raw value; `expr` for data
-logic; `tmpl` for text. (CEL for data, templates for text.)
+logic; `tmpl` for text; `scrt` / `tkn` for credentials and auth tokens without
+exposing plaintext in intermediate resolvers, dry-run/WhatIf, render, or snapshots.
+(CEL for data, templates for text.)
 
 ## Action Workflow
 
@@ -213,7 +217,7 @@ This is authoritative and version-accurate.
 
 - `Solution`: Top-level with APIVersion, Kind, Metadata, Catalog, Spec
 - `Resolver`: Name, Type, Phases (Resolve/Transform/Validate), When, DependsOn
-- `ValueRef`: Literal | Resolver | Expr | Tmpl
+- `ValueRef`: Literal | Resolver (`rslvr`) | Expr (`expr`) | Tmpl (`tmpl`) | Secret (`scrt`) | Token (`tkn`)
 - `Workflow`: Actions map, ResultSchemaMode
 - `Action`: Provider, Inputs, DependsOn, When, ContinueOnError, Retry, ForEach
 
