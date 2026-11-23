@@ -865,7 +865,8 @@ func TestCommandLogin_AutoBridgeWithScope(t *testing.T) {
 }
 
 // TestCommandLogin_EmbedderBinaryName verifies that CommandLogin works with a
-// non-default binary name (embedder contract compliance).
+// non-default binary name (embedder contract compliance) and falls back to the
+// default binary name when BinaryName is empty.
 func TestCommandLogin_EmbedderBinaryName(t *testing.T) {
 	t.Parallel()
 
@@ -877,6 +878,16 @@ func TestCommandLogin_EmbedderBinaryName(t *testing.T) {
 
 	assert.Equal(t, "login <handler>", cmd.Use)
 	assert.NotNil(t, cmd.RunE)
+	assert.Contains(t, cmd.Long, "mycli auth login entra")
+	assert.Contains(t, cmd.Long, "mycli auth login entra --flow device-code")
+	assert.NotContains(t, cmd.Long, settings.CliBinaryName)
+
+	emptyParams := &settings.Run{}
+	fallbackCmd := CommandLogin(emptyParams, ioStreams, "auth")
+	assert.Contains(t, fallbackCmd.Long, settings.CliBinaryName+" auth login entra")
+
+	nilCmd := CommandLogin(nil, ioStreams, "auth")
+	assert.Contains(t, nilCmd.Long, settings.CliBinaryName+" auth login entra")
 }
 
 // TestCommandLogin_InteractiveFlow_SetsDeviceCodeCallback verifies that the

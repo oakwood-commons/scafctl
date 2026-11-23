@@ -790,6 +790,29 @@ func TestResolveEntraConfig(t *testing.T) {
 				assert.Empty(t, result.ActiveProfile)
 			},
 		},
+		{
+			name: "normalizes hyphenated top-level defaultFlow to canonical snake_case",
+			cfg: &config.EntraAuthConfig{
+				DefaultFlow: "device-code",
+			},
+			profile: "",
+			check: func(t *testing.T, result *config.EntraAuthConfig) {
+				assert.Equal(t, "device_code", result.DefaultFlow)
+			},
+		},
+		{
+			name: "normalizes hyphenated profile defaultFlow to canonical snake_case",
+			cfg: &config.EntraAuthConfig{
+				DefaultFlow: "interactive",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"headless": {DefaultFlow: "device-code"},
+				},
+			},
+			profile: "headless",
+			check: func(t *testing.T, result *config.EntraAuthConfig) {
+				assert.Equal(t, "device_code", result.DefaultFlow)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -797,6 +820,115 @@ func TestResolveEntraConfig(t *testing.T) {
 			t.Parallel()
 			result := ResolveEntraConfig(tt.cfg, tt.profile)
 			tt.check(t, result)
+		})
+	}
+}
+
+func TestResolveActiveProfile_ProfileResolvedSkipsFallback(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{ActiveProfile: "headless"},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), cfg)
+	ctx = WithGlobalProfile(ctx, "global-prof")
+	ctx = WithProfileResolved(ctx)
+
+	assert.Empty(t, ResolveActiveProfile(ctx, "entra"),
+		"WithProfileResolved with empty ProfileFromContext must not fall back to global or config activeProfile")
+}
+
+func TestResolveEntraDefaultFlow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		build func() context.Context
+		want  Flow
+	}{
+		{
+			name:  "nil config defaults to interactive",
+			build: context.Background,
+			want:  FlowInteractive,
+		},
+		{
+			name: "empty entra config defaults to interactive",
+			build: func() context.Context {
+				return config.WithConfig(context.Background(), &config.Config{
+					Auth: config.GlobalAuthConfig{Entra: &config.EntraAuthConfig{}},
+				})
+			},
+			want: FlowInteractive,
+		},
+		{
+			name: "top-level device_code",
+			build: func() context.Context {
+				return config.WithConfig(context.Background(), &config.Config{
+					Auth: config.GlobalAuthConfig{Entra: &config.EntraAuthConfig{DefaultFlow: "device_code"}},
+				})
+			},
+			want: FlowDeviceCode,
+		},
+		{
+			name: "hyphenated device-code normalized",
+			build: func() context.Context {
+				return config.WithConfig(context.Background(), &config.Config{
+					Auth: config.GlobalAuthConfig{Entra: &config.EntraAuthConfig{DefaultFlow: "device-code"}},
+				})
+			},
+			want: FlowDeviceCode,
+		},
+		{
+			name: "global profile selects profile defaultFlow",
+			build: func() context.Context {
+				ctx := config.WithConfig(context.Background(), &config.Config{
+					Auth: config.GlobalAuthConfig{
+						Entra: &config.EntraAuthConfig{
+							DefaultFlow: "interactive",
+							Profiles: map[string]*config.EntraProfileConfig{
+								"ssh": {DefaultFlow: "device_code"},
+							},
+						},
+					},
+				})
+				return WithGlobalProfile(ctx, "ssh")
+			},
+			want: FlowDeviceCode,
+		},
+		{
+			name: "explicit resolved default profile ignores activeProfile",
+			build: func() context.Context {
+				ctx := config.WithConfig(context.Background(), &config.Config{
+					Auth: config.GlobalAuthConfig{
+						Entra: &config.EntraAuthConfig{
+							ActiveProfile: "ssh",
+							Profiles: map[string]*config.EntraProfileConfig{
+								"ssh": {DefaultFlow: "device_code"},
+							},
+						},
+					},
+				})
+				return WithProfileResolved(ctx)
+			},
+			want: FlowInteractive,
+		},
+		{
+			name: "non-user flow in config falls back to interactive",
+			build: func() context.Context {
+				return config.WithConfig(context.Background(), &config.Config{
+					Auth: config.GlobalAuthConfig{Entra: &config.EntraAuthConfig{DefaultFlow: "service_principal"}},
+				})
+			},
+			want: FlowInteractive,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, ResolveEntraDefaultFlow(tc.build()))
 		})
 	}
 }

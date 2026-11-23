@@ -12,7 +12,7 @@ auth:
       - read:org
       - read:packages
   entra:
-    # Azure CLI public client ID (well-known, supports device code flow)
+    # Azure CLI public client ID (well-known, supports interactive and device code flows)
     clientId: 04b07795-8ddb-461a-bbee-02f9e1bf7b46
     tenantId: common
     authority: https://login.microsoftonline.com

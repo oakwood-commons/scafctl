@@ -930,7 +930,7 @@ scafctl ships with three builtin auth handlers:
 
 | Handler | Name | Package | Flows | Key Config |
 | --------- | ------ | --------- | ------- | ------------ |
-| **Entra ID** | `entra` | `pkg/auth/entra/` | device_code, service_principal, workload_identity | `ClientID`, `TenantID`, `Authority`, `DefaultScopes` |
+| **Entra ID** | `entra` | `pkg/auth/entra/` | interactive, device_code, service_principal, workload_identity | `ClientID`, `TenantID`, `Authority`, `DefaultScopes`, `DefaultFlow` |
 | **GitHub** | `github` | `pkg/auth/github/` | device_code, pat | `ClientID`, `Hostname`, `DefaultScopes` |
 | **GCP** | `gcp` | `pkg/auth/gcp/` | device_code, interactive, service_principal, metadata, workload_identity, gcloud_adc | `ClientID`, `ClientSecret`, `DefaultScopes`, `ImpersonateServiceAccount` |
 

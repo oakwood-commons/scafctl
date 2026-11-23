@@ -562,3 +562,63 @@ func TestAuthHandlerWrapper_GetToken_ProfileResolvedSkipsReResolution(t *testing
 	require.NoError(t, err)
 	assert.Empty(t, capturedProfile, "should not re-resolve when already resolved")
 }
+
+func TestAuthHandlerWrapper_ApplyOverrides_SelectedDefaultProfileOverridesActiveProfile(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockAuthHandlerPlugin{}
+	client := &AuthHandlerClient{plugin: mock}
+	reg := auth.NewRegistry()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ClientID:      "top-level-client-id",
+				TenantID:      "top-level-tenant-id",
+				DefaultFlow:   "interactive",
+				ActiveProfile: "work",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {
+						ClientID:     "work-profile-client-id",
+						TenantID:     "work-profile-tenant-id",
+						ClientSecret: "work-profile-secret",
+					},
+				},
+			},
+		},
+	}
+
+	baseCtx := config.WithConfig(context.Background(), appCfg)
+	registered := configureAndRegisterAuthHandlers(
+		baseCtx,
+		reg,
+		client,
+		[]AuthHandlerInfo{{Name: "entra", DisplayName: "Microsoft Entra ID"}},
+		&ProviderConfig{BinaryName: "scafctl"},
+	)
+	require.Equal(t, []string{"entra"}, registered)
+	require.NotNil(t, mock.lastConfig)
+	assert.Equal(t, "work", mock.lastConfig.Profile)
+
+	var initialSettings map[string]any
+	require.NoError(t, json.Unmarshal(mock.lastConfig.Settings["entra"], &initialSettings))
+	assert.Equal(t, "work-profile-client-id", initialSettings["clientId"])
+	assert.Equal(t, "work-profile-tenant-id", initialSettings["tenantId"])
+	assert.Equal(t, "work-profile-secret", initialSettings["clientSecret"])
+
+	h, ok := reg.GetRegistered("entra")
+	require.True(t, ok)
+	cfgr, ok := h.(auth.Configurer)
+	require.True(t, ok)
+
+	loginCtx := auth.WithProfileResolved(baseCtx)
+	require.NoError(t, cfgr.ApplyOverrides(loginCtx, map[string]string{"defaultFlow": "interactive"}))
+
+	assert.Empty(t, mock.lastConfig.Profile)
+	var updatedSettings map[string]any
+	require.NoError(t, json.Unmarshal(mock.lastConfig.Settings["entra"], &updatedSettings))
+	assert.Equal(t, "top-level-client-id", updatedSettings["clientId"])
+	assert.Equal(t, "top-level-tenant-id", updatedSettings["tenantId"])
+	assert.Equal(t, "interactive", updatedSettings["defaultFlow"])
+	assert.NotContains(t, updatedSettings, "clientSecret")
+}

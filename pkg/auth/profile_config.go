@@ -22,6 +22,9 @@ func ResolveActiveProfile(ctx context.Context, handlerName string) string {
 	if p := ProfileFromContext(ctx); p != "" {
 		return p
 	}
+	if IsProfileResolved(ctx) {
+		return ""
+	}
 
 	// 2. Global auth profile from context (set by root --auth-profile flag)
 	// Check raw value first: if the user explicitly set --auth-profile (even
@@ -264,45 +267,69 @@ func ResolveEntraConfig(cfg *config.EntraAuthConfig, profile string) *config.Ent
 	resolved.ActiveProfile = ""
 	resolved.Profiles = nil
 
-	if profile == "" {
-		return &resolved
+	if profile != "" {
+		if p, ok := cfg.Profiles[profile]; ok && p != nil {
+			// Profile fields override top-level when non-empty.
+			if p.HTTPClient != nil {
+				resolved.HTTPClient = p.HTTPClient
+			}
+			if p.ClientID != "" {
+				resolved.ClientID = p.ClientID
+			}
+			if p.TenantID != "" {
+				resolved.TenantID = p.TenantID
+			}
+			if p.Authority != "" {
+				resolved.Authority = p.Authority
+			}
+			if len(p.DefaultScopes) > 0 {
+				resolved.DefaultScopes = p.DefaultScopes
+			}
+			if p.DefaultFlow != "" {
+				resolved.DefaultFlow = p.DefaultFlow
+			}
+			if p.FederatedTokenFile != "" {
+				resolved.FederatedTokenFile = p.FederatedTokenFile
+			}
+			if p.FederatedToken != "" {
+				resolved.FederatedToken = p.FederatedToken
+			}
+			if p.ClientSecret != "" {
+				resolved.ClientSecret = p.ClientSecret
+			}
+		}
 	}
 
-	p, ok := cfg.Profiles[profile]
-	if !ok || p == nil {
-		return &resolved
-	}
-
-	// Profile fields override top-level when non-empty.
-	if p.HTTPClient != nil {
-		resolved.HTTPClient = p.HTTPClient
-	}
-	if p.ClientID != "" {
-		resolved.ClientID = p.ClientID
-	}
-	if p.TenantID != "" {
-		resolved.TenantID = p.TenantID
-	}
-	if p.Authority != "" {
-		resolved.Authority = p.Authority
-	}
-	if len(p.DefaultScopes) > 0 {
-		resolved.DefaultScopes = p.DefaultScopes
-	}
-	if p.DefaultFlow != "" {
-		resolved.DefaultFlow = p.DefaultFlow
-	}
-	if p.FederatedTokenFile != "" {
-		resolved.FederatedTokenFile = p.FederatedTokenFile
-	}
-	if p.FederatedToken != "" {
-		resolved.FederatedToken = p.FederatedToken
-	}
-	if p.ClientSecret != "" {
-		resolved.ClientSecret = p.ClientSecret
+	if resolved.DefaultFlow != "" {
+		if parsed, err := ParseFlow(resolved.DefaultFlow, "entra"); err == nil {
+			if parsed == FlowInteractive || parsed == FlowDeviceCode {
+				resolved.DefaultFlow = string(parsed)
+			}
+		}
 	}
 
 	return &resolved
+}
+
+// ResolveEntraDefaultFlow returns the default interactive authentication flow
+// for the Entra handler when no explicit --flow flag was specified and
+// FlowDetector did not select a flow. It honors auth.entra.defaultFlow (and
+// per-profile overrides resolved from ctx) when set to interactive or
+// device_code, defaulting to FlowInteractive.
+func ResolveEntraDefaultFlow(ctx context.Context) Flow {
+	cfg := config.FromContext(ctx)
+	if cfg != nil && cfg.Auth.Entra != nil {
+		profile := ResolveActiveProfile(ctx, "entra")
+		resolved := ResolveEntraConfig(cfg.Auth.Entra, profile)
+		if resolved != nil && resolved.DefaultFlow != "" {
+			if parsed, err := ParseFlow(resolved.DefaultFlow, "entra"); err == nil {
+				if parsed == FlowInteractive || parsed == FlowDeviceCode {
+					return parsed
+				}
+			}
+		}
+	}
+	return FlowInteractive
 }
 
 // ResolveGitHubConfig returns a copy of the GitHub config with the active profile's

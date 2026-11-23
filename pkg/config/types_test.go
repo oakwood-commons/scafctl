@@ -4,6 +4,7 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -94,4 +95,29 @@ func TestPrivateCIDRList(t *testing.T) {
 		require.NotNil(t, got)
 		assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16"}, *got)
 	})
+}
+
+func TestEntraDefaultFlowDocTags(t *testing.T) {
+	t.Parallel()
+
+	const wantDoc = "Default interactive auth flow. Defaults to interactive; set device_code for headless environments."
+
+	typesToCheck := []struct {
+		name string
+		typ  reflect.Type
+	}{
+		{name: "EntraAuthConfig", typ: reflect.TypeFor[EntraAuthConfig]()},
+		{name: "EntraProfileConfig", typ: reflect.TypeFor[EntraProfileConfig]()},
+		{name: "SanitizedEntraAuth", typ: reflect.TypeFor[SanitizedEntraAuth]()},
+	}
+
+	for _, tc := range typesToCheck {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			field, ok := tc.typ.FieldByName("DefaultFlow")
+			require.True(t, ok, "%s must define DefaultFlow", tc.name)
+			assert.Equal(t, wantDoc, field.Tag.Get("doc"))
+			assert.Equal(t, "interactive", field.Tag.Get("example"))
+		})
+	}
 }

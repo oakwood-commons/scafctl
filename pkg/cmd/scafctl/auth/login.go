@@ -29,6 +29,11 @@ import (
 
 // CommandLogin creates the 'auth login' command.
 func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
+	binaryName := settings.CliBinaryName
+	if cliParams != nil && cliParams.BinaryName != "" {
+		binaryName = cliParams.BinaryName
+	}
+
 	var (
 		tenantID                  string
 		clientID                  string
@@ -62,12 +67,11 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 			authorization code.
 
 			For the 'entra' handler, this supports multiple authentication flows:
-			- device-code: Device code flow via microsoft.com/devicelogin (default).
-			               Works in any browser because the login page inherits the
-			               browser's existing SSO session and device PRT.
-			- interactive: Authorization code + PKCE flow. Opens a browser tab directly
-			               to the authorize endpoint. May not carry the device PRT on
-			               non-Edge browsers, causing Conditional Access failures.
+			- interactive: Opens a browser and signs in with authorization code + PKCE
+			               (default; automatically falls back to device code when no
+			               browser or display is available).
+			- device-code: Device code flow via microsoft.com/devicelogin for headless
+			               or SSH environments.
 			- service-principal: Non-interactive authentication for CI/CD
 			- workload-identity: Kubernetes workload identity (AKS)
 
@@ -103,7 +107,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 			  OR
 			- --federated-token flag: Pass token directly (for testing)
 
-			By default, the Entra device code flow uses the Azure CLI's public client ID.
+			By default, the Entra interactive and device code flows use the Azure CLI's public client ID.
 			The default GitHub interactive flow uses the built-in OAuth App client ID with
 			device code + automatic browser open (no client secret required).
 			To use browser redirect (Authorization Code + PKCE), configure 'auth.github.clientSecret'
@@ -116,8 +120,11 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 			- gcp: Google Cloud Platform
 
 			Examples:
-			  # Login with Entra ID using device code flow (default)
+			  # Login with Entra ID using interactive browser flow (default)
 			  scafctl auth login entra
+
+			  # Login with Entra ID using device code flow (headless/SSH)
+			  scafctl auth login entra --flow device-code
 
 			  # Login with GitHub (default: device code + browser auto-open, like 'gh auth login')
 			  scafctl auth login github
@@ -146,7 +153,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 			  # Login with Entra workload identity (Kubernetes)
 			  scafctl auth login entra --flow workload-identity
 
-			  # Login with a custom timeout (device code only)
+			  # Login with a custom timeout
 			  scafctl auth login entra --timeout 10m
 
 			  # Login with specific scopes
@@ -176,9 +183,9 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 
 			  # Login with GCP and specific scopes
 			  scafctl auth login gcp --scope https://www.googleapis.com/auth/bigquery
-		`), settings.CliBinaryName, cliParams.BinaryName),
+		`), settings.CliBinaryName, binaryName),
 		SilenceUsage: true,
-		Args:         flags.RequireArg("handler", cliParams.BinaryName+" auth login gcp"),
+		Args:         flags.RequireArg("handler", binaryName+" auth login gcp"),
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
 			if len(args) > 0 {
 				return nil, cobra.ShellCompDirectiveNoFileComp
@@ -217,6 +224,9 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 				ctx = auth.WithProfile(ctx, effectiveProfile)
+			}
+			if profileExplicit {
+				ctx = auth.WithProfileResolved(ctx)
 			}
 
 			// Validate handler name against registry
@@ -314,10 +324,21 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			// Apply CLI flag overrides (--client-id, --tenant) to the handler's
-			// plugin configuration before login so the plugin uses the correct
-			// OAuth application and tenant for token requests.
-			if clientID != "" || tenantID != "" {
+			var entraDefaultFlow auth.Flow
+			var profileDefaultFlow string
+			if handlerName == "entra" {
+				entraDefaultFlow = auth.ResolveEntraDefaultFlow(ctx)
+				if profileExplicit || auth.GlobalProfileFromContext(ctx) != "" {
+					profileDefaultFlow = string(entraDefaultFlow)
+				}
+			}
+
+			// Apply CLI flag overrides (--client-id, --tenant) and selected
+			// --profile/--auth-profile configuration before login. Capabilities()
+			// initializes cached plugin wrappers prior to CLI profile selection, so
+			// reconfiguration runs even when --flow is explicit (LoginOptions.Flow
+			// still takes precedence).
+			if clientID != "" || tenantID != "" || profileDefaultFlow != "" {
 				if cfgr, ok := handler.(auth.Configurer); ok {
 					overrides := make(map[string]string)
 					if clientID != "" {
@@ -326,19 +347,20 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 					if tenantID != "" {
 						overrides["tenantId"] = tenantID
 					}
-					if err := cfgr.ApplyOverrides(ctx, overrides); err != nil {
-						return exitcode.WithCode(
-							fmt.Errorf("applying config overrides (--client-id/--tenant): %w", err),
-							exitcode.InvalidInput,
-						)
+					if profileDefaultFlow != "" {
+						overrides["defaultFlow"] = profileDefaultFlow
+					}
+					if applyErr := cfgr.ApplyOverrides(ctx, overrides); applyErr != nil {
+						err := fmt.Errorf("applying auth handler config overrides: %w", applyErr)
+						w.Errorf("%v", err)
+						return exitcode.WithCode(err, exitcode.InvalidInput)
 					}
 				} else if clientID != "" {
 					// --client-id requires Configurer support; --tenant is passed via
 					// LoginOptions so it works without Configurer.
-					return exitcode.WithCode(
-						fmt.Errorf("--client-id is not supported by the %q auth handler", handlerName),
-						exitcode.InvalidInput,
-					)
+					err := fmt.Errorf("--client-id is not supported by the %q auth handler", handlerName)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 			}
 
@@ -358,9 +380,9 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 						flow = auth.FlowWorkloadIdentity
 					}
 				}
-				loginErr = loginWithFlowDetection(ctx, w, cliParams.BinaryName, handler, handlerName, flow, tenantID, hostname, callbackPort, timeout, scopes, force, skipIfAuthenticated, auth.FlowDeviceCode)
+				loginErr = loginWithFlowDetection(ctx, w, binaryName, handler, handlerName, flow, tenantID, hostname, callbackPort, timeout, scopes, force, skipIfAuthenticated, entraDefaultFlow)
 			default:
-				loginErr = loginWithFlowDetection(ctx, w, cliParams.BinaryName, handler, handlerName, flow, tenantID, hostname, callbackPort, timeout, scopes, force, skipIfAuthenticated, auth.Flow(""))
+				loginErr = loginWithFlowDetection(ctx, w, binaryName, handler, handlerName, flow, tenantID, hostname, callbackPort, timeout, scopes, force, skipIfAuthenticated, auth.Flow(""))
 			}
 
 			if loginErr != nil {
