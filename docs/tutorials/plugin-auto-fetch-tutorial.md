@@ -392,10 +392,11 @@ A **registry-sourced** lock entry is matched back to its dependency by the
   short-name plugin) are always re-resolved from the `local` catalog so
   in-place `--force` rebuilds pick up the current digest.
 - Remote lock entries (registry-sourced or short-name) replay their pinned
-  `version` as long as it still satisfies `constraint`, the recorded
-  `resolvedCanonical` still maps to a configured catalog, and any active
-  signature policy is satisfied by a recorded `signature` (an unsigned lock
-  entry is re-resolved when signature verification is enabled).
+  `version`, origin, and content digests as long as the pinned version still
+  satisfies `constraint` and the recorded `resolvedCanonical` still maps to a
+  configured catalog. When a signature policy is active, the pinned artifact is
+  reverified against the current policy before replay (`enforce` fails closed if
+  the pinned artifact does not satisfy the active trust policy).
 
 This is what makes a plugin deterministic: the origin (`resolvedCanonical`, plus
 `source.registry` when sourced), the artifact (`name`), the exact `version`, and

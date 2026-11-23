@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdsa"
@@ -11667,32 +11668,74 @@ func TestIntegration_MCPServeInfo(t *testing.T) {
 	assert.True(t, toolNames["list_context_variables"], "expected list_context_variables tool")
 }
 
-func TestIntegration_MCPServeProtocol(t *testing.T) {
-	t.Parallel()
+// runMCPServeSession starts `scafctl mcp serve` over pipes, sends the JSON-RPC
+// lines on stdin, and keeps stdin open until the JSON-RPC response with id ==
+// waitForID is read from stdout (preventing stdin EOF from canceling queued
+// stdio worker requests before their response is flushed).
+func runMCPServeSession(t *testing.T, extraEnv map[string]string, messages []string, waitForID int) string {
+	t.Helper()
 
-	// Test the MCP JSON-RPC protocol by piping an initialize message via stdin.
-	// We build a simple stdin payload and verify the server responds correctly.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
 	cmd.Dir = findProjectRoot()
+	baseEnv := os.Environ()
+	env := make([]string, 0, len(baseEnv)+len(extraEnv))
+	for _, kv := range baseEnv {
+		key, _, _ := strings.Cut(kv, "=")
+		if _, overridden := extraEnv[key]; !overridden {
+			env = append(env, kv)
+		}
+	}
+	for k, v := range extraEnv {
+		env = append(env, k+"="+v)
+	}
+	cmd.Env = env
 
-	initMsg := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
-	cmd.Stdin = strings.NewReader(initMsg + "\n")
-
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
+	stdinPipe, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	stdoutPipe, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 
-	err := cmd.Run()
-	// The server may exit with an error when stdin closes, that's OK
-	_ = err
+	require.NoError(t, cmd.Start())
 
-	output := outBuf.String()
-	require.NotEmpty(t, output, "expected JSON-RPC response on stdout")
+	_, writeErr := io.WriteString(stdinPipe, strings.Join(messages, "\n")+"\n")
+	require.NoError(t, writeErr)
 
-	// Parse the first JSON-RPC response
+	var targetResp string
+	var rawLines []string
+	scanner := bufio.NewScanner(stdoutPipe)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		rawLines = append(rawLines, line)
+		var envelope struct {
+			ID *int `json:"id"`
+		}
+		if json.Unmarshal([]byte(line), &envelope) == nil && envelope.ID != nil && *envelope.ID == waitForID {
+			targetResp = line
+			break
+		}
+	}
+	scanErr := scanner.Err()
+	_ = stdinPipe.Close()
+	_, _ = io.Copy(io.Discard, stdoutPipe)
+	_ = cmd.Wait()
+
+	require.NoError(t, scanErr, "mcp serve stdout scan failed; stderr: %s", errBuf.String())
+	require.NotEmpty(t, targetResp, "expected JSON-RPC response for id %d; got lines: %v; stderr: %s", waitForID, rawLines, errBuf.String())
+	return targetResp
+}
+
+func TestIntegration_MCPServeProtocol(t *testing.T) {
+	t.Parallel()
+
+	initMsg := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
+	output := runMCPServeSession(t, nil, []string{initMsg}, 1)
+
 	var resp struct {
 		JSONRPC string `json:"jsonrpc"`
 		ID      int    `json:"id"`
@@ -15233,35 +15276,12 @@ func TestIntegration_MCPServe_GetProviderSchema_Builtin(t *testing.T) {
 	t.Parallel()
 	// Verify the MCP get_provider_schema tool returns full schema for
 	// builtin providers via JSON-RPC protocol.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
-	cmd.Dir = findProjectRoot()
-
-	messages := strings.Join([]string{
+	messages := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_provider_schema","arguments":{"name":"cel"}}}`,
-	}, "\n")
-	cmd.Stdin = strings.NewReader(messages + "\n")
-
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-
-	_ = cmd.Run()
-
-	output := outBuf.String()
-	// Find the tools/call response (id:2)
-	var schemaResp string
-	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, `"id":2`) {
-			schemaResp = line
-			break
-		}
 	}
-	require.NotEmpty(t, schemaResp, "expected tools/call response for id 2")
+	schemaResp := runMCPServeSession(t, nil, messages, 2)
 	assert.Contains(t, schemaResp, "cel")
 	assert.Contains(t, schemaResp, "expression")
 	assert.NotContains(t, schemaResp, "NOT_FOUND")
@@ -15272,34 +15292,12 @@ func TestIntegration_MCPServe_GetProviderSchema_OfficialFallback(t *testing.T) {
 	// When an official plugin provider can't be fetched (no fetcher in test
 	// env), get_provider_schema should return a helpful NOT_FOUND response
 	// with guidance rather than crashing.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
-	cmd.Dir = findProjectRoot()
-
-	messages := strings.Join([]string{
+	messages := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_provider_schema","arguments":{"name":"exec"}}}`,
-	}, "\n")
-	cmd.Stdin = strings.NewReader(messages + "\n")
-
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-
-	_ = cmd.Run()
-
-	output := outBuf.String()
-	var schemaResp string
-	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, `"id":2`) {
-			schemaResp = line
-			break
-		}
 	}
-	require.NotEmpty(t, schemaResp, "expected tools/call response for id 2")
+	schemaResp := runMCPServeSession(t, nil, messages, 2)
 	// Should mention exec and provide useful context (either schema if cached,
 	// or NOT_FOUND with guidance about the plugin).
 	assert.Contains(t, schemaResp, "exec")
@@ -15310,8 +15308,6 @@ func TestIntegration_MCPServe_GetProviderSchema_CachedDescriptor(t *testing.T) {
 	// Pre-populate the provider schema cache with a fake descriptor.
 	// When the plugin binary is unavailable, get_provider_schema should
 	// return the cached descriptor with "source": "cached".
-	cacheDir := t.TempDir()
-
 	// Write a minimal cached descriptor entry (use current time so TTL check passes).
 	// Note: the Descriptor struct tags the input schema as "schema" (not "inputSchema").
 	cacheEntry := fmt.Sprintf(`{
@@ -15330,51 +15326,19 @@ func TestIntegration_MCPServe_GetProviderSchema_CachedDescriptor(t *testing.T) {
 			}
 		}
 	}`, time.Now().UTC().Format(time.RFC3339))
-	err := os.MkdirAll(cacheDir, 0o755)
-	require.NoError(t, err)
-	err = os.WriteFile(filepath.Join(cacheDir, "fake-cached-provider.json"), []byte(cacheEntry), 0o600)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
-	cmd.Dir = findProjectRoot()
-	cmd.Env = append(os.Environ(), "XDG_CACHE_HOME="+filepath.Dir(cacheDir))
 
 	// The cache expects the path: $XDG_CACHE_HOME/scafctl/provider-schemas/
-	// So we need to create the proper directory structure
-	properCacheDir := filepath.Join(t.TempDir(), "scafctl", "provider-schemas")
-	err = os.MkdirAll(properCacheDir, 0o755)
-	require.NoError(t, err)
-	err = os.WriteFile(filepath.Join(properCacheDir, "fake-cached-provider.json"), []byte(cacheEntry), 0o600)
-	require.NoError(t, err)
+	xdgCacheHome := t.TempDir()
+	properCacheDir := filepath.Join(xdgCacheHome, "scafctl", "provider-schemas")
+	require.NoError(t, os.MkdirAll(properCacheDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(properCacheDir, "fake-cached-provider.json"), []byte(cacheEntry), 0o600))
 
-	xdgCacheHome := filepath.Dir(filepath.Dir(properCacheDir)) // parent of scafctl/
-	cmd.Env = append(os.Environ(), "XDG_CACHE_HOME="+xdgCacheHome)
-
-	messages := strings.Join([]string{
+	messages := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_provider_schema","arguments":{"name":"fake-cached-provider"}}}`,
-	}, "\n")
-	cmd.Stdin = strings.NewReader(messages + "\n")
-
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-
-	_ = cmd.Run()
-
-	output := outBuf.String()
-	var schemaResp string
-	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, `"id":2`) {
-			schemaResp = line
-			break
-		}
 	}
-	require.NotEmpty(t, schemaResp, "expected tools/call response for id 2")
+	schemaResp := runMCPServeSession(t, map[string]string{"XDG_CACHE_HOME": xdgCacheHome}, messages, 2)
 	assert.Contains(t, schemaResp, "fake-cached-provider")
 	assert.Contains(t, schemaResp, "cached")
 	assert.Contains(t, schemaResp, "input1")

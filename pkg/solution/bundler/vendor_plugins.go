@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -222,17 +223,18 @@ type VendorAllPluginsOptions struct {
 //
 // Resolution follows three explicit paths after validating p.ValidateSource():
 //   - Registry-sourced (p.HasRegistry()): validates p.Registry() against
-//     CatalogResolver, replays a satisfying existingLock entry unless an active
-//     signature policy sees an unsigned entry, and otherwise resolves scoped to
-//     that catalog alias.
+//     CatalogResolver, replays a satisfying existingLock entry (reverifying the
+//     pinned artifact under opts.VerifySignature when a signature policy is
+//     active), and otherwise resolves scoped to that catalog alias.
 //   - Built (p.HasBuilt()): never replays from existingLock (local builds can be
 //     overwritten in place with --force); resolves scoped to local (SourceBuilt).
 //   - Short-name (p.Source == nil): probes local (SourceBuilt) first so a local
 //     build shadows both existingLock and remote catalogs (failing closed on
 //     non-404 local errors); otherwise replays a satisfying remote lock entry
-//     whose ResolvedCanonical is still a configured catalog and whose signature
-//     satisfies any active policy; otherwise resolves across the PluginFetcher
-//     chain and reads platforms/digests scoped to the winning catalog.
+//     whose ResolvedCanonical is still a configured catalog (reverifying the
+//     pinned artifact under opts.VerifySignature when a signature policy is
+//     active); otherwise resolves across the PluginFetcher chain and reads
+//     platforms/digests scoped to the winning catalog.
 func VendorAllPlugins(ctx context.Context, plugins []solution.PluginDependency, existingLock *LockFile, opts VendorAllPluginsOptions) (*VendorPluginsResult, error) {
 	if opts.Platform == "" {
 		return nil, fmt.Errorf("plugin vendoring requires a build platform")
@@ -248,7 +250,11 @@ func VendorAllPlugins(ctx context.Context, plugins []solution.PluginDependency, 
 			if err != nil {
 				return nil, fmt.Errorf("plugin %q: resolving catalog for registry %q: %w", p.DisplayName(), p.Registry(), err)
 			}
-			if locked := replayLockedRegistry(ctx, existingLock, p, opts.VerifySignature != nil); locked != nil {
+			locked, err := replayLockedRegistry(ctx, existingLock, p, catalogAlias, opts)
+			if err != nil {
+				return nil, err
+			}
+			if locked != nil {
 				result.ResolvedPlugins = append(result.ResolvedPlugins, *locked)
 				continue
 			}
@@ -283,7 +289,11 @@ func VendorAllPlugins(ctx context.Context, plugins []solution.PluginDependency, 
 				result.ResolvedPlugins = append(result.ResolvedPlugins, resolved)
 				continue
 			}
-			if locked := replayLockedShortName(ctx, existingLock, p, opts.CatalogResolver, opts.VerifySignature != nil); locked != nil {
+			locked, err := replayLockedShortName(ctx, existingLock, p, opts)
+			if err != nil {
+				return nil, err
+			}
+			if locked != nil {
 				result.ResolvedPlugins = append(result.ResolvedPlugins, *locked)
 				continue
 			}
@@ -298,68 +308,172 @@ func VendorAllPlugins(ctx context.Context, plugins []solution.PluginDependency, 
 }
 
 // replayLockedRegistry replays a registry-sourced lock entry when its pinned
-// version still satisfies p's constraint and any active signature policy is
-// satisfied by a recorded signature.
-func replayLockedRegistry(ctx context.Context, existingLock *LockFile, p solution.PluginDependency, requireSignature bool) *LockPlugin {
+// version still satisfies p's constraint. When a signature policy is active,
+// the pinned artifact is reverified against that policy before replay.
+func replayLockedRegistry(ctx context.Context, existingLock *LockFile, p solution.PluginDependency, catalogAlias string, opts VendorAllPluginsOptions) (*LockPlugin, error) {
 	locked := existingLock.FindPluginByDep(p)
 	if locked == nil {
-		return nil
+		return nil, nil
 	}
-	return replayCandidate(ctx, locked, p, requireSignature)
+	return replayCandidate(ctx, locked, p, catalogAlias, opts)
 }
 
 // replayLockedShortName replays a short-name lock entry only when it came from
-// a remote catalog that is still configured, its version still satisfies p's
-// constraint, and any active signature policy is satisfied by a recorded
-// signature.
-func replayLockedShortName(ctx context.Context, existingLock *LockFile, p solution.PluginDependency, catalogResolver RegistryAliasResolver, requireSignature bool) *LockPlugin {
+// a remote catalog that is still configured and its version still satisfies p's
+// constraint. When a signature policy is active, the pinned artifact is
+// reverified against that policy before replay.
+func replayLockedShortName(ctx context.Context, existingLock *LockFile, p solution.PluginDependency, opts VendorAllPluginsOptions) (*LockPlugin, error) {
 	locked := existingLock.FindPluginByDep(p)
 	if locked == nil || locked.IsBuilt() {
-		return nil
+		return nil, nil
 	}
 	lgr := logger.FromContext(ctx)
-	if catalogResolver == nil {
+	if opts.CatalogResolver == nil {
 		lgr.V(1).Info("no catalog resolver configured for short-name lock replay, re-resolving",
 			"name", p.DisplayName(),
 			"kind", p.Kind)
-		return nil
+		return nil, nil
 	}
-	if _, ok := catalogResolver.AliasForRegistry(locked.ResolvedCanonical); !ok {
+	catalogAlias, ok := opts.CatalogResolver.AliasForRegistry(locked.ResolvedCanonical)
+	if !ok {
 		lgr.V(1).Info("locked plugin catalog no longer configured, re-resolving",
 			"name", p.DisplayName(),
 			"kind", p.Kind,
 			"resolvedCanonical", locked.ResolvedCanonical)
-		return nil
+		return nil, nil
 	}
-	return replayCandidate(ctx, locked, p, requireSignature)
+	return replayCandidate(ctx, locked, p, catalogAlias, opts)
 }
 
-func replayCandidate(ctx context.Context, locked *LockPlugin, p solution.PluginDependency, requireSignature bool) *LockPlugin {
+func lockedSatisfiesConstraint(constraint, lockedVersion string) bool {
+	satisfies, err := CheckVersionConstraint(constraint, lockedVersion)
+	return err == nil && satisfies
+}
+
+func replayCandidate(ctx context.Context, locked *LockPlugin, p solution.PluginDependency, catalogAlias string, opts VendorAllPluginsOptions) (*LockPlugin, error) {
 	lgr := logger.FromContext(ctx)
-	if requireSignature && locked.Signature == nil {
-		lgr.V(1).Info("lock entry unsigned under active signature policy, re-resolving",
-			"name", p.DisplayName(),
-			"kind", p.Kind,
-			"lockedVersion", locked.Version)
-		return nil
-	}
-	satisfies, err := CheckVersionConstraint(p.Version, locked.Version)
-	if err != nil || !satisfies {
+	if !lockedSatisfiesConstraint(p.Version, locked.Version) {
 		lgr.V(1).Info("lock entry stale, re-resolving",
 			"name", p.DisplayName(),
 			"kind", p.Kind,
 			"constraint", p.Version,
 			"lockedVersion", locked.Version)
-		return nil
+		return nil, nil
+	}
+	entry := cloneLockPlugin(*locked)
+	entry.Constraint = p.Version
+	if opts.VerifySignature != nil {
+		sig, err := reverifyLockedPlugin(ctx, opts.PluginFetcher, locked, p, catalogAlias, opts.Platform, opts.VerifySignature)
+		if err != nil {
+			return nil, err
+		}
+		entry.Signature = sig
 	}
 	lgr.V(1).Info("replaying plugin from lock file",
 		"name", p.DisplayName(),
 		"kind", p.Kind,
 		"version", locked.Version,
 		"digest", locked.Digest)
-	entry := *locked
-	entry.Constraint = p.Version
-	return &entry
+	return &entry, nil
+}
+
+// reverifyLockedPlugin resolves the pinned version in catalogAlias, verifies
+// that its content digest(s) still match locked, and evaluates signatureFunc
+// against the pinned artifact's ImageRef so recorded audit metadata never
+// substitutes for verification under the active trust policy.
+func reverifyLockedPlugin(
+	ctx context.Context,
+	r PluginResolver,
+	locked *LockPlugin,
+	p solution.PluginDependency,
+	catalogAlias, buildPlatform string,
+	signatureFunc func(ctx context.Context, imageRef string) (*LockPluginSignature, error),
+) (*LockPluginSignature, error) {
+	if r == nil {
+		return nil, fmt.Errorf("plugin %q: no plugin fetcher configured", p.DisplayName())
+	}
+	kind := pluginKindToArtifactKind(p.Kind)
+	scope := catalog.WithCatalog(catalogAlias)
+	found, err := r.Find(ctx, catalog.ArtifactQuery{
+		Kind:    kind,
+		Name:    p.ArtifactName(),
+		Version: locked.Version,
+		Source:  selectorFor(p),
+	}, scope)
+	if err != nil {
+		return nil, fmt.Errorf("plugin %q: finding locked version %q in catalog %q: %w", p.DisplayName(), locked.Version, catalogAlias, err)
+	}
+	if !samePinnedVersion(found.Reference.Version, locked.Version) {
+		got := "<nil>"
+		if found.Reference.Version != nil {
+			got = found.Reference.Version.String()
+		}
+		return nil, fmt.Errorf("plugin %q: catalog %q resolved version %q for pinned version %q", p.DisplayName(), catalogAlias, got, locked.Version)
+	}
+	if locked.ResolvedCanonical != "" && found.Canonical != "" && !strings.EqualFold(locked.ResolvedCanonical, found.Canonical) {
+		return nil, fmt.Errorf("plugin %q: catalog %q canonical origin %q does not match locked origin %q", p.DisplayName(), catalogAlias, found.Canonical, locked.ResolvedCanonical)
+	}
+	artifactName := found.Reference.Name
+	if artifactName == "" {
+		artifactName = p.ArtifactName()
+	}
+	digests, primary, err := resolveContentDigests(ctx, r, artifactName, kind, locked.Version, found.Digest, buildPlatform, catalog.MediaTypeForKind(kind), scope)
+	if err != nil {
+		return nil, fmt.Errorf("plugin %q: verifying locked digests for %q in catalog %q: %w", p.DisplayName(), locked.Version, catalogAlias, err)
+	}
+	if !lockedDigestsMatch(locked, digests, primary) {
+		return nil, fmt.Errorf("plugin %q: locked version %q content digest in catalog %q does not match lock file", p.DisplayName(), locked.Version, catalogAlias)
+	}
+	sig, err := signatureFunc(ctx, found.ImageRef)
+	if err != nil {
+		return nil, fmt.Errorf("plugin %q: signature verification failed during lock: %w", p.DisplayName(), err)
+	}
+	return sig, nil
+}
+
+func samePinnedVersion(resolved *semver.Version, lockedVersion string) bool {
+	if resolved == nil {
+		return false
+	}
+	if resolved.String() == lockedVersion {
+		return true
+	}
+	lockedParsed, err := semver.NewVersion(lockedVersion)
+	return err == nil && resolved.Equal(lockedParsed)
+}
+
+func lockedDigestsMatch(locked *LockPlugin, digests map[string]string, primary string) bool {
+	if locked == nil || locked.Digest == "" {
+		return false
+	}
+	if len(locked.Digests) == 0 {
+		return len(digests) == 0 && primary == locked.Digest
+	}
+	if len(digests) == 0 || !maps.Equal(locked.Digests, digests) {
+		return false
+	}
+	for _, d := range digests {
+		if d == locked.Digest {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneLockPlugin(lp LockPlugin) LockPlugin {
+	out := lp
+	if lp.Digests != nil {
+		out.Digests = maps.Clone(lp.Digests)
+	}
+	if lp.Signature != nil {
+		sig := *lp.Signature
+		out.Signature = &sig
+	}
+	if lp.Source != nil {
+		src := *lp.Source
+		out.Source = &src
+	}
+	return out
 }
 
 // probeLocalBuiltShortName probes the local catalog for a locally built copy of

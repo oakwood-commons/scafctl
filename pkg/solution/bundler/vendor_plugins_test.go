@@ -26,6 +26,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type fakeVersionEntry struct {
+	info         catalog.ArtifactInfo
+	platforms    []string
+	digestByPlat map[string]string
+}
+
 // fakeCatalogSource implements catalog.PluginSource for fast in-memory tests of
 // VendorAllPlugins over a real *catalog.PluginFetcher.
 type fakeCatalogSource struct {
@@ -36,6 +42,7 @@ type fakeCatalogSource struct {
 	platformsErr error
 	digestByPlat map[string]string
 	digestErr    map[string]error
+	byVersion    map[string]fakeVersionEntry
 
 	findCalls   int
 	findQueries []catalog.ArtifactQuery
@@ -60,17 +67,30 @@ func (f *fakeCatalogSource) ListPlatforms(_ context.Context, ref catalog.Referen
 	if f.findErr != nil {
 		return nil, f.findErr
 	}
+	if ref.Version != nil {
+		if v, ok := f.byVersion[ref.Version.String()]; ok {
+			return v.platforms, nil
+		}
+	}
 	if f.findInfo.Reference.Name != "" && ref.Name != f.findInfo.Reference.Name {
 		return nil, &catalog.ArtifactNotFoundError{Reference: ref, Catalog: f.name}
 	}
 	return f.platforms, nil
 }
 
-func (f *fakeCatalogSource) ResolveContentDigest(_ context.Context, _ catalog.Reference, platform, _ string) (catalog.ContentDigestInfo, error) {
+func (f *fakeCatalogSource) ResolveContentDigest(_ context.Context, ref catalog.Reference, platform, _ string) (catalog.ContentDigestInfo, error) {
 	f.digestCalls++
 	f.digestPlats = append(f.digestPlats, platform)
 	if err := f.digestErr[platform]; err != nil {
 		return catalog.ContentDigestInfo{}, err
+	}
+	if ref.Version != nil {
+		if v, ok := f.byVersion[ref.Version.String()]; ok {
+			return catalog.ContentDigestInfo{
+				ArtifactInfo:  v.info,
+				ContentDigest: v.digestByPlat[platform],
+			}, nil
+		}
 	}
 	return catalog.ContentDigestInfo{
 		ArtifactInfo:  f.findInfo,
@@ -83,6 +103,9 @@ func (f *fakeCatalogSource) Find(_ context.Context, q catalog.ArtifactQuery) (ca
 	f.findQueries = append(f.findQueries, q)
 	if f.findErr != nil {
 		return catalog.ArtifactInfo{}, f.findErr
+	}
+	if v, ok := f.byVersion[q.Version]; ok {
+		return v.info, nil
 	}
 	return f.findInfo, nil
 }
@@ -499,25 +522,46 @@ func TestVendorAllPlugins_RegistryErrors(t *testing.T) {
 
 func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 	t.Parallel()
-	sig := &LockPluginSignature{Issuer: "https://issuer.example", Identity: "ci"}
+	const lockedImageRef = "ghcr.io/myorg/providers/exec@sha256:manifest-1.1.0"
+	signerA := &LockPluginSignature{Issuer: "https://issuer.example", Identity: "signer-a"}
+	signerB := &LockPluginSignature{Issuer: "https://issuer.example", Identity: "signer-b"}
+	sigErr := errors.New("signer-a is not trusted by active policy")
 
-	signedLocked := lockedExec("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"})
-	signedLocked.Signature = sig
+	multiLocked := func(version string, source *LockPluginSource, sig *LockPluginSignature) LockPlugin {
+		return LockPlugin{
+			Name:       "exec",
+			Kind:       "provider",
+			Version:    version,
+			Constraint: "^1.0.0",
+			Digest:     "sha256:locked",
+			Digests: map[string]string{
+				"linux/amd64":  "sha256:locked",
+				"darwin/arm64": "sha256:locked-darwin",
+			},
+			ResolvedFrom:      "myorg",
+			ResolvedCanonical: "ghcr.io/myorg",
+			Source:            source,
+			Signature:         sig,
+		}
+	}
 
 	tests := []struct {
-		name        string
-		lock        *LockFile
-		constraint  string
-		verifySig   func(context.Context, string) (*LockPluginSignature, error)
-		wantVersion string
-		wantDigest  string
-		wantSig     *LockPluginSignature
-		wantFind    int
+		name         string
+		lock         *LockFile
+		constraint   string
+		mutateRemote func(*fakeCatalogSource)
+		verifySig    func(context.Context, string) (*LockPluginSignature, error)
+		wantVersion  string
+		wantDigest   string
+		wantSig      *LockPluginSignature
+		wantFind     int
+		wantFindVer  string
+		wantErr      string
 	}{
 		{
-			name: "pinned version satisfies constraint is replayed",
+			name: "pinned version satisfies constraint is replayed without network when signatures off",
 			lock: &LockFile{Plugins: []LockPlugin{
-				lockedExec("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}),
+				multiLocked("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}, nil),
 			}},
 			constraint:  "^1.0",
 			wantVersion: "1.1.0",
@@ -525,30 +569,85 @@ func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 			wantFind:    0,
 		},
 		{
-			name: "unsigned lock entry is re-resolved when signature verification is active",
+			name: "unsigned lock entry is reverified at pinned version when signature verification is active",
 			lock: &LockFile{Plugins: []LockPlugin{
-				lockedExec("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}),
+				multiLocked("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}, nil),
 			}},
 			constraint: "^1.0",
-			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
-				return sig, nil
-			},
-			wantVersion: "1.2.3",
-			wantDigest:  "sha256:aaa",
-			wantSig:     sig,
-			wantFind:    1,
-		},
-		{
-			name:       "signed lock entry is replayed when signature verification is active",
-			lock:       &LockFile{Plugins: []LockPlugin{signedLocked}},
-			constraint: "^1.0",
-			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
-				return nil, errors.New("must not re-verify already signed lock entry")
+			verifySig: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
+				if imageRef != lockedImageRef {
+					return nil, errors.New("unexpected imageRef: " + imageRef)
+				}
+				return signerB, nil
 			},
 			wantVersion: "1.1.0",
 			wantDigest:  "sha256:locked",
-			wantSig:     sig,
-			wantFind:    0,
+			wantSig:     signerB,
+			wantFind:    1,
+			wantFindVer: "1.1.0",
+		},
+		{
+			name: "signed lock entry is reverified against active policy and preserves pinned version",
+			lock: &LockFile{Plugins: []LockPlugin{
+				multiLocked("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}, signerA),
+			}},
+			constraint: "^1.0",
+			verifySig: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
+				if imageRef != lockedImageRef {
+					return nil, errors.New("unexpected imageRef: " + imageRef)
+				}
+				return signerA, nil
+			},
+			wantVersion: "1.1.0",
+			wantDigest:  "sha256:locked",
+			wantSig:     signerA,
+			wantFind:    1,
+			wantFindVer: "1.1.0",
+		},
+		{
+			name: "signed lock entry fails closed under tightened enforce policy",
+			lock: &LockFile{Plugins: []LockPlugin{
+				multiLocked("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}, signerA),
+			}},
+			constraint: "^1.0",
+			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
+				return nil, sigErr
+			},
+			wantErr: "signature verification failed during lock: signer-a is not trusted by active policy",
+		},
+		{
+			name: "signed lock entry clears stale signature when warn mode verification returns nil",
+			lock: &LockFile{Plugins: []LockPlugin{
+				multiLocked("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}, signerA),
+			}},
+			constraint: "^1.0",
+			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
+				return nil, nil
+			},
+			wantVersion: "1.1.0",
+			wantDigest:  "sha256:locked",
+			wantSig:     nil,
+			wantFind:    1,
+			wantFindVer: "1.1.0",
+		},
+		{
+			name: "reverification fails closed when locked tag content digest changed in catalog",
+			lock: &LockFile{Plugins: []LockPlugin{
+				multiLocked("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}, signerA),
+			}},
+			constraint: "^1.0",
+			mutateRemote: func(remote *fakeCatalogSource) {
+				entry := remote.byVersion["1.1.0"]
+				entry.digestByPlat = map[string]string{
+					"linux/amd64":  "sha256:tampered",
+					"darwin/arm64": "sha256:locked-darwin",
+				}
+				remote.byVersion["1.1.0"] = entry
+			},
+			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
+				return signerA, nil
+			},
+			wantErr: "content digest in catalog \"myorg\" does not match lock file",
 		},
 		{
 			name: "stale pinned version is re-resolved",
@@ -559,6 +658,7 @@ func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 			wantVersion: "1.2.3",
 			wantDigest:  "sha256:aaa",
 			wantFind:    1,
+			wantFindVer: "^1.0.0",
 		},
 		{
 			name: "short-name entry with same name is not replayed",
@@ -569,6 +669,7 @@ func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 			wantVersion: "1.2.3",
 			wantDigest:  "sha256:aaa",
 			wantFind:    1,
+			wantFindVer: "^1.0.0",
 		},
 		{
 			name: "entry from a different registry is not replayed",
@@ -579,12 +680,33 @@ func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 			wantVersion: "1.2.3",
 			wantDigest:  "sha256:aaa",
 			wantFind:    1,
+			wantFindVer: "^1.0.0",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			remote := newFakeRemote()
+			remote.byVersion = map[string]fakeVersionEntry{
+				"1.1.0": {
+					info: catalog.ArtifactInfo{
+						Reference:      catalog.Reference{Kind: catalog.ArtifactKindProvider, Name: "exec", Version: semver.MustParse("1.1.0")},
+						Catalog:        "myorg",
+						Canonical:      "ghcr.io/myorg",
+						Digest:         "sha256:manifest-1.1.0",
+						ManifestDigest: "sha256:manifest-1.1.0",
+						ImageRef:       lockedImageRef,
+					},
+					platforms: []string{"linux/amd64", "darwin/arm64"},
+					digestByPlat: map[string]string{
+						"linux/amd64":  "sha256:locked",
+						"darwin/arm64": "sha256:locked-darwin",
+					},
+				},
+			}
+			if tt.mutateRemote != nil {
+				tt.mutateRemote(remote)
+			}
 
 			result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep(tt.constraint)}, tt.lock, VendorAllPluginsOptions{
 				CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
@@ -592,11 +714,18 @@ func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 				Platform:        "linux/amd64",
 				VerifySignature: tt.verifySig,
 			})
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
 			require.NoError(t, err)
 			require.Len(t, result.ResolvedPlugins, 1)
 
 			lp := result.ResolvedPlugins[0]
 			assert.Equal(t, tt.wantFind, remote.findCalls)
+			if tt.wantFindVer != "" && assert.NotEmpty(t, remote.findQueries) {
+				assert.Equal(t, tt.wantFindVer, remote.findQueries[0].Version)
+			}
 			assert.Equal(t, tt.wantVersion, lp.Version)
 			assert.Equal(t, tt.wantDigest, lp.Digest)
 			assert.Equal(t, tt.wantSig, lp.Signature)
@@ -890,15 +1019,22 @@ func TestVendorAllPlugins_ShortNameErrorsAndEdgeCases(t *testing.T) {
 func TestVendorAllPlugins_ShortNameLockReplay(t *testing.T) {
 	t.Parallel()
 
-	sig := &LockPluginSignature{Issuer: "https://token.actions.githubusercontent.com", Identity: "official"}
+	const lockedImageRef = "ghcr.io/oakwood-commons/providers/exec@sha256:manifest-official-1.1.0"
+	signerA := &LockPluginSignature{Issuer: "https://token.actions.githubusercontent.com", Identity: "signer-a"}
+	signerB := &LockPluginSignature{Issuer: "https://token.actions.githubusercontent.com", Identity: "signer-b"}
+	sigErr := errors.New("signer-a is not trusted by active policy")
 
 	remoteLockEntry := func(version, canonical string, s *LockPluginSignature) LockPlugin {
 		return LockPlugin{
-			Name:              "exec",
-			Kind:              "provider",
-			Version:           version,
-			Constraint:        "^1.0.0",
-			Digest:            "sha256:locked-remote",
+			Name:       "exec",
+			Kind:       "provider",
+			Version:    version,
+			Constraint: "^1.0.0",
+			Digest:     "sha256:locked-remote",
+			Digests: map[string]string{
+				"linux/amd64":  "sha256:locked-remote",
+				"darwin/arm64": "sha256:locked-remote-darwin",
+			},
 			ResolvedFrom:      "corp",
 			ResolvedCanonical: canonical,
 			Signature:         s,
@@ -913,10 +1049,13 @@ func TestVendorAllPlugins_ShortNameLockReplay(t *testing.T) {
 		wantVersion  string
 		wantDigest   string
 		wantFrom     string
+		wantSig      *LockPluginSignature
 		wantFind     int
+		wantFindVer  string
+		wantErr      string
 	}{
 		{
-			name: "replays remote lock entry when catalog still configured",
+			name: "replays remote lock entry without network when catalog configured and signatures off",
 			existingLock: &LockFile{Plugins: []LockPlugin{
 				remoteLockEntry("1.1.0", "ghcr.io/corp", nil),
 			}},
@@ -936,6 +1075,7 @@ func TestVendorAllPlugins_ShortNameLockReplay(t *testing.T) {
 			wantDigest:  "sha256:aaa",
 			wantFrom:    "official",
 			wantFind:    1,
+			wantFindVer: "^1.0.0",
 		},
 		{
 			name: "never replays local built lock entry",
@@ -954,34 +1094,72 @@ func TestVendorAllPlugins_ShortNameLockReplay(t *testing.T) {
 			wantDigest:  "sha256:aaa",
 			wantFrom:    "official",
 			wantFind:    1,
+			wantFindVer: "^1.0.0",
 		},
 		{
-			name: "re-resolves unsigned short-name lock entry when signature policy is active",
+			name: "reverifies unsigned short-name lock entry at pinned version when signature policy is active",
 			existingLock: &LockFile{Plugins: []LockPlugin{
 				remoteLockEntry("1.1.0", "ghcr.io/oakwood-commons", nil),
 			}},
 			resolver: newTestAliasResolver("official", "oci://ghcr.io/oakwood-commons"),
-			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
-				return sig, nil
-			},
-			wantVersion: "1.2.3",
-			wantDigest:  "sha256:aaa",
-			wantFrom:    "official",
-			wantFind:    1,
-		},
-		{
-			name: "replays signed short-name lock entry when signature policy is active",
-			existingLock: &LockFile{Plugins: []LockPlugin{
-				remoteLockEntry("1.1.0", "ghcr.io/oakwood-commons", sig),
-			}},
-			resolver: newTestAliasResolver("official", "oci://ghcr.io/oakwood-commons"),
-			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
-				return nil, errors.New("must not re-verify signed lock entry")
+			verifySig: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
+				if imageRef != lockedImageRef {
+					return nil, errors.New("unexpected imageRef: " + imageRef)
+				}
+				return signerB, nil
 			},
 			wantVersion: "1.1.0",
 			wantDigest:  "sha256:locked-remote",
 			wantFrom:    "corp",
-			wantFind:    0,
+			wantSig:     signerB,
+			wantFind:    1,
+			wantFindVer: "1.1.0",
+		},
+		{
+			name: "reverifies signed short-name lock entry against active policy and preserves pinned metadata",
+			existingLock: &LockFile{Plugins: []LockPlugin{
+				remoteLockEntry("1.1.0", "ghcr.io/oakwood-commons", signerA),
+			}},
+			resolver: newTestAliasResolver("official", "oci://ghcr.io/oakwood-commons"),
+			verifySig: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
+				if imageRef != lockedImageRef {
+					return nil, errors.New("unexpected imageRef: " + imageRef)
+				}
+				return signerA, nil
+			},
+			wantVersion: "1.1.0",
+			wantDigest:  "sha256:locked-remote",
+			wantFrom:    "corp",
+			wantSig:     signerA,
+			wantFind:    1,
+			wantFindVer: "1.1.0",
+		},
+		{
+			name: "signed short-name lock entry fails closed when tightened enforce policy rejects recorded signer",
+			existingLock: &LockFile{Plugins: []LockPlugin{
+				remoteLockEntry("1.1.0", "ghcr.io/oakwood-commons", signerA),
+			}},
+			resolver: newTestAliasResolver("official", "oci://ghcr.io/oakwood-commons"),
+			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
+				return nil, sigErr
+			},
+			wantErr: "signature verification failed during lock: signer-a is not trusted by active policy",
+		},
+		{
+			name: "signed short-name lock entry clears signature when warn mode returns nil",
+			existingLock: &LockFile{Plugins: []LockPlugin{
+				remoteLockEntry("1.1.0", "ghcr.io/oakwood-commons", signerA),
+			}},
+			resolver: newTestAliasResolver("official", "oci://ghcr.io/oakwood-commons"),
+			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
+				return nil, nil
+			},
+			wantVersion: "1.1.0",
+			wantDigest:  "sha256:locked-remote",
+			wantFrom:    "corp",
+			wantSig:     nil,
+			wantFind:    1,
+			wantFindVer: "1.1.0",
 		},
 	}
 
@@ -990,6 +1168,23 @@ func TestVendorAllPlugins_ShortNameLockReplay(t *testing.T) {
 			t.Parallel()
 			local := notFoundInCatalog(catalog.LocalCatalogName, "exec")
 			official := newFakeRemoteSource("official", "ghcr.io/oakwood-commons", "exec", "1.2.3")
+			official.byVersion = map[string]fakeVersionEntry{
+				"1.1.0": {
+					info: catalog.ArtifactInfo{
+						Reference:      catalog.Reference{Kind: catalog.ArtifactKindProvider, Name: "exec", Version: semver.MustParse("1.1.0")},
+						Catalog:        "official",
+						Canonical:      "ghcr.io/oakwood-commons",
+						Digest:         "sha256:manifest-official-1.1.0",
+						ManifestDigest: "sha256:manifest-official-1.1.0",
+						ImageRef:       lockedImageRef,
+					},
+					platforms: []string{"linux/amd64", "darwin/arm64"},
+					digestByPlat: map[string]string{
+						"linux/amd64":  "sha256:locked-remote",
+						"darwin/arm64": "sha256:locked-remote-darwin",
+					},
+				},
+			}
 
 			result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{shortExecDep()}, tt.existingLock, VendorAllPluginsOptions{
 				CatalogResolver: tt.resolver,
@@ -997,14 +1192,22 @@ func TestVendorAllPlugins_ShortNameLockReplay(t *testing.T) {
 				Platform:        "linux/amd64",
 				VerifySignature: tt.verifySig,
 			})
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
 			require.NoError(t, err)
 			require.Len(t, result.ResolvedPlugins, 1)
 
 			lp := result.ResolvedPlugins[0]
 			assert.Equal(t, tt.wantFind, official.findCalls)
+			if tt.wantFindVer != "" && assert.NotEmpty(t, official.findQueries) {
+				assert.Equal(t, tt.wantFindVer, official.findQueries[0].Version)
+			}
 			assert.Equal(t, tt.wantVersion, lp.Version)
 			assert.Equal(t, tt.wantDigest, lp.Digest)
 			assert.Equal(t, tt.wantFrom, lp.ResolvedFrom)
+			assert.Equal(t, tt.wantSig, lp.Signature)
 			assert.Nil(t, lp.Source)
 		})
 	}
@@ -1238,6 +1441,109 @@ func TestVendorAllPlugins_LiveAndCachedRemoteImageRef(t *testing.T) {
 	assert.Equal(t, config.CatalogNameOfficial, cachedRes.ResolvedPlugins[0].ResolvedFrom)
 	assert.Equal(t, host+"/scafctl", cachedRes.ResolvedPlugins[0].ResolvedCanonical)
 	assert.Nil(t, cachedRes.ResolvedPlugins[0].Source)
+
+	// 3. Replaying that signed lock entry under a tightened policy must reverify
+	//    against the cached OCI ImageRef and fail closed when the signer is rejected.
+	existingLock := &LockFile{Plugins: cachedRes.ResolvedPlugins}
+	constraintDep := solution.PluginDependency{Name: "directory", Kind: solution.PluginKindProvider, Version: "^0.2.0"}
+	var replayRef string
+	_, err = VendorAllPlugins(testContext(), []solution.PluginDependency{constraintDep}, existingLock, VendorAllPluginsOptions{
+		CatalogResolver: catalogindex.FromCatalogs(pf.Catalogs()),
+		PluginFetcher:   pf,
+		Platform:        "linux/amd64",
+		VerifySignature: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
+			replayRef = imageRef
+			return nil, errors.New("signer rejected by tightened policy")
+		},
+	})
+	require.ErrorContains(t, err, "signer rejected by tightened policy")
+	assert.Equal(t, wantImageRef, replayRef)
+}
+
+func TestVendorAllPlugins_LockReplayReverifyEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	t.Run("single-platform lock entry reverifies matching sole digest", func(t *testing.T) {
+		t.Parallel()
+		remote := newFakeRemote()
+		remote.platforms = nil
+		remote.digestByPlat = map[string]string{"linux/amd64": "sha256:single"}
+		remote.findInfo.Reference.Version = semver.MustParse("1.1.0")
+		lock := &LockFile{Plugins: []LockPlugin{{
+			Name:              "exec",
+			Kind:              "provider",
+			Version:           "1.1.0",
+			Constraint:        "^1.0.0",
+			Digest:            "sha256:single",
+			ResolvedFrom:      "myorg",
+			ResolvedCanonical: "ghcr.io/myorg",
+			Source:            &LockPluginSource{Registry: "ghcr.io/myorg"},
+			Signature:         &LockPluginSignature{Issuer: "https://issuer.example", Identity: "old"},
+		}}}
+		wantSig := &LockPluginSignature{Issuer: "https://issuer.example", Identity: "verified"}
+		res, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep("^1.0.0")}, lock, VendorAllPluginsOptions{
+			CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+			PluginFetcher:   mustPluginFetcher(t, remote),
+			Platform:        "linux/amd64",
+			VerifySignature: func(context.Context, string) (*LockPluginSignature, error) {
+				return wantSig, nil
+			},
+		})
+		require.NoError(t, err)
+		require.Len(t, res.ResolvedPlugins, 1)
+		assert.Nil(t, res.ResolvedPlugins[0].Digests)
+		assert.Equal(t, "sha256:single", res.ResolvedPlugins[0].Digest)
+		assert.Equal(t, wantSig, res.ResolvedPlugins[0].Signature)
+	})
+
+	t.Run("nil plugin fetcher fails closed when reverifying registry lock entry", func(t *testing.T) {
+		t.Parallel()
+		lock := &LockFile{Plugins: []LockPlugin{
+			lockedExec("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}),
+		}}
+		_, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep("^1.0.0")}, lock, VendorAllPluginsOptions{
+			CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+			Platform:        "linux/amd64",
+			VerifySignature: func(context.Context, string) (*LockPluginSignature, error) {
+				return nil, nil
+			},
+		})
+		require.ErrorContains(t, err, "no plugin fetcher configured")
+	})
+
+	t.Run("missing locked version in catalog fails closed during reverification", func(t *testing.T) {
+		t.Parallel()
+		remote := notFoundInCatalog("myorg", "exec")
+		lock := &LockFile{Plugins: []LockPlugin{
+			lockedExec("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}),
+		}}
+		_, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep("^1.0.0")}, lock, VendorAllPluginsOptions{
+			CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+			PluginFetcher:   mustPluginFetcher(t, remote),
+			Platform:        "linux/amd64",
+			VerifySignature: func(context.Context, string) (*LockPluginSignature, error) {
+				return nil, nil
+			},
+		})
+		require.ErrorIs(t, err, catalog.ErrArtifactNotFound)
+	})
+
+	t.Run("mismatched resolved version fails closed during reverification", func(t *testing.T) {
+		t.Parallel()
+		remote := newFakeRemote() // returns 1.2.3 even when 1.1.0 is queried
+		lock := &LockFile{Plugins: []LockPlugin{
+			lockedExec("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}),
+		}}
+		_, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep("^1.0.0")}, lock, VendorAllPluginsOptions{
+			CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+			PluginFetcher:   mustPluginFetcher(t, remote),
+			Platform:        "linux/amd64",
+			VerifySignature: func(context.Context, string) (*LockPluginSignature, error) {
+				return nil, nil
+			},
+		})
+		require.ErrorContains(t, err, `resolved version "1.2.3" for pinned version "1.1.0"`)
+	})
 }
 
 func TestVendorAllPlugins_AllFormsSameNameRoundTrip(t *testing.T) {
