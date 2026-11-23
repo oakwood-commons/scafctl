@@ -86,7 +86,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/oakwood-commons/celexp v0.1.0 // indirect
 	github.com/oakwood-commons/kvx v0.18.0 // indirect
-	github.com/oakwood-commons/scafctl-plugin-sdk v0.18.0 // indirect
+	github.com/oakwood-commons/scafctl-plugin-sdk v0.19.0 // indirect
 	github.com/oklog/run v1.2.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect

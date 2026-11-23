@@ -56,8 +56,10 @@ After plugin load, scafctl calls `ConfigureProvider` once per provider with host
 | `Quiet` | `bool` | Suppress non-essential output |
 | `NoColor` | `bool` | Disable colored output |
 | `BinaryName` | `string` | CLI binary name (e.g. "scafctl" or an embedder name) |
+| `Profile` | `string` | Active authentication profile name (auth handlers) |
 | `HostServiceID` | `uint32` | GRPCBroker service ID for HostService callbacks |
 | `Settings` | `map[string]json.RawMessage` | Extensible key-value settings |
+| `AuthCallbackPages` | `*AuthCallbackPages` | Optional pre-rendered success/failure HTML documents (<= 256 KiB each) for interactive OAuth callback servers |
 
 The `ConfigureProvider` request also carries a `protocol_version` field for
 feature detection. The current version is defined by `PluginProtocolVersion`.
@@ -81,15 +83,18 @@ type AuthHandlerPlugin interface {
 ```
 
 After plugin load, scafctl calls `ConfigureAuthHandler` once per handler. The
-request uses the same `ProviderConfig` fields as `ConfigureProvider` (quiet,
-no_color, binary_name, settings, host_service_id, protocol_version). The
-response includes optional `diagnostics` for structured warnings/errors.
+request uses the `ProviderConfig` fields (`quiet`, `no_color`, `binary_name`,
+`profile`, `settings`, `host_service_id`, `protocol_version`,
+`host_capabilities`, and `auth_callback_pages`). The response includes optional
+`diagnostics` for structured warnings/errors.
 
 Auth handler plugins have full access to `HostService` callbacks (secrets, auth
 identity) via the GRPCBroker, mirroring the provider plugin pattern.
 
-`RegisterAuthHandlerPlugins` returns `[]*AuthHandlerClient`. The caller should
-defer `KillAllAuthHandlers(clients)` for cleanup.
+`RegisterAuthHandlerPlugins` and `RegisterScopedAuthHandlerPlugins` return
+`[]*AuthHandlerClient` with each discovered handler isolated to its own
+`scafctl.auth.<name>.` secret namespace before `HostService` is exposed. The
+caller should defer `KillAllAuthHandlers(clients)` for cleanup.
 
 ## HostService Callbacks
 
@@ -191,7 +196,7 @@ can clean up with `KillAll` on shutdown.
 1. **Discovery**: scafctl finds plugin binaries
 2. **Handshake**: Protocol version and magic cookie are validated
 3. **GetAuthHandlers**: Plugin advertises handler names, flows, and capabilities
-4. **ConfigureAuthHandler**: Host sends config + protocol version + HostService ID
+4. **ConfigureAuthHandler**: Host sends config + protocol version + HostService ID + host capabilities + callback pages
 5. **Authentication**: `Login`, `Logout`, `GetStatus`, `GetToken` on user request
 6. **Shutdown**: `StopAuthHandler` for graceful cleanup, then `Kill()` the process
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -65,7 +66,13 @@ type LazyAuthHandlerConfig struct {
 	BinPath string
 
 	// PluginCfg is passed to ConfigureAuthHandler after startup.
+	// Ignored when PluginCfgFn is set.
 	PluginCfg *ProviderConfig
+
+	// PluginCfgFn lazily builds the ProviderConfig only when the plugin
+	// subprocess is actually started, avoiding eager asset/template rendering
+	// on commands that never invoke the auth handler.
+	PluginCfgFn func() *ProviderConfig
 
 	// ClientOpts are options for the plugin client (e.g., host deps).
 	ClientOpts []ClientOption
@@ -98,37 +105,7 @@ func NewLazyAuthHandlerWrapper(cfg LazyAuthHandlerConfig) *LazyAuthHandlerWrappe
 			// Find the handler matching our name.
 			for _, info := range handlers {
 				if info.Name == cfg.Name {
-					wrapper := NewAuthHandlerWrapper(client, info)
-
-					// Resolve trusted domains (official + operator config) and fail
-					// closed on device-code verification when none resolve. Official
-					// handlers whose OAuth host is per-cluster (e.g. openshift) carry
-					// no hardcoded domains and rely on this until
-					// auth.handlers.<name>.trustedVerificationDomains is set.
-					var cfgDomains, handlerDomains []string
-					if appCfg := config.FromContext(ctx); appCfg != nil {
-						cfgDomains = appCfg.Auth.TrustedVerificationDomains
-						handlerDomains = appCfg.Auth.Handlers[cfg.Name].TrustedVerificationDomains
-					}
-					applyTrustedDomains(wrapper, cfg.Name, cfg.OfficialRegistry, cfgDomains, handlerDomains)
-
-					// Configure the handler.
-					if cfg.PluginCfg != nil {
-						hostCfg := *cfg.PluginCfg
-						hostCfg.HostServiceID = client.HostServiceID()
-						injectAuthHandlerSettings(ctx, info.Name, &hostCfg)
-						if cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg); cfgErr != nil {
-							lgr.Info("failed to configure lazy auth handler",
-								"handler", info.Name, "error", cfgErr)
-						}
-						wrapper.hostCfg = hostConfig{
-							Quiet:      cfg.PluginCfg.Quiet,
-							NoColor:    cfg.PluginCfg.NoColor,
-							BinaryName: cfg.PluginCfg.BinaryName,
-						}
-					}
-
-					return wrapper, nil
+					return configureLazyWrapper(ctx, client, info, cfg), nil
 				}
 			}
 
@@ -136,6 +113,49 @@ func NewLazyAuthHandlerWrapper(cfg LazyAuthHandlerConfig) *LazyAuthHandlerWrappe
 			return nil, fmt.Errorf("plugin %s does not expose handler %q", cfg.BinPath, cfg.Name)
 		},
 	}
+}
+
+// configureLazyWrapper builds and configures an AuthHandlerWrapper once the
+// lazy plugin client has started and reported its matching AuthHandlerInfo.
+func configureLazyWrapper(ctx context.Context, client *AuthHandlerClient, info AuthHandlerInfo, cfg LazyAuthHandlerConfig) *AuthHandlerWrapper {
+	lgr := logger.FromContext(ctx)
+	wrapper := NewAuthHandlerWrapper(client, info)
+
+	// Resolve trusted domains (official + operator config) and fail
+	// closed on device-code verification when none resolve. Official
+	// handlers whose OAuth host is per-cluster (e.g. openshift) carry
+	// no hardcoded domains and rely on this until
+	// auth.handlers.<name>.trustedVerificationDomains is set.
+	var cfgDomains, handlerDomains []string
+	if appCfg := config.FromContext(ctx); appCfg != nil {
+		cfgDomains = appCfg.Auth.TrustedVerificationDomains
+		handlerDomains = appCfg.Auth.Handlers[cfg.Name].TrustedVerificationDomains
+	}
+	applyTrustedDomains(wrapper, cfg.Name, cfg.OfficialRegistry, cfgDomains, handlerDomains)
+
+	pluginCfg := cfg.PluginCfg
+	if cfg.PluginCfgFn != nil {
+		pluginCfg = cfg.PluginCfgFn()
+	}
+	if pluginCfg != nil {
+		wrapper.setHostConfig(hostConfig{
+			Quiet:             pluginCfg.Quiet,
+			NoColor:           pluginCfg.NoColor,
+			BinaryName:        pluginCfg.BinaryName,
+			Profile:           pluginCfg.Profile,
+			AuthCallbackPages: pluginCfg.AuthCallbackPages,
+		})
+		hostCfg := *pluginCfg
+		hostCfg.Settings = maps.Clone(pluginCfg.Settings)
+		hostCfg.HostServiceID = client.HostServiceID()
+		injectAuthHandlerSettings(ctx, info.Name, &hostCfg)
+		if cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg); cfgErr != nil {
+			lgr.Info("failed to configure lazy auth handler",
+				"handler", info.Name, "error", cfgErr)
+		}
+	}
+
+	return wrapper
 }
 
 // init starts the plugin if not already started. The provided context is used

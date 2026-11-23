@@ -6,11 +6,20 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/csv"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,7 +32,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/authpage"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16717,4 +16729,370 @@ func TestIntegration_RefactorRenameFunctionApply(t *testing.T) {
 	assert.Contains(t, s, "{{ welcome .args.msg }}")
 	assert.Contains(t, s, "{{ welcome ._.env }}")
 	assert.NotContains(t, s, "greet")
+}
+
+func TestIntegration_AuthPluginCallbackPages_SubprocessRoundTrip(t *testing.T) {
+	// Build the sibling scafctl-plugin-auth-entra checkout when running inside a
+	// multi-repo workspace; otherwise build the self-contained in-repo testdata
+	// auth-handler plugin so single-repo CI and worktrees always exercise the
+	// full host -> gRPC SDK -> plugin -> oauth-helpers subprocess pipeline.
+	projectRoot := findProjectRoot()
+	pluginDir := t.TempDir()
+	pluginBin := filepath.Join(pluginDir, "scafctl-plugin-auth-entra")
+	if runtime.GOOS == "windows" {
+		pluginBin += ".exe"
+	}
+
+	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelBuild()
+
+	entraRoot := filepath.Join(filepath.Dir(projectRoot), "scafctl-plugin-auth-entra")
+	var buildCmd *exec.Cmd
+	if _, statErr := os.Stat(filepath.Join(entraRoot, "cmd", "scafctl-plugin-auth-entra", "main.go")); statErr == nil {
+		buildCmd = exec.CommandContext(buildCtx, "go", "build", "-o", pluginBin, "./cmd/scafctl-plugin-auth-entra") //nolint:gosec // test-controlled build path
+		buildCmd.Dir = entraRoot
+		if wsGoWork := filepath.Join(filepath.Dir(projectRoot), "go.work"); func() bool {
+			_, err := os.Stat(wsGoWork)
+			return err == nil
+		}() {
+			buildCmd.Env = append(os.Environ(), "GOWORK="+wsGoWork)
+		}
+	} else {
+		buildCmd = exec.CommandContext(buildCtx, "go", "build", "-o", pluginBin, "./tests/integration/testdata/authpageplugin") //nolint:gosec // test-controlled build path
+		buildCmd.Dir = projectRoot
+		buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	}
+	buildOut, buildErr := buildCmd.CombinedOutput()
+	require.NoError(t, buildErr, "build auth handler plugin: %s", string(buildOut))
+
+	fakeBrowserBin := filepath.Join(t.TempDir(), "fakebrowser")
+	if runtime.GOOS == "windows" {
+		fakeBrowserBin += ".exe"
+	}
+	fbCmd := exec.CommandContext(buildCtx, "go", "build", "-o", fakeBrowserBin, "./tests/integration/testdata/fakebrowser") //nolint:gosec // test-controlled build path
+	fbCmd.Dir = projectRoot
+	fbCmd.Env = append(os.Environ(), "GOWORK=off")
+	fbOut, fbErr := fbCmd.CombinedOutput()
+	require.NoError(t, fbErr, "build fakebrowser helper: %s", string(fbOut))
+
+	// Stand up a local TLS mock Entra OIDC authority with a certificate valid
+	// for login.microsoftonline.com, fronted by a local CONNECT proxy so:
+	//  1. host-side ValidateVerificationURI sees the real trusted Entra domain,
+	//  2. plugin TLS verification succeeds via SSL_CERT_FILE, and
+	//  3. zero external network traffic leaves the machine.
+	headerB64 := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"
+	claimsB64 := "eyJzdWIiOiJzdWItZDJlIiwib2lkIjoib2lkLWQyZSIsInRpZCI6InRpZC1kMmUiLCJwcmVmZXJyZWRfdXNlcm5hbWUiOiJkZXZAZXhhbXBsZS5jb20ifQ"
+	unsignedJWT := headerB64 + "." + claimsB64 + "."
+
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "login.microsoftonline.com"},
+		DNSNames:              []string{"login.microsoftonline.com"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(1 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	derBytes, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &privKey.PublicKey, privKey)
+	require.NoError(t, err)
+
+	var forceExchangeFailure bool
+	var mu sync.Mutex
+	authoritySrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		failNow := forceExchangeFailure
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if failNow {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":             "invalid_grant",
+				"error_description": "AADSTS70008: confidential-token-error-detail",
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token":  "live-entra-access-token",
+			"refresh_token": "live-entra-refresh-token",
+			"token_type":    "Bearer",
+			"expires_in":    3600,
+			"id_token":      unsignedJWT,
+		})
+	}))
+	authoritySrv.TLS = &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{{Certificate: [][]byte{derBytes}, PrivateKey: privKey}},
+	}
+	authoritySrv.StartTLS()
+	defer authoritySrv.Close()
+
+	authorityAddr := authoritySrv.Listener.Addr().String()
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "connect only", http.StatusMethodNotAllowed)
+			return
+		}
+		var d net.Dialer
+		upConn, dialErr := d.DialContext(r.Context(), "tcp", authorityAddr)
+		if dialErr != nil {
+			http.Error(w, dialErr.Error(), http.StatusBadGateway)
+			return
+		}
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			_ = upConn.Close()
+			return
+		}
+		clientConn, _, hjErr := hj.Hijack()
+		if hjErr != nil {
+			_ = upConn.Close()
+			return
+		}
+		_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		go func() {
+			_, _ = io.Copy(upConn, clientConn)
+			_ = upConn.Close()
+		}()
+		_, _ = io.Copy(clientConn, upConn)
+		_ = clientConn.Close()
+	}))
+	defer proxySrv.Close()
+
+	certPath := filepath.Join(t.TempDir(), "test-authority-ca.pem")
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	require.NoError(t, os.WriteFile(certPath, certPEM, 0o600))
+
+	captureFile := filepath.Join(t.TempDir(), "browser-response.html")
+	headersFile := filepath.Join(t.TempDir(), "browser-headers.txt")
+
+	t.Setenv("SSL_CERT_FILE", certPath)
+	t.Setenv("HTTPS_PROXY", proxySrv.URL)
+	t.Setenv("NO_PROXY", "localhost,127.0.0.1")
+	t.Setenv("BROWSER", fakeBrowserBin)
+	t.Setenv("SCAFCTL_TEST_CAPTURE_BODY", captureFile)
+	t.Setenv("SCAFCTL_TEST_CAPTURE_HEADERS", headersFile)
+	t.Setenv("SCAFCTL_TEST_OAUTH_CODE", "SUBPROC-AUTH-CODE")
+	t.Setenv("AZURE_CLIENT_ID", "")
+	t.Setenv("AZURE_TENANT_ID", "")
+	t.Setenv("AZURE_CLIENT_SECRET", "")
+	t.Setenv("AZURE_FEDERATED_TOKEN", "")
+	t.Setenv("AZURE_FEDERATED_TOKEN_FILE", "")
+
+	xdgDir := t.TempDir()
+	cfgPath := filepath.Join(xdgDir, "config.yaml")
+	cfgContent := `auth:
+  entra:
+    authority: https://login.microsoftonline.com
+    clientId: test-client-id
+    tenantId: tid-d2e
+settings:
+  requireSecureKeyring: false
+`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgContent), 0o600))
+
+	readCapturedBrowser := func(t *testing.T) (htmlStr, hdrStr string) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			hb, err1 := os.ReadFile(captureFile) //nolint:gosec
+			hd, err2 := os.ReadFile(headersFile) //nolint:gosec
+			if err1 != nil || err2 != nil || len(hb) == 0 || len(hd) == 0 {
+				return false
+			}
+			htmlStr = string(hb)
+			hdrStr = string(hd)
+			return true
+		}, 3*time.Second, 15*time.Millisecond, "detached fakebrowser helper should flush captured response")
+		_ = os.Remove(captureFile)
+		_ = os.Remove(headersFile)
+		return htmlStr, hdrStr
+	}
+
+	// Run scafctl in-process with RootOptions pointing AuthPluginDirs at our freshly
+	// built plugin binary, exercising default scafctl Blueprint, custom embedder
+	// whole-page replacement, alternate BinaryName wordmark, 503 failure, and
+	// local catalog + cached LazyAuthHandlerWrapper + --tenant ApplyOverrides.
+	t.Run("default scafctl Blueprint survives host->SDK->Entra->helper subprocess with --tenant override", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdgDir, "cfg1"))
+		t.Setenv("XDG_DATA_HOME", filepath.Join(xdgDir, "data1"))
+		t.Setenv("XDG_CACHE_HOME", filepath.Join(xdgDir, "cache1"))
+		t.Setenv("SCAFCTL_SECRETS_KEY", "test-passphrase-for-isolated-keyring")
+
+		var outBuf, errBuf bytes.Buffer
+		rootCmd, cleanup := scafctl.Root(&scafctl.RootOptions{
+			ConfigPath:     cfgPath,
+			AuthPluginDirs: []string{pluginDir},
+			IOStreams:      &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &outBuf, ErrOut: &errBuf},
+		})
+		defer cleanup()
+
+		rootCmd.SetArgs([]string{"auth", "login", "entra", "--flow", "interactive", "--tenant", "override-tenant", "--timeout", "15s", "--force"})
+		err := rootCmd.Execute()
+		require.NoError(t, err, "stderr: %s", errBuf.String())
+
+		htmlStr, hdrStr := readCapturedBrowser(t)
+		assert.Contains(t, hdrStr, "STATUS:200")
+		assert.Contains(t, hdrStr, "default-src 'none'")
+		assert.Contains(t, htmlStr, "<title>scafctl | Authentication complete</title>")
+		assert.Contains(t, htmlStr, `<svg class="logo"`)
+		assert.Contains(t, htmlStr, "DECLARATIVE BY DESIGN.")
+		assert.NotContains(t, htmlStr, "live-entra-access-token")
+		assert.NotContains(t, htmlStr, "SUBPROC-AUTH-CODE")
+	})
+
+	t.Run("custom embedder whole-page AuthPageRenderer + alternate BinaryName survives subprocess", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdgDir, "cfg2"))
+		t.Setenv("XDG_DATA_HOME", filepath.Join(xdgDir, "data2"))
+		t.Setenv("XDG_CACHE_HOME", filepath.Join(xdgDir, "cache2"))
+		t.Setenv("MYCLI_SECRETS_KEY", "test-passphrase-for-isolated-keyring")
+
+		var outBuf, errBuf bytes.Buffer
+		rootCmd, cleanup := scafctl.Root(&scafctl.RootOptions{
+			BinaryName:     "mycli",
+			ConfigPath:     cfgPath,
+			AuthPluginDirs: []string{pluginDir},
+			IOStreams:      &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &outBuf, ErrOut: &errBuf},
+			AuthPageRenderer: func(_ context.Context, d authpage.Data) ([]byte, error) {
+				return []byte("<!doctype html><html><body>WHOLE-REPLACEMENT:" + d.BinaryName + ":" + string(d.State) + "</body></html>"), nil
+			},
+		})
+		defer cleanup()
+
+		rootCmd.SetArgs([]string{"auth", "login", "entra", "--flow", "interactive", "--timeout", "15s", "--force"})
+		err := rootCmd.Execute()
+		require.NoError(t, err, "stderr: %s", errBuf.String())
+
+		htmlStr, hdrStr := readCapturedBrowser(t)
+		assert.Contains(t, hdrStr, "STATUS:200")
+		assert.Equal(t, "<!doctype html><html><body>WHOLE-REPLACEMENT:mycli:success</body></html>", htmlStr)
+	})
+
+	t.Run("alternate BinaryName with nil AuthPageRenderer renders plain-text wordmark without scafctl branding", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdgDir, "cfg2b"))
+		t.Setenv("XDG_DATA_HOME", filepath.Join(xdgDir, "data2b"))
+		t.Setenv("XDG_CACHE_HOME", filepath.Join(xdgDir, "cache2b"))
+		t.Setenv("MYCLI_SECRETS_KEY", "test-passphrase-for-isolated-keyring")
+
+		var outBuf, errBuf bytes.Buffer
+		rootCmd, cleanup := scafctl.Root(&scafctl.RootOptions{
+			BinaryName:     "mycli",
+			ConfigPath:     cfgPath,
+			AuthPluginDirs: []string{pluginDir},
+			IOStreams:      &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &outBuf, ErrOut: &errBuf},
+		})
+		defer cleanup()
+
+		rootCmd.SetArgs([]string{"auth", "login", "entra", "--flow", "interactive", "--timeout", "15s", "--force"})
+		err := rootCmd.Execute()
+		require.NoError(t, err, "stderr: %s", errBuf.String())
+
+		htmlStr, hdrStr := readCapturedBrowser(t)
+		assert.Contains(t, hdrStr, "STATUS:200")
+		assert.Contains(t, htmlStr, "<title>mycli | Authentication complete</title>")
+		assert.Contains(t, htmlStr, `<span class="brand-wordmark">mycli</span>`)
+		assert.NotContains(t, htmlStr, `<svg class="logo"`)
+		assert.NotContains(t, strings.ToLower(htmlStr), "scafctl")
+	})
+
+	t.Run("post-callback token exchange failure serves Blueprint failure page with 503 and hides AADSTS details", func(t *testing.T) {
+		mu.Lock()
+		forceExchangeFailure = true
+		mu.Unlock()
+		defer func() {
+			mu.Lock()
+			forceExchangeFailure = false
+			mu.Unlock()
+		}()
+
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdgDir, "cfg3"))
+		t.Setenv("XDG_DATA_HOME", filepath.Join(xdgDir, "data3"))
+		t.Setenv("XDG_CACHE_HOME", filepath.Join(xdgDir, "cache3"))
+		t.Setenv("SCAFCTL_SECRETS_KEY", "test-passphrase-for-isolated-keyring")
+
+		var outBuf, errBuf bytes.Buffer
+		rootCmd, cleanup := scafctl.Root(&scafctl.RootOptions{
+			ConfigPath:     cfgPath,
+			AuthPluginDirs: []string{pluginDir},
+			IOStreams:      &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &outBuf, ErrOut: &errBuf},
+			ExitFunc:       func(_ int) {},
+		})
+		defer cleanup()
+
+		rootCmd.SetArgs([]string{"auth", "login", "entra", "--flow", "interactive", "--timeout", "15s", "--force"})
+		err := rootCmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "token_exchange")
+
+		htmlStr, hdrStr := readCapturedBrowser(t)
+		assert.Contains(t, hdrStr, "STATUS:503")
+		assert.Contains(t, htmlStr, "<title>scafctl | Authentication unsuccessful</title>")
+		assert.Contains(t, htmlStr, `<body class="failure">`)
+		assert.NotContains(t, htmlStr, "AADSTS70008")
+		assert.NotContains(t, htmlStr, "confidential-token-error-detail")
+	})
+
+	t.Run("local catalog + cached lazy official plugin path delivers custom AuthPageRenderer without AuthPluginDirs", func(t *testing.T) {
+		catXDG := filepath.Join(xdgDir, "cat-run")
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(catXDG, "cfg"))
+		t.Setenv("XDG_DATA_HOME", filepath.Join(catXDG, "data"))
+		t.Setenv("XDG_CACHE_HOME", filepath.Join(catXDG, "cache"))
+		t.Setenv("MYCLI_SECRETS_KEY", "test-passphrase-for-isolated-keyring")
+
+		// 1. Publish entra@0.4.1 into mycli's isolated local catalog (zero network).
+		var buildOut, buildErrBuf bytes.Buffer
+		buildRoot, buildCleanup := scafctl.Root(&scafctl.RootOptions{
+			BinaryName: "mycli",
+			ConfigPath: cfgPath,
+			IOStreams:  &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &buildOut, ErrOut: &buildErrBuf},
+		})
+		buildRoot.SetArgs([]string{
+			"build", "plugin", "--force",
+			"--name", "entra",
+			"--kind", "auth-handler",
+			"--version", "0.4.1",
+			"--platform", runtime.GOOS + "/" + runtime.GOARCH + "=" + pluginBin,
+		})
+		require.NoError(t, buildRoot.Execute(), "build plugin stderr: %s", buildErrBuf.String())
+		buildCleanup()
+
+		// 2. First login resolves entra@0.4.1 via the catalog fallback resolver
+		// (caching it in XDG_CACHE_HOME/mycli/plugins/) WITHOUT AuthPluginDirs.
+		var out1, err1 bytes.Buffer
+		loginRoot1, loginCleanup1 := scafctl.Root(&scafctl.RootOptions{
+			BinaryName: "mycli",
+			ConfigPath: cfgPath,
+			IOStreams:  &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &out1, ErrOut: &err1},
+			AuthPageRenderer: func(_ context.Context, d authpage.Data) ([]byte, error) {
+				return []byte("<!doctype html><html><body>CATALOG-FALLBACK:" + d.BinaryName + ":" + string(d.State) + "</body></html>"), nil
+			},
+		})
+		loginRoot1.SetArgs([]string{"auth", "login", "entra", "--flow", "interactive", "--timeout", "15s", "--force"})
+		require.NoError(t, loginRoot1.Execute(), "catalog fallback login stderr: %s", err1.String())
+		loginCleanup1()
+
+		html1, hdr1 := readCapturedBrowser(t)
+		assert.Contains(t, hdr1, "STATUS:200")
+		assert.Equal(t, "<!doctype html><html><body>CATALOG-FALLBACK:mycli:success</body></html>", html1)
+
+		// 3. Second login hits the now-cached LazyAuthHandlerWrapper path (+ --tenant ApplyOverrides).
+		var out2, err2 bytes.Buffer
+		loginRoot2, loginCleanup2 := scafctl.Root(&scafctl.RootOptions{
+			BinaryName: "mycli",
+			ConfigPath: cfgPath,
+			IOStreams:  &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &out2, ErrOut: &err2},
+			AuthPageRenderer: func(_ context.Context, d authpage.Data) ([]byte, error) {
+				return []byte("<!doctype html><html><body>CACHED-LAZY:" + d.BinaryName + ":" + string(d.State) + "</body></html>"), nil
+			},
+		})
+		defer loginCleanup2()
+		loginRoot2.SetArgs([]string{"auth", "login", "entra", "--flow", "interactive", "--tenant", "override-tenant", "--timeout", "15s", "--force"})
+		require.NoError(t, loginRoot2.Execute(), "cached lazy login stderr: %s", err2.String())
+
+		html2, hdr2 := readCapturedBrowser(t)
+		assert.Contains(t, hdr2, "STATUS:200")
+		assert.Equal(t, "<!doctype html><html><body>CACHED-LAZY:mycli:success</body></html>", html2)
+	})
 }

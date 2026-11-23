@@ -11,12 +11,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAuthHandlerSecretScopeWiring fails if either auth-handler registration
-// path (the fetch fallback resolver and the cached-official lazy wrapper)
-// stops scoping host secret access to the handler's own namespace.
+// TestAuthHandlerSecretScopeWiring fails if either CLI helper for auth-handler
+// option composition (the fetch fallback resolver and the cached-official lazy
+// wrapper) stops scoping host secret access to the handler's own namespace.
+// Directory-loaded plugins delegate directly to
+// plugin.RegisterScopedAuthHandlerPlugins, tested in pkg/plugin.
 func TestAuthHandlerSecretScopeWiring(t *testing.T) {
 	t.Parallel()
-	deps := &plugin.HostServiceDeps{}
+	deps := &plugin.HostServiceDeps{
+		PromptBroker: &plugin.AuthPromptBroker{},
+	}
 	base := []plugin.ClientOption{plugin.WithHostDeps(deps)}
 
 	// Fallback resolver path.

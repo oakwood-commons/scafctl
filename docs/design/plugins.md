@@ -265,6 +265,10 @@ Called once after auth handler plugin load, using the same configuration model a
 - `protocol_version` -- the host's plugin protocol version for feature detection
 - `host_capabilities` -- optional host features advertised at configure time
   (see below)
+- `auth_callback_pages` -- optional pre-rendered browser OAuth callback HTML
+  documents (`success_html` and `failure_html`, each capped at 256 KiB) for
+  deferred-completion interactive logins (see
+  [Custom Browser Authentication Pages](auth-callback-pages.md))
 
 The response includes a `protocol_version` field and optional `diagnostics` (repeated `Diagnostic` messages) for structured warning/error reporting.
 

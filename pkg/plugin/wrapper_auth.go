@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -93,17 +95,18 @@ type AuthHandlerWrapper struct {
 	// trust domains.
 	requireTrustedDomains bool
 	startupLatency        time.Duration
-	hostCfg               hostConfig // host-level config (Quiet, NoColor, BinaryName)
+	hostCfg               hostConfig // host-level config preserved across ApplyOverrides
 	mu                    sync.RWMutex
 }
 
 // hostConfig stores host-level ProviderConfig fields so ApplyOverrides
 // can reconstruct a full config without zeroing them.
 type hostConfig struct {
-	Quiet      bool
-	NoColor    bool
-	BinaryName string
-	Profile    string
+	Quiet             bool
+	NoColor           bool
+	BinaryName        string
+	Profile           string
+	AuthCallbackPages *AuthCallbackPages
 }
 
 // NewAuthHandlerWrapper creates a new wrapper for a plugin auth handler.
@@ -391,14 +394,16 @@ func (w *AuthHandlerWrapper) ApplyOverrides(ctx context.Context, overrides map[s
 	}
 
 	// Reconstruct the ProviderConfig with the override settings merged.
-	// Preserve host-level fields (Quiet, NoColor, BinaryName) from initial config.
+	// Preserve host-level fields (Quiet, NoColor, BinaryName, Profile, AuthCallbackPages) from initial config.
+	hc := w.getHostConfig()
 	cfg := ProviderConfig{
-		Quiet:         w.hostCfg.Quiet,
-		NoColor:       w.hostCfg.NoColor,
-		BinaryName:    w.hostCfg.BinaryName,
-		Profile:       w.hostCfg.Profile,
-		Settings:      map[string]json.RawMessage{w.handlerName: settingsJSON},
-		HostServiceID: w.client.HostServiceID(),
+		Quiet:             hc.Quiet,
+		NoColor:           hc.NoColor,
+		BinaryName:        hc.BinaryName,
+		Profile:           hc.Profile,
+		AuthCallbackPages: hc.AuthCallbackPages,
+		Settings:          map[string]json.RawMessage{w.handlerName: settingsJSON},
+		HostServiceID:     w.client.HostServiceID(),
 	}
 
 	// Inject base settings from app config first, then overlay overrides.
@@ -442,6 +447,18 @@ func (w *AuthHandlerWrapper) SetStartupLatency(d time.Duration) {
 	w.startupLatency = d
 }
 
+func (w *AuthHandlerWrapper) setHostConfig(hc hostConfig) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.hostCfg = hc
+}
+
+func (w *AuthHandlerWrapper) getHostConfig() hostConfig {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.hostCfg
+}
+
 // configureAndRegisterAuthHandlers configures each handler with host-side
 // settings (when cfg is non-nil) and registers it in the auth registry.
 // It also sets trusted verification domains on each wrapper from the official
@@ -476,6 +493,16 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 		// wrapper and fail closed on device-code verification when none resolve.
 		applyTrustedDomains(wrapper, info.Name, officialReg, cfgDomains, handlerCfgs[info.Name].TrustedVerificationDomains)
 
+		if cfg != nil {
+			wrapper.setHostConfig(hostConfig{
+				Quiet:             cfg.Quiet,
+				NoColor:           cfg.NoColor,
+				BinaryName:        cfg.BinaryName,
+				Profile:           cfg.Profile,
+				AuthCallbackPages: cfg.AuthCallbackPages,
+			})
+		}
+
 		if err := registry.Register(wrapper); err != nil {
 			lgr.V(1).Info("failed to register auth handler", "handler", info.Name, "error", err)
 			continue
@@ -494,12 +521,6 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 				lgr.Info("failed to configure auth handler plugin",
 					"handler", info.Name,
 					"error", cfgErr)
-			}
-			wrapper.hostCfg = hostConfig{
-				Quiet:      cfg.Quiet,
-				NoColor:    cfg.NoColor,
-				BinaryName: cfg.BinaryName,
-				Profile:    cfg.Profile,
 			}
 		}
 	}
@@ -617,31 +638,90 @@ func injectAuthHandlerSettings(ctx context.Context, handlerName string, cfg *Pro
 	cfg.Settings[handlerName] = raw
 }
 
-// RegisterAuthHandlerPlugins discovers auth handler plugins and registers them
-// with the auth registry. Returns the created clients (caller should Kill() them
-// on cleanup).
+// RegisterAuthHandlerPlugins discovers auth handler plugins in pluginDirs,
+// validates each advertised handler name, and registers an isolated per-handler
+// client scoped via WithSecretScope(name) with the auth registry. Returns the
+// created clients (caller should Kill() them on cleanup).
 func RegisterAuthHandlerPlugins(ctx context.Context, registry *auth.Registry, pluginDirs []string, cfg *ProviderConfig, clientOpts ...ClientOption) ([]*AuthHandlerClient, error) {
-	clients, err := DiscoverAuthHandlers(pluginDirs, clientOpts...)
+	var cfgFn func() *ProviderConfig
+	if cfg != nil {
+		cfgFn = func() *ProviderConfig { return cfg }
+	}
+	return RegisterScopedAuthHandlerPlugins(ctx, registry, pluginDirs, cfgFn, clientOpts...)
+}
+
+// probeDiscoveryClientOpts forwards caller transport/isolation options (such as
+// WithSanitizedEnv, WithStartTimeout, and WithGRPCMaxMessageSize) to discovery
+// probes while appending WithHostDeps(nil) last so HostService stays disabled
+// until handler names have been validated and scoped.
+func probeDiscoveryClientOpts(baseClientOpts []ClientOption) []ClientOption {
+	return slices.Concat(baseClientOpts, []ClientOption{WithHostDeps(nil)})
+}
+
+// RegisterScopedAuthHandlerPlugins discovers auth handler binaries in
+// pluginDirs without exposing HostService, validates each advertised handler
+// name as a single dot-free namespace segment, and starts an isolated client
+// per new handler scoped via WithSecretScope(name). cfgFn, when non-nil, is
+// evaluated only when at least one valid new handler is about to be registered.
+func RegisterScopedAuthHandlerPlugins(
+	ctx context.Context,
+	registry *auth.Registry,
+	pluginDirs []string,
+	cfgFn func() *ProviderConfig,
+	baseClientOpts ...ClientOption,
+) ([]*AuthHandlerClient, error) {
+	probeClients, err := DiscoverAuthHandlers(pluginDirs, probeDiscoveryClientOpts(baseClientOpts)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover auth handler plugins: %w", err)
 	}
+	defer func() {
+		for _, p := range probeClients {
+			p.Kill()
+		}
+	}()
 
+	lgr := logger.FromContext(ctx)
 	var allClients []*AuthHandlerClient
+	var errs []error
 
-	for _, client := range clients {
-		handlers, err := client.GetAuthHandlers(ctx)
-		if err != nil {
-			client.Kill()
+	for _, probe := range probeClients {
+		binPath := probe.Path()
+		handlers, hErr := probe.GetAuthHandlers(ctx)
+		probe.Kill()
+		if hErr != nil {
 			continue
 		}
 
-		registered := configureAndRegisterAuthHandlers(ctx, registry, client, handlers, cfg)
-		propagateStartupLatency(ctx, registry, client, registered)
+		for _, info := range handlers {
+			if registry.Has(info.Name) {
+				lgr.V(1).Info("skipping auth handler: name already registered", "handler", info.Name)
+				continue
+			}
+			if !validSecretScopeName(info.Name) {
+				errs = append(errs, fmt.Errorf("auth handler plugin %s advertised invalid handler name %q", binPath, info.Name))
+				continue
+			}
 
-		allClients = append(allClients, client)
+			var cfg *ProviderConfig
+			if cfgFn != nil {
+				cfg = cfgFn()
+			}
+			scopedOpts := slices.Concat(baseClientOpts, []ClientOption{WithSecretScope(info.Name)})
+			results := []FetchResult{{
+				Name: info.Name,
+				Kind: solution.PluginKindAuthHandler,
+				Path: binPath,
+			}}
+			clients, regErr := RegisterFetchedAuthHandlerPluginsNamed(ctx, registry, results, cfg, info.Name, scopedOpts...)
+			if regErr != nil {
+				errs = append(errs, regErr)
+				continue
+			}
+			allClients = append(allClients, clients...)
+		}
 	}
 
-	return allClients, nil
+	return allClients, errors.Join(errs...)
 }
 
 // KillAllAuthHandlers terminates all auth handler plugin processes in the given client list.
