@@ -155,6 +155,7 @@ Use these in your implementations for consistent error handling:
 | `auth.ErrTimeout` | Flow timed out |
 | `auth.ErrAlreadyAuthenticated` | Already logged in (if handler forbids re-login) |
 | `auth.ErrCapabilityNotSupported` | Feature not supported |
+| `auth.ErrGroupsNotSupported` | Group membership queries (`GroupsProvider`) not supported |
 
 ## Quick Start: Minimal Builtin Auth Handler
 
@@ -694,7 +695,17 @@ type AuthHandlerPlugin interface {
 ```
 
 > [!TIP]
-> **Multi-profile settings (`scafctl-plugin-sdk v0.19.0+`)**: On every `Login`, `GetStatus`, `GetToken`, and `DetectAvailableFlows` RPC, the host injects the target profile (`auth.ProfileFromContext(ctx)`) and the resolved per-profile handler settings (`plugin.RequestSettingsFromContext(ctx)`, also exposed as `req.Settings` on `Login`, `GetStatus`, and `GetToken`). Prefer reading `RequestSettingsFromContext(ctx)` per request so concurrent multi-profile token and status calls remain stateless; the host also re-sends `ConfigureAuthHandler` when the target profile changes for backward compatibility with stateful plugins.
+> **Multi-profile settings (`scafctl-plugin-sdk v0.19.0+`)**: On every `Login`, `GetStatus`, `GetToken`, `DetectAvailableFlows`, and `GetGroups` RPC, the host injects the target profile (`auth.ProfileFromContext(ctx)`) and the resolved per-profile handler settings (`plugin.RequestSettingsFromContext(ctx)`, also exposed as `req.Settings` on `Login`, `GetStatus`, and `GetToken`). Prefer reading `RequestSettingsFromContext(ctx)` per request so concurrent multi-profile token, status, and group calls remain stateless; the host also re-sends `ConfigureAuthHandler` when the target profile changes for backward compatibility with stateful plugins.
+
+Plugin auth handlers that resolve group memberships (for example when OIDC tokens omit `groups` due to claim overage) can optionally implement `plugin.AuthGroupsProvider`:
+
+```go
+type AuthGroupsProvider interface {
+    GetGroups(ctx context.Context, handlerName string) ([]string, error)
+}
+```
+
+When implemented, `scafctl` invokes the `AuthHandlerService.GetGroups` RPC (forwarding the resolved profile via `auth.ProfileFromContext(ctx)` and per-profile handler settings via `plugin.RequestSettingsFromContext(ctx)`) for `scafctl auth token <handler> --decode` overage tokens and `HostService.GetAuthGroups` provider callbacks. Plugins that do not implement `AuthGroupsProvider` (including older plugin binaries) return gRPC `Unimplemented`, which the host maps to `auth.ErrGroupsNotSupported`.
 
 ### Quick Start
 

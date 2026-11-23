@@ -72,6 +72,28 @@ func TestErrorHelpers(t *testing.T) {
 	assert.True(t, IsInvalidScope(ErrInvalidScope))
 	assert.True(t, IsInvalidScope(fmt.Errorf("scope: %w", ErrInvalidScope)))
 	assert.False(t, IsInvalidScope(ErrConsentRequired))
+
+	assert.True(t, IsGroupsNotSupported(ErrGroupsNotSupported))
+	assert.True(t, IsGroupsNotSupported(NewGroupsNotSupportedError("github")))
+	assert.True(t, IsGroupsNotSupported(fmt.Errorf("wrapped: %w", NewGroupsNotSupportedError("github"))))
+	assert.False(t, IsGroupsNotSupported(ErrCapabilityNotSupported))
+}
+
+func TestGroupsNotSupportedError(t *testing.T) {
+	named := NewGroupsNotSupportedError("github")
+	assert.Equal(t, `auth handler "github" does not support group membership queries (GroupsProvider not implemented)`, named.Error())
+	assert.ErrorIs(t, named, ErrGroupsNotSupported)
+
+	var target *GroupsNotSupportedError
+	assert.ErrorAs(t, named, &target)
+	assert.Equal(t, "github", target.Handler)
+
+	unnamed := NewGroupsNotSupportedError("")
+	assert.Equal(t, ErrGroupsNotSupported.Error(), unnamed.Error())
+	assert.ErrorIs(t, unnamed, ErrGroupsNotSupported)
+
+	var nilTarget *GroupsNotSupportedError
+	assert.Equal(t, ErrGroupsNotSupported.Error(), nilTarget.Error())
 }
 
 func TestClaimsChallengeError(t *testing.T) {

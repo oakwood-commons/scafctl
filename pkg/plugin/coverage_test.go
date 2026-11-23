@@ -154,6 +154,7 @@ type mockHostServiceClient struct {
 	getAuthTokenErr      error
 	getAuthGroupsResp    *proto.GetAuthGroupsResponse
 	getAuthGroupsErr     error
+	lastGetAuthGroupsReq *proto.GetAuthGroupsRequest
 }
 
 func (m *mockHostServiceClient) GetSecret(_ context.Context, _ *proto.GetSecretRequest, _ ...grpc.CallOption) (*proto.GetSecretResponse, error) {
@@ -184,7 +185,8 @@ func (m *mockHostServiceClient) GetAuthToken(_ context.Context, _ *proto.GetAuth
 	return m.getAuthTokenResp, m.getAuthTokenErr
 }
 
-func (m *mockHostServiceClient) GetAuthGroups(_ context.Context, _ *proto.GetAuthGroupsRequest, _ ...grpc.CallOption) (*proto.GetAuthGroupsResponse, error) {
+func (m *mockHostServiceClient) GetAuthGroups(_ context.Context, req *proto.GetAuthGroupsRequest, _ ...grpc.CallOption) (*proto.GetAuthGroupsResponse, error) {
+	m.lastGetAuthGroupsReq = req
 	return m.getAuthGroupsResp, m.getAuthGroupsErr
 }
 

@@ -4,6 +4,8 @@
 package auth
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -12,8 +14,10 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -632,4 +636,245 @@ func TestCommandToken_ExpressionBeatsExecInfo(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "entra")
 	assert.NotContains(t, output, "ExecCredential")
+}
+
+func buildTestJWT(t *testing.T, payload map[string]any) string {
+	t.Helper()
+	headerBytes, err := json.Marshal(map[string]any{"alg": "RS256", "typ": "JWT"})
+	require.NoError(t, err)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return base64.RawURLEncoding.EncodeToString(headerBytes) + "." +
+		base64.RawURLEncoding.EncodeToString(payloadBytes) + ".sig"
+}
+
+func TestCommandToken_DecodeGroupsOverage(t *testing.T) {
+	overageJWT := buildTestJWT(t, map[string]any{
+		"sub":          "user-123",
+		"_claim_names": map[string]any{"groups": "src1"},
+		"_claim_sources": map[string]any{
+			"src1": map[string]any{"endpoint": "https://graph.windows.net/tenant/users/user-123/getMemberObjects"},
+		},
+	})
+
+	t.Run("resolves groups via GroupsProvider and keeps stdout JSON clean", func(t *testing.T) {
+		var outBuf, errBuf bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		cliParams.BinaryName = "mycli"
+		ioStreams := terminal.NewIOStreams(nil, &outBuf, &errBuf, false)
+		w := writer.New(ioStreams, cliParams)
+
+		mock := auth.NewMockGroupsHandler("entra")
+		mock.CapabilitiesValue = []auth.Capability{
+			auth.CapScopesOnLogin,
+			auth.CapScopesOnTokenRequest,
+		}
+		mock.GroupsResult = []string{"00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"}
+		mock.SetToken(&auth.Token{
+			AccessToken: overageJWT,
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+			Scope:       "https://graph.microsoft.com/.default",
+		})
+
+		ctx := writer.WithWriter(t.Context(), w)
+		ctx = withTestHandler(ctx, mock)
+
+		cmd := CommandToken(cliParams, ioStreams, "mycli/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"entra", "--scope", "https://graph.microsoft.com/.default", "--profile", "work", "--decode", "-o", "json"})
+
+		require.NoError(t, cmd.Execute())
+		assert.Equal(t, 1, mock.GetGroupsCalls)
+		assert.Equal(t, "work", mock.LastContextProfile)
+		assert.Contains(t, errBuf.String(), "Groups overage detected")
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &decoded), "stdout must be valid uncorrupted JSON")
+		payload, ok := decoded["payload"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, true, payload["groups_overage"])
+		assert.Equal(t, []any{"00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"}, payload["groups_resolved"])
+		assert.Equal(t, float64(2), payload["groups_resolved_count"])
+		assert.NotContains(t, payload, "groups_resolved_error")
+	})
+
+	t.Run("older plugin returning ErrGroupsNotSupported populates canonical groups_resolved_error", func(t *testing.T) {
+		var outBuf, errBuf bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		ioStreams := terminal.NewIOStreams(nil, &outBuf, &errBuf, false)
+		w := writer.New(ioStreams, cliParams)
+
+		mock := auth.NewMockGroupsHandler("entra")
+		mock.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
+		mock.GroupsErr = auth.NewGroupsNotSupportedError("entra")
+		mock.SetToken(&auth.Token{
+			AccessToken: overageJWT,
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+			Scope:       "https://graph.microsoft.com/.default",
+		})
+
+		ctx := writer.WithWriter(t.Context(), w)
+		ctx = withTestHandler(ctx, mock)
+
+		cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"entra", "--scope", "https://graph.microsoft.com/.default", "--decode", "-o", "json"})
+
+		require.NoError(t, cmd.Execute())
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &decoded))
+		payload := decoded["payload"].(map[string]any)
+		assert.Equal(t, true, payload["groups_overage"])
+		assert.Equal(t, "handler does not support group membership queries (GroupsProvider not implemented)", payload["groups_resolved_error"])
+		assert.NotContains(t, payload, "groups_resolved")
+	})
+
+	t.Run("handler not implementing GroupsProvider populates canonical groups_resolved_error", func(t *testing.T) {
+		var outBuf, errBuf bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		ioStreams := terminal.NewIOStreams(nil, &outBuf, &errBuf, false)
+		w := writer.New(ioStreams, cliParams)
+
+		mock := newEntraMock()
+		mock.SetToken(&auth.Token{
+			AccessToken: overageJWT,
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+			Scope:       "https://graph.microsoft.com/.default",
+		})
+
+		ctx := writer.WithWriter(t.Context(), w)
+		ctx = withTestHandler(ctx, mock)
+
+		cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"entra", "--scope", "https://graph.microsoft.com/.default", "--decode", "-o", "json"})
+
+		require.NoError(t, cmd.Execute())
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &decoded))
+		payload := decoded["payload"].(map[string]any)
+		assert.Equal(t, true, payload["groups_overage"])
+		assert.Equal(t, "handler does not support group membership queries (GroupsProvider not implemented)", payload["groups_resolved_error"])
+	})
+
+	t.Run("handler returning Graph or flow error surfaces message in groups_resolved_error", func(t *testing.T) {
+		var outBuf, errBuf bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		ioStreams := terminal.NewIOStreams(nil, &outBuf, &errBuf, false)
+		w := writer.New(ioStreams, cliParams)
+
+		mock := auth.NewMockGroupsHandler("entra")
+		mock.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
+		mock.GroupsErr = errors.New("group membership queries are not supported for service principal flows")
+		mock.SetToken(&auth.Token{
+			AccessToken: overageJWT,
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+			Scope:       "https://graph.microsoft.com/.default",
+		})
+
+		ctx := writer.WithWriter(t.Context(), w)
+		ctx = withTestHandler(ctx, mock)
+
+		cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"entra", "--scope", "https://graph.microsoft.com/.default", "--decode", "-o", "json"})
+
+		require.NoError(t, cmd.Execute())
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &decoded))
+		payload := decoded["payload"].(map[string]any)
+		assert.Equal(t, "group membership queries are not supported for service principal flows", payload["groups_resolved_error"])
+	})
+
+	t.Run("non-overage JWT does not invoke GetGroups", func(t *testing.T) {
+		var outBuf, errBuf bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		ioStreams := terminal.NewIOStreams(nil, &outBuf, &errBuf, false)
+		w := writer.New(ioStreams, cliParams)
+
+		inlineJWT := buildTestJWT(t, map[string]any{
+			"sub":    "user-123",
+			"groups": []string{"inline-grp"},
+		})
+
+		mock := auth.NewMockGroupsHandler("entra")
+		mock.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
+		mock.SetToken(&auth.Token{
+			AccessToken: inlineJWT,
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+			Scope:       "https://graph.microsoft.com/.default",
+		})
+
+		ctx := writer.WithWriter(t.Context(), w)
+		ctx = withTestHandler(ctx, mock)
+
+		cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"entra", "--scope", "https://graph.microsoft.com/.default", "--decode", "-o", "json"})
+
+		require.NoError(t, cmd.Execute())
+		assert.Equal(t, 0, mock.GetGroupsCalls)
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &decoded))
+		payload := decoded["payload"].(map[string]any)
+		assert.NotContains(t, payload, "groups_overage")
+		assert.Equal(t, []any{"inline-grp"}, payload["groups"])
+	})
+
+	t.Run("nil slice from GroupsProvider normalizes to empty JSON array", func(t *testing.T) {
+		var outBuf, errBuf bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		ioStreams := terminal.NewIOStreams(nil, &outBuf, &errBuf, false)
+		w := writer.New(ioStreams, cliParams)
+
+		mock := auth.NewMockGroupsHandler("entra")
+		mock.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
+		mock.GroupsResult = nil
+		mock.SetToken(&auth.Token{
+			AccessToken: overageJWT,
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+			Scope:       "https://graph.microsoft.com/.default",
+		})
+
+		ctx := writer.WithWriter(t.Context(), w)
+		ctx = withTestHandler(ctx, mock)
+
+		cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"entra", "--scope", "https://graph.microsoft.com/.default", "--decode", "-o", "json"})
+
+		require.NoError(t, cmd.Execute())
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &decoded))
+		payload := decoded["payload"].(map[string]any)
+		assert.Equal(t, []any{}, payload["groups_resolved"])
+		assert.Equal(t, float64(0), payload["groups_resolved_count"])
+	})
+
+	t.Run("plugin wrappers satisfy auth.GroupsProvider for token decode path", func(t *testing.T) {
+		var (
+			_ auth.GroupsProvider = (*plugin.AuthHandlerWrapper)(nil)
+			_ auth.GroupsProvider = (*plugin.LazyAuthHandlerWrapper)(nil)
+		)
+		wrapper := plugin.NewAuthHandlerWrapper(nil, plugin.AuthHandlerInfo{Name: "entra"})
+		_, ok := any(wrapper).(auth.GroupsProvider)
+		assert.True(t, ok)
+	})
 }

@@ -59,6 +59,10 @@ type FlowAvailability = sdkplugin.FlowAvailability
 // AuthHandlerPlugin is the interface that auth handler plugins must implement.
 type AuthHandlerPlugin = sdkplugin.AuthHandlerPlugin
 
+// AuthGroupsProvider is an optional interface that AuthHandlerPlugin
+// implementations may satisfy to resolve group memberships.
+type AuthGroupsProvider = sdkplugin.AuthGroupsProvider
+
 // HandshakeConfigData contains the handshake configuration.
 type HandshakeConfigData = sdkplugin.HandshakeConfigData
 

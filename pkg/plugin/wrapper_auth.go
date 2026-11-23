@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -36,11 +37,12 @@ var authTracer = telemetry.Tracer(telemetry.TracerPlugin + "/auth")
 
 // Compile-time interface checks.
 var (
-	_ auth.Handler      = (*AuthHandlerWrapper)(nil)
-	_ auth.TokenLister  = (*AuthHandlerWrapper)(nil)
-	_ auth.TokenPurger  = (*AuthHandlerWrapper)(nil)
-	_ auth.FlowDetector = (*AuthHandlerWrapper)(nil)
-	_ auth.Configurer   = (*AuthHandlerWrapper)(nil)
+	_ auth.Handler        = (*AuthHandlerWrapper)(nil)
+	_ auth.TokenLister    = (*AuthHandlerWrapper)(nil)
+	_ auth.TokenPurger    = (*AuthHandlerWrapper)(nil)
+	_ auth.FlowDetector   = (*AuthHandlerWrapper)(nil)
+	_ auth.Configurer     = (*AuthHandlerWrapper)(nil)
+	_ auth.GroupsProvider = (*AuthHandlerWrapper)(nil)
 )
 
 // defaultPreflightFlowDetectTimeout bounds the advisory DetectAvailableFlows
@@ -91,8 +93,9 @@ func hostInTrustedDomains(rawURL string, trusted []string) bool {
 	return false
 }
 
-// AuthHandlerWrapper wraps a plugin auth handler to implement the auth.Handler
-// (and optionally auth.TokenLister / auth.TokenPurger) interfaces.
+// AuthHandlerWrapper wraps a plugin auth handler to implement auth.Handler
+// along with optional interfaces (TokenLister, TokenPurger, FlowDetector,
+// Configurer, GroupsProvider).
 type AuthHandlerWrapper struct {
 	client         *AuthHandlerClient
 	handlerName    string
@@ -445,6 +448,38 @@ func (w *AuthHandlerWrapper) DetectAvailableFlows(ctx context.Context) ([]auth.F
 	return w.client.plugin.DetectAvailableFlows(ctx, w.handlerName)
 }
 
+// GetGroups implements auth.GroupsProvider.
+// It resolves the active profile and per-profile handler settings on the host
+// side before invoking the plugin's GetGroups RPC, returning an error wrapping
+// auth.ErrGroupsNotSupported when the plugin does not implement group queries.
+func (w *AuthHandlerWrapper) GetGroups(ctx context.Context) ([]string, error) {
+	ctx, span := authTracer.Start(ctx, "auth.plugin.get_groups",
+		trace.WithAttributes(attribute.String("auth.handler", w.handlerName)))
+	defer span.End()
+
+	if w.client == nil {
+		return nil, fmt.Errorf("plugin auth handler %s get-groups: client is not initialized", w.handlerName)
+	}
+
+	ctx, _, release, err := w.beginCall(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("plugin auth handler %s get-groups: %w", w.handlerName, err)
+	}
+	defer release()
+
+	groups, err := w.client.GetGroups(ctx, w.handlerName)
+	if err != nil {
+		if auth.IsGroupsNotSupported(err) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("plugin auth handler %s get-groups: %w", w.handlerName, err)
+	}
+	if groups == nil {
+		return []string{}, nil
+	}
+	return groups, nil
+}
+
 // ApplyOverrides implements auth.Configurer.
 // It merges the provided key-value overrides into the handler's current
 // plugin configuration and re-sends ConfigureAuthHandler to the plugin process.
@@ -490,7 +525,12 @@ func (w *AuthHandlerWrapper) ApplyOverrides(ctx context.Context, overrides map[s
 		w.overrides = make(map[string]map[string]string)
 	}
 	prevProfileOverrides, hadPrev := w.overrides[profile]
-	w.overrides[profile] = maps.Clone(filtered)
+	combinedOverrides := maps.Clone(prevProfileOverrides)
+	if combinedOverrides == nil {
+		combinedOverrides = make(map[string]string, len(filtered))
+	}
+	maps.Copy(combinedOverrides, filtered)
+	w.overrides[profile] = combinedOverrides
 
 	rawForConfigure, _, _, err := w.resolveHandlerSettingsLocked(ctx, hc, profile)
 	if err != nil {
@@ -501,10 +541,11 @@ func (w *AuthHandlerWrapper) ApplyOverrides(ctx context.Context, overrides map[s
 		return err
 	}
 	if w.client == nil || w.client.plugin == nil {
+		restoreProfileOverrides(w.overrides, profile, prevProfileOverrides, hadPrev)
 		w.reconfiguring = false
 		w.broadcastLocked()
 		w.configMu.Unlock()
-		return nil
+		return fmt.Errorf("plugin auth handler %s apply-overrides: client is not initialized", w.handlerName)
 	}
 
 	cfg := w.buildProviderConfig(hc, profile, rawForConfigure)
@@ -544,11 +585,12 @@ func (w *AuthHandlerWrapper) resolveEffectiveProfile(ctx context.Context) (conte
 		normalized := auth.NormalizeProfileName(raw)
 		if normalized != "" {
 			if err := auth.ValidateProfileName(normalized); err != nil {
-				return ctx, "", err
+				return ctx, "", fmt.Errorf("invalid profile: %w", err)
 			}
 		}
 		ctx = auth.WithProfile(ctx, normalized)
 		ctx = auth.WithProfileResolved(ctx)
+		ctx = sdkauth.WithProfile(ctx, normalized)
 		return ctx, normalized, nil
 	}
 
@@ -557,6 +599,9 @@ func (w *AuthHandlerWrapper) resolveEffectiveProfile(ctx context.Context) (conte
 	}
 	if auth.IsProfileResolved(ctx) {
 		return finalize(ctx, "")
+	}
+	if p := sdkauth.ProfileFromContext(ctx); p != "" {
+		return finalize(ctx, p)
 	}
 
 	hc := w.getHostConfig()
@@ -586,6 +631,10 @@ func (w *AuthHandlerWrapper) resolveEffectiveProfile(ctx context.Context) (conte
 // stateful plugin mid-RPC. Calls sharing the same profile and settings run
 // concurrently.
 func (w *AuthHandlerWrapper) beginCall(ctx context.Context) (context.Context, map[string]json.RawMessage, func(), error) {
+	if w.client == nil || w.client.plugin == nil {
+		return ctx, nil, nil, fmt.Errorf("plugin auth handler %s: client is not initialized", w.handlerName)
+	}
+	callerSettings, hasCallerSettings := RequestSettingsFromContext(ctx)
 	ctx, profile, err := w.resolveEffectiveProfile(ctx)
 	if err != nil {
 		return ctx, nil, nil, err
@@ -598,6 +647,11 @@ func (w *AuthHandlerWrapper) beginCall(ctx context.Context) (context.Context, ma
 		return ctx, nil, nil, err
 	}
 
+	if hasCallerSettings {
+		cloned := cloneSettingsMap(callerSettings)
+		ctx = WithRequestSettings(ctx, cloned)
+		return ctx, cloned, release, nil
+	}
 	if perCallSettings != nil {
 		ctx = WithRequestSettings(ctx, cloneSettingsMap(perCallSettings))
 	}
@@ -859,38 +913,21 @@ func (w *AuthHandlerWrapper) resolveHandlerSettingsLocked(
 	}
 	hasConfigSource = fromAppCfg
 
-	if !hasConfigSource {
-		if staticRaw, ok := hc.BaseSettings[w.handlerName]; ok && len(staticRaw) > 0 {
-			hasConfigSource = true
-			baseRaw = bytes.Clone(staticRaw)
-		}
+	if staticRaw, ok := hc.BaseSettings[w.handlerName]; ok && !isNullOrEmptyJSON(staticRaw) {
+		hasConfigSource = true
+		baseRaw = mergeJSONSettings(staticRaw, baseRaw)
 	}
 
 	profileOverrides := w.overrides[profile]
 	if len(profileOverrides) > 0 {
 		hasConfigSource = true
-		var baseMap map[string]any
-		if len(baseRaw) > 0 {
-			if unmarshalErr := json.Unmarshal(baseRaw, &baseMap); unmarshalErr != nil {
-				return nil, nil, false, fmt.Errorf("unmarshaling base settings for handler %s: %w", w.handlerName, unmarshalErr)
-			}
-		}
-		if baseMap == nil {
-			baseMap = make(map[string]any, len(profileOverrides))
-		}
-		for k, v := range profileOverrides {
-			for ek := range baseMap {
-				if ek != k && strings.EqualFold(ek, k) {
-					delete(baseMap, ek)
-				}
-			}
-			baseMap[k] = v
-		}
-		merged, mergeErr := json.Marshal(baseMap)
+		merged, mergeErr := overlayStringMapJSON(baseRaw, profileOverrides)
 		if mergeErr != nil {
-			return nil, nil, false, fmt.Errorf("marshaling merged settings for handler %s: %w", w.handlerName, mergeErr)
+			return nil, nil, false, fmt.Errorf("merging settings for handler %s: %w", w.handlerName, mergeErr)
 		}
 		baseRaw = merged
+	} else if !hasConfigSource && len(w.overrides) > 0 {
+		hasConfigSource = true
 	}
 
 	if !hasConfigSource {
@@ -1023,6 +1060,7 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 		// wrapper and fail closed on device-code verification when none resolve.
 		applyTrustedDomains(wrapper, info.Name, officialReg, cfgDomains, handlerCfgs[info.Name].TrustedVerificationDomains)
 
+		appCfg := config.FromContext(ctx)
 		if cfg != nil {
 			wrapper.setHostConfig(hostConfig{
 				Quiet:             cfg.Quiet,
@@ -1030,7 +1068,7 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 				BinaryName:        cfg.BinaryName,
 				Profile:           cfg.Profile,
 				GlobalProfile:     auth.GlobalProfileFromContext(ctx),
-				AppConfig:         config.FromContext(ctx),
+				AppConfig:         appCfg,
 				AuthCallbackPages: cfg.AuthCallbackPages,
 				BaseSettings:      cloneSettingsMap(cfg.Settings),
 			})
@@ -1040,6 +1078,11 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 			wrapper.configMu.Lock()
 			wrapper.reconfiguring = true
 			wrapper.configMu.Unlock()
+		} else if appCfg != nil || auth.GlobalProfileFromContext(ctx) != "" {
+			wrapper.setHostConfig(hostConfig{
+				GlobalProfile: auth.GlobalProfileFromContext(ctx),
+				AppConfig:     appCfg,
+			})
 		}
 
 		if err := registry.Register(wrapper); err != nil {
@@ -1141,8 +1184,7 @@ func applyTrustedDomains(wrapper *AuthHandlerWrapper, handlerName string, offici
 // top-level config), and serializes the result into cfg.Settings[handlerName]
 // so the plugin can apply host-side overrides (clientId, hostname, scopes, etc.).
 func injectAuthHandlerSettings(ctx context.Context, handlerName string, cfg *ProviderConfig) {
-	appCfg := config.FromContext(ctx)
-	if appCfg == nil {
+	if config.FromContext(ctx) == nil {
 		return
 	}
 
@@ -1157,7 +1199,75 @@ func injectAuthHandlerSettings(ctx context.Context, handlerName string, cfg *Pro
 	if cfg.Settings == nil {
 		cfg.Settings = make(map[string]json.RawMessage)
 	}
-	cfg.Settings[handlerName] = raw
+	cfg.Settings[handlerName] = mergeJSONSettings(cfg.Settings[handlerName], raw)
+}
+
+func isNullOrEmptyJSON(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
+}
+
+func mergeJSONSettings(base, overlay json.RawMessage) json.RawMessage {
+	baseEmpty := isNullOrEmptyJSON(base)
+	overlayEmpty := isNullOrEmptyJSON(overlay)
+	if baseEmpty && overlayEmpty {
+		return nil
+	}
+	if baseEmpty {
+		return bytes.Clone(overlay)
+	}
+	if overlayEmpty {
+		return bytes.Clone(base)
+	}
+	var baseMap, overlayMap map[string]json.RawMessage
+	if err := json.Unmarshal(base, &baseMap); err != nil || baseMap == nil {
+		return bytes.Clone(overlay)
+	}
+	if err := json.Unmarshal(overlay, &overlayMap); err != nil || overlayMap == nil {
+		return bytes.Clone(base)
+	}
+	for k, v := range overlayMap {
+		for ek := range baseMap {
+			if ek != k && strings.EqualFold(ek, k) {
+				delete(baseMap, ek)
+			}
+		}
+		baseMap[k] = json.RawMessage(bytes.Clone(v))
+	}
+	merged, err := json.Marshal(baseMap)
+	if err != nil {
+		return bytes.Clone(overlay)
+	}
+	return merged
+}
+
+func overlayStringMapJSON(base json.RawMessage, overrides map[string]string) (json.RawMessage, error) {
+	baseMap := make(map[string]json.RawMessage, len(overrides))
+	if !isNullOrEmptyJSON(base) {
+		if err := json.Unmarshal(base, &baseMap); err != nil {
+			return nil, fmt.Errorf("unmarshaling base settings: %w", err)
+		}
+		if baseMap == nil {
+			baseMap = make(map[string]json.RawMessage, len(overrides))
+		}
+	}
+	for k, v := range overrides {
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling override %q: %w", k, err)
+		}
+		for ek := range baseMap {
+			if ek != k && strings.EqualFold(ek, k) {
+				delete(baseMap, ek)
+			}
+		}
+		baseMap[k] = encoded
+	}
+	merged, err := json.Marshal(baseMap)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling merged settings: %w", err)
+	}
+	return merged, nil
 }
 
 // marshalAppAuthHandlerSettings resolves and JSON-encodes the effective handler

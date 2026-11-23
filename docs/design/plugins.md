@@ -196,6 +196,9 @@ service AuthHandlerService {
   rpc ListCachedTokens(ListCachedTokensRequest) returns (ListCachedTokensResponse);
   rpc PurgeExpiredTokens(PurgeExpiredTokensRequest) returns (PurgeExpiredTokensResponse);
   rpc StopAuthHandler(StopAuthHandlerRequest) returns (StopAuthHandlerResponse);
+  rpc DetectAvailableFlows(DetectAvailableFlowsRequest) returns (DetectAvailableFlowsResponse);
+  rpc ActivateServerMode(ActivateServerModeRequest) returns (ActivateServerModeResponse);
+  rpc GetGroups(GetGroupsRequest) returns (GetGroupsResponse);
 }
 
 // HostService is a callback service that plugins can invoke on the host.
@@ -240,6 +243,7 @@ service HostService {
 | Token | `GetToken` | host -> plugin | On token request |
 | Token | `ListCachedTokens` | host -> plugin | On cache listing |
 | Token | `PurgeExpiredTokens` | host -> plugin | On cache cleanup |
+| Groups | `GetGroups` | host -> plugin | On group membership lookup (`auth token --decode`, `HostService.GetAuthGroups`) |
 | Shutdown | `StopAuthHandler` | host -> plugin | During cancellation or cleanup |
 | Callbacks | `HostService.*` | plugin -> host | Anytime during handler operations |
 
@@ -290,6 +294,10 @@ optional host features so handlers can rank login flows before the first
 
 Called during CLI shutdown or context cancellation to allow auth handler plugins to release resources gracefully. The RPC carries only the `handler_name`. If the plugin does not implement `StopAuthHandler` (older plugins), the host silently ignores the `Unimplemented` gRPC status.
 
+### GetGroups
+
+Called when the host resolves group memberships for an authenticated user (for example, `scafctl auth token <handler> --decode` when a JWT carries a `_claim_names.groups` overage, or `HostService.GetAuthGroups` callbacks from provider plugins). `GetGroupsRequest` carries `handler_name`, the resolved `profile`, and per-request JSON `settings` bytes for that profile so long-lived plugin processes stay profile-isolated without re-running `ConfigureAuthHandler`. Plugins that do not implement `plugin.AuthGroupsProvider` (including pre-v0.19.0 plugin binaries) return gRPC `Unimplemented`, which the host maps to `auth.ErrGroupsNotSupported`.
+
 ### HostService Callbacks
 
 Plugins that need host-side resources (secrets, auth tokens) use the `HostService` callback service. The host registers this service via the go-plugin GRPCBroker during plugin startup.
@@ -307,7 +315,8 @@ Plugins access HostService via a client injected during `ConfigureProvider`.
 
 `GetAuthGroups` returns the authenticated user's group memberships (as
 ObjectIDs) for the named handler, resolving an empty name to the default
-handler. Group membership is served by a separate paginated callback rather
+handler and forwarding `profile` (or resolving the host's active profile via
+`ProfileResolverFunc`). Group membership is served by a separate paginated callback rather
 than being folded into `GetAuthIdentity`'s `Claims`: Microsoft Entra emits a
 `_claim_names.groups` overage (instead of a `groups` claim) once a user belongs
 to more than 200 groups, so the full list must be fetched out of band. The

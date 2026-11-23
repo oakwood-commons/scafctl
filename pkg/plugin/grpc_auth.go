@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/go-plugin"
@@ -124,7 +125,9 @@ func withNormalizedProfile(ctx context.Context, profile string) (context.Context
 			return ctx, err
 		}
 	}
-	return auth.WithProfile(ctx, normalized), nil
+	ctx = auth.WithProfile(ctx, normalized)
+	ctx = sdkauth.WithProfile(ctx, normalized)
+	return ctx, nil
 }
 
 // decodeRequestSettings unmarshals per-RPC JSON handler settings from a proto
@@ -425,7 +428,51 @@ func (s *AuthHandlerGRPCServer) StopAuthHandler(ctx context.Context, req *proto.
 	return &proto.StopAuthHandlerResponse{}, nil
 }
 
+// GetGroups implements the GetGroups RPC.
+func (s *AuthHandlerGRPCServer) GetGroups(ctx context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+	ctx = extractIncomingLineageToContext(ctx)
+	gp, ok := s.Impl.(AuthGroupsProvider)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "auth handler plugin does not implement AuthGroupsProvider")
+	}
+	ctx, err := withNormalizedProfile(ctx, req.Profile)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
+	}
+	settings, err := decodeRequestSettings(req.Settings)
+	if err != nil {
+		//nolint:nilerr // Error is communicated via response, not gRPC error
+		return &proto.GetGroupsResponse{Error: err.Error()}, nil
+	}
+	ctx = WithRequestSettings(ctx, settings)
+	groups, err := gp.GetGroups(ctx, req.HandlerName)
+	if err != nil {
+		//nolint:nilerr // Error is communicated via response, not gRPC error
+		return &proto.GetGroupsResponse{Error: err.Error()}, nil
+	}
+	return &proto.GetGroupsResponse{Groups: groups}, nil
+}
+
+func profileFromContext(ctx context.Context) string {
+	if p := auth.ProfileFromContext(ctx); p != "" || auth.IsProfileResolved(ctx) {
+		return p
+	}
+	return sdkauth.ProfileFromContext(ctx)
+}
+
+func validatedProfileFromContext(ctx context.Context) (string, error) {
+	profile := auth.NormalizeProfileName(profileFromContext(ctx))
+	if profile != "" {
+		if err := auth.ValidateProfileName(profile); err != nil {
+			return "", fmt.Errorf("invalid profile: %w", err)
+		}
+	}
+	return profile, nil
+}
+
 // ---- gRPC Client (runs in the scafctl host process) ----
+
+var _ AuthGroupsProvider = (*AuthHandlerGRPCClient)(nil)
 
 // AuthHandlerGRPCClient implements AuthHandlerPlugin by calling the gRPC service.
 type AuthHandlerGRPCClient struct {
@@ -499,7 +546,7 @@ func (c *AuthHandlerGRPCClient) Login(ctx context.Context, handlerName string, r
 		Scopes:         req.Scopes,
 		Flow:           string(req.Flow),
 		TimeoutSeconds: int64(req.Timeout / time.Second),
-		Profile:        auth.ProfileFromContext(ctx),
+		Profile:        profileFromContext(ctx),
 		CallbackPort:   callbackPortToProto(req.CallbackPort),
 		Browser:        req.Browser,
 		Settings:       settingsBytes,
@@ -540,7 +587,7 @@ func (c *AuthHandlerGRPCClient) Login(ctx context.Context, handlerName string, r
 // Logout implements AuthHandlerPlugin.Logout.
 func (c *AuthHandlerGRPCClient) Logout(ctx context.Context, handlerName string, req LogoutRequest) error {
 	ctx = appendOutgoingLineageMetadata(ctx)
-	_, err := c.client.Logout(ctx, &proto.LogoutRequest{HandlerName: handlerName, Hostname: req.Hostname, Profile: auth.ProfileFromContext(ctx)})
+	_, err := c.client.Logout(ctx, &proto.LogoutRequest{HandlerName: handlerName, Hostname: req.Hostname, Profile: profileFromContext(ctx)})
 	return err
 }
 
@@ -554,7 +601,7 @@ func (c *AuthHandlerGRPCClient) GetStatus(ctx context.Context, handlerName strin
 	resp, err := c.client.GetStatus(ctx, &proto.GetStatusRequest{
 		HandlerName: handlerName,
 		Hostname:    req.Hostname,
-		Profile:     auth.ProfileFromContext(ctx),
+		Profile:     profileFromContext(ctx),
 		Settings:    settingsBytes,
 	})
 	if err != nil {
@@ -566,6 +613,10 @@ func (c *AuthHandlerGRPCClient) GetStatus(ctx context.Context, handlerName strin
 // GetToken implements AuthHandlerPlugin.GetToken.
 func (c *AuthHandlerGRPCClient) GetToken(ctx context.Context, handlerName string, req TokenRequest) (*TokenResponse, error) {
 	ctx = appendOutgoingLineageMetadata(ctx)
+	profile, err := validatedProfileFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	settingsBytes, err := encodeRequestSettings(ctx, req.Settings)
 	if err != nil {
 		return nil, err
@@ -575,7 +626,7 @@ func (c *AuthHandlerGRPCClient) GetToken(ctx context.Context, handlerName string
 		Scope:              req.Scope,
 		MinValidForSeconds: int64(req.MinValidFor / time.Second),
 		ForceRefresh:       req.ForceRefresh,
-		Profile:            auth.ProfileFromContext(ctx),
+		Profile:            profile,
 		Hostname:           req.Hostname,
 		ServerContext:      string(req.ServerContext),
 		Caller:             string(req.Caller),
@@ -591,7 +642,7 @@ func (c *AuthHandlerGRPCClient) GetToken(ctx context.Context, handlerName string
 // ListCachedTokens implements AuthHandlerPlugin.ListCachedTokens.
 func (c *AuthHandlerGRPCClient) ListCachedTokens(ctx context.Context, handlerName string) ([]*auth.CachedTokenInfo, error) {
 	ctx = appendOutgoingLineageMetadata(ctx)
-	resp, err := c.client.ListCachedTokens(ctx, &proto.ListCachedTokensRequest{HandlerName: handlerName, Profile: auth.ProfileFromContext(ctx)})
+	resp, err := c.client.ListCachedTokens(ctx, &proto.ListCachedTokensRequest{HandlerName: handlerName, Profile: profileFromContext(ctx)})
 	if err != nil {
 		return nil, err
 	}
@@ -605,7 +656,7 @@ func (c *AuthHandlerGRPCClient) ListCachedTokens(ctx context.Context, handlerNam
 // PurgeExpiredTokens implements AuthHandlerPlugin.PurgeExpiredTokens.
 func (c *AuthHandlerGRPCClient) PurgeExpiredTokens(ctx context.Context, handlerName string) (int, error) {
 	ctx = appendOutgoingLineageMetadata(ctx)
-	resp, err := c.client.PurgeExpiredTokens(ctx, &proto.PurgeExpiredTokensRequest{HandlerName: handlerName, Profile: auth.ProfileFromContext(ctx)})
+	resp, err := c.client.PurgeExpiredTokens(ctx, &proto.PurgeExpiredTokensRequest{HandlerName: handlerName, Profile: profileFromContext(ctx)})
 	if err != nil {
 		return 0, err
 	}
@@ -778,6 +829,50 @@ func (c *AuthHandlerGRPCClient) ActivateServerMode(ctx context.Context, settings
 		return fmt.Errorf("activate server mode failed: %s", resp.Error)
 	}
 	return nil
+}
+
+// GetGroups implements AuthGroupsProvider by invoking the GetGroups RPC with
+// the resolved profile and optional per-call JSON settings bytes from ctx.
+// Older plugins built before SDK v0.19.0 and handlers that do not implement
+// AuthGroupsProvider return gRPC codes.Unimplemented, which maps cleanly to
+// auth.ErrGroupsNotSupported.
+func (c *AuthHandlerGRPCClient) GetGroups(ctx context.Context, handlerName string) ([]string, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
+	profile, err := validatedProfileFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	settingsBytes, err := encodeRequestSettings(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.client.GetGroups(ctx, &proto.GetGroupsRequest{
+		HandlerName: handlerName,
+		Profile:     profile,
+		Settings:    settingsBytes,
+	})
+	if err != nil {
+		if sdkplugin.IsUnimplemented(err) {
+			return nil, auth.NewGroupsNotSupportedError(handlerName)
+		}
+		return nil, fmt.Errorf("get groups RPC failed: %w", err)
+	}
+	if resp.Error != "" {
+		if isGroupsNotImplementedMessage(resp.Error) {
+			return nil, auth.NewGroupsNotSupportedError(handlerName)
+		}
+		return nil, errors.New(resp.Error)
+	}
+	if resp.Groups == nil {
+		return []string{}, nil
+	}
+	return resp.Groups, nil
+}
+
+func isGroupsNotImplementedMessage(msg string) bool {
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "authgroupsprovider") ||
+		strings.Contains(lower, "groupsprovider not implemented")
 }
 
 // ---- Conversion helpers ----

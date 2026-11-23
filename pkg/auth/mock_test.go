@@ -166,3 +166,19 @@ func TestMockConfigurerHandler_ApplyOverrides_Error(t *testing.T) {
 	err := mock.ApplyOverrides(context.Background(), map[string]string{"key": "val"})
 	assert.ErrorIs(t, err, assert.AnError)
 }
+
+func TestMockGroupsHandler_GetGroups(t *testing.T) {
+	mock := NewMockGroupsHandler("entra")
+	mock.GroupsResult = []string{"g1", "g2"}
+
+	ctx := WithProfile(context.Background(), "work")
+	groups, err := mock.GetGroups(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"g1", "g2"}, groups)
+	assert.Equal(t, 1, mock.GetGroupsCalls)
+	assert.Equal(t, "work", mock.LastContextProfile)
+
+	mock.Reset()
+	assert.Equal(t, 0, mock.GetGroupsCalls)
+	assert.Empty(t, mock.LastContextProfile)
+}
