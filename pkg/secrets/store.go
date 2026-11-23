@@ -89,6 +89,11 @@ func newStore(opts ...Option) (*store, error) {
 	return s, nil
 }
 
+// SecretsDir returns the filesystem directory backing this secret store.
+func (s *store) SecretsDir() string {
+	return s.secretsDir
+}
+
 // initMasterKey retrieves or creates the master encryption key.
 // If the key doesn't exist in the keyring:
 //   - If there are existing secrets, they are orphaned and deleted

@@ -3707,11 +3707,54 @@ scafctl auth logout quay
 scafctl catalog login quay.io
 ```
 
-Custom handlers support all three OAuth2 flows:
+Custom handlers support five authentication flows:
 
 - **Interactive** (authorization code + PKCE) -- requires `authorizeURL`. Set `responseType: token` for implicit grant servers. Set `disablePKCE: true` for servers that support auth code but reject PKCE parameters
 - **Device code** (RFC 8628) -- requires `deviceAuthURL`
-- **Client credentials** -- requires `clientSecret`
+- **Workload identity** (`workload_identity`, RFC 7523 JWT client assertion & RFC 8693 token exchange) -- requires `federatedToken` (`file://`, `env://`, or `secret://`) or `federatedTokenFile`; re-reads rotated token files automatically on refresh
+- **Client credentials** (`client_credentials`, RFC 6749) -- requires `clientSecret` (supports `secret://`, `file://`, `env://`, or literal) or `dynamicClientRegistration`
+- **Static / robot token** (`pat`) -- requires `token` (`secret://`, `file://`, or `env://`) with optional `username` (overrides `registryUsername` for OCI robot accounts such as Quay `org+robot`)
+
+### Zero-Ceremony CI/CD and Kubernetes Authentication
+
+For headless pipelines and Kubernetes workloads, custom OAuth2 handlers acquire
+tokens on demand in `scafctl auth status`, `scafctl auth token`, OCI catalog
+operations, and `http` provider `authProvider` calls **without requiring a
+prior `scafctl auth login` step** (even in keyless containers without an OS
+keyring). When no interactive login session is stored, non-interactive
+credentials are tried in priority order:
+`workload_identity` -> `client_credentials` -> `pat` (or starting with
+`defaultFlow` when `defaultFlow` names one of those three).
+
+```yaml
+auth:
+  customOAuth2:
+    # Kubernetes / GitHub Actions Workload Identity Federation (RFC 7523 default, or RFC 8693 token_exchange)
+    - name: deploy-api
+      displayName: "Deploy API"
+      tokenURL: "https://idp.example.com/oauth2/token"
+      clientID: "scafctl-deployer"
+      federatedToken: "file:///var/run/secrets/tokens/deploy-jwt"
+      audience: "api://deploy-service"
+      workloadIdentityGrantType: client_credentials # or token_exchange (RFC 8693)
+      defaultFlow: workload_identity
+      scopes:
+        - "deploy:write"
+
+    # Static registry robot account via SecretRef (no tokenURL or clientID needed)
+    - name: quay-ci
+      displayName: "Quay Robot"
+      defaultFlow: pat
+      token: "secret://quay-robot-token" # or env://QUAY_ROBOT_TOKEN / file://...
+      username: "acme+ci_robot"
+      registry: "quay.io"
+      verifyURL: "https://quay.io/api/v1/user/"
+```
+
+Credential fields (`federatedToken`, `token`, `clientSecret`, `username`, and
+`dynamicClientRegistration.initialAccessToken`) accept `secret://<name>`,
+`file://<path>`, and `env://<VAR>` `SecretRef` URIs so `config.yaml` stays free
+of plaintext secrets (`scafctl config view` redacts credential fields).
 
 > [!IMPORTANT]
 > **Prerequisite -- active browser session for non-redirecting authorize endpoints:**

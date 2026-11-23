@@ -210,6 +210,57 @@ func ValidateBrowser(browser string) error {
 	return nil
 }
 
+// ValidateCredentials validates SecretRef syntax, reserved secret prefixes, and
+// workload-identity field constraints on a CustomOAuth2Config.
+func (oc *CustomOAuth2Config) ValidateCredentials(binaryNames ...string) error {
+	if oc == nil {
+		return nil
+	}
+	if oc.FederatedToken != "" && oc.FederatedTokenFile != "" {
+		return fmt.Errorf("federatedToken and federatedTokenFile are mutually exclusive")
+	}
+	if oc.FederatedTokenFile != "" {
+		if strings.TrimSpace(oc.FederatedTokenFile) == "" {
+			return fmt.Errorf("invalid federatedTokenFile: path must not be whitespace-only")
+		}
+		if strings.ContainsRune(oc.FederatedTokenFile, 0) {
+			return fmt.Errorf("invalid federatedTokenFile: path must not contain NUL bytes")
+		}
+	}
+	if oc.FederatedToken != "" {
+		if err := oc.FederatedToken.ValidateFor(binaryNames...); err != nil {
+			return fmt.Errorf("invalid federatedToken: %w", err)
+		}
+	}
+	if oc.Token != "" {
+		if err := oc.Token.ValidateFor(binaryNames...); err != nil {
+			return fmt.Errorf("invalid token: %w", err)
+		}
+	}
+	if oc.ClientSecret != "" {
+		if err := ValidateCredentialValue(oc.ClientSecret, binaryNames...); err != nil {
+			return fmt.Errorf("invalid clientSecret: %w", err)
+		}
+	}
+	if oc.Username != "" {
+		if err := ValidateCredentialValue(oc.Username, binaryNames...); err != nil {
+			return fmt.Errorf("invalid username: %w", err)
+		}
+	}
+	if oc.DynamicClientRegistration != nil && oc.DynamicClientRegistration.InitialAccessToken != "" {
+		if err := ValidateCredentialValue(oc.DynamicClientRegistration.InitialAccessToken, binaryNames...); err != nil {
+			return fmt.Errorf("invalid dynamicClientRegistration.initialAccessToken: %w", err)
+		}
+	}
+	switch oc.WorkloadIdentityGrantType {
+	case "", WorkloadIdentityGrantClientCredentials, WorkloadIdentityGrantTokenExchange:
+	default:
+		return fmt.Errorf("unknown workloadIdentityGrantType %q (valid: %s, %s)",
+			oc.WorkloadIdentityGrantType, WorkloadIdentityGrantClientCredentials, WorkloadIdentityGrantTokenExchange)
+	}
+	return nil
+}
+
 // Validate validates a catalog configuration.
 func (c *CatalogConfig) Validate() error {
 	// Validate catalog type if specified

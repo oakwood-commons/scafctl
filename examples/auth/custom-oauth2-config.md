@@ -3,7 +3,45 @@
 These examples show how to configure custom OAuth2 auth handlers for
 registries and OAuth2 services that don't have built-in support.
 
-## Quay.io (Robot Account)
+## Quay.io (Robot Account -- Zero-Ceremony Static Token)
+
+For headless CI/CD pipelines or Kubernetes jobs using a pre-issued Quay robot
+token, configure the `pat` flow with a `SecretRef` URI (`secret://`, `file://`,
+or `env://`) and set `username` to the robot account name (`<org>+<robot>`).
+`GetToken`, `Status`, and OCI registry credential bridging work immediately
+with zero prior `scafctl auth login` step, and `username` overrides any
+`$oauthtoken` `registryUsername` when `pat` is active:
+
+```yaml
+# ~/.config/scafctl/config.yaml
+auth:
+  customOAuth2:
+    - name: quay
+      displayName: "Quay.io Robot"
+      defaultFlow: pat
+      # SecretRef URI: secret://<name>, env://<VAR>, or file://<PATH>
+      token: "secret://quay-robot-token"
+      username: "myorg+ci_robot"
+      registry: "quay.io"
+      verifyURL: "https://quay.io/api/v1/user/"
+      identityFields:
+        username: "username"
+```
+
+Store the robot token once on workstations (or use `env://QUAY_ROBOT_TOKEN` /
+`file:///var/run/secrets/...` in ephemeral CI runners):
+
+```bash
+# Store secret in scafctl's encrypted secret store
+scafctl secrets set quay-robot-token
+
+# Verify status or mint/bridge credentials with no prior 'auth login' step
+scafctl auth status quay --exit-code
+scafctl auth token quay --raw
+scafctl catalog login quay.io
+```
+
+## Quay.io (OAuth2 Application Client Credentials)
 
 ```yaml
 # ~/.config/scafctl/config.yaml
@@ -13,7 +51,7 @@ auth:
       displayName: "Quay.io"
       tokenURL: "https://quay.io/oauth/token"
       clientID: "your-quay-app-client-id"
-      clientSecret: "your-quay-app-client-secret"
+      clientSecret: "secret://quay-app-client-secret"
       defaultFlow: client_credentials
       scopes:
         - "repo:read"
@@ -207,6 +245,111 @@ auth:
         email: "email"
         name: "name"
 ```
+
+## Workload Identity Federation (Kubernetes & GitHub Actions -- Zero-Ceremony CI)
+
+Custom OAuth2 handlers support secretless Workload Identity Federation
+(`workload_identity`) with zero prior `scafctl auth login` step. The federated
+JWT (`federatedToken` or `federatedTokenFile`) is re-resolved and trimmed on
+every token refresh so rotated Kubernetes projected volume tokens are picked up
+automatically.
+
+### RFC 7523 JWT Client Assertion (`client_credentials`, default)
+
+Compatible with Keycloak, Okta, Auth0, GitLab, Ping, Ory, and standard OAuth2
+authorization servers that accept `client_assertion_type=jwt-bearer`:
+
+```yaml
+auth:
+  customOAuth2:
+    - name: internal-idp
+      displayName: "Internal OIDC Service"
+      tokenURL: "https://idp.example.com/oauth2/token"
+      clientID: "scafctl-k8s-workload"
+      # Re-read automatically whenever a cached access token expires
+      federatedToken: "file:///var/run/secrets/tokens/idp-token"
+      audience: "api://internal-service"
+      defaultFlow: workload_identity
+      scopes:
+        - "service:read"
+```
+
+For GitHub Actions OIDC tokens exposed via environment variables:
+
+```yaml
+auth:
+  customOAuth2:
+    - name: ci-api
+      displayName: "CI Deployment API"
+      tokenURL: "https://idp.example.com/oauth2/token"
+      clientID: "github-actions-deployer"
+      federatedToken: "env://ACTIONS_ID_TOKEN"
+      workloadIdentityGrantType: client_credentials
+      defaultFlow: workload_identity
+      scopes:
+        - "deploy:write"
+```
+
+### RFC 8693 OAuth 2.0 Token Exchange (`token_exchange`)
+
+Compatible with HashiCorp Vault, Dex, and STS-style token brokers (`clientID`
+is optional; if both `clientID` and `clientSecret` are set, HTTP Basic
+authentication is sent on the token exchange request):
+
+```yaml
+auth:
+  customOAuth2:
+    - name: sts-broker
+      displayName: "STS Token Broker"
+      tokenURL: "https://sts.example.com/v1/oauth/token"
+      federatedTokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+      workloadIdentityGrantType: token_exchange
+      subjectTokenType: "urn:ietf:params:oauth:token-type:jwt"
+      audience: "https://api.example.com"
+      defaultFlow: workload_identity
+      scopes:
+        - "api:read"
+```
+
+## Hybrid Workstation + Headless Pipeline Handler
+
+A single handler can serve interactive browser login on developer workstations
+while falling back automatically (`workload_identity` -> `client_credentials`
+-> `pat`) in headless CI containers when no interactive login session exists:
+
+```yaml
+auth:
+  customOAuth2:
+    - name: registry-auth
+      displayName: "Container Registry"
+      authorizeURL: "https://registry.example.com/oauth/authorize"
+      tokenURL: "https://registry.example.com/oauth/token"
+      clientID: "registry-cli"
+      # Used on developer workstations when running 'scafctl auth login registry-auth'
+      defaultFlow: interactive
+      callbackPort: 8400
+      registry: "registry.example.com"
+      registryUsername: "$oauthtoken"
+      # Used automatically in CI when REGISTRY_ROBOT_TOKEN is set (overrides registryUsername)
+      token: "env://REGISTRY_ROBOT_TOKEN"
+      username: "acme+ci_robot"
+```
+
+## SecretRef Credential Syntax
+
+All custom OAuth2 credential fields support `SecretRef` URIs so plaintext
+secrets never appear in `config.yaml`:
+
+| Scheme | Example | Source |
+| --- | --- | --- |
+| `secret://<name>` | `secret://quay-robot-token` | Encrypted `scafctl` secret store (`scafctl secrets set <name>`) |
+| `file://<path>` | `file:///var/run/secrets/tokens/token` | Local or projected volume file (trimmed of surrounding whitespace) |
+| `env://<VAR>` | `env://CI_OIDC_TOKEN` | Process environment variable |
+
+`federatedToken` and `token` require a `SecretRef` URI; `clientSecret`,
+`username`, and `dynamicClientRegistration.initialAccessToken` accept either a
+`SecretRef` URI or a literal string. Internal `scafctl.*` secret keys are
+reserved and rejected by `secret://`.
 
 ## Related
 

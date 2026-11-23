@@ -39,6 +39,13 @@ type RegistryUsernameProvider interface {
 	RegistryUsername() string
 }
 
+// ContextualRegistryUsernameProvider is an optional context-aware extension of
+// RegistryUsernameProvider that resolves the registry username for the active
+// profile in ctx rather than handler-wide state.
+type ContextualRegistryUsernameProvider interface {
+	RegistryUsernameForContext(ctx context.Context) string
+}
+
 // BridgeAuthToRegistry converts an auth handler's token into OCI registry credentials.
 // Each registry type expects a specific username/password convention:
 //   - GitHub (ghcr.io): username=<github-username>, password=<access-token>
@@ -94,8 +101,15 @@ func RegistryUsername(ctx context.Context, handler auth.Handler, _ string) (stri
 		return claimsUsernameOrDefault(ctx, handler), nil
 
 	default:
-		// Check if the handler provides a custom registry username override
-		// (e.g., "$oauthtoken" for Quay.io configured via CustomOAuth2Config.RegistryUsername).
+		// Check if the handler provides a profile-aware or static custom registry
+		// username override (e.g., "$oauthtoken" for Quay.io or per-profile robot
+		// username configured via CustomOAuth2Config).
+		if cp, ok := handler.(ContextualRegistryUsernameProvider); ok {
+			if username := cp.RegistryUsernameForContext(ctx); username != "" {
+				return username, nil
+			}
+			return RegistryUsernameDefault, nil
+		}
 		if p, ok := handler.(RegistryUsernameProvider); ok {
 			if username := p.RegistryUsername(); username != "" {
 				return username, nil

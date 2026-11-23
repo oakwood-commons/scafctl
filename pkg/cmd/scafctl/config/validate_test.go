@@ -298,3 +298,31 @@ func TestValidateOptions_Run_InvalidYAML_JSON(t *testing.T) {
 	assert.False(t, got.Valid)
 	assert.NotEmpty(t, got.Error)
 }
+
+func TestValidateOptions_Run_InvalidCustomOAuth2_JSON(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	invalidCustomOAuth2 := `
+auth:
+  customOAuth2:
+    - name: bad-pat
+      token: "plaintext-not-secretref"
+      defaultFlow: pat
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(invalidCustomOAuth2), 0o600))
+
+	stdout, _, err := runValidate(t, configPath, "json")
+	require.Error(t, err)
+
+	var ec *exitcode.ExitError
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, exitcode.ValidationFailed, ec.Code)
+
+	var got ValidateResult
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got))
+	assert.False(t, got.Valid)
+	assert.Contains(t, got.Error, "auth.customOAuth2[0]")
+	assert.NotContains(t, got.Error, "plaintext-not-secretref", "validation error output must never echo plaintext credential values")
+	assert.NotContains(t, stdout, "plaintext-not-secretref")
+}

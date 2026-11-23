@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -203,6 +204,17 @@ func (o *ValidateOptions) Run(ctx context.Context) error {
 		wrapped := fmt.Errorf("validation error: %w", err)
 		o.emitFailure(w, kvxOpts, structured, filePath, wrapped)
 		return exitcode.WithCode(wrapped, exitcode.ValidationFailed)
+	}
+	binName := settings.CliBinaryName
+	if o.CliParams != nil && o.CliParams.BinaryName != "" {
+		binName = o.CliParams.BinaryName
+	}
+	for i, oc := range cfg.Auth.CustomOAuth2 {
+		if err := customoauth2.ValidateConfigFor(oc, binName); err != nil {
+			wrapped := fmt.Errorf("validation error: auth.customOAuth2[%d]: %w", i, err)
+			o.emitFailure(w, kvxOpts, structured, filePath, wrapped)
+			return exitcode.WithCode(wrapped, exitcode.ValidationFailed)
+		}
 	}
 
 	result := ValidateResult{

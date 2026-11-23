@@ -641,9 +641,11 @@ scafctl supports user-defined OAuth2 auth handlers for any OAuth2-compliant serv
 
 - **Authorization code + PKCE** -- interactive browser-based login
 - **Device code (RFC 8628)** -- CLI-friendly flow for headless environments
-- **Client credentials (RFC 6749 §4.4)** -- machine-to-machine authentication
-- **Token exchange** -- optional post-login pipeline to convert an OAuth2 token to a registry-specific token (e.g., GCP Artifact Registry, Quay.io)
-- **Token verification** -- optional identity extraction from a userinfo endpoint
+- **Workload identity federation (RFC 7523 & RFC 8693)** -- zero-ceremony JWT assertion or token exchange from `file://`, `env://`, or `secret://` federated tokens, re-reading rotated files automatically
+- **Client credentials (RFC 6749 Section 4.4)** -- machine-to-machine authentication (`secret://`, `file://`, `env://`, or literal `clientSecret`)
+- **Static / robot token (`pat`)** -- pre-issued API or registry robot credentials via `SecretRef` (`secret://`, `file://`, `env://`) with optional `username` override
+- **Token exchange** -- optional post-login pipeline to convert an OAuth2 token to a registry-specific token (e.g., GCP Artifact Registry, Quay.io; skipped on `pat`)
+- **Token verification** -- optional identity extraction from a userinfo endpoint (strictly enforced on `pat` login)
 
 ### Configuration
 
@@ -654,8 +656,8 @@ auth:
       displayName: "Quay.io"  # human-readable label
       authorizeURL: "https://quay.io/oauth/authorize"
       clientID: "app-client-id"
-      clientSecret: "app-client-secret"  # required for client_credentials
-      defaultFlow: interactive           # interactive | device_code | client_credentials
+      clientSecret: "secret://quay-client-secret" # literal or SecretRef (secret://, file://, env://)
+      defaultFlow: interactive                    # interactive | device_code | workload_identity | client_credentials | pat
       responseType: token                # implicit grant (Quay only supports response_type=token)
       disablePKCE: true                  # auto-implied by responseType: token
       scopes: ["repo:read"]

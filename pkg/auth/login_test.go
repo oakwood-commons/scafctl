@@ -167,6 +167,35 @@ func TestPreLoginCheck_HostnameIgnoredWithoutCapability(t *testing.T) {
 	assert.Equal(t, 1, handler.StatusCalls) // non-host-aware handler still checks status
 }
 
+func TestPreLoginCheck_AmbientHeadlessFlowDoesNotBlockInteractiveLogin(t *testing.T) {
+	handler := NewMockHandler("hybrid")
+	handler.StatusResult = &Status{
+		Authenticated: true,
+		Flow:          FlowPAT,
+		Claims:        &Claims{Username: "acme+ci_robot"},
+	}
+
+	// Interactive login proceeds even when ambient PAT credentials report authenticated.
+	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "",
+		FlowServicePrincipal, FlowWorkloadIdentity, FlowPAT, FlowClientCredentials, FlowMetadata)
+	require.NoError(t, err)
+	assert.Equal(t, PreLoginProceed, result.Action)
+
+	// Explicit --skip-if-authenticated is honored even on hybrid handlers with ambient PAT/WIF sessions.
+	resultSkip, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, true, "",
+		FlowServicePrincipal, FlowWorkloadIdentity, FlowPAT, FlowClientCredentials, FlowMetadata)
+	require.NoError(t, err)
+	assert.Equal(t, PreLoginSkip, resultSkip.Action)
+	assert.Equal(t, "acme+ci_robot", resultSkip.Identity)
+
+	// Matching interactive session still reports already authenticated.
+	handler.StatusResult.Flow = FlowInteractive
+	resultSame, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "",
+		FlowServicePrincipal, FlowWorkloadIdentity, FlowPAT, FlowClientCredentials, FlowMetadata)
+	require.NoError(t, err)
+	assert.Equal(t, PreLoginAlreadyAuthenticated, resultSame.Action)
+}
+
 func BenchmarkDetectFlow(b *testing.B) {
 	detectors := []CredentialDetector{
 		{HasCredentials: func() bool { return false }, Flow: FlowWorkloadIdentity},

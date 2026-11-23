@@ -6,13 +6,19 @@ package auth
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -917,4 +923,144 @@ func TestCommandLogin_HelpText_EntraInteractiveDefaultAndNoAuthCodeAlias(t *test
 
 	_, err := parseFlow("auth-code", "entra")
 	require.Error(t, err, "interactive flow must not expose an auth-code alias")
+}
+
+func TestCommandLogin_HybridHandlerPreservesExplicitInteractiveAndDeviceCodeDefaults(t *testing.T) {
+	t.Setenv("TEST_HYBRID_ROBOT_TOKEN", "robot-secret-token")
+	t.Setenv("TEST_HYBRID_WIF_JWT", "oidc-jwt-token")
+
+	t.Run("defaultFlow device_code runs device_code instead of ambient PAT or WIF", func(t *testing.T) {
+		var deviceCodeHits, tokenHits int
+		srv := newHybridLoginTestServer(t, &deviceCodeHits, &tokenHits)
+		defer srv.Close()
+
+		store := newTestMemorySecretStore()
+		h, err := newCustomOAuth2HandlerForLoginTest(config.CustomOAuth2Config{
+			Name:                   "registry-auth",
+			DisplayName:            "Container Registry",
+			DeviceAuthURL:          srv.URL + "/device",
+			TokenURL:               srv.URL + "/token",
+			ClientID:               "registry-cli",
+			DefaultFlow:            "device_code",
+			DeviceCodePollInterval: 1,
+			Token:                  "env://TEST_HYBRID_ROBOT_TOKEN",
+			Username:               "acme+ci_robot",
+			FederatedToken:         "env://TEST_HYBRID_WIF_JWT",
+		}, store, srv.Client())
+		require.NoError(t, err)
+
+		// Ambient GetToken before login still falls back to headless credentials.
+		ambientTok, err := h.GetToken(context.Background(), auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, auth.FlowWorkloadIdentity, ambientTok.Flow)
+
+		// Running 'auth login registry-auth' without --flow or --force must use
+		// device_code rather than silently selecting PAT/WIF or stopping on ambient status.
+		ctx, buf := newTestContext(t)
+		reg := auth.NewRegistry()
+		require.NoError(t, reg.Register(h))
+		ctx = auth.WithRegistry(ctx, reg)
+
+		cliParams := settings.NewCliParams()
+		ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+		cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"registry-auth"})
+
+		require.NoError(t, cmd.Execute())
+		assert.Equal(t, 1, deviceCodeHits, "CLI login must execute configured device_code flow")
+		assert.Equal(t, auth.FlowDeviceCode, h.ActiveFlow(context.Background()))
+		assert.NotContains(t, buf.String(), "Already authenticated")
+	})
+
+	t.Run("defaultFlow interactive selects interactive flow even when PAT is resolvable", func(t *testing.T) {
+		store := newTestMemorySecretStore()
+		rec := &recordingCustomFlowHandler{
+			Handler: mustNewHybridInteractiveHandler(t, store),
+		}
+
+		ctx, buf := newTestContext(t)
+		reg := auth.NewRegistry()
+		require.NoError(t, reg.Register(rec))
+		ctx = auth.WithRegistry(ctx, reg)
+
+		cliParams := settings.NewCliParams()
+		ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+		cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"registry-auth"})
+
+		require.NoError(t, cmd.Execute())
+		require.Len(t, rec.loginFlows, 1)
+		assert.Equal(t, auth.FlowInteractive, rec.loginFlows[0], "CLI login must pass FlowInteractive instead of FlowPAT")
+		assert.NotContains(t, buf.String(), "Already authenticated")
+	})
+}
+
+type recordingCustomFlowHandler struct {
+	*oauth2.Handler
+	loginFlows []auth.Flow
+}
+
+func (r *recordingCustomFlowHandler) Login(_ context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+	r.loginFlows = append(r.loginFlows, opts.Flow)
+	return &auth.Result{
+		Claims:    &auth.Claims{Username: "workstation-user"},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}, nil
+}
+
+func newTestMemorySecretStore() secrets.Store {
+	return secrets.NewMockStore()
+}
+
+func newCustomOAuth2HandlerForLoginTest(cfg config.CustomOAuth2Config, store secrets.Store, httpClient *http.Client) (*oauth2.Handler, error) {
+	return oauth2.New(cfg, oauth2.WithSecretStore(store), oauth2.WithHTTPClient(httpClient), oauth2.WithLogger(logr.Discard()))
+}
+
+func mustNewHybridInteractiveHandler(t *testing.T, store secrets.Store) *oauth2.Handler {
+	t.Helper()
+	h, err := oauth2.New(config.CustomOAuth2Config{
+		Name:             "registry-auth",
+		DisplayName:      "Container Registry",
+		AuthorizeURL:     "https://registry.example.com/oauth/authorize",
+		TokenURL:         "https://registry.example.com/oauth/token",
+		ClientID:         "registry-cli",
+		DefaultFlow:      "interactive",
+		CallbackPort:     8400,
+		Registry:         "registry.example.com",
+		RegistryUsername: "$oauthtoken",
+		Token:            "env://TEST_HYBRID_ROBOT_TOKEN",
+		Username:         "acme+ci_robot",
+	}, oauth2.WithSecretStore(store), oauth2.WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	return h
+}
+
+func newHybridLoginTestServer(t *testing.T, deviceCodeHits, tokenHits *int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/device":
+			*deviceCodeHits++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"device_code":      "dev-code-1",
+				"user_code":        "ABCD-EFGH",
+				"verification_uri": "https://registry.example.com/activate",
+				"expires_in":       300,
+				"interval":         1,
+			})
+		case "/token":
+			*tokenHits++
+			_ = r.ParseForm()
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "tok-" + r.FormValue("grant_type"),
+				"token_type":   "Bearer",
+				"expires_in":   3600,
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
 }

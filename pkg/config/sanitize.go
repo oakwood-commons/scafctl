@@ -86,17 +86,25 @@ type SanitizedGCPAuth struct {
 	Project                   string   `json:"project,omitempty" yaml:"project,omitempty" doc:"GCP project ID" maxLength:"256" example:"my-gcp-project"`
 }
 
-// SanitizedCustomOAuth2 mirrors CustomOAuth2Config with the client secret and
-// token-exchange request body dropped.
+// SanitizedCustomOAuth2 mirrors CustomOAuth2Config with sensitive credential
+// fields redacted and the token-exchange request body dropped.
 type SanitizedCustomOAuth2 struct {
 	Name                      string                              `json:"name" yaml:"name" doc:"Handler name" maxLength:"64" example:"quay"`
 	DisplayName               string                              `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable display name" maxLength:"128"`
 	AuthorizeURL              string                              `json:"authorizeURL,omitempty" yaml:"authorizeURL,omitempty" doc:"OAuth2 authorization endpoint" maxLength:"2048"`
-	TokenURL                  string                              `json:"tokenURL" yaml:"tokenURL" doc:"OAuth2 token endpoint" maxLength:"2048"`
+	TokenURL                  string                              `json:"tokenURL,omitempty" yaml:"tokenURL,omitempty" doc:"OAuth2 token endpoint" maxLength:"2048"`
 	DeviceAuthURL             string                              `json:"deviceAuthURL,omitempty" yaml:"deviceAuthURL,omitempty" doc:"OAuth2 device authorization endpoint" maxLength:"2048"`
-	ClientID                  string                              `json:"clientID" yaml:"clientID" doc:"OAuth2 client ID" maxLength:"256"`
+	ClientID                  string                              `json:"clientID,omitempty" yaml:"clientID,omitempty" doc:"OAuth2 client ID" maxLength:"256" example:"my-app-client-id"`
+	ClientSecret              string                              `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" doc:"OAuth2 client secret (redacted)" maxLength:"4096" example:"[REDACTED]"`                                            //nolint:gosec // G117: holds RedactedValue placeholder, never plaintext
+	FederatedToken            string                              `json:"federatedToken,omitempty" yaml:"federatedToken,omitempty" doc:"Federated token reference (redacted)" maxLength:"4096" example:"[REDACTED]"`                                   //nolint:gosec // G101: holds RedactedValue placeholder
+	FederatedTokenFile        string                              `json:"federatedTokenFile,omitempty" yaml:"federatedTokenFile,omitempty" doc:"Path to projected federated token file" maxLength:"4096" example:"/var/run/secrets/tokens/oidc-token"` //nolint:gosec // G101: file path, not credential
+	Audience                  string                              `json:"audience,omitempty" yaml:"audience,omitempty" doc:"Target audience for workload identity" maxLength:"1024" example:"api://my-target-service"`
+	WorkloadIdentityGrantType string                              `json:"workloadIdentityGrantType,omitempty" yaml:"workloadIdentityGrantType,omitempty" doc:"Workload identity grant type" maxLength:"32" enum:"client_credentials,token_exchange" example:"client_credentials"`
+	SubjectTokenType          string                              `json:"subjectTokenType,omitempty" yaml:"subjectTokenType,omitempty" doc:"RFC 8693 subject token type" maxLength:"256" example:"urn:ietf:params:oauth:token-type:jwt"`
+	Token                     string                              `json:"token,omitempty" yaml:"token,omitempty" doc:"Static bearer token reference (redacted)" maxLength:"4096" example:"[REDACTED]"` //nolint:gosec // G101: holds RedactedValue placeholder
+	Username                  string                              `json:"username,omitempty" yaml:"username,omitempty" doc:"Static/robot username" maxLength:"4096" example:"myorg+ci_robot"`
 	Scopes                    []string                            `json:"scopes,omitempty" yaml:"scopes,omitempty" doc:"Default OAuth scopes" maxItems:"20"`
-	DefaultFlow               string                              `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" doc:"Default OAuth2 flow" maxLength:"32"`
+	DefaultFlow               string                              `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" doc:"Default OAuth2 flow" maxLength:"32" enum:"interactive,device_code,client_credentials,workload_identity,pat" example:"interactive"`
 	CallbackPort              int                                 `json:"callbackPort,omitempty" yaml:"callbackPort,omitempty" doc:"Local callback port"`
 	CallbackPath              string                              `json:"callbackPath,omitempty" yaml:"callbackPath,omitempty" doc:"Callback path" maxLength:"256"`
 	CallbackHost              string                              `json:"callbackHost,omitempty" yaml:"callbackHost,omitempty" doc:"Callback host" maxLength:"253"`
@@ -122,10 +130,11 @@ type SanitizedTokenExchange struct {
 }
 
 // SanitizedDynamicClientRegistration mirrors DynamicClientRegistrationConfig
-// with the initial access token dropped -- it is a bearer credential used to
+// with the initial access token redacted -- it is a bearer credential used to
 // authorize the registration request.
 type SanitizedDynamicClientRegistration struct {
-	RegistrationEndpoint string         `json:"registrationEndpoint,omitempty" yaml:"registrationEndpoint,omitempty" doc:"RFC 7591 Dynamic Client Registration endpoint" maxLength:"2048"`
+	RegistrationEndpoint string         `json:"registrationEndpoint,omitempty" yaml:"registrationEndpoint,omitempty" doc:"RFC 7591 Dynamic Client Registration endpoint" maxLength:"2048" example:"https://idp.example.com/register"`
+	InitialAccessToken   string         `json:"initialAccessToken,omitempty" yaml:"initialAccessToken,omitempty" doc:"Initial access token (redacted)" maxLength:"4096" example:"[REDACTED]"` //nolint:gosec // G101: holds RedactedValue placeholder
 	ClientMetadata       map[string]any `json:"clientMetadata,omitempty" yaml:"clientMetadata,omitempty" doc:"Client metadata for dynamic registration"`
 }
 
@@ -311,28 +320,45 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 	return s
 }
 
-// sanitizeCustomOAuth2 copies non-sensitive fields and drops the client
-// secret and any templated request body.
+// sanitizeCustomOAuth2 copies non-sensitive fields, redacts credential-bearing
+// fields, and drops any templated request body.
 func sanitizeCustomOAuth2(oc CustomOAuth2Config) SanitizedCustomOAuth2 {
 	out := SanitizedCustomOAuth2{
-		Name:                   oc.Name,
-		DisplayName:            oc.DisplayName,
-		AuthorizeURL:           oc.AuthorizeURL,
-		TokenURL:               oc.TokenURL,
-		DeviceAuthURL:          oc.DeviceAuthURL,
-		ClientID:               oc.ClientID,
-		Scopes:                 oc.Scopes,
-		DefaultFlow:            oc.DefaultFlow,
-		CallbackPort:           oc.CallbackPort,
-		CallbackPath:           oc.CallbackPath,
-		CallbackHost:           oc.CallbackHost,
-		DeviceCodePollInterval: oc.DeviceCodePollInterval,
-		DisablePKCE:            oc.DisablePKCE,
-		ResponseType:           oc.ResponseType,
-		VerifyURL:              oc.VerifyURL,
-		IdentityFields:         oc.IdentityFields,
-		Registry:               oc.Registry,
-		RegistryUsername:       oc.RegistryUsername,
+		Name:                      oc.Name,
+		DisplayName:               oc.DisplayName,
+		AuthorizeURL:              oc.AuthorizeURL,
+		TokenURL:                  oc.TokenURL,
+		DeviceAuthURL:             oc.DeviceAuthURL,
+		ClientID:                  oc.ClientID,
+		FederatedTokenFile:        oc.FederatedTokenFile,
+		Audience:                  oc.Audience,
+		WorkloadIdentityGrantType: oc.WorkloadIdentityGrantType,
+		SubjectTokenType:          oc.SubjectTokenType,
+		Username:                  oc.Username,
+		Scopes:                    oc.Scopes,
+		DefaultFlow:               oc.DefaultFlow,
+		CallbackPort:              oc.CallbackPort,
+		CallbackPath:              oc.CallbackPath,
+		CallbackHost:              oc.CallbackHost,
+		DeviceCodePollInterval:    oc.DeviceCodePollInterval,
+		DisablePKCE:               oc.DisablePKCE,
+		ResponseType:              oc.ResponseType,
+		VerifyURL:                 oc.VerifyURL,
+		IdentityFields:            oc.IdentityFields,
+		Registry:                  oc.Registry,
+		RegistryUsername:          oc.RegistryUsername,
+	}
+	if oc.ClientSecret != "" {
+		out.ClientSecret = RedactedValue
+	}
+	if oc.FederatedToken != "" {
+		out.FederatedToken = RedactedValue
+	}
+	if oc.Token != "" {
+		out.Token = RedactedValue
+	}
+	if IsSecretRef(oc.Username) {
+		out.Username = RedactedValue
 	}
 	if oc.TokenExchange != nil {
 		out.TokenExchange = &SanitizedTokenExchange{
@@ -343,10 +369,14 @@ func sanitizeCustomOAuth2(oc CustomOAuth2Config) SanitizedCustomOAuth2 {
 		}
 	}
 	if oc.DynamicClientRegistration != nil {
-		out.DynamicClientRegistration = &SanitizedDynamicClientRegistration{
+		sdcr := &SanitizedDynamicClientRegistration{
 			RegistrationEndpoint: oc.DynamicClientRegistration.RegistrationEndpoint,
 			ClientMetadata:       oc.DynamicClientRegistration.ClientMetadata,
 		}
+		if oc.DynamicClientRegistration.InitialAccessToken != "" {
+			sdcr.InitialAccessToken = RedactedValue
+		}
+		out.DynamicClientRegistration = sdcr
 	}
 	return out
 }
