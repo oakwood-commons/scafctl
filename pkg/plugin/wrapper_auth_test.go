@@ -2430,13 +2430,13 @@ func TestConfigureAndRegisterAuthHandlers_PreservesEmbedderSettingsAcrossPerRequ
 		&ProviderConfig{
 			BinaryName: "mycli",
 			Settings: map[string]json.RawMessage{
-				"entra": json.RawMessage(`{"clientId":"embedder-client"}`),
+				"entra": json.RawMessage(`{"clientId":"embedder-client","accountId":9007199254740993}`),
 			},
 		},
 	)
 	require.Equal(t, []string{"entra"}, registered)
 	require.NotNil(t, mockSvc.lastConfigureReq)
-	assert.JSONEq(t, `{"clientId":"embedder-client"}`, string(mockSvc.lastConfigureReq.Settings["entra"]))
+	assert.Contains(t, string(mockSvc.lastConfigureReq.Settings["entra"]), `"accountId":9007199254740993`)
 
 	h, err := reg.Get("entra")
 	require.NoError(t, err)
@@ -2444,8 +2444,9 @@ func TestConfigureAndRegisterAuthHandlers_PreservesEmbedderSettingsAcrossPerRequ
 	_, err = h.GetToken(ctx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
 	require.NoError(t, err)
 	require.NotNil(t, mockSvc.capturedGetTokenReq)
-	assert.JSONEq(t, `{"clientId":"embedder-client"}`, string(mockSvc.capturedGetTokenReq.Settings),
-		"same-profile GetToken must preserve caller-supplied ProviderConfig.Settings instead of resetting to {}")
+	assert.Contains(t, string(mockSvc.capturedGetTokenReq.Settings), `"clientId":"embedder-client"`)
+	assert.Contains(t, string(mockSvc.capturedGetTokenReq.Settings), `"accountId":9007199254740993`,
+		"large integer tokens beyond float64 precision must remain exact during merge")
 
 	gp, ok := h.(auth.GroupsProvider)
 	require.True(t, ok)
@@ -2453,8 +2454,20 @@ func TestConfigureAndRegisterAuthHandlers_PreservesEmbedderSettingsAcrossPerRequ
 	require.NoError(t, err)
 	assert.Equal(t, []string{"g-embedder"}, groups)
 	require.NotNil(t, capturedGroupsReq)
-	assert.JSONEq(t, `{"clientId":"embedder-client"}`, string(capturedGroupsReq.Settings),
-		"same-profile GetGroups must preserve caller-supplied ProviderConfig.Settings instead of resetting to {}")
+	assert.Contains(t, string(capturedGroupsReq.Settings), `"clientId":"embedder-client"`)
+	assert.Contains(t, string(capturedGroupsReq.Settings), `"accountId":9007199254740993`)
+
+	// Applying string CLI overrides must also preserve 64-bit integer precision on untouched keys.
+	cfgr, ok := h.(auth.Configurer)
+	require.True(t, ok)
+	require.NoError(t, cfgr.ApplyOverrides(ctx, map[string]string{"tenantId": "override-tenant"}))
+	assert.Contains(t, string(mockSvc.lastConfigureReq.Settings["entra"]), `"accountId":9007199254740993`)
+	assert.Contains(t, string(mockSvc.lastConfigureReq.Settings["entra"]), `"tenantId":"override-tenant"`)
+
+	_, err = h.GetToken(ctx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
+	require.NoError(t, err)
+	assert.Contains(t, string(mockSvc.capturedGetTokenReq.Settings), `"accountId":9007199254740993`)
+	assert.Contains(t, string(mockSvc.capturedGetTokenReq.Settings), `"tenantId":"override-tenant"`)
 }
 
 type mockGroupsAuthHandlerPlugin struct {
