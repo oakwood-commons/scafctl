@@ -323,4 +323,6 @@ auth:
 	require.NoError(t, json.Unmarshal([]byte(stdout), &got))
 	assert.False(t, got.Valid)
 	assert.Contains(t, got.Error, "auth.customOAuth2[0]")
+	assert.NotContains(t, got.Error, "plaintext-not-secretref", "validation error output must never echo plaintext credential values")
+	assert.NotContains(t, stdout, "plaintext-not-secretref")
 }

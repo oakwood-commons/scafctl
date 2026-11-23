@@ -177,18 +177,26 @@ func TestSecretRef_Validate_SecretInvalidCases(t *testing.T) {
 
 func TestSecretRef_Validate_UnknownScheme(t *testing.T) {
 	t.Parallel()
-	s := SecretRef("vault://secret/data/foo")
+	s := SecretRef("vault://secret/data/super-sensitive-value")
 	err := s.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported secret ref scheme")
+	assert.Contains(t, err.Error(), `"vault"`)
+	assert.NotContains(t, err.Error(), "super-sensitive-value")
 }
 
 func TestSecretRef_Validate_NoScheme(t *testing.T) {
 	t.Parallel()
-	s := SecretRef("just-a-string")
+	rawSecret := "ghp_superSecretPlaintextCredentialValue123"
+	s := SecretRef(rawSecret)
 	err := s.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported secret ref scheme")
+	assert.NotContains(t, err.Error(), rawSecret)
+
+	_, resolveErr := s.Resolve()
+	require.Error(t, resolveErr)
+	assert.NotContains(t, resolveErr.Error(), rawSecret)
 }
 
 func TestSecretRef_Resolve_Env(t *testing.T) {

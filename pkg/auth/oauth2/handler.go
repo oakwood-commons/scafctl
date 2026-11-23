@@ -105,6 +105,30 @@ type basicAuthCredentials struct {
 	password string
 }
 
+type selectedDynamicClientKey struct{}
+
+func withSelectedDynamicClient(ctx context.Context, c *dynamicClient) context.Context {
+	if c == nil {
+		return ctx
+	}
+	cp := *c
+	return context.WithValue(ctx, selectedDynamicClientKey{}, &cp)
+}
+
+func selectedDynamicClientFromContext(ctx context.Context) *dynamicClient {
+	if ctx == nil {
+		return nil
+	}
+	c, _ := ctx.Value(selectedDynamicClientKey{}).(*dynamicClient)
+	return c
+}
+
+type persistedDerivedToken struct {
+	auth.Token
+	Fingerprint string `json:"fingerprint"`
+	Username    string `json:"username,omitempty"`
+}
+
 // Handler implements auth.Handler for generic configurable OAuth2 services.
 type Handler struct {
 	cfg                   config.CustomOAuth2Config
@@ -122,22 +146,25 @@ type Handler struct {
 	mu            sync.RWMutex
 	dcrClients    map[string]*dynamicClient
 	activeFlows   map[string]auth.Flow
-	lastFlow      auth.Flow
 	patUsernames  map[string]string
-	lastPATUser   string
+	derivedUsers  map[string]string
 	sessionStates map[string]string
+	sessionGen    map[string]uint64
+	publishLocks  map[string]*sync.Mutex
+	refreshLocks  map[string]*sync.Mutex
 	memCache      map[string]*auth.Token
-	memDerived    map[string]*auth.Token
+	memDerived    map[string]*persistedDerivedToken
 	sfGroup       singleflight.Group
 }
 
 // Compile-time interface assertions.
 var (
-	_ auth.Handler      = (*Handler)(nil)
-	_ auth.TokenLister  = (*Handler)(nil)
-	_ auth.TokenPurger  = (*Handler)(nil)
-	_ auth.FlowDetector = (*Handler)(nil)
-	_ auth.FlowReporter = (*Handler)(nil)
+	_ auth.Handler             = (*Handler)(nil)
+	_ auth.TokenLister         = (*Handler)(nil)
+	_ auth.TokenPurger         = (*Handler)(nil)
+	_ auth.FlowDetector        = (*Handler)(nil)
+	_ auth.FlowReporter        = (*Handler)(nil)
+	_ auth.DefaultFlowProvider = (*Handler)(nil)
 )
 
 // Option configures the Handler.
@@ -216,9 +243,13 @@ func New(cfg config.CustomOAuth2Config, opts ...Option) (*Handler, error) {
 		dcrClients:      make(map[string]*dynamicClient),
 		activeFlows:     make(map[string]auth.Flow),
 		patUsernames:    make(map[string]string),
+		derivedUsers:    make(map[string]string),
 		sessionStates:   make(map[string]string),
+		sessionGen:      make(map[string]uint64),
+		publishLocks:    make(map[string]*sync.Mutex),
+		refreshLocks:    make(map[string]*sync.Mutex),
 		memCache:        make(map[string]*auth.Token),
-		memDerived:      make(map[string]*auth.Token),
+		memDerived:      make(map[string]*persistedDerivedToken),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -253,31 +284,63 @@ func (h *Handler) DisplayName() string {
 	return h.cfg.Name
 }
 
+// DefaultFlow returns the handler's configured default authentication flow,
+// implementing auth.DefaultFlowProvider.
+func (h *Handler) DefaultFlow() auth.Flow {
+	return h.resolveDefaultFlow()
+}
+
 // RegistryUsername returns the configured OCI registry username convention for
-// this handler (e.g. "$oauthtoken" for Quay.io, or the resolved robot username
-// when FlowPAT is active and Username is set). An empty string means the caller
-// should use the default convention. This implements the optional
-// catalog.RegistryUsernameProvider interface consumed by BridgeAuthToRegistry.
+// the default profile context. Prefer RegistryUsernameForContext when a
+// profile-bearing request context is available.
 func (h *Handler) RegistryUsername() string {
+	return h.RegistryUsernameForContext(context.Background())
+}
+
+// RegistryUsernameForContext returns the OCI registry username for the active
+// profile in ctx (e.g. "$oauthtoken" for Quay.io, the derived username from
+// tokenExchange, or the resolved robot username when FlowPAT is active and
+// Username is set). Implements catalog.ContextualRegistryUsernameProvider.
+func (h *Handler) RegistryUsernameForContext(ctx context.Context) string {
+	ctx = h.resolveContextProfile(ctx)
+	profile := auth.ProfileFromContext(ctx)
+
+	if state, err := h.getSessionState(ctx); err != nil || state == sessionStateLoggedOut {
+		return h.cfg.RegistryUsername
+	}
+
 	h.mu.RLock()
-	flow := h.lastFlow
-	patUser := h.lastPATUser
-	regUser := h.cfg.RegistryUsername
-	cfgUser := h.cfg.Username
+	var (
+		flow        auth.Flow
+		patUser     string
+		derivedUser string
+	)
+	if h.activeFlows != nil {
+		flow = h.activeFlows[profile]
+	}
+	if h.patUsernames != nil {
+		patUser = h.patUsernames[profile]
+	}
+	if h.derivedUsers != nil {
+		derivedUser = h.derivedUsers[profile]
+	}
 	h.mu.RUnlock()
 
 	if flow == "" {
-		flow = h.inferInitialFlow()
+		flow = h.inferFlowForContext(ctx)
 	}
-	if flow == auth.FlowPAT && cfgUser != "" {
+	if flow == auth.FlowPAT && h.cfg.Username != "" {
 		if patUser != "" {
 			return patUser
 		}
-		if resolved, err := h.resolvePATUsername(context.Background()); err == nil && resolved != "" {
+		if resolved, err := h.resolvePATUsername(ctx); err == nil && resolved != "" {
 			return resolved
 		}
 	}
-	return regUser
+	if h.cfg.TokenExchange != nil && flow != auth.FlowPAT && derivedUser != "" {
+		return derivedUser
+	}
+	return h.cfg.RegistryUsername
 }
 
 // ActiveFlow returns the authentication flow currently in use, implementing
@@ -285,6 +348,10 @@ func (h *Handler) RegistryUsername() string {
 func (h *Handler) ActiveFlow(ctx context.Context) auth.Flow {
 	ctx = h.resolveContextProfile(ctx)
 	profile := auth.ProfileFromContext(ctx)
+
+	if state, err := h.getSessionState(ctx); err != nil || state == sessionStateLoggedOut {
+		return ""
+	}
 
 	h.mu.RLock()
 	var flow auth.Flow
@@ -330,12 +397,26 @@ func (h *Handler) SupportedFlows() []auth.Flow {
 // DetectAvailableFlows reports which configured non-interactive flows have
 // resolvable credentials in the current environment, enabling automatic flow
 // selection during 'auth login <name>' without '--flow'.
+// When defaultFlow explicitly specifies 'interactive' or 'device_code',
+// headless credentials are not auto-selected for 'auth login' so hybrid
+// workstation configs preserve user login unless '--flow' is passed.
 func (h *Handler) DetectAvailableFlows(ctx context.Context) ([]auth.FlowAvailability, error) {
+	ctx = h.resolveContextProfile(ctx)
+	explicitInteractiveDefault := h.cfg.DefaultFlow == "interactive" || h.cfg.DefaultFlow == "device_code"
+
 	var out []auth.FlowAvailability
 	for _, flow := range h.nonInteractiveFlowOrder() {
 		switch flow { //nolint:exhaustive // only headless non-interactive flows are probed
 		case auth.FlowWorkloadIdentity:
 			if !h.hasWorkloadIdentityConfig() {
+				continue
+			}
+			if explicitInteractiveDefault {
+				out = append(out, auth.FlowAvailability{
+					Flow:      auth.FlowWorkloadIdentity,
+					Available: false,
+					Reason:    fmt.Sprintf("defaultFlow is %s", h.cfg.DefaultFlow),
+				})
 				continue
 			}
 			_, err := h.resolveFederatedToken(ctx)
@@ -364,6 +445,14 @@ func (h *Handler) DetectAvailableFlows(ctx context.Context) ([]auth.FlowAvailabi
 			})
 		case auth.FlowPAT:
 			if h.cfg.Token == "" {
+				continue
+			}
+			if explicitInteractiveDefault {
+				out = append(out, auth.FlowAvailability{
+					Flow:      auth.FlowPAT,
+					Available: false,
+					Reason:    fmt.Sprintf("defaultFlow is %s", h.cfg.DefaultFlow),
+				})
 				continue
 			}
 			_, err := h.resolvePATToken(ctx)
@@ -400,6 +489,25 @@ func (h *Handler) DetectAvailableFlows(ctx context.Context) ([]auth.FlowAvailabi
 }
 
 func (h *Handler) detectClientCredentialsAvailability(ctx context.Context) (bool, string) {
+	ctx = h.resolveContextProfile(ctx)
+	if h.dcrEnabled() {
+		// Only auto-select DCR for client_credentials when explicitly configured
+		// as defaultFlow or when no interactive endpoints exist.
+		if h.cfg.DefaultFlow != "client_credentials" && (h.cfg.AuthorizeURL != "" || h.cfg.DeviceAuthURL != "") {
+			return false, "dynamic client registration shares interactive endpoints"
+		}
+		// Prefer an already-registered, unexpired dynamic client for this profile
+		// without probing any bootstrap initialAccessToken or unused static secret.
+		if existing := h.reusableDynamicClient(ctx); existing != nil && existing.ClientSecret != "" {
+			return true, "persisted dynamic client credentials are available"
+		}
+		if h.cfg.DynamicClientRegistration.InitialAccessToken != "" {
+			if _, err := config.ResolveCredentialValue(ctx, h.cfg.DynamicClientRegistration.InitialAccessToken, h.secretStore, h.reservedBinaryNames()...); err != nil {
+				return false, err.Error()
+			}
+		}
+		return true, "dynamic client registration is configured"
+	}
 	if h.cfg.ClientSecret != "" {
 		// When authorizeURL is also configured and defaultFlow is explicitly
 		// interactive or device_code, clientSecret may belong to confidential
@@ -415,19 +523,6 @@ func (h *Handler) detectClientCredentialsAvailability(ctx context.Context) (bool
 			return true, "clientSecret credential is resolvable"
 		}
 		return false, "clientSecret resolved to empty value"
-	}
-	if h.dcrEnabled() {
-		// Only auto-select DCR for client_credentials when explicitly configured
-		// as defaultFlow or when no interactive endpoints exist.
-		if h.cfg.DefaultFlow != "client_credentials" && (h.cfg.AuthorizeURL != "" || h.cfg.DeviceAuthURL != "") {
-			return false, "dynamic client registration shares interactive endpoints"
-		}
-		if h.cfg.DynamicClientRegistration.InitialAccessToken != "" {
-			if _, err := config.ResolveCredentialValue(ctx, h.cfg.DynamicClientRegistration.InitialAccessToken, h.secretStore, h.reservedBinaryNames()...); err != nil {
-				return false, err.Error()
-			}
-		}
-		return true, "dynamic client registration is configured"
 	}
 	return false, "clientSecret not configured"
 }
@@ -458,17 +553,18 @@ func (h *Handler) Capabilities() []auth.Capability {
 
 func (h *Handler) storeDynamicClient(ctx context.Context, client *dynamicClient) error {
 	profile := auth.ProfileFromContext(ctx)
+	cp := *client
 	h.mu.Lock()
 	if h.dcrClients == nil {
 		h.dcrClients = make(map[string]*dynamicClient)
 	}
-	h.dcrClients[profile] = client
+	h.dcrClients[profile] = &cp
 	h.mu.Unlock()
 
 	if h.secretStore == nil {
 		return nil
 	}
-	data, err := json.Marshal(client) //nolint:gosec // marshaling to store in the secret store, not logging
+	data, err := json.Marshal(&cp) //nolint:gosec // marshaling to store in the secret store, not logging
 	if err != nil {
 		return fmt.Errorf("marshal dynamic client: %w", err)
 	}
@@ -487,7 +583,8 @@ func (h *Handler) loadDynamicClient(ctx context.Context) (*dynamicClient, error)
 		if c == nil {
 			return nil, secrets.ErrNotFound
 		}
-		return c, nil
+		cp := *c
+		return &cp, nil
 	}
 	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, dynamicClientSecretKey))
 	if err != nil {
@@ -500,13 +597,9 @@ func (h *Handler) loadDynamicClient(ctx context.Context) (*dynamicClient, error)
 	return &client, nil
 }
 
-// ensureLoadedDynamicClient populates the in-memory profile DCR client from
-// secretStore when Dynamic Client Registration is configured so new CLI
-// processes reuse the registered client_id/client_secret for token cache
-// lookups and refresh_token grants.
-func (h *Handler) ensureLoadedDynamicClient(ctx context.Context) {
+func (h *Handler) reusableDynamicClient(ctx context.Context) *dynamicClient {
 	if !h.dcrEnabled() {
-		return
+		return nil
 	}
 	profile := auth.ProfileFromContext(ctx)
 	fingerprint := dcrFingerprint(h.cfg.DynamicClientRegistration, h.cfg.TokenURL)
@@ -517,129 +610,195 @@ func (h *Handler) ensureLoadedDynamicClient(ctx context.Context) {
 		existing = h.dcrClients[profile]
 	}
 	h.mu.RUnlock()
-	if existing != nil && !existing.expired() && existing.Fingerprint == fingerprint {
-		return
+	if existing != nil && existing.ClientID != "" && !existing.expired() && existing.Fingerprint == fingerprint {
+		cp := *existing
+		return &cp
 	}
 
 	cachedClient, err := h.loadDynamicClient(ctx)
-	if err == nil && cachedClient != nil && !cachedClient.expired() && cachedClient.Fingerprint == fingerprint {
+	if err == nil && cachedClient != nil && cachedClient.ClientID != "" && !cachedClient.expired() && cachedClient.Fingerprint == fingerprint {
+		cp := *cachedClient
 		h.mu.Lock()
 		if h.dcrClients == nil {
 			h.dcrClients = make(map[string]*dynamicClient)
 		}
-		h.dcrClients[profile] = cachedClient
+		h.dcrClients[profile] = &cp
 		h.mu.Unlock()
+		ret := cp
+		return &ret
 	}
+	return nil
 }
 
-// dynamicClientRegistration performs RFC 7591 Dynamic Client Registration if
-// configured. On success it caches the registered client credentials in
-// h.dcrClients (and in secretStore when available) without mutating h.cfg.
-func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
+// ensureLoadedDynamicClient populates the in-memory profile DCR client from
+// secretStore when Dynamic Client Registration is configured so new CLI
+// processes reuse the registered client_id/client_secret for token cache
+// lookups and refresh_token grants.
+func (h *Handler) ensureLoadedDynamicClient(ctx context.Context) {
+	_ = h.reusableDynamicClient(ctx)
+}
+
+// ensureDynamicClient coalesces RFC 7591 Dynamic Client Registration per
+// profile and registration fingerprint, returning an immutable snapshot of the
+// selected client so concurrent requests never clobber one another's client
+// binding mid-acquisition.
+func (h *Handler) ensureDynamicClient(ctx context.Context, gen uint64) (*dynamicClient, error) {
 	dcr := h.cfg.DynamicClientRegistration
 	if dcr == nil || dcr.RegistrationEndpoint == "" {
-		return nil
+		return nil, nil
 	}
 	profile := auth.ProfileFromContext(ctx)
 	fingerprint := dcrFingerprint(dcr, h.cfg.TokenURL)
+	sfKey := fmt.Sprintf("dcr|%s|%s|gen=%d", profile, fingerprint, gen)
 
-	// Check if we already have a dynamic client registered and cached for
-	// this exact registration target (endpoint + token URL + metadata).
-	cachedClient, err := h.loadDynamicClient(ctx)
-	if err == nil && cachedClient != nil && !cachedClient.expired() && cachedClient.Fingerprint == fingerprint {
-		h.logger.V(1).Info("using cached dynamic client")
-		h.mu.Lock()
-		if h.dcrClients == nil {
-			h.dcrClients = make(map[string]*dynamicClient)
+	ch := h.sfGroup.DoChan(sfKey, func() (any, error) {
+		sfCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultTimeout)
+		defer cancel()
+
+		// Check in-memory first (especially important when secretStore == nil).
+		h.mu.RLock()
+		var memExisting *dynamicClient
+		if h.dcrClients != nil {
+			memExisting = h.dcrClients[profile]
 		}
-		h.dcrClients[profile] = cachedClient
-		h.mu.Unlock()
-		return nil
-	}
-	if err != nil && !errors.Is(err, secrets.ErrNotFound) {
-		return auth.NewError(h.cfg.Name, "load_dynamic_client", err)
-	}
-	if cachedClient != nil {
-		switch {
-		case cachedClient.expired():
-			h.logger.V(1).Info("cached dynamic client secret expired, re-registering")
-		case cachedClient.Fingerprint != fingerprint:
-			h.logger.V(1).Info("dynamic client registration config changed, re-registering")
+		h.mu.RUnlock()
+		if memExisting != nil && memExisting.ClientID != "" && !memExisting.expired() && memExisting.Fingerprint == fingerprint {
+			if h.secretStore == nil {
+				cp := *memExisting
+				return &cp, nil
+			}
 		}
-	}
 
-	h.logger.V(1).Info("performing dynamic client registration")
-
-	var initialToken string
-	if dcr.InitialAccessToken != "" {
-		var resolveErr error
-		initialToken, resolveErr = config.ResolveCredentialValue(ctx, dcr.InitialAccessToken, h.secretStore, h.reservedBinaryNames()...)
-		if resolveErr != nil {
-			return auth.NewError(h.cfg.Name, "dcr_initial_access_token", resolveErr)
+		// Check persisted store (or in-memory fallback when secretStore == nil).
+		cachedClient, err := h.loadDynamicClient(sfCtx)
+		if err == nil && cachedClient != nil && cachedClient.ClientID != "" && !cachedClient.expired() && cachedClient.Fingerprint == fingerprint {
+			h.logger.V(1).Info("using cached dynamic client")
+			pubMu := h.profilePublishLock(profile)
+			pubMu.Lock()
+			if h.currentSessionGen(profile) != gen {
+				pubMu.Unlock()
+				return nil, auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
+			}
+			cp := *cachedClient
+			h.mu.Lock()
+			if h.dcrClients == nil {
+				h.dcrClients = make(map[string]*dynamicClient)
+			}
+			h.dcrClients[profile] = &cp
+			h.mu.Unlock()
+			pubMu.Unlock()
+			ret := cp
+			return &ret, nil
 		}
-	}
+		if err != nil && !errors.Is(err, secrets.ErrNotFound) {
+			return nil, auth.NewError(h.cfg.Name, "load_dynamic_client", err)
+		}
+		if cachedClient != nil {
+			switch {
+			case cachedClient.expired():
+				h.logger.V(1).Info("cached dynamic client secret expired, re-registering")
+			case cachedClient.Fingerprint != fingerprint:
+				h.logger.V(1).Info("dynamic client registration config changed, re-registering")
+			}
+		}
 
-	// Perform dynamic client registration. RFC 7591 requires the request
-	// body to be a JSON object; marshal a nil metadata map as "{}" rather
-	// than JSON null.
-	clientMetadata := dcr.ClientMetadata
-	if clientMetadata == nil {
-		clientMetadata = map[string]any{}
-	}
-	reqBody, err := json.Marshal(clientMetadata)
-	if err != nil {
-		return auth.NewError(h.cfg.Name, "dcr_marshal", fmt.Errorf("marshal client metadata: %w", err))
-	}
+		h.logger.V(1).Info("performing dynamic client registration")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dcr.RegistrationEndpoint, bytes.NewBuffer(reqBody))
-	if err != nil {
-		return auth.NewError(h.cfg.Name, "dcr_request", fmt.Errorf("create registration request: %w", err))
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if initialToken != "" {
-		req.Header.Set("Authorization", "Bearer "+initialToken)
-	}
+		var initialToken string
+		if dcr.InitialAccessToken != "" {
+			var resolveErr error
+			initialToken, resolveErr = config.ResolveCredentialValue(sfCtx, dcr.InitialAccessToken, h.secretStore, h.reservedBinaryNames()...)
+			if resolveErr != nil {
+				return nil, auth.NewError(h.cfg.Name, "dcr_initial_access_token", resolveErr)
+			}
+		}
 
-	resp, err := h.httpClient.Do(req) //nolint:gosec // URL from trusted admin config
-	if err != nil {
-		return auth.NewError(h.cfg.Name, "dcr_http", fmt.Errorf("registration request failed: %w", err))
-	}
-	defer resp.Body.Close()
+		// Perform dynamic client registration. RFC 7591 requires the request
+		// body to be a JSON object; marshal a nil metadata map as "{}" rather
+		// than JSON null.
+		clientMetadata := dcr.ClientMetadata
+		if clientMetadata == nil {
+			clientMetadata = map[string]any{}
+		}
+		reqBody, err := json.Marshal(clientMetadata)
+		if err != nil {
+			return nil, auth.NewError(h.cfg.Name, "dcr_marshal", fmt.Errorf("marshal client metadata: %w", err))
+		}
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
-	if err != nil {
-		return auth.NewError(h.cfg.Name, "dcr_read_body", fmt.Errorf("read registration response: %w", err))
-	}
+		req, err := http.NewRequestWithContext(sfCtx, http.MethodPost, dcr.RegistrationEndpoint, bytes.NewBuffer(reqBody))
+		if err != nil {
+			return nil, auth.NewError(h.cfg.Name, "dcr_request", fmt.Errorf("create registration request: %w", err))
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		if initialToken != "" {
+			req.Header.Set("Authorization", "Bearer "+initialToken)
+		}
 
-	if resp.StatusCode != http.StatusCreated {
-		return auth.NewError(h.cfg.Name, "dcr_http_status", fmt.Errorf("registration failed (HTTP %d): %s", resp.StatusCode, string(respBody)))
-	}
+		resp, err := h.httpClient.Do(req) //nolint:gosec // URL from trusted admin config
+		if err != nil {
+			return nil, auth.NewError(h.cfg.Name, "dcr_http", fmt.Errorf("registration request failed: %w", err))
+		}
+		defer resp.Body.Close()
 
-	var regResp struct {
-		ClientID              string `json:"client_id"`
-		ClientSecret          string `json:"client_secret"` //nolint:gosec // JSON field
-		ClientSecretExpiresAt int64  `json:"client_secret_expires_at"`
-	}
-	if err := json.Unmarshal(respBody, &regResp); err != nil {
-		return auth.NewError(h.cfg.Name, "dcr_unmarshal", fmt.Errorf("parse registration response: %w", err))
-	}
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+		if err != nil {
+			return nil, auth.NewError(h.cfg.Name, "dcr_read_body", fmt.Errorf("read registration response: %w", err))
+		}
 
-	if regResp.ClientID == "" {
-		return auth.NewError(h.cfg.Name, "dcr_missing_field", fmt.Errorf("registration response missing client_id"))
-	}
+		if resp.StatusCode != http.StatusCreated {
+			return nil, auth.NewError(h.cfg.Name, "dcr_http_status", fmt.Errorf("registration failed (HTTP %d): %s", resp.StatusCode, string(respBody)))
+		}
 
-	newClient := &dynamicClient{
-		ClientID:              regResp.ClientID,
-		ClientSecret:          regResp.ClientSecret,
-		ClientSecretExpiresAt: regResp.ClientSecretExpiresAt,
-		Fingerprint:           fingerprint,
-	}
-	if err := h.storeDynamicClient(ctx, newClient); err != nil {
-		return auth.NewError(h.cfg.Name, "dcr_store", err)
-	}
+		var regResp struct {
+			ClientID              string `json:"client_id"`
+			ClientSecret          string `json:"client_secret"` //nolint:gosec // JSON field
+			ClientSecretExpiresAt int64  `json:"client_secret_expires_at"`
+		}
+		if err := json.Unmarshal(respBody, &regResp); err != nil {
+			return nil, auth.NewError(h.cfg.Name, "dcr_unmarshal", fmt.Errorf("parse registration response: %w", err))
+		}
 
-	return nil
+		if regResp.ClientID == "" {
+			return nil, auth.NewError(h.cfg.Name, "dcr_missing_field", fmt.Errorf("registration response missing client_id"))
+		}
+
+		newClient := &dynamicClient{
+			ClientID:              regResp.ClientID,
+			ClientSecret:          regResp.ClientSecret,
+			ClientSecretExpiresAt: regResp.ClientSecretExpiresAt,
+			Fingerprint:           fingerprint,
+		}
+		pubMu := h.profilePublishLock(profile)
+		pubMu.Lock()
+		if h.currentSessionGen(profile) != gen {
+			pubMu.Unlock()
+			return nil, auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
+		}
+		if err := h.storeDynamicClient(sfCtx, newClient); err != nil {
+			pubMu.Unlock()
+			return nil, auth.NewError(h.cfg.Name, "dcr_store", err)
+		}
+		pubMu.Unlock()
+
+		cp := *newClient
+		return &cp, nil
+	})
+
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		c, _ := res.Val.(*dynamicClient)
+		if c == nil {
+			return nil, nil
+		}
+		cp := *c
+		return &cp, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // Login performs authentication using the configured OAuth2 or credential flow.
@@ -693,10 +852,13 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		return res, nil
 	}
 
-	if err := h.dynamicClientRegistration(ctx); err != nil {
+	profile := auth.ProfileFromContext(ctx)
+	dcrClient, err := h.ensureDynamicClient(ctx, h.currentSessionGen(profile))
+	if err != nil {
 		h.recordFailedLogin(ctx)
 		return nil, err
 	}
+	ctx = withSelectedDynamicClient(ctx, dcrClient)
 
 	var tokenResp *tokenResponse
 	var cbServer *oauth.CallbackServer
@@ -749,17 +911,14 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 
 	// Token exchange (optional post-flow pipeline)
 	expiresAt := h.tokenExpiresAt(tokenResp)
+	var derived *exchangeResult
 	if h.cfg.TokenExchange != nil {
-		derived, exchangeErr := h.executeTokenExchange(ctx, tokenResp.AccessToken)
+		var exchangeErr error
+		derived, exchangeErr = h.executeTokenExchange(ctx, tokenResp.AccessToken)
 		if exchangeErr != nil {
 			settleCallback(false)
 			h.recordFailedLogin(ctx)
 			return nil, auth.NewError(h.cfg.Name, "token_exchange", exchangeErr)
-		}
-		// Use the primary token's expiry for the derived token since the exchange
-		// response does not carry its own expiry.
-		if storeErr := h.storeDerivedToken(ctx, derived, expiresAt, flow, scopes); storeErr != nil {
-			h.logger.V(1).Info("failed to cache derived token", "error", storeErr)
 		}
 	}
 
@@ -776,11 +935,25 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		claims = h.fallbackClaims(ctx, tokenResp.AccessToken, flow)
 	}
 
+	pubMu := h.profilePublishLock(profile)
+	pubMu.Lock()
+	if derived != nil {
+		// Use the primary token's expiry for the derived token since the exchange
+		// response does not carry its own expiry.
+		if storeErr := h.storeDerivedToken(ctx, derived, expiresAt, flow, scopes); storeErr != nil {
+			h.logger.V(1).Info("failed to cache derived token", "error", storeErr)
+		}
+	}
 	if storeErr := h.storeTokens(ctx, tokenResp, claims, expiresAt, flow, scopes); storeErr != nil {
 		h.logger.V(1).Info("failed to store tokens", "error", storeErr)
 	}
-	h.clearSessionState(ctx)
+	if clearErr := h.clearSessionState(ctx); clearErr != nil {
+		pubMu.Unlock()
+		settleCallback(false)
+		return nil, auth.NewError(h.cfg.Name, "session_state", clearErr)
+	}
 	h.setActiveFlow(ctx, flow)
+	pubMu.Unlock()
 
 	settleCallback(true)
 	return &auth.Result{Claims: claims, ExpiresAt: expiresAt}, nil
@@ -816,15 +989,6 @@ func (h *Handler) patLogin(ctx context.Context, scopes []string) (*auth.Result, 
 		claims.Username = username
 	}
 
-	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix), []byte(patToken)); err != nil {
-		return nil, auth.NewError(h.cfg.Name, "store_pat", fmt.Errorf("store pat token: %w", err))
-	}
-	if username != "" {
-		if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATUsernameSuffix), []byte(username)); err != nil {
-			h.logger.V(1).Info("failed to persist pat username", "error", err)
-		}
-	}
-
 	meta := &auth.HandlerMetadata{
 		Claims:        claims,
 		ExpiresAt:     time.Time{},
@@ -835,11 +999,26 @@ func (h *Handler) patLogin(ctx context.Context, scopes []string) (*auth.Result, 
 	if err != nil {
 		return nil, auth.NewError(h.cfg.Name, "store_metadata", fmt.Errorf("marshal metadata: %w", err))
 	}
+
+	profile := auth.ProfileFromContext(ctx)
+	pubMu := h.profilePublishLock(profile)
+	pubMu.Lock()
+	defer pubMu.Unlock()
+
+	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix), []byte(patToken)); err != nil {
+		return nil, auth.NewError(h.cfg.Name, "store_pat", fmt.Errorf("store pat token: %w", err))
+	}
+	if username != "" {
+		if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATUsernameSuffix), []byte(username)); err != nil {
+			h.logger.V(1).Info("failed to persist pat username", "error", err)
+		}
+	}
 	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyMetadataSuffix), metaBytes); err != nil {
 		return nil, auth.NewError(h.cfg.Name, "store_metadata", fmt.Errorf("store metadata: %w", err))
 	}
-
-	h.clearSessionState(ctx)
+	if clearErr := h.clearSessionState(ctx); clearErr != nil {
+		return nil, auth.NewError(h.cfg.Name, "session_state", clearErr)
+	}
 	h.setActivePAT(ctx, username)
 	return &auth.Result{Claims: claims, ExpiresAt: time.Time{}}, nil
 }
@@ -851,20 +1030,38 @@ func (h *Handler) Logout(ctx context.Context) error {
 	ctx = h.resolveContextProfile(ctx)
 	profile := auth.ProfileFromContext(ctx)
 
+	pubMu := h.profilePublishLock(profile)
+	pubMu.Lock()
+	defer pubMu.Unlock()
+
 	h.mu.Lock()
+	if h.sessionGen == nil {
+		h.sessionGen = make(map[string]uint64)
+	}
+	h.sessionGen[profile]++
 	if h.activeFlows != nil {
 		delete(h.activeFlows, profile)
 	}
-	h.lastFlow = ""
 	if h.patUsernames != nil {
 		delete(h.patUsernames, profile)
 	}
-	h.lastPATUser = ""
+	if h.derivedUsers != nil {
+		delete(h.derivedUsers, profile)
+	}
 	if h.dcrClients != nil {
 		delete(h.dcrClients, profile)
 	}
-	clear(h.memCache)
-	clear(h.memDerived)
+	profilePrefix := profile + "|"
+	for k := range h.memCache {
+		if strings.HasPrefix(k, profilePrefix) {
+			delete(h.memCache, k)
+		}
+	}
+	for k := range h.memDerived {
+		if strings.HasPrefix(k, profilePrefix) {
+			delete(h.memDerived, k)
+		}
+	}
 	if h.sessionStates == nil {
 		h.sessionStates = make(map[string]string)
 	}
@@ -965,6 +1162,15 @@ func (h *Handler) PurgeExpiredTokens(ctx context.Context) (int, error) {
 // unavailable in keyless CI containers.
 func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 	ctx = h.resolveContextProfile(ctx)
+
+	state, stateErr := h.getSessionState(ctx)
+	if stateErr != nil {
+		return &auth.Status{Authenticated: false, Reason: "session state unreadable"}, nil //nolint:nilerr // Status reports unreadable session state via Authenticated=false + Reason
+	}
+	if state == sessionStateLoggedOut {
+		return &auth.Status{Authenticated: false, Reason: "not logged in"}, nil
+	}
+
 	h.ensureLoadedDynamicClient(ctx)
 
 	var expiredMeta *auth.HandlerMetadata
@@ -1015,9 +1221,9 @@ func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 		return &auth.Status{Authenticated: false, Reason: "metadata corrupt or unreadable"}, nil
 	}
 
-	// Do not advertise ambient headless authentication immediately after an
-	// explicit Logout or a failed Login attempt on this profile.
-	if state := h.getSessionState(ctx); state == sessionStateLoggedOut || state == sessionStateLoginFailed {
+	// Do not advertise ambient headless authentication immediately after a
+	// failed Login attempt on this profile.
+	if state == sessionStateLoginFailed {
 		return &auth.Status{Authenticated: false, Reason: "not logged in"}, nil
 	}
 
@@ -1147,6 +1353,19 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 	}
 
 	ctx = h.resolveContextProfile(ctx)
+	profile := auth.ProfileFromContext(ctx)
+	gen := h.currentSessionGen(profile)
+
+	// Enforce logout and fail closed on unreadable session_state before serving
+	// any cached, derived, refreshed, or ambient credential.
+	state, stateErr := h.getSessionState(ctx)
+	if stateErr != nil {
+		return nil, auth.NewError(h.cfg.Name, "session_state", stateErr)
+	}
+	if state == sessionStateLoggedOut {
+		return nil, auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
+	}
+
 	h.ensureLoadedDynamicClient(ctx)
 
 	scope := opts.Scope
@@ -1157,52 +1376,66 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 	// 1. Check stored login session when secretStore is available.
 	if h.secretStore != nil {
 		meta, metaErr := h.loadMetadata(ctx)
+		if metaErr != nil && !errors.Is(metaErr, secrets.ErrNotFound) {
+			return nil, auth.NewError(h.cfg.Name, "load_metadata", metaErr)
+		}
 
-		// Stored PAT session: read pat_token directly (never stored in TokenCache).
-		if metaErr == nil && meta != nil && meta.LastLoginFlow == auth.FlowPAT {
-			if !opts.ForceRefresh {
-				patData, patErr := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix))
-				if patErr == nil && len(patData) > 0 {
-					h.restoreStoredPATUsername(ctx, meta)
-					return &auth.Token{
-						AccessToken: string(patData),
-						TokenType:   defaultTokenType,
-						ExpiresAt:   time.Time{},
-						Scope:       scope,
-						Flow:        auth.FlowPAT,
-					}, nil
-				}
-			} else if h.cfg.Token != "" {
-				tok, err := h.acquirePATToken(ctx, scope, true)
-				if err != nil {
-					return nil, err
-				}
-				return tok, nil
+		if meta != nil {
+			sessionFlow := meta.LastLoginFlow
+			if sessionFlow == "" {
+				sessionFlow = h.resolveDefaultFlow()
 			}
-		}
 
-		// Stored derived token takes precedence when TokenExchange is configured
-		// (only for non-PAT sessions). Never fall back to returning the raw
-		// primary OAuth2 token when TokenExchange is configured.
-		if h.cfg.TokenExchange != nil && (meta == nil || meta.LastLoginFlow != auth.FlowPAT) {
-			derived, err := h.loadDerivedToken(ctx)
-			if err == nil && derived != nil && (derived.Scope == "" || derived.Scope == scope) && derived.IsValidFor(opts.MinValidFor) && !opts.ForceRefresh {
-				if derived.Flow != "" {
-					h.setActiveFlow(ctx, derived.Flow)
+			// Stored PAT session: read pat_token directly (never stored in TokenCache).
+			if sessionFlow == auth.FlowPAT {
+				if !opts.ForceRefresh {
+					patData, patErr := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix))
+					if patErr == nil && len(patData) > 0 {
+						if activeErr := h.ensureSessionActive(ctx, profile, gen); activeErr != nil {
+							return nil, activeErr
+						}
+						h.restoreStoredPATUsername(ctx, meta)
+						return &auth.Token{
+							AccessToken: string(patData),
+							TokenType:   defaultTokenType,
+							ExpiresAt:   time.Time{},
+							Scope:       scope,
+							Flow:        auth.FlowPAT,
+						}, nil
+					}
+				} else if h.cfg.Token != "" {
+					tok, err := h.acquirePATToken(ctx, scope, true, gen)
+					if err != nil {
+						return nil, err
+					}
+					if activeErr := h.ensureSessionActive(ctx, profile, gen); activeErr != nil {
+						return nil, activeErr
+					}
+					return tok, nil
 				}
-				return derived, nil
 			}
-		}
 
-		sessionFlow := h.resolveDefaultFlow()
-		if metaErr == nil && meta != nil && meta.LastLoginFlow != "" {
-			sessionFlow = meta.LastLoginFlow
-		}
-
-		if h.cfg.TokenExchange == nil && sessionFlow != auth.FlowPAT && !opts.ForceRefresh {
-			if cached := h.lookupCachedToken(ctx, sessionFlow, scope, opts.MinValidFor); cached != nil {
-				h.setActiveFlow(ctx, sessionFlow)
-				return cached, nil
+			// Stored derived or primary token shortcuts apply strictly to an active
+			// stored login session (meta != nil). Ambient headless credentials omit
+			// metadata and go through acquireHeadlessToken so nonInteractiveFlowOrder
+			// is always respected.
+			if sessionFlow != auth.FlowPAT && !opts.ForceRefresh {
+				if h.cfg.TokenExchange != nil {
+					derived, err := h.loadDerivedTokenForFlow(ctx, sessionFlow)
+					if err == nil && derived != nil && (derived.Scope == "" || derived.Scope == scope) && derived.IsValidFor(opts.MinValidFor) {
+						if activeErr := h.ensureSessionActive(ctx, profile, gen); activeErr != nil {
+							return nil, activeErr
+						}
+						h.setActiveFlow(ctx, sessionFlow)
+						return derived, nil
+					}
+				} else if cached := h.lookupCachedToken(ctx, sessionFlow, scope, opts.MinValidFor); cached != nil {
+					if activeErr := h.ensureSessionActive(ctx, profile, gen); activeErr != nil {
+						return nil, activeErr
+					}
+					h.setActiveFlow(ctx, sessionFlow)
+					return cached, nil
+				}
 			}
 		}
 
@@ -1210,25 +1443,41 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 		// for this session and refresh fails, fail closed rather than silently
 		// minting a new headless token over a revoked/invalid session.
 		refreshData, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix))
+		if err != nil && !errors.Is(err, secrets.ErrNotFound) {
+			return nil, auth.NewError(h.cfg.Name, "refresh_token", err)
+		}
 		if err == nil && len(refreshData) > 0 {
-			refreshed, refreshErr := h.refreshWithSingleflight(ctx, string(refreshData), sessionFlow, scope, opts)
+			sessionFlow := h.resolveDefaultFlow()
+			if meta != nil && meta.LastLoginFlow != "" {
+				sessionFlow = meta.LastLoginFlow
+			}
+			refreshed, refreshErr := h.refreshWithSingleflight(ctx, sessionFlow, scope, opts, gen)
 			if refreshErr != nil {
+				if errors.Is(refreshErr, auth.ErrNotAuthenticated) {
+					return nil, refreshErr
+				}
 				return nil, auth.NewError(h.cfg.Name, "refresh_token", refreshErr)
+			}
+			if activeErr := h.ensureSessionActive(ctx, profile, gen); activeErr != nil {
+				return nil, activeErr
 			}
 			return refreshed, nil
 		}
 	}
 
-	// Respect explicit Logout across subprocess invocations.
-	if h.getSessionState(ctx) == sessionStateLoggedOut {
-		return nil, auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
-	}
-
 	// 2. Zero-ceremony headless pipeline acquisition (works with or without secretStore).
-	token, headlessErr := h.acquireHeadlessToken(ctx, scope, opts)
+	token, headlessErr := h.acquireHeadlessToken(ctx, scope, opts, gen)
 	if token != nil {
-		if h.getSessionState(ctx) == sessionStateLoginFailed {
-			h.clearSessionState(ctx)
+		if activeErr := h.ensureSessionActive(ctx, profile, gen); activeErr != nil {
+			return nil, activeErr
+		}
+		if curState, curErr := h.getSessionState(ctx); curErr == nil && curState == sessionStateLoginFailed {
+			pubMu := h.profilePublishLock(profile)
+			pubMu.Lock()
+			if h.currentSessionGen(profile) == gen {
+				_ = h.clearSessionState(ctx)
+			}
+			pubMu.Unlock()
 		}
 		return token, nil
 	}
@@ -1243,44 +1492,100 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 	return nil, auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
 }
 
-func (h *Handler) refreshWithSingleflight(ctx context.Context, refreshToken string, flow auth.Flow, scope string, opts auth.TokenOptions) (*auth.Token, error) {
-	sfKey := fmt.Sprintf("refresh|%s|%s|%s|min=%d|force=%t", auth.ProfileFromContext(ctx), flow, scope, opts.MinValidFor, opts.ForceRefresh)
+func (h *Handler) refreshWithSingleflight(ctx context.Context, flow auth.Flow, scope string, opts auth.TokenOptions, gen uint64) (*auth.Token, error) {
+	profile := auth.ProfileFromContext(ctx)
+	sfKey := fmt.Sprintf("refresh|%s|%s|%s|min=%d|force=%t|gen=%d", profile, flow, scope, opts.MinValidFor, opts.ForceRefresh, gen)
 	return h.doSingleflightToken(ctx, sfKey, func(sfCtx context.Context) (*auth.Token, error) {
+		// Serialize refresh-token consumption per profile so concurrent requests
+		// with different scopes or options never submit the same single-use
+		// rotating refresh token simultaneously.
+		refMu := h.profileRefreshLock(profile)
+		refMu.Lock()
+		defer refMu.Unlock()
+
+		if activeErr := h.ensureSessionActive(sfCtx, profile, gen); activeErr != nil {
+			return nil, activeErr
+		}
+		if dcrClient := h.reusableDynamicClient(sfCtx); dcrClient != nil {
+			sfCtx = withSelectedDynamicClient(sfCtx, dcrClient)
+		}
+
 		if !opts.ForceRefresh {
 			if h.cfg.TokenExchange != nil {
-				if derived, loadErr := h.loadDerivedToken(sfCtx); loadErr == nil && derived != nil && (derived.Scope == "" || derived.Scope == scope) && derived.IsValidFor(opts.MinValidFor) {
+				if derived, loadErr := h.loadDerivedTokenForFlow(sfCtx, flow); loadErr == nil && derived != nil && (derived.Scope == "" || derived.Scope == scope) && derived.IsValidFor(opts.MinValidFor) {
 					return derived, nil
 				}
 			} else if cached := h.lookupCachedToken(sfCtx, flow, scope, opts.MinValidFor); cached != nil {
 				return cached, nil
 			}
 		}
-		tokenResp, refreshErr := h.refreshAccessToken(sfCtx, refreshToken, scope)
+
+		refreshData, getErr := h.secretStore.Get(sfCtx, h.profileSecretKey(sfCtx, secretKeyRefreshSuffix))
+		if getErr != nil {
+			if errors.Is(getErr, secrets.ErrNotFound) {
+				return nil, auth.ErrNotAuthenticated
+			}
+			return nil, getErr
+		}
+		if len(refreshData) == 0 {
+			return nil, auth.ErrNotAuthenticated
+		}
+
+		tokenResp, refreshErr := h.refreshAccessToken(sfCtx, string(refreshData), scope)
 		if refreshErr != nil {
 			return nil, refreshErr
 		}
 		token := h.tokenRespToToken(tokenResp, flow, scope)
+
+		// Persist any rotated refresh_token immediately under publish lock before
+		// running optional post-grant token exchange so single-use refresh tokens
+		// are never lost even if a downstream exchange fails transiently.
+		pubMu := h.profilePublishLock(profile)
+		pubMu.Lock()
+		if activeErr := h.ensureSessionActive(sfCtx, profile, gen); activeErr != nil {
+			pubMu.Unlock()
+			return nil, activeErr
+		}
+		if tokenResp.RefreshToken != "" {
+			if setErr := h.secretStore.Set(sfCtx, h.profileSecretKey(sfCtx, secretKeyRefreshSuffix), []byte(tokenResp.RefreshToken)); setErr != nil {
+				pubMu.Unlock()
+				return nil, fmt.Errorf("persist rotated refresh token: %w", setErr)
+			}
+		}
+		if h.cfg.TokenExchange == nil {
+			h.saveCachedToken(sfCtx, flow, scope, token)
+			h.setActiveFlow(sfCtx, flow)
+			pubMu.Unlock()
+			return token, nil
+		}
+		pubMu.Unlock()
+
+		derived, exchangeErr := h.executeTokenExchange(sfCtx, tokenResp.AccessToken)
+		if exchangeErr != nil {
+			return nil, auth.NewError(h.cfg.Name, "token_exchange", exchangeErr)
+		}
+
+		pubMu.Lock()
+		if activeErr := h.ensureSessionActive(sfCtx, profile, gen); activeErr != nil {
+			pubMu.Unlock()
+			return nil, activeErr
+		}
 		h.saveCachedToken(sfCtx, flow, scope, token)
 		h.setActiveFlow(sfCtx, flow)
-		if h.cfg.TokenExchange != nil {
-			derived, exchangeErr := h.executeTokenExchange(sfCtx, tokenResp.AccessToken)
-			if exchangeErr != nil {
-				return nil, auth.NewError(h.cfg.Name, "token_exchange", exchangeErr)
-			}
-			_ = h.storeDerivedToken(sfCtx, derived, token.ExpiresAt, flow, scopeSliceFromString(scope))
-			return &auth.Token{
-				AccessToken: derived.Token,
-				TokenType:   defaultTokenType,
-				ExpiresAt:   token.ExpiresAt,
-				Scope:       scope,
-				Flow:        flow,
-			}, nil
-		}
-		return token, nil
+		_ = h.storeDerivedToken(sfCtx, derived, token.ExpiresAt, flow, scopeSliceFromString(scope))
+		pubMu.Unlock()
+
+		return &auth.Token{
+			AccessToken: derived.Token,
+			TokenType:   defaultTokenType,
+			ExpiresAt:   token.ExpiresAt,
+			Scope:       scope,
+			Flow:        flow,
+		}, nil
 	})
 }
 
-func (h *Handler) acquireHeadlessToken(ctx context.Context, scope string, opts auth.TokenOptions) (*auth.Token, error) {
+func (h *Handler) acquireHeadlessToken(ctx context.Context, scope string, opts auth.TokenOptions, gen uint64) (*auth.Token, error) {
 	var lastCredentialErr error
 
 	for _, flow := range h.nonInteractiveFlowOrder() {
@@ -1303,7 +1608,7 @@ func (h *Handler) acquireHeadlessToken(ctx context.Context, scope string, opts a
 				h.logger.V(1).Info("workload identity federated token unavailable", "error", resolveErr)
 				continue
 			}
-			tok, err := h.mintHeadlessOAuthToken(ctx, auth.FlowWorkloadIdentity, scope, opts)
+			tok, err := h.mintHeadlessOAuthToken(ctx, auth.FlowWorkloadIdentity, scope, opts, gen)
 			if err != nil {
 				return nil, err
 			}
@@ -1321,12 +1626,14 @@ func (h *Handler) acquireHeadlessToken(ctx context.Context, scope string, opts a
 			}
 			avail, reason := h.detectClientCredentialsAvailability(ctx)
 			if !avail {
-				if h.cfg.ClientSecret != "" && h.cfg.DefaultFlow != "interactive" && h.cfg.DefaultFlow != "device_code" {
+				dcrClientCredsAllowed := h.dcrEnabled() && (h.cfg.DefaultFlow == "client_credentials" || (h.cfg.AuthorizeURL == "" && h.cfg.DeviceAuthURL == ""))
+				staticClientCredsAllowed := !h.dcrEnabled() && h.cfg.ClientSecret != "" && h.cfg.DefaultFlow != "interactive" && h.cfg.DefaultFlow != "device_code"
+				if dcrClientCredsAllowed || staticClientCredsAllowed {
 					lastCredentialErr = fmt.Errorf("%s", reason)
 				}
 				continue
 			}
-			tok, err := h.mintHeadlessOAuthToken(ctx, auth.FlowClientCredentials, scope, opts)
+			tok, err := h.mintHeadlessOAuthToken(ctx, auth.FlowClientCredentials, scope, opts, gen)
 			if err != nil {
 				return nil, err
 			}
@@ -1336,7 +1643,7 @@ func (h *Handler) acquireHeadlessToken(ctx context.Context, scope string, opts a
 			if h.cfg.Token == "" {
 				continue
 			}
-			tok, err := h.acquirePATToken(ctx, scope, opts.ForceRefresh)
+			tok, err := h.acquirePATToken(ctx, scope, opts.ForceRefresh, gen)
 			if err != nil {
 				lastCredentialErr = err
 				h.logger.V(1).Info("static PAT credential unavailable", "error", err)
@@ -1352,18 +1659,28 @@ func (h *Handler) acquireHeadlessToken(ctx context.Context, scope string, opts a
 	return nil, nil
 }
 
-func (h *Handler) mintHeadlessOAuthToken(ctx context.Context, flow auth.Flow, scope string, opts auth.TokenOptions) (*auth.Token, error) {
-	sfKey := fmt.Sprintf("mint|%s|%s|%s|min=%d|force=%t", auth.ProfileFromContext(ctx), flow, scope, opts.MinValidFor, opts.ForceRefresh)
+func (h *Handler) mintHeadlessOAuthToken(ctx context.Context, flow auth.Flow, scope string, opts auth.TokenOptions, gen uint64) (*auth.Token, error) {
+	profile := auth.ProfileFromContext(ctx)
+	sfKey := fmt.Sprintf("mint|%s|%s|%s|min=%d|force=%t|gen=%d", profile, flow, scope, opts.MinValidFor, opts.ForceRefresh, gen)
 	return h.doSingleflightToken(ctx, sfKey, func(sfCtx context.Context) (*auth.Token, error) {
+		if activeErr := h.ensureSessionActive(sfCtx, profile, gen); activeErr != nil {
+			return nil, activeErr
+		}
+
+		dcrClient, dcrErr := h.ensureDynamicClient(sfCtx, gen)
+		if dcrErr != nil {
+			return nil, dcrErr
+		}
+		sfCtx = withSelectedDynamicClient(sfCtx, dcrClient)
+
 		if !opts.ForceRefresh {
 			if cached := h.lookupEffectiveCachedToken(sfCtx, flow, scope, opts.MinValidFor); cached != nil {
+				if activeErr := h.ensureSessionActive(sfCtx, profile, gen); activeErr != nil {
+					return nil, activeErr
+				}
 				h.setActiveFlow(sfCtx, flow)
 				return cached, nil
 			}
-		}
-
-		if err := h.dynamicClientRegistration(sfCtx); err != nil {
-			return nil, err
 		}
 
 		scopes := scopeSliceFromString(scope)
@@ -1384,15 +1701,26 @@ func (h *Handler) mintHeadlessOAuthToken(ctx context.Context, flow auth.Flow, sc
 		}
 
 		primary := h.tokenRespToToken(tokenResp, flow, scope)
-		h.saveCachedToken(sfCtx, flow, scope, primary)
-		h.setActiveFlow(sfCtx, flow)
-
+		var derived *exchangeResult
 		if h.cfg.TokenExchange != nil {
-			derived, exchangeErr := h.executeTokenExchange(sfCtx, tokenResp.AccessToken)
+			var exchangeErr error
+			derived, exchangeErr = h.executeTokenExchange(sfCtx, tokenResp.AccessToken)
 			if exchangeErr != nil {
 				return nil, auth.NewError(h.cfg.Name, "token_exchange", exchangeErr)
 			}
+		}
+
+		pubMu := h.profilePublishLock(profile)
+		pubMu.Lock()
+		if activeErr := h.ensureSessionActive(sfCtx, profile, gen); activeErr != nil {
+			pubMu.Unlock()
+			return nil, activeErr
+		}
+		h.saveCachedToken(sfCtx, flow, scope, primary)
+		h.setActiveFlow(sfCtx, flow)
+		if derived != nil {
 			_ = h.storeDerivedToken(sfCtx, derived, primary.ExpiresAt, flow, scopes)
+			pubMu.Unlock()
 			return &auth.Token{
 				AccessToken: derived.Token,
 				TokenType:   defaultTokenType,
@@ -1401,12 +1729,13 @@ func (h *Handler) mintHeadlessOAuthToken(ctx context.Context, flow auth.Flow, sc
 				Flow:        flow,
 			}, nil
 		}
+		pubMu.Unlock()
 
 		return primary, nil
 	})
 }
 
-func (h *Handler) acquirePATToken(ctx context.Context, scope string, updateStored bool) (*auth.Token, error) {
+func (h *Handler) acquirePATToken(ctx context.Context, scope string, updateStored bool, gen uint64) (*auth.Token, error) {
 	tok, err := h.resolvePATToken(ctx)
 	if err != nil {
 		return nil, err
@@ -1414,6 +1743,14 @@ func (h *Handler) acquirePATToken(ctx context.Context, scope string, updateStore
 	username, err := h.resolvePATUsername(ctx)
 	if err != nil {
 		return nil, auth.NewError(h.cfg.Name, "resolve_username", err)
+	}
+	profile := auth.ProfileFromContext(ctx)
+	pubMu := h.profilePublishLock(profile)
+	pubMu.Lock()
+	defer pubMu.Unlock()
+
+	if activeErr := h.ensureSessionActive(ctx, profile, gen); activeErr != nil {
+		return nil, activeErr
 	}
 	if updateStored && h.secretStore != nil {
 		_ = h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix), []byte(tok))
@@ -1522,24 +1859,89 @@ func (h *Handler) resolveContextProfile(ctx context.Context) context.Context {
 	return ctx
 }
 
-func (h *Handler) getSessionState(ctx context.Context) string {
-	profile := auth.ProfileFromContext(ctx)
-	if h.secretStore != nil {
-		data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeySessionStateSuffix))
-		if err == nil && len(data) > 0 {
-			return string(data)
-		}
-		return ""
-	}
+func (h *Handler) currentSessionGen(profile string) uint64 {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	if h.sessionStates == nil {
-		return ""
+	if h.sessionGen == nil {
+		return 0
 	}
-	return h.sessionStates[profile]
+	return h.sessionGen[profile]
 }
 
-func (h *Handler) clearSessionState(ctx context.Context) {
+func (h *Handler) profilePublishLock(profile string) *sync.Mutex {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.publishLocks == nil {
+		h.publishLocks = make(map[string]*sync.Mutex)
+	}
+	m, ok := h.publishLocks[profile]
+	if !ok {
+		m = &sync.Mutex{}
+		h.publishLocks[profile] = m
+	}
+	return m
+}
+
+func (h *Handler) profileRefreshLock(profile string) *sync.Mutex {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.refreshLocks == nil {
+		h.refreshLocks = make(map[string]*sync.Mutex)
+	}
+	m, ok := h.refreshLocks[profile]
+	if !ok {
+		m = &sync.Mutex{}
+		h.refreshLocks[profile] = m
+	}
+	return m
+}
+
+// ensureSessionActive verifies that no Logout has occurred since gen was
+// captured and that persisted session_state is readable and not logged_out.
+func (h *Handler) ensureSessionActive(ctx context.Context, profile string, gen uint64) error {
+	if h.currentSessionGen(profile) != gen {
+		return auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
+	}
+	state, err := h.getSessionState(ctx)
+	if err != nil {
+		return auth.NewError(h.cfg.Name, "session_state", err)
+	}
+	if state == sessionStateLoggedOut {
+		return auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
+	}
+	return nil
+}
+
+func (h *Handler) getSessionState(ctx context.Context) (string, error) {
+	profile := auth.ProfileFromContext(ctx)
+	h.mu.RLock()
+	var localState string
+	if h.sessionStates != nil {
+		localState = h.sessionStates[profile]
+	}
+	h.mu.RUnlock()
+
+	if h.secretStore != nil {
+		data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeySessionStateSuffix))
+		if err != nil {
+			if !errors.Is(err, secrets.ErrNotFound) {
+				return "", fmt.Errorf("read session state: %w", err)
+			}
+			return localState, nil
+		}
+		persisted := strings.TrimSpace(string(data))
+		if persisted == "" {
+			return "", fmt.Errorf("session state is empty or corrupt")
+		}
+		if localState == sessionStateLoggedOut {
+			return sessionStateLoggedOut, nil
+		}
+		return persisted, nil
+	}
+	return localState, nil
+}
+
+func (h *Handler) clearSessionState(ctx context.Context) error {
 	profile := auth.ProfileFromContext(ctx)
 	h.mu.Lock()
 	if h.sessionStates != nil {
@@ -1547,12 +1949,30 @@ func (h *Handler) clearSessionState(ctx context.Context) {
 	}
 	h.mu.Unlock()
 	if h.secretStore != nil {
-		_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeySessionStateSuffix))
+		if err := h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeySessionStateSuffix)); err != nil && !errors.Is(err, secrets.ErrNotFound) {
+			return fmt.Errorf("clear session state: %w", err)
+		}
 	}
+	return nil
 }
 
 func (h *Handler) recordFailedLogin(ctx context.Context) {
+	profile := auth.ProfileFromContext(ctx)
+	pubMu := h.profilePublishLock(profile)
+	pubMu.Lock()
+	defer pubMu.Unlock()
+
+	h.mu.RLock()
+	if h.sessionStates != nil && h.sessionStates[profile] == sessionStateLoggedOut {
+		h.mu.RUnlock()
+		return
+	}
+	h.mu.RUnlock()
+
 	if h.secretStore != nil {
+		if state, err := h.getSessionState(ctx); err != nil || state == sessionStateLoggedOut {
+			return
+		}
 		if meta, err := h.loadMetadata(ctx); err == nil && meta != nil {
 			if (meta.LastLoginFlow == auth.FlowPAT && meta.ExpiresAt.IsZero()) || (!meta.ExpiresAt.IsZero() && !meta.ExpiresAt.Before(time.Now())) {
 				return
@@ -1560,7 +1980,6 @@ func (h *Handler) recordFailedLogin(ctx context.Context) {
 		}
 		_ = h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeySessionStateSuffix), []byte(sessionStateLoginFailed))
 	}
-	profile := auth.ProfileFromContext(ctx)
 	h.mu.Lock()
 	if h.sessionStates == nil {
 		h.sessionStates = make(map[string]string)
@@ -1570,6 +1989,9 @@ func (h *Handler) recordFailedLogin(ctx context.Context) {
 }
 
 func (h *Handler) effectiveClientID(ctx context.Context) string {
+	if selected := selectedDynamicClientFromContext(ctx); selected != nil && selected.ClientID != "" {
+		return selected.ClientID
+	}
 	h.ensureLoadedDynamicClient(ctx)
 	profile := auth.ProfileFromContext(ctx)
 	h.mu.RLock()
@@ -1583,6 +2005,9 @@ func (h *Handler) effectiveClientID(ctx context.Context) string {
 }
 
 func (h *Handler) resolveClientCredentials(ctx context.Context) (string, string, error) {
+	if selected := selectedDynamicClientFromContext(ctx); selected != nil && selected.ClientID != "" {
+		return selected.ClientID, selected.ClientSecret, nil
+	}
 	h.ensureLoadedDynamicClient(ctx)
 	profile := auth.ProfileFromContext(ctx)
 	h.mu.RLock()
@@ -1665,12 +2090,10 @@ func (h *Handler) setActiveFlow(ctx context.Context, flow auth.Flow) {
 		h.activeFlows = make(map[string]auth.Flow)
 	}
 	h.activeFlows[profile] = flow
-	h.lastFlow = flow
 	if flow != auth.FlowPAT {
 		if h.patUsernames != nil {
 			delete(h.patUsernames, profile)
 		}
-		h.lastPATUser = ""
 	}
 	h.mu.Unlock()
 }
@@ -1685,9 +2108,24 @@ func (h *Handler) setActivePAT(ctx context.Context, username string) {
 		h.patUsernames = make(map[string]string)
 	}
 	h.activeFlows[profile] = auth.FlowPAT
-	h.lastFlow = auth.FlowPAT
 	h.patUsernames[profile] = username
-	h.lastPATUser = username
+	if h.derivedUsers != nil {
+		delete(h.derivedUsers, profile)
+	}
+	h.mu.Unlock()
+}
+
+func (h *Handler) setDerivedUsername(ctx context.Context, username string) {
+	profile := auth.ProfileFromContext(ctx)
+	h.mu.Lock()
+	if h.derivedUsers == nil {
+		h.derivedUsers = make(map[string]string)
+	}
+	if username == "" {
+		delete(h.derivedUsers, profile)
+	} else {
+		h.derivedUsers[profile] = username
+	}
 	h.mu.Unlock()
 }
 
@@ -1709,9 +2147,9 @@ func (h *Handler) restoreStoredPATUsername(ctx context.Context, meta *auth.Handl
 	h.setActivePAT(ctx, username)
 }
 
-func (h *Handler) inferInitialFlow() auth.Flow {
+func (h *Handler) inferFlowForContext(ctx context.Context) auth.Flow {
 	if h.secretStore != nil {
-		if meta, err := h.loadMetadata(context.Background()); err == nil && meta != nil && meta.LastLoginFlow != "" {
+		if meta, err := h.loadMetadata(ctx); err == nil && meta != nil && meta.LastLoginFlow != "" {
 			return meta.LastLoginFlow
 		}
 	}
@@ -2125,9 +2563,7 @@ func (h *Handler) executeTokenExchange(ctx context.Context, primaryToken string)
 		method = http.MethodPost
 	}
 
-	h.mu.RLock()
 	regUsername := h.cfg.RegistryUsername
-	h.mu.RUnlock()
 
 	var bodyReader io.Reader
 	if exc.RequestBody != "" {
@@ -2187,10 +2623,6 @@ func (h *Handler) executeTokenExchange(ctx context.Context, primaryToken string)
 	if exc.UsernameJSONPath != "" {
 		if username, extractErr := extractJSONPath(respData, exc.UsernameJSONPath); extractErr == nil && username != "" {
 			result.Username = username
-			// Persist the extracted username so BridgeAuthToRegistry uses it for registry auth.
-			h.mu.Lock()
-			h.cfg.RegistryUsername = username
-			h.mu.Unlock()
 		}
 	}
 	return result, nil
@@ -2256,15 +2688,47 @@ func (h *Handler) fallbackClaims(ctx context.Context, accessToken string, flow a
 func (h *Handler) cacheFingerprint(ctx context.Context, flow auth.Flow) string {
 	clientID := h.effectiveClientID(ctx)
 	if flow == auth.FlowWorkloadIdentity {
+		grantType := h.cfg.WorkloadIdentityGrantType
+		if grantType == "" {
+			grantType = config.WorkloadIdentityGrantClientCredentials
+		}
+		subjectTokenType := h.cfg.SubjectTokenType
+		if grantType == config.WorkloadIdentityGrantTokenExchange && subjectTokenType == "" {
+			subjectTokenType = config.DefaultSubjectTokenType
+		}
 		return auth.FingerprintHash(strings.Join([]string{
 			clientID,
+			h.cfg.TokenURL,
 			h.cfg.Audience,
-			h.cfg.WorkloadIdentityGrantType,
+			grantType,
+			subjectTokenType,
 			string(h.cfg.FederatedToken),
 			h.cfg.FederatedTokenFile,
 		}, "|"))
 	}
-	return auth.FingerprintHash(clientID)
+	return auth.FingerprintHash(strings.Join([]string{clientID, h.cfg.TokenURL}, "|"))
+}
+
+func (h *Handler) derivedFingerprint(ctx context.Context, flow auth.Flow) string {
+	base := h.cacheFingerprint(ctx, flow)
+	if h.cfg.TokenExchange == nil {
+		return base
+	}
+	exc := h.cfg.TokenExchange
+	method := strings.ToUpper(exc.Method)
+	if method == "" {
+		method = http.MethodPost
+	}
+	return auth.FingerprintHash(strings.Join([]string{
+		base,
+		exc.URL,
+		method,
+		string(exc.RequestBody),
+		exc.TokenJSONPath,
+		exc.UsernameJSONPath,
+		h.cfg.Registry,
+		h.cfg.RegistryUsername,
+	}, "|"))
 }
 
 func (h *Handler) memCacheKey(ctx context.Context, flow auth.Flow, scope string) string {
@@ -2272,7 +2736,7 @@ func (h *Handler) memCacheKey(ctx context.Context, flow auth.Flow, scope string)
 }
 
 func (h *Handler) memDerivedKey(ctx context.Context, flow auth.Flow, scope string) string {
-	return fmt.Sprintf("%s|%s|%s", auth.ProfileFromContext(ctx), flow, scope)
+	return fmt.Sprintf("%s|%s|%s|%s", auth.ProfileFromContext(ctx), flow, h.derivedFingerprint(ctx, flow), scope)
 }
 
 func (h *Handler) lookupCachedToken(ctx context.Context, flow auth.Flow, scope string, minValidFor time.Duration) *auth.Token {
@@ -2300,20 +2764,24 @@ func (h *Handler) lookupCachedToken(ctx context.Context, flow auth.Flow, scope s
 func (h *Handler) lookupEffectiveCachedToken(ctx context.Context, flow auth.Flow, scope string, minValidFor time.Duration) *auth.Token {
 	if h.cfg.TokenExchange != nil {
 		if h.secretStore != nil {
-			if derived, err := h.loadDerivedToken(ctx); err == nil && derived != nil && derived.Flow == flow && (derived.Scope == "" || derived.Scope == scope) && derived.IsValidFor(minValidFor) {
+			if derived, err := h.loadDerivedTokenForFlow(ctx, flow); err == nil && derived != nil && (derived.Scope == "" || derived.Scope == scope) && derived.IsValidFor(minValidFor) {
 				return derived
 			}
 			return nil
 		}
 		key := h.memDerivedKey(ctx, flow, scope)
+		expectedFP := h.derivedFingerprint(ctx, flow)
 		h.mu.RLock()
-		var derived *auth.Token
+		var derived *persistedDerivedToken
 		if h.memDerived != nil {
 			derived = h.memDerived[key]
 		}
 		h.mu.RUnlock()
-		if derived != nil && derived.IsValidFor(minValidFor) {
-			cp := *derived
+		if derived != nil && derived.Fingerprint == expectedFP && derived.IsValidFor(minValidFor) {
+			if derived.Username != "" {
+				h.setDerivedUsername(ctx, derived.Username)
+			}
+			cp := derived.Token
 			return &cp
 		}
 		return nil
@@ -2365,24 +2833,32 @@ func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *
 
 func (h *Handler) storeDerivedToken(ctx context.Context, result *exchangeResult, expiresAt time.Time, flow auth.Flow, scopes []string) error {
 	scope := strings.Join(scopes, " ")
-	token := &auth.Token{
-		AccessToken: result.Token,
-		TokenType:   defaultTokenType,
-		ExpiresAt:   expiresAt,
-		Scope:       scope,
-		Flow:        flow,
+	fp := h.derivedFingerprint(ctx, flow)
+	stored := &persistedDerivedToken{
+		Token: auth.Token{
+			AccessToken: result.Token,
+			TokenType:   defaultTokenType,
+			ExpiresAt:   expiresAt,
+			Scope:       scope,
+			Flow:        flow,
+		},
+		Fingerprint: fp,
+		Username:    result.Username,
+	}
+	if result.Username != "" {
+		h.setDerivedUsername(ctx, result.Username)
 	}
 	if h.secretStore == nil {
 		key := h.memDerivedKey(ctx, flow, scope)
 		h.mu.Lock()
 		if h.memDerived == nil {
-			h.memDerived = make(map[string]*auth.Token)
+			h.memDerived = make(map[string]*persistedDerivedToken)
 		}
-		h.memDerived[key] = token
+		h.memDerived[key] = stored
 		h.mu.Unlock()
 		return nil
 	}
-	data, err := json.Marshal(token) //nolint:gosec // runtime token
+	data, err := json.Marshal(stored) //nolint:gosec // runtime token
 	if err != nil {
 		return fmt.Errorf("marshal derived token: %w", err)
 	}
@@ -2394,27 +2870,43 @@ func (h *Handler) storeDerivedToken(ctx context.Context, result *exchangeResult,
 		if setErr := h.secretStore.Set(ctx, h.profileSecretKey(ctx, derivedUsernameSuffix), []byte(result.Username)); setErr != nil {
 			h.logger.V(1).Info("failed to persist derived username", "error", setErr)
 		}
+	} else {
+		_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, derivedUsernameSuffix))
 	}
 	return nil
 }
 
 func (h *Handler) loadDerivedToken(ctx context.Context) (*auth.Token, error) {
+	ctx = h.resolveContextProfile(ctx)
+	return h.loadDerivedTokenForFlow(ctx, h.inferFlowForContext(ctx))
+}
+
+func (h *Handler) loadDerivedTokenForFlow(ctx context.Context, flow auth.Flow) (*auth.Token, error) {
 	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, derivedTokenSuffix))
 	if err != nil {
 		return nil, err
 	}
-	var token auth.Token
-	if err := json.Unmarshal(data, &token); err != nil {
+	var stored persistedDerivedToken
+	if err := json.Unmarshal(data, &stored); err != nil {
 		return nil, err
 	}
-	// Restore the derived username so BridgeAuthToRegistry uses the correct
-	// username even when the token was loaded from cache across process restarts.
-	if usernameData, usernameErr := h.secretStore.Get(ctx, h.profileSecretKey(ctx, derivedUsernameSuffix)); usernameErr == nil && len(usernameData) > 0 {
-		h.mu.Lock()
-		h.cfg.RegistryUsername = string(usernameData)
-		h.mu.Unlock()
+	expectedFP := h.derivedFingerprint(ctx, flow)
+	if stored.Flow != flow || stored.Fingerprint == "" || stored.Fingerprint != expectedFP {
+		return nil, secrets.ErrNotFound
 	}
-	return &token, nil
+	// Restore the derived username only after validating that the derived token
+	// belongs to the current authentication and exchange configuration fingerprint.
+	username := stored.Username
+	if username == "" {
+		if usernameData, usernameErr := h.secretStore.Get(ctx, h.profileSecretKey(ctx, derivedUsernameSuffix)); usernameErr == nil && len(usernameData) > 0 {
+			username = string(usernameData)
+		}
+	}
+	if username != "" {
+		h.setDerivedUsername(ctx, username)
+	}
+	tok := stored.Token
+	return &tok, nil
 }
 
 func (h *Handler) loadMetadata(ctx context.Context) (*auth.HandlerMetadata, error) {
@@ -2464,7 +2956,9 @@ func (h *Handler) postTokenEndpointWithAuth(ctx context.Context, data url.Values
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	if basicAuth != nil {
-		req.SetBasicAuth(basicAuth.username, basicAuth.password)
+		// RFC 6749 Section 2.3.1 requires client_id and client_secret to be
+		// individually application/x-www-form-urlencoded prior to Basic encoding.
+		req.SetBasicAuth(url.QueryEscape(basicAuth.username), url.QueryEscape(basicAuth.password))
 	}
 
 	resp, err := h.httpClient.Do(req) //nolint:gosec // URL from trusted admin config

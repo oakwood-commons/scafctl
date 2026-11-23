@@ -97,9 +97,37 @@ func (s SecretRef) ValidateFor(binaryNames ...string) error {
 			return err
 		}
 	default:
-		return fmt.Errorf("unsupported secret ref scheme %q, must start with env://, file://, or secret://", str)
+		return unsupportedSecretRefSchemeError(str)
 	}
 	return nil
+}
+
+func unsupportedSecretRefSchemeError(raw string) error {
+	if idx := strings.Index(raw, "://"); idx > 0 {
+		scheme := raw[:idx]
+		if isSimpleURIScheme(scheme) {
+			return fmt.Errorf("unsupported secret ref scheme %q: must start with env://, file://, or secret://", scheme)
+		}
+	}
+	return fmt.Errorf("unsupported secret ref scheme: value must start with env://, file://, or secret://")
+}
+
+func isSimpleURIScheme(s string) bool {
+	if len(s) == 0 || len(s) > 32 {
+		return false
+	}
+	first := s[0]
+	if (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if isASCIIAlphaNumeric(c) || c == '+' || c == '-' || c == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validateSecretRefStoreName(name string, binaryNames ...string) error {
@@ -107,27 +135,27 @@ func validateSecretRefStoreName(name string, binaryNames ...string) error {
 		return fmt.Errorf("secret:// scheme requires a secret name")
 	}
 	if len(name) > maxSecretRefNameLen {
-		return fmt.Errorf("secret:// name %q exceeds maximum length of %d characters", name, maxSecretRefNameLen)
+		return fmt.Errorf("secret:// name exceeds maximum length of %d characters", maxSecretRefNameLen)
 	}
 	if hasWhitespaceOrControl(name) {
-		return fmt.Errorf("secret:// name %q must not contain whitespace or control characters", name)
+		return fmt.Errorf("secret:// name must not contain whitespace or control characters")
 	}
 	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
-		return fmt.Errorf("secret:// name %q must not contain path separators or '..'", name)
+		return fmt.Errorf("secret:// name must not contain path separators or '..'")
 	}
 	if !isASCIIAlphaNumeric(name[0]) {
-		return fmt.Errorf("secret:// name %q must start with an alphanumeric character (a-z, A-Z, 0-9)", name)
+		return fmt.Errorf("secret:// name must start with an alphanumeric character (a-z, A-Z, 0-9)")
 	}
 	for i := range len(name) {
 		c := name[i]
 		if isASCIIAlphaNumeric(c) || c == '.' || c == '_' || c == '-' {
 			continue
 		}
-		return fmt.Errorf("secret:// name %q contains invalid characters (allowed: a-z, A-Z, 0-9, -, _, .)", name)
+		return fmt.Errorf("secret:// name contains invalid characters (allowed: a-z, A-Z, 0-9, -, _, .)")
 	}
 	for _, prefix := range ReservedSecretPrefixes(binaryNames...) {
 		if strings.HasPrefix(name, prefix) {
-			return fmt.Errorf("secret:// name %q uses reserved internal secret prefix %q", name, prefix)
+			return fmt.Errorf("secret:// name uses reserved internal secret prefix %q", prefix)
 		}
 	}
 	return nil
@@ -180,9 +208,9 @@ func (s SecretRef) Resolve() (string, error) {
 		if err := s.Validate(); err != nil {
 			return "", err
 		}
-		return "", fmt.Errorf("secret ref %q uses secret:// scheme and requires a secret store: use ResolveWithStore", str)
+		return "", fmt.Errorf("secret ref uses secret:// scheme and requires a secret store: use ResolveWithStore")
 	default:
-		return "", fmt.Errorf("unsupported secret ref scheme %q", str)
+		return "", unsupportedSecretRefSchemeError(str)
 	}
 }
 

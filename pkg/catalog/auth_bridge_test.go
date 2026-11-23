@@ -277,6 +277,44 @@ func BenchmarkBridgeAuthToRegistry(b *testing.B) {
 	}
 }
 
+type contextualUsernameHandler struct {
+	*auth.MockHandler
+	usernames map[string]string
+}
+
+func (h *contextualUsernameHandler) GetToken(ctx context.Context, _ auth.TokenOptions) (*auth.Token, error) {
+	p := auth.ProfileFromContext(ctx)
+	return &auth.Token{AccessToken: "tok-" + p, TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+
+func (h *contextualUsernameHandler) RegistryUsernameForContext(ctx context.Context) string {
+	return h.usernames[auth.ProfileFromContext(ctx)]
+}
+
+func TestBridgeAuthToRegistry_ContextualProfileUsername(t *testing.T) {
+	t.Parallel()
+	h := &contextualUsernameHandler{
+		MockHandler: auth.NewMockHandler("quay"),
+		usernames: map[string]string{
+			"prod": "acme+prod_robot",
+			"dev":  "$oauthtoken",
+		},
+	}
+
+	prodCtx := auth.WithProfile(context.Background(), "prod")
+	devCtx := auth.WithProfile(context.Background(), "dev")
+
+	uProd, pProd, err := BridgeAuthToRegistry(prodCtx, h, "quay.io", "")
+	require.NoError(t, err)
+	assert.Equal(t, "acme+prod_robot", uProd)
+	assert.Equal(t, "tok-prod", pProd)
+
+	uDev, pDev, err := BridgeAuthToRegistry(devCtx, h, "quay.io", "")
+	require.NoError(t, err)
+	assert.Equal(t, "$oauthtoken", uDev)
+	assert.Equal(t, "tok-dev", pDev)
+}
+
 func TestInferDefaultScope(t *testing.T) {
 	t.Parallel()
 

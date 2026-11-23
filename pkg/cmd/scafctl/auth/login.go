@@ -531,7 +531,12 @@ func loginWithFlowDetection(ctx context.Context, w *writer.Writer, binaryName st
 				}
 			}
 		}
-		// Fall back to the provided default flow
+		// Fall back to the provided default flow (or the handler's configured default flow)
+		if flow == "" && defaultFlow == "" {
+			if dfp, ok := handler.(auth.DefaultFlowProvider); ok {
+				defaultFlow = dfp.DefaultFlow()
+			}
+		}
 		if flow == "" && defaultFlow != "" {
 			flow = defaultFlow
 		}

@@ -5,13 +5,16 @@ package oauth2
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,6 +22,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/stretchr/testify/assert"
@@ -339,10 +343,16 @@ func TestHandler_GetToken_DerivedToken(t *testing.T) {
 		cfg.ClientSecret = "test-secret"
 		cfg.TokenExchange = &config.TokenExchangeConfig{URL: srv.URL + "/exchange", TokenJSONPath: "token"}
 	})
-	derived := &auth.Token{AccessToken: "stored-derived-token", TokenType: "Bearer", ExpiresAt: time.Now().Add(1 * time.Hour), Flow: auth.FlowClientCredentials}
-	derivedBytes, _ := json.Marshal(derived)
-	_ = store.Set(context.Background(), secretKeyPrefix+"test-provider."+derivedTokenSuffix, derivedBytes)
-	token, err := h.GetToken(context.Background(), auth.TokenOptions{})
+	ctx := context.Background()
+	metaBytes, err := json.Marshal(auth.HandlerMetadata{
+		ExpiresAt:     time.Now().Add(time.Hour),
+		LastLoginFlow: auth.FlowClientCredentials,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.Set(ctx, secretKeyPrefix+"test-provider."+secretKeyMetadataSuffix, metaBytes))
+	require.NoError(t, h.storeDerivedToken(ctx, &exchangeResult{Token: "stored-derived-token"}, time.Now().Add(time.Hour), auth.FlowClientCredentials, nil))
+
+	token, err := h.GetToken(ctx, auth.TokenOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "stored-derived-token", token.AccessToken)
 }
@@ -599,15 +609,16 @@ func TestHandler_GetToken_WithDerivedToken_RestoresUsername(t *testing.T) {
 	require.NoError(t, loginErr)
 	assert.Equal(t, "exchange-user", h.RegistryUsername())
 
-	// Reset in-memory username to simulate process restart
-	h.cfg.RegistryUsername = ""
-	assert.Empty(t, h.RegistryUsername())
+	// Construct a fresh Handler over the same secretStore to simulate process restart
+	hRestarted, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	assert.Empty(t, hRestarted.RegistryUsername())
 
 	// GetToken should load derived token and restore username
-	token, err := h.GetToken(ctx, auth.TokenOptions{})
+	token, err := hRestarted.GetToken(ctx, auth.TokenOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "exchanged-token", token.AccessToken)
-	assert.Equal(t, "exchange-user", h.RegistryUsername())
+	assert.Equal(t, "exchange-user", hRestarted.RegistryUsername())
 }
 
 func TestHandler_Login_WithTokenExchange_PersistsUsername(t *testing.T) {
@@ -2215,6 +2226,711 @@ func BenchmarkHandler_WorkloadIdentity_GetToken_Cached(b *testing.B) {
 	for b.Loop() {
 		_, _ = h.GetToken(ctx, auth.TokenOptions{})
 	}
+}
+
+type failingSessionStateStore struct {
+	*secrets.MockStore
+	failGetKey string
+	failSetKey string
+	getErr     error
+	setErr     error
+}
+
+func (s *failingSessionStateStore) Get(ctx context.Context, name string) ([]byte, error) {
+	if s.failGetKey != "" && name == s.failGetKey {
+		return nil, s.getErr
+	}
+	return s.MockStore.Get(ctx, name)
+}
+
+func (s *failingSessionStateStore) Set(ctx context.Context, name string, value []byte) error {
+	if s.failSetKey != "" && name == s.failSetKey {
+		return s.setErr
+	}
+	return s.MockStore.Set(ctx, name, value)
+}
+
+func TestHandler_Logout_PreventsInFlightMintAndRefreshFromRepopulatingCache(t *testing.T) {
+	t.Parallel()
+
+	t.Run("blocked headless mint completing after Logout neither publishes nor returns credentials", func(t *testing.T) {
+		t.Parallel()
+		entered := make(chan struct{})
+		release := make(chan struct{})
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			close(entered)
+			<-release
+			writeJSON(w, tokenResponse{
+				AccessToken: "late-minted-token",
+				TokenType:   "Bearer",
+				ExpiresIn:   3600,
+			})
+		}))
+		defer srv.Close()
+
+		dir := t.TempDir()
+		jwtFile := filepath.Join(dir, "token")
+		require.NoError(t, os.WriteFile(jwtFile, []byte("wif-jwt"), 0o600))
+
+		store := secrets.NewMockStore()
+		h, err := New(config.CustomOAuth2Config{
+			Name:               "race-mint",
+			TokenURL:           srv.URL + "/token",
+			ClientID:           "cid",
+			FederatedTokenFile: jwtFile,
+		}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		errCh := make(chan error, 1)
+		go func() {
+			_, gErr := h.GetToken(ctx, auth.TokenOptions{})
+			errCh <- gErr
+		}()
+
+		<-entered
+		require.NoError(t, h.Logout(ctx))
+		close(release)
+
+		mintErr := <-errCh
+		require.ErrorIs(t, mintErr, auth.ErrNotAuthenticated)
+
+		cachedList, err := h.ListCachedTokens(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, cachedList, "pre-logout mint must not repopulate token cache")
+
+		_, nextErr := h.GetToken(ctx, auth.TokenOptions{})
+		require.ErrorIs(t, nextErr, auth.ErrNotAuthenticated)
+
+		st, stErr := h.Status(ctx)
+		require.NoError(t, stErr)
+		assert.False(t, st.Authenticated)
+	})
+
+	t.Run("blocked refresh completing after Logout neither publishes nor returns credentials", func(t *testing.T) {
+		t.Parallel()
+		entered := make(chan struct{})
+		release := make(chan struct{})
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			close(entered)
+			<-release
+			writeJSON(w, tokenResponse{
+				AccessToken:  "late-refreshed-token",
+				TokenType:    "Bearer",
+				ExpiresIn:    3600,
+				RefreshToken: "late-rotated-refresh",
+			})
+		}))
+		defer srv.Close()
+
+		store := secrets.NewMockStore()
+		ctx := context.Background()
+		require.NoError(t, store.Set(ctx, secretKeyPrefix+"race-refresh."+secretKeyRefreshSuffix, []byte("initial-refresh")))
+
+		h, err := New(config.CustomOAuth2Config{
+			Name:         "race-refresh",
+			TokenURL:     srv.URL + "/token",
+			ClientID:     "cid",
+			ClientSecret: "csec",
+		}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		errCh := make(chan error, 1)
+		go func() {
+			_, gErr := h.GetToken(ctx, auth.TokenOptions{})
+			errCh <- gErr
+		}()
+
+		<-entered
+		require.NoError(t, h.Logout(ctx))
+		close(release)
+
+		refErr := <-errCh
+		require.ErrorIs(t, refErr, auth.ErrNotAuthenticated)
+
+		_, storedRefreshErr := store.Get(ctx, secretKeyPrefix+"race-refresh."+secretKeyRefreshSuffix)
+		assert.ErrorIs(t, storedRefreshErr, secrets.ErrNotFound, "pre-logout refresh must not re-persist refresh_token")
+
+		cachedList, err := h.ListCachedTokens(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, cachedList)
+
+		// Even if a stale cached token existed alongside logged_out session_state, GetToken rejects it.
+		_ = h.tokenCache.Set(ctx, auth.FlowClientCredentials, h.cacheFingerprint(ctx, auth.FlowClientCredentials), "", &auth.Token{
+			AccessToken: "stale-cached",
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+		})
+		_, nextErr := h.GetToken(ctx, auth.TokenOptions{})
+		require.ErrorIs(t, nextErr, auth.ErrNotAuthenticated)
+	})
+}
+
+func TestHandler_SessionState_FailClosedOnReadError_And_PreservesLocalLogout(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	baseStore := secrets.NewMockStore()
+	require.NoError(t, baseStore.Set(ctx, "robot-tok", []byte("ambient-pat")))
+
+	sessionStateKey := secretKeyPrefix + "sess-guard." + secretKeySessionStateSuffix
+	wrapStore := &failingSessionStateStore{
+		MockStore:  baseStore,
+		failGetKey: sessionStateKey,
+		getErr:     errors.New("permission denied reading secret file"),
+	}
+
+	h, err := New(config.CustomOAuth2Config{
+		Name:        "sess-guard",
+		Token:       "secret://robot-tok",
+		DefaultFlow: "pat",
+	}, WithSecretStore(wrapStore), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	// Non-ErrNotFound session_state read failure must fail closed in Status and GetToken.
+	st, err := h.Status(ctx)
+	require.NoError(t, err)
+	assert.False(t, st.Authenticated)
+	assert.Contains(t, st.Reason, "session state unreadable")
+
+	_, tokErr := h.GetToken(ctx, auth.TokenOptions{})
+	require.Error(t, tokErr)
+	assert.Contains(t, tokErr.Error(), "session_state")
+
+	// Clear read error, simulate Set failure on session_state during Logout, and verify
+	// in-memory logout state still blocks ambient credentials when store lacks session_state.
+	wrapStore.failGetKey = ""
+	wrapStore.failSetKey = sessionStateKey
+	wrapStore.setErr = errors.New("disk full")
+
+	logoutErr := h.Logout(ctx)
+	require.Error(t, logoutErr)
+
+	stAfterLocalLogout, err := h.Status(ctx)
+	require.NoError(t, err)
+	assert.False(t, stAfterLocalLogout.Authenticated)
+
+	_, tokAfterLocalLogoutErr := h.GetToken(ctx, auth.TokenOptions{})
+	require.ErrorIs(t, tokAfterLocalLogoutErr, auth.ErrNotAuthenticated)
+}
+
+func TestHandler_WorkloadIdentity_And_DerivedToken_ConfigFingerprints(t *testing.T) {
+	t.Parallel()
+
+	var srv1Hits, srv2Hits atomic.Int32
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			srv1Hits.Add(1)
+			require.NoError(t, r.ParseForm())
+			writeJSON(w, tokenResponse{
+				AccessToken: "idp1-tok-" + r.FormValue("subject_token_type"),
+				TokenType:   "Bearer",
+				ExpiresIn:   3600,
+			})
+		case "/exchange":
+			writeJSON(w, map[string]any{"token": "derived-idp1", "username": "user-idp1"})
+		}
+	}))
+	defer srv1.Close()
+
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			srv2Hits.Add(1)
+			require.NoError(t, r.ParseForm())
+			writeJSON(w, tokenResponse{
+				AccessToken: "idp2-tok-" + r.FormValue("subject_token_type"),
+				TokenType:   "Bearer",
+				ExpiresIn:   3600,
+			})
+		case "/exchange":
+			writeJSON(w, map[string]any{"token": "derived-idp2", "username": "user-idp2"})
+		}
+	}))
+	defer srv2.Close()
+
+	dir := t.TempDir()
+	jwtFile := filepath.Join(dir, "sa-jwt")
+	require.NoError(t, os.WriteFile(jwtFile, []byte("jwt-payload"), 0o600))
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+
+	// 1. Primary WIF cache must miss when tokenURL or subjectTokenType changes.
+	baseCfg := config.CustomOAuth2Config{
+		Name:                      "wif-fp",
+		TokenURL:                  srv1.URL + "/token",
+		ClientID:                  "shared-cid",
+		FederatedTokenFile:        jwtFile,
+		WorkloadIdentityGrantType: config.WorkloadIdentityGrantTokenExchange,
+		SubjectTokenType:          "urn:ietf:params:oauth:token-type:jwt",
+		Audience:                  "api://svc",
+	}
+	h1, err := New(baseCfg, WithSecretStore(store), WithHTTPClient(srv1.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	tok1, err := h1.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Contains(t, tok1.AccessToken, "idp1-tok-")
+	assert.Equal(t, int32(1), srv1Hits.Load())
+
+	// Changing SubjectTokenType invalidates cache.
+	cfgNewSubjType := baseCfg
+	cfgNewSubjType.SubjectTokenType = "urn:ietf:params:oauth:token-type:id_token"
+	hSubj, err := New(cfgNewSubjType, WithSecretStore(store), WithHTTPClient(srv1.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	tokSubj, err := hSubj.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "idp1-tok-urn:ietf:params:oauth:token-type:id_token", tokSubj.AccessToken)
+	assert.Equal(t, int32(2), srv1Hits.Load())
+
+	// Repointing TokenURL to srv2 invalidates cache and contacts srv2.
+	cfgNewIssuer := cfgNewSubjType
+	cfgNewIssuer.TokenURL = srv2.URL + "/token"
+	hIssuer, err := New(cfgNewIssuer, WithSecretStore(store), WithHTTPClient(srv2.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	tokIssuer, err := hIssuer.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "idp2-tok-urn:ietf:params:oauth:token-type:id_token", tokIssuer.AccessToken)
+	assert.Equal(t, int32(1), srv2Hits.Load())
+
+	// 2. Derived tokens and derived usernames must also be bound to the config fingerprint.
+	storeEx := secrets.NewMockStore()
+	cfgEx1 := baseCfg
+	cfgEx1.Name = "wif-derived-fp"
+	cfgEx1.TokenExchange = &config.TokenExchangeConfig{
+		URL:              srv1.URL + "/exchange",
+		TokenJSONPath:    "token",
+		UsernameJSONPath: "username",
+	}
+	hEx1, err := New(cfgEx1, WithSecretStore(storeEx), WithHTTPClient(srv1.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	_, err = hEx1.Login(ctx, auth.LoginOptions{Flow: auth.FlowWorkloadIdentity})
+	require.NoError(t, err)
+	assert.Equal(t, "user-idp1", hEx1.RegistryUsername())
+
+	// Restarting with a different Audience must not reuse derived-idp1 or user-idp1.
+	cfgEx2 := cfgEx1
+	cfgEx2.Audience = "api://different-audience"
+	cfgEx2.TokenURL = srv2.URL + "/token"
+	cfgEx2.TokenExchange = &config.TokenExchangeConfig{
+		URL:              srv2.URL + "/exchange",
+		TokenJSONPath:    "token",
+		UsernameJSONPath: "username",
+	}
+	hEx2, err := New(cfgEx2, WithSecretStore(storeEx), WithHTTPClient(srv2.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	assert.Empty(t, hEx2.RegistryUsername(), "mismatched config fingerprint must not restore stale derived username")
+
+	tokEx2, err := hEx2.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "derived-idp2", tokEx2.AccessToken)
+	assert.Equal(t, "user-idp2", hEx2.RegistryUsername())
+}
+
+func TestHandler_ProfileIsolatedRegistryUsername(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			writeJSON(w, tokenResponse{AccessToken: "oauth-tok-" + r.FormValue("scope"), TokenType: "Bearer", ExpiresIn: 3600})
+		case "/exchange":
+			writeJSON(w, map[string]any{"token": "exchanged-dev-tok", "username": "dev-exchange-user"})
+		}
+	}))
+	defer srv.Close()
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	require.NoError(t, store.Set(ctx, "prod-robot-token", []byte("prod-pat-secret")))
+
+	h, err := New(config.CustomOAuth2Config{
+		Name:             "quay-multi",
+		TokenURL:         srv.URL + "/token",
+		ClientID:         "cid",
+		ClientSecret:     "csec",
+		Registry:         "quay.io",
+		RegistryUsername: "$oauthtoken",
+		Token:            "secret://prod-robot-token",
+		Username:         "acme+prod_robot",
+		TokenExchange: &config.TokenExchangeConfig{
+			URL:              srv.URL + "/exchange",
+			TokenJSONPath:    "token",
+			UsernameJSONPath: "username",
+		},
+	}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	prodCtx := auth.WithProfile(ctx, "prod")
+	devCtx := auth.WithProfile(ctx, "dev")
+
+	_, err = h.Login(prodCtx, auth.LoginOptions{Flow: auth.FlowPAT})
+	require.NoError(t, err)
+	_, err = h.Login(devCtx, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+
+	// Interleaving profile requests must never pair prod's PAT with dev's derived username.
+	uProd, pProd, err := catalog.BridgeAuthToRegistry(prodCtx, h, "quay.io", "")
+	require.NoError(t, err)
+	assert.Equal(t, "acme+prod_robot", uProd)
+	assert.Equal(t, "prod-pat-secret", pProd)
+
+	uDev, pDev, err := catalog.BridgeAuthToRegistry(devCtx, h, "quay.io", "")
+	require.NoError(t, err)
+	assert.Equal(t, "dev-exchange-user", uDev)
+	assert.Equal(t, "exchanged-dev-tok", pDev)
+
+	// Re-checking prod after dev's request still returns prod's robot username.
+	assert.Equal(t, "acme+prod_robot", h.RegistryUsernameForContext(prodCtx))
+}
+
+func TestHandler_DCR_StatusAndAvailabilitySkipsStaticSecretAndBootstrapToken(t *testing.T) {
+	var regCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/register":
+			regCalls.Add(1)
+			assert.Equal(t, "Bearer bootstrap-iat", r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(w, map[string]any{
+				"client_id":     "dcr-persisted-id",
+				"client_secret": "dcr-persisted-secret",
+			})
+		case "/token":
+			require.NoError(t, r.ParseForm())
+			assert.Equal(t, "dcr-persisted-id", r.FormValue("client_id"))
+			assert.Equal(t, "dcr-persisted-secret", r.FormValue("client_secret"))
+			writeJSON(w, tokenResponse{AccessToken: "fresh-dcr-access", TokenType: "Bearer", ExpiresIn: 3600})
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv("TEST_DCR_BOOTSTRAP_IAT", "bootstrap-iat")
+	t.Setenv("TEST_UNUSED_STATIC_SECRET", "")
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	cfg := config.CustomOAuth2Config{
+		Name:         "dcr-reuse",
+		TokenURL:     srv.URL + "/token",
+		ClientSecret: "env://TEST_UNUSED_STATIC_SECRET",
+		DefaultFlow:  "client_credentials",
+		DynamicClientRegistration: &config.DynamicClientRegistrationConfig{
+			RegistrationEndpoint: srv.URL + "/register",
+			InitialAccessToken:   "env://TEST_DCR_BOOTSTRAP_IAT",
+		},
+	}
+
+	h1, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	// Initial Status and GetToken succeed despite TEST_UNUSED_STATIC_SECRET being empty.
+	st1, err := h1.Status(ctx)
+	require.NoError(t, err)
+	assert.True(t, st1.Authenticated)
+
+	tok1, err := h1.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "fresh-dcr-access", tok1.AccessToken)
+	assert.Equal(t, int32(1), regCalls.Load())
+
+	// Remove bootstrap initialAccessToken and expire cached access token; persisted DCR client must still work.
+	t.Setenv("TEST_DCR_BOOTSTRAP_IAT", "")
+	require.NoError(t, h1.tokenCache.Clear(ctx))
+
+	h2, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	st2, err := h2.Status(ctx)
+	require.NoError(t, err)
+	assert.True(t, st2.Authenticated, "persisted unexpired DCR client must not require bootstrap token")
+
+	tok2, err := h2.GetToken(ctx, auth.TokenOptions{ForceRefresh: true})
+	require.NoError(t, err)
+	assert.Equal(t, "fresh-dcr-access", tok2.AccessToken)
+	assert.Equal(t, int32(1), regCalls.Load(), "persisted DCR client must be reused without re-registering")
+}
+
+func TestHandler_AmbientHeadlessFlowOrder_WithCachedDerivedToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			writeJSON(w, tokenResponse{AccessToken: "wif-primary", TokenType: "Bearer", ExpiresIn: 3600})
+		case "/exchange":
+			writeJSON(w, map[string]any{"token": "wif-derived", "username": "wif-user"})
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	jwtFile := filepath.Join(dir, "sa-token")
+	require.NoError(t, os.WriteFile(jwtFile, []byte("ambient-jwt"), 0o600))
+
+	t.Setenv("TEST_PREFERRED_PAT_LATE", "")
+
+	store := secrets.NewMockStore()
+	h, err := New(config.CustomOAuth2Config{
+		Name:               "ambient-order",
+		TokenURL:           srv.URL + "/token",
+		ClientID:           "cid",
+		FederatedTokenFile: jwtFile,
+		Token:              "env://TEST_PREFERRED_PAT_LATE",
+		Username:           "acme+pat_robot",
+		DefaultFlow:        "pat",
+		TokenExchange: &config.TokenExchangeConfig{
+			URL:              srv.URL + "/exchange",
+			TokenJSONPath:    "token",
+			UsernameJSONPath: "username",
+		},
+	}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Preferred PAT is initially unset, so GetToken falls back to WIF and caches wif-derived.
+	tokFallback, err := h.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "wif-derived", tokFallback.AccessToken)
+	assert.Equal(t, auth.FlowWorkloadIdentity, tokFallback.Flow)
+
+	// Once preferred PAT becomes available, GetToken must honor defaultFlow: pat
+	// instead of shortcutting to the cached ambient WIF derived token.
+	t.Setenv("TEST_PREFERRED_PAT_LATE", "preferred-pat-secret")
+	tokPreferred, err := h.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "preferred-pat-secret", tokPreferred.AccessToken)
+	assert.Equal(t, auth.FlowPAT, tokPreferred.Flow)
+	assert.Equal(t, "acme+pat_robot", h.RegistryUsername())
+}
+
+func TestHandler_RefreshToken_RotationPersistence_And_ConcurrentSingleUseSerialization(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	currentValidRefresh := "refresh-gen-1"
+	rotationSeq := 1
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		assert.Equal(t, "refresh_token", r.FormValue("grant_type"))
+
+		// Small delay so concurrent refreshes with different scopes overlap.
+		time.Sleep(15 * time.Millisecond)
+
+		submitted := r.FormValue("refresh_token")
+		scope := r.FormValue("scope")
+
+		mu.Lock()
+		if submitted != currentValidRefresh {
+			mu.Unlock()
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, tokenEndpointError{
+				ErrorCode:   "invalid_grant",
+				Description: fmt.Sprintf("single-use refresh token %q already consumed", submitted),
+			})
+			return
+		}
+		rotationSeq++
+		nextRefresh := fmt.Sprintf("refresh-gen-%d", rotationSeq)
+		currentValidRefresh = nextRefresh
+		seq := rotationSeq
+		mu.Unlock()
+
+		writeJSON(w, tokenResponse{
+			AccessToken:  fmt.Sprintf("access-%s-gen-%d", scope, seq),
+			TokenType:    "Bearer",
+			ExpiresIn:    3600,
+			RefreshToken: nextRefresh,
+			Scope:        scope,
+		})
+	}))
+	defer srv.Close()
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	require.NoError(t, store.Set(ctx, secretKeyPrefix+"rot-idp."+secretKeyRefreshSuffix, []byte("refresh-gen-1")))
+
+	h, err := New(config.CustomOAuth2Config{
+		Name:         "rot-idp",
+		TokenURL:     srv.URL + "/token",
+		ClientID:     "cid",
+		ClientSecret: "csec",
+	}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	// 1. Two consecutive refreshes with ForceRefresh must persist and submit rotated tokens.
+	tok1, err := h.GetToken(ctx, auth.TokenOptions{Scope: "read", ForceRefresh: true})
+	require.NoError(t, err)
+	assert.Equal(t, "access-read-gen-2", tok1.AccessToken)
+
+	tok2, err := h.GetToken(ctx, auth.TokenOptions{Scope: "read", ForceRefresh: true})
+	require.NoError(t, err)
+	assert.Equal(t, "access-read-gen-3", tok2.AccessToken)
+
+	// 2. Concurrent refreshes with distinct scopes share one single-use refresh token
+	// without invalid_grant races and retain separate scope-specific access-token caches.
+	var wg sync.WaitGroup
+	scopes := []string{"scope-alpha", "scope-beta", "scope-gamma"}
+	results := make([]*auth.Token, len(scopes))
+	errs := make([]error, len(scopes))
+	start := make(chan struct{})
+
+	for i, sc := range scopes {
+		wg.Add(1)
+		go func(idx int, scopeVal string) {
+			defer wg.Done()
+			<-start
+			results[idx], errs[idx] = h.GetToken(ctx, auth.TokenOptions{Scope: scopeVal})
+		}(i, sc)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, sc := range scopes {
+		require.NoError(t, errs[i], "concurrent refresh for %s must succeed", sc)
+		require.NotNil(t, results[i])
+		assert.Contains(t, results[i].AccessToken, "access-"+sc+"-")
+	}
+
+	// Subsequent calls for each scope hit their respective scope-specific cache entries.
+	mu.Lock()
+	seqBeforeCacheCheck := rotationSeq
+	mu.Unlock()
+	for i, sc := range scopes {
+		cachedTok, cErr := h.GetToken(ctx, auth.TokenOptions{Scope: sc})
+		require.NoError(t, cErr)
+		assert.Equal(t, results[i].AccessToken, cachedTok.AccessToken)
+	}
+	mu.Lock()
+	assert.Equal(t, seqBeforeCacheCheck, rotationSeq, "scope-specific cached tokens must avoid further refreshes")
+	mu.Unlock()
+}
+
+func TestHandler_DCR_ConcurrentColdRegistrationCoalescedAcrossScopesAndLogin(t *testing.T) {
+	t.Parallel()
+
+	var regSeq atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/register":
+			n := regSeq.Add(1)
+			time.Sleep(25 * time.Millisecond)
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(w, map[string]any{
+				"client_id":     fmt.Sprintf("coalesced-client-%d", n),
+				"client_secret": fmt.Sprintf("coalesced-secret-%d", n),
+			})
+		case "/token":
+			require.NoError(t, r.ParseForm())
+			cid := r.FormValue("client_id")
+			sc := r.FormValue("scope")
+			writeJSON(w, tokenResponse{
+				AccessToken: fmt.Sprintf("tok-%s-%s", cid, sc),
+				TokenType:   "Bearer",
+				ExpiresIn:   3600,
+				Scope:       sc,
+			})
+		}
+	}))
+	defer srv.Close()
+
+	store := secrets.NewMockStore()
+	h, err := New(config.CustomOAuth2Config{
+		Name:        "dcr-coalesce",
+		TokenURL:    srv.URL + "/token",
+		DefaultFlow: "client_credentials",
+		DynamicClientRegistration: &config.DynamicClientRegistrationConfig{
+			RegistrationEndpoint: srv.URL + "/register",
+		},
+	}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	var tokA, tokB *auth.Token
+	var errA, errB, errLogin error
+
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		<-start
+		tokA, errA = h.GetToken(ctx, auth.TokenOptions{Scope: "scope-a"})
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		tokB, errB = h.GetToken(ctx, auth.TokenOptions{Scope: "scope-b"})
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_, errLogin = h.Login(ctx, auth.LoginOptions{Scopes: []string{"scope-login"}})
+	}()
+	close(start)
+	wg.Wait()
+
+	require.NoError(t, errA)
+	require.NoError(t, errB)
+	require.NoError(t, errLogin)
+	assert.Equal(t, int32(1), regSeq.Load(), "concurrent cold GetToken and Login calls must coalesce into one registration")
+	assert.Equal(t, "tok-coalesced-client-1-scope-a", tokA.AccessToken)
+	assert.Equal(t, "tok-coalesced-client-1-scope-b", tokB.AccessToken)
+
+	// Cached entries must be indexed under coalesced-client-1's fingerprint.
+	expectedFP := h.cacheFingerprint(ctx, auth.FlowClientCredentials)
+	entries, err := h.ListCachedTokens(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+	for _, entry := range entries {
+		assert.Equal(t, expectedFP, entry.Fingerprint)
+	}
+}
+
+func TestHandler_ConfidentialTokenExchange_URLEncodesBasicAuthCredentials(t *testing.T) {
+	t.Parallel()
+
+	rawClientID := "my+client:id%1 with space"
+	rawClientSecret := "sec:ret+val%2 with space"
+
+	var receivedAuthHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthHeader = r.Header.Get("Authorization")
+		writeJSON(w, tokenResponse{AccessToken: "rfc6749-basic-tok", TokenType: "Bearer", ExpiresIn: 1800})
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	jwtFile := filepath.Join(dir, "jwt")
+	require.NoError(t, os.WriteFile(jwtFile, []byte("subject-jwt"), 0o600))
+
+	h, err := New(config.CustomOAuth2Config{
+		Name:                      "rfc6749-basic",
+		TokenURL:                  srv.URL + "/token",
+		ClientID:                  rawClientID,
+		ClientSecret:              rawClientSecret,
+		FederatedTokenFile:        jwtFile,
+		WorkloadIdentityGrantType: config.WorkloadIdentityGrantTokenExchange,
+	}, WithSecretStore(secrets.NewMockStore()), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	tok, err := h.GetToken(context.Background(), auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "rfc6749-basic-tok", tok.AccessToken)
+
+	encodedPayload, ok := strings.CutPrefix(receivedAuthHeader, "Basic ")
+	require.True(t, ok, "expected Basic Authorization header")
+	decodedBytes, err := base64.StdEncoding.DecodeString(encodedPayload)
+	require.NoError(t, err)
+
+	expectedPair := url.QueryEscape(rawClientID) + ":" + url.QueryEscape(rawClientSecret)
+	assert.Equal(t, expectedPair, string(decodedBytes))
 }
 
 func BenchmarkHandler_PAT_GetToken(b *testing.B) {

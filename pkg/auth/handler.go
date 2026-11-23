@@ -138,6 +138,13 @@ type FlowDetector interface {
 	DetectAvailableFlows(ctx context.Context) ([]FlowAvailability, error)
 }
 
+// DefaultFlowProvider is an optional interface for auth handlers that expose
+// their configured default authentication flow for CLI login selection.
+type DefaultFlowProvider interface {
+	// DefaultFlow returns the handler's configured default authentication flow.
+	DefaultFlow() Flow
+}
+
 // Configurer is an optional interface for auth handlers that accept runtime
 // setting overrides. The auth login command uses this to apply --client-id
 // and --tenant flags before initiating the login flow.
