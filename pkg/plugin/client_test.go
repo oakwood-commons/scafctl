@@ -235,6 +235,9 @@ func TestAuthHandlerClient_ActivateServerMode_NotGRPCClient(t *testing.T) {
 		name:   "mock-handler",
 	}
 
+	require.NoError(t, client.ActivateServerMode(context.Background(), nil))
+	require.NoError(t, client.ActivateServerMode(context.Background(), []byte("null")))
+
 	err := client.ActivateServerMode(context.Background(), []byte(`{}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "plugin does not support server mode")

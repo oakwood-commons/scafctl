@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -624,6 +625,11 @@ type AuthHandlerClient struct {
 	name            string
 	startupDuration time.Duration
 	hostDeps        *HostServiceDeps
+
+	wrappersMu  sync.Mutex
+	multiLockMu sync.Mutex
+	serverMode  bool
+	wrappers    []*AuthHandlerWrapper
 }
 
 // newAuthHandlerClientWithConnector creates an auth handler plugin client
@@ -756,11 +762,61 @@ func (c *AuthHandlerClient) authCallbackLineage() *authCallbackLineage {
 	return c.hostDeps.callbackLineage
 }
 
+// registerWrapper records w on this client in registration order and propagates
+// serverMode if plugin-wide server mode was already activated on the client.
+func (c *AuthHandlerClient) registerWrapper(w *AuthHandlerWrapper) {
+	if c == nil || w == nil {
+		return
+	}
+	c.wrappersMu.Lock()
+	if !slices.Contains(c.wrappers, w) {
+		c.wrappers = append(c.wrappers, w)
+	}
+	active := c.serverMode
+	c.wrappersMu.Unlock()
+	if active {
+		w.configMu.Lock()
+		w.serverMode = true
+		w.configMu.Unlock()
+	}
+}
+
+// ensureAndSnapshotWrappers ensures self is registered on c (handling struct-literal
+// wrappers in tests) and returns a snapshot of all wrappers sharing c in
+// deterministic registration order.
+func (c *AuthHandlerClient) ensureAndSnapshotWrappers(self *AuthHandlerWrapper) []*AuthHandlerWrapper {
+	if c == nil {
+		if self == nil {
+			return nil
+		}
+		return []*AuthHandlerWrapper{self}
+	}
+	c.wrappersMu.Lock()
+	if self != nil && !slices.Contains(c.wrappers, self) {
+		c.wrappers = append(c.wrappers, self)
+	}
+	out := slices.Clone(c.wrappers)
+	c.wrappersMu.Unlock()
+	return out
+}
+
+func (c *AuthHandlerClient) markServerMode() {
+	if c == nil {
+		return
+	}
+	c.wrappersMu.Lock()
+	c.serverMode = true
+	c.wrappersMu.Unlock()
+}
+
 func (c *AuthHandlerClient) ActivateServerMode(ctx context.Context, settings []byte) error {
 	if sm, ok := c.plugin.(*AuthHandlerGRPCClient); ok {
 		return sm.ActivateServerMode(ctx, settings)
 	}
-	return fmt.Errorf("plugin does not support server mode")
+	if !hasServerModeSettings(settings) {
+		return nil
+	}
+	return fmt.Errorf("activate server mode failed: plugin does not support server mode")
 }
 
 // Kill terminates the plugin process.

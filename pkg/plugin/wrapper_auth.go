@@ -140,11 +140,15 @@ type hostConfig struct {
 
 // NewAuthHandlerWrapper creates a new wrapper for a plugin auth handler.
 func NewAuthHandlerWrapper(client *AuthHandlerClient, info AuthHandlerInfo) *AuthHandlerWrapper {
-	return &AuthHandlerWrapper{
+	w := &AuthHandlerWrapper{
 		client:      client,
 		handlerName: info.Name,
 		info:        info,
 	}
+	if client != nil {
+		client.registerWrapper(w)
+	}
+	return w
 }
 
 // SetTrustedDomains sets the trusted verification URI domains for device code
@@ -1291,27 +1295,97 @@ func KillAllAuthHandlers(clients []*AuthHandlerClient) {
 	}
 }
 
+func lockSiblings(client *AuthHandlerClient, siblings []*AuthHandlerWrapper) {
+	if client != nil {
+		client.multiLockMu.Lock()
+		defer client.multiLockMu.Unlock()
+	}
+	for _, sib := range siblings {
+		sib.configMu.Lock()
+	}
+}
+
+func unlockSiblings(siblings []*AuthHandlerWrapper) {
+	for i := len(siblings) - 1; i >= 0; i-- {
+		siblings[i].configMu.Unlock()
+	}
+}
+
+// ActivateServerMode coordinates plugin-wide server-mode activation across all
+// AuthHandlerWrappers sharing w.client so activation never overlaps an
+// in-flight RPC on any handler exposed by the plugin and propagates serverMode
+// to every sibling wrapper once non-empty settings succeed.
 func (w *AuthHandlerWrapper) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
-	w.configMu.Lock()
-	if err := w.acquireExclusiveReconfigLocked(ctx); err != nil {
-		w.configMu.Unlock()
-		return err
-	}
-	srvCtx, endSrvLineage := w.startLineageLocked(ctx, "", false)
-	w.configMu.Unlock()
+	lineage := lineageFromContext(ctx)
+	for {
+		siblings := w.client.ensureAndSnapshotWrappers(w)
+		lockSiblings(w.client, siblings)
 
-	err := w.client.ActivateServerMode(srvCtx, settings)
+		for _, sib := range siblings {
+			if sib.hasActiveParentLocked(lineage) {
+				unlockSiblings(siblings)
+				return fmt.Errorf("plugin auth handler %s cannot reconfigure inside a nested callback", w.handlerName)
+			}
+		}
 
-	trimmed := bytes.TrimSpace(settings)
-	w.configMu.Lock()
-	endSrvLineage()
-	w.reconfiguring = false
-	if err == nil && len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
-		w.serverMode = true
+		var busy *AuthHandlerWrapper
+		for _, sib := range siblings {
+			if sib.reconfiguring || sib.inFlight > 0 {
+				busy = sib
+				break
+			}
+		}
+
+		if busy == nil {
+			endFns := make([]func(), 0, len(siblings))
+			srvCtx := ctx
+			for _, sib := range siblings {
+				sib.reconfiguring = true
+				var endFn func()
+				srvCtx, endFn = sib.startLineageLocked(srvCtx, "", false)
+				endFns = append(endFns, endFn)
+			}
+			unlockSiblings(siblings)
+
+			err := w.client.ActivateServerMode(srvCtx, settings)
+			setServerMode := err == nil && hasServerModeSettings(settings)
+			if setServerMode && w.client != nil {
+				w.client.markServerMode()
+			}
+
+			finalSiblings := w.client.ensureAndSnapshotWrappers(w)
+			lockSiblings(w.client, finalSiblings)
+			for _, endFn := range endFns {
+				endFn()
+			}
+			for _, sib := range finalSiblings {
+				sib.reconfiguring = false
+				if setServerMode {
+					sib.serverMode = true
+				}
+				sib.broadcastLocked()
+			}
+			unlockSiblings(finalSiblings)
+			return err
+		}
+
+		waitCh := busy.waitChanLocked()
+		busy.writersWaiting++
+		unlockSiblings(siblings)
+
+		select {
+		case <-waitCh:
+			busy.configMu.Lock()
+			busy.writersWaiting--
+			busy.configMu.Unlock()
+		case <-ctx.Done():
+			busy.configMu.Lock()
+			busy.writersWaiting--
+			busy.broadcastLocked()
+			busy.configMu.Unlock()
+			return ctx.Err()
+		}
 	}
-	w.broadcastLocked()
-	w.configMu.Unlock()
-	return err
 }
 
 // willOpenBrowserOnLogin reports whether delegating Login to the plugin will

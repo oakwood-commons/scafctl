@@ -81,9 +81,11 @@ scafctl auth login gcp --profile deploy --scope https://www.googleapis.com/auth/
 {{% /tab %}}
 {{< /tabs >}}
 
-Profile names must be ASCII alphanumeric, hyphens, or underscores, and must start with an alphanumeric character. Examples: `work`, `personal`, `staging-eu`, `ci_deploy`.
+Profile names must be ASCII alphanumeric, hyphens, or underscores, and must start with an alphanumeric character. Named profiles are canonicalized to lowercase (`--profile myWork` and `--profile mywork` resolve to the same `mywork` profile across `config.yaml`, plugin RPCs, and credential storage). Examples: `work`, `personal`, `staging-eu`, `ci_deploy`.
 
 > **Note:** Logging in without `--profile` uses the default (unnamed) profile. The default profile and named profiles are independent -- they don't share credentials.
+
+> **Upgrade Note (Mixed-Case Profile Names):** Named profile keys in `config.yaml`, OAuth2 credential entries (`<binary>.auth.oauth2.<handler>.<profile>.*`), and token caches (`<binary>.auth.oauth2.<handler>.<profile>.tokens.*`) now always use lowercase profile names. If you previously authenticated under a mixed-case profile name (such as `--profile myWork`), re-authenticate with `scafctl auth login <handler> --profile mywork` and remove any orphaned mixed-case secret or cached-token entries using `scafctl secrets list` and `scafctl secrets delete`.
 
 ---
 

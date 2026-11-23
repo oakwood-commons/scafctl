@@ -748,9 +748,18 @@ func (c *AuthHandlerGRPCClient) StopAuthHandler(ctx context.Context, handlerName
 	return nil
 }
 
+// hasServerModeSettings reports whether raw carries non-empty, non-null JSON
+// settings (as opposed to a nil, empty, or "null" CLI-mode no-op).
+func hasServerModeSettings(raw []byte) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
+
 // ActivateServerMode sends server-mode settings to the plugin. When settings
-// is nil the plugin stays in CLI mode. When non-nil the bytes are passed as-is
-// to the plugin's ActivateServerMode RPC which unmarshals and validates them.
+// is nil, empty, or "null" the plugin stays in CLI mode. When non-empty the
+// bytes are passed as-is to the plugin's ActivateServerMode RPC which
+// unmarshals and validates them; older plugins returning Unimplemented fail
+// when server settings are supplied so callers never assume server mode succeeded.
 func (c *AuthHandlerGRPCClient) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
 	ctx = appendOutgoingLineageMetadata(ctx)
 	resp, err := c.client.ActivateServerMode(ctx, &proto.ActivateServerModeRequest{
@@ -758,7 +767,10 @@ func (c *AuthHandlerGRPCClient) ActivateServerMode(ctx context.Context, settings
 	})
 	if err != nil {
 		if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
-			return nil
+			if !hasServerModeSettings(settings) {
+				return nil
+			}
+			return fmt.Errorf("activate server mode failed: plugin does not support server mode")
 		}
 		return err
 	}

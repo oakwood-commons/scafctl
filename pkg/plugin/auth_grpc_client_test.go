@@ -1719,8 +1719,19 @@ func TestAuthHandlerGRPCClient_ActivateServerMode_Unimplemented(t *testing.T) {
 	}
 	client := &AuthHandlerGRPCClient{client: mock}
 
+	// Nil, empty, and "null" settings are CLI-mode no-ops and remain tolerated on older plugins.
+	require.NoError(t, client.ActivateServerMode(context.Background(), nil))
+	require.NoError(t, client.ActivateServerMode(context.Background(), json.RawMessage{}))
+	require.NoError(t, client.ActivateServerMode(context.Background(), json.RawMessage("null")))
+
+	// Non-empty, non-null server settings must fail when the plugin does not implement ActivateServerMode.
 	err := client.ActivateServerMode(context.Background(), json.RawMessage(`{}`))
-	require.NoError(t, err, "Unimplemented should be treated as a no-op")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plugin does not support server mode")
+
+	err = client.ActivateServerMode(context.Background(), json.RawMessage(`{"tenant_id":"abc"}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plugin does not support server mode")
 }
 
 func TestAuthHandlerGRPCClient_ActivateServerMode_GRPCError(t *testing.T) {

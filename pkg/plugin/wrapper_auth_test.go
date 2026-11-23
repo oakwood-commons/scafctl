@@ -18,7 +18,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestInjectAuthHandlerSettings(t *testing.T) {
@@ -2089,5 +2091,148 @@ func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
 		got := lineageFromContext(extracted)
 		assert.Len(t, got, maxCallbackLineageDepth)
 		assert.Equal(t, "id-000", got[0])
+	})
+
+	t.Run("ActivateServerMode on Unimplemented plugin fails for non-empty settings and leaves CLI mode intact", func(t *testing.T) {
+		t.Parallel()
+		mockSvc := &mockAuthHandlerServiceClient{
+			activateServerModeErr:    status.Error(codes.Unimplemented, "not implemented"),
+			configureAuthHandlerResp: &proto.ConfigureAuthHandlerResponse{ProtocolVersion: PluginProtocolVersion},
+			getTokenResp:             &proto.GetTokenResponse{AccessToken: "cli-tok", TokenType: "Bearer"},
+		}
+		grpcClient := &AuthHandlerGRPCClient{client: mockSvc, hostServiceID: 88}
+		wrapper := NewAuthHandlerWrapper(NewAuthHandlerClientFromPlugin(grpcClient), AuthHandlerInfo{Name: "entra"})
+
+		require.NoError(t, wrapper.ActivateServerMode(context.Background(), nil))
+		err := wrapper.ActivateServerMode(context.Background(), json.RawMessage(`{"clientId":"srv-client"}`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "plugin does not support server mode")
+
+		_, tokErr := wrapper.GetToken(workCtx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
+		require.NoError(t, tokErr)
+		require.NotNil(t, mockSvc.lastConfigureReq, "failed Unimplemented ActivateServerMode must keep CLI reconfiguration enabled")
+		require.NotNil(t, mockSvc.capturedGetTokenReq)
+		assert.NotEmpty(t, mockSvc.capturedGetTokenReq.Settings, "failed Unimplemented ActivateServerMode must keep per-RPC CLI settings")
+	})
+
+	t.Run("ActivateServerMode coordinates across multiple handlers sharing one client", func(t *testing.T) {
+		t.Parallel()
+		multiAppCfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{
+					ActiveProfile: "work",
+					ClientID:      "entra-default",
+					Profiles: map[string]*config.EntraProfileConfig{
+						"work": {ClientID: "entra-work"},
+					},
+				},
+				GitHub: &config.GitHubAuthConfig{
+					ActiveProfile: "work",
+					ClientID:      "gh-default",
+					Profiles: map[string]*config.GitHubProfileConfig{
+						"work": {ClientID: "gh-work"},
+					},
+				},
+			},
+		}
+		multiCtx := config.WithConfig(context.Background(), multiAppCfg)
+
+		enteredGitHubToken := make(chan struct{}, 1)
+		releaseGitHubToken := make(chan struct{})
+		activateEntered := make(chan struct{}, 1)
+
+		var (
+			entraWrapper  *AuthHandlerWrapper
+			githubWrapper *AuthHandlerWrapper
+		)
+		pluginImpl := &callbackAwareStatefulPlugin{}
+		pluginImpl.onOuterToken = func(ctx context.Context) (string, error) {
+			// Nested ActivateServerMode on sibling entraWrapper from inside githubWrapper's RPC must fail fast!
+			nestedErr := entraWrapper.ActivateServerMode(ctx, json.RawMessage(`{"clientId":"bad-nested"}`))
+			if nestedErr == nil {
+				return "", fmt.Errorf("expected sibling ActivateServerMode inside nested callback to fail")
+			}
+			enteredGitHubToken <- struct{}{}
+			<-releaseGitHubToken
+			return nestedErr.Error(), nil
+		}
+
+		grpcServer := &AuthHandlerGRPCServer{Impl: pluginImpl}
+		wireSvc := &concurrentWireServiceClient{server: grpcServer}
+		wireSvc.onActivate = func(_ context.Context, raw json.RawMessage) error {
+			select {
+			case activateEntered <- struct{}{}:
+			default:
+			}
+			var m map[string]string
+			_ = json.Unmarshal(raw, &m)
+			pluginImpl.mu.Lock()
+			pluginImpl.configuredProfile = "srv"
+			pluginImpl.configuredClient = m["clientId"]
+			pluginImpl.mu.Unlock()
+			return nil
+		}
+
+		sharedClient := NewAuthHandlerClientFromPlugin(NewAuthHandlerGRPCClient(wireSvc))
+		entraWrapper = NewAuthHandlerWrapper(sharedClient, AuthHandlerInfo{Name: "entra"})
+		entraWrapper.setHostConfig(hostConfig{AppConfig: multiAppCfg})
+		githubWrapper = NewAuthHandlerWrapper(sharedClient, AuthHandlerInfo{Name: "github"})
+		githubWrapper.setHostConfig(hostConfig{AppConfig: multiAppCfg})
+
+		// Start in-flight CLI GetToken on githubWrapper.
+		type tokRes struct {
+			tok *auth.Token
+			err error
+		}
+		ghDone := make(chan tokRes, 1)
+		go func() {
+			tok, err := githubWrapper.GetToken(multiCtx, auth.TokenOptions{Scope: "outer"})
+			ghDone <- tokRes{tok: tok, err: err}
+		}()
+
+		<-enteredGitHubToken
+
+		// Concurrent ActivateServerMode on entraWrapper must wait for sibling githubWrapper's in-flight RPC!
+		actDone := make(chan error, 1)
+		go func() {
+			actDone <- entraWrapper.ActivateServerMode(context.Background(), json.RawMessage(`{"clientId":"shared-srv"}`))
+		}()
+
+		require.Eventually(t, func() bool {
+			githubWrapper.configMu.Lock()
+			defer githubWrapper.configMu.Unlock()
+			return githubWrapper.writersWaiting >= 1 && githubWrapper.inFlight == 1
+		}, 2*time.Second, 5*time.Millisecond)
+
+		select {
+		case <-activateEntered:
+			t.Fatal("entraWrapper.ActivateServerMode overlapped sibling githubWrapper's in-flight GetToken")
+		default:
+		}
+
+		close(releaseGitHubToken)
+
+		select {
+		case res := <-ghDone:
+			require.NoError(t, res.err)
+			assert.Contains(t, res.tok.AccessToken, "work:gh-work->")
+			assert.Contains(t, res.tok.AccessToken, "|work:gh-work")
+			assert.Contains(t, res.tok.AccessToken, "cannot reconfigure inside a nested callback")
+		case <-time.After(2 * time.Second):
+			t.Fatal("sibling githubWrapper GetToken deadlocked with entraWrapper.ActivateServerMode")
+		}
+
+		select {
+		case err := <-actDone:
+			require.NoError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("entraWrapper.ActivateServerMode did not finish after sibling githubWrapper completed")
+		}
+
+		// Both wrappers on sharedClient must now be in serverMode: githubWrapper must NOT send CLI settings or reconfigure!
+		require.NoError(t, githubWrapper.ApplyOverrides(multiCtx, map[string]string{"clientId": "cli-ignored"}))
+		ghAfter, err := githubWrapper.GetToken(multiCtx, auth.TokenOptions{Scope: "after-srv"})
+		require.NoError(t, err)
+		assert.Equal(t, "nested:srv:shared-srv", ghAfter.AccessToken)
 	})
 }
