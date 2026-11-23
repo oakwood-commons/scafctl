@@ -15,7 +15,7 @@ import (
 func newPopulatedMockSource(t *testing.T) PluginSource {
 	t.Helper()
 	src := NewMockPluginSource("mock")
-	m, ok := src.(*mockCatalog)
+	m, ok := src.(*mockPluginSource)
 	require.True(t, ok)
 	m.addArtifact(testRef("p", "1.0.0"), []byte("v1"))
 	m.addArtifact(testRef("p", "1.2.0"), []byte("v12"))
@@ -90,4 +90,18 @@ func TestMockPluginSource_FetchAndDigest(t *testing.T) {
 
 	_, err = src.ResolveContentDigest(context.Background(), testRef("missing", "1.0.0"), "linux/amd64", MediaTypeProviderBinary)
 	require.ErrorIs(t, err, ErrArtifactNotFound)
+
+	platforms, err := src.ListPlatforms(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Nil(t, platforms)
+
+	_, err = src.ListPlatforms(context.Background(), testRef("missing", "1.0.0"))
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+
+	custom := NewMockPluginSource("custom", WithListPlatformsFunc(func(_ context.Context, _ Reference) ([]string, error) {
+		return []string{"linux/amd64", "darwin/arm64"}, nil
+	}))
+	platforms, err = custom.ListPlatforms(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"linux/amd64", "darwin/arm64"}, platforms)
 }

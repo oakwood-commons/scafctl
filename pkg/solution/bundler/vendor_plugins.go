@@ -5,6 +5,7 @@ package bundler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -96,20 +97,24 @@ func pluginKindToArtifactKind(kind solution.PluginKind) catalog.ArtifactKind {
 	}
 }
 
-// contentDigestCatalog is the minimal catalog surface resolveContentDigests
-// needs. Unlike platformDigestCatalog it resolves the content digest straight
-// from the (already-fetched) manifest via ResolveContentDigest, so it never
-// downloads the binary blob.
-type contentDigestCatalog interface {
-	// ListPlatforms returns the platforms an artifact publishes, or an empty
-	// list for a single-platform artifact.
-	ListPlatforms(ctx context.Context, ref catalog.Reference) ([]string, error)
-
-	// ResolveContentDigest returns the content-layer digest and artifact
-	// metadata for a specific platform without downloading the binary blob.
-	// The mediaType selects which layer to read the digest from.
-	ResolveContentDigest(ctx context.Context, ref catalog.Reference, platform, mediaType string) (catalog.ContentDigestInfo, error)
+// pluginDigestResolver is the minimal catalog surface resolveContentDigests
+// needs. It resolves the content digest straight from the manifest via
+// ResolveContentDigest without downloading the binary blob.
+type pluginDigestResolver interface {
+	ListPlatforms(ctx context.Context, name string, kind catalog.ArtifactKind, version string, opts ...catalog.Option) ([]string, error)
+	ResolveContentDigest(ctx context.Context, name string, kind catalog.ArtifactKind, version, platform, mediaType string, opts ...catalog.Option) (catalog.ContentDigestInfo, error)
 }
+
+// PluginResolver is the catalog surface plugin vendoring needs: find a plugin
+// across the configured source chain (or scoped to a single catalog via
+// catalog.WithCatalog), then read its per-platform content digests without
+// downloading the binary. *catalog.PluginFetcher satisfies it.
+type PluginResolver interface {
+	Find(ctx context.Context, query catalog.ArtifactQuery, opts ...catalog.Option) (catalog.ArtifactInfo, error)
+	pluginDigestResolver
+}
+
+var _ PluginResolver = (*catalog.PluginFetcher)(nil)
 
 // resolveContentDigests resolves content-layer digests for an artifact and
 // returns them alongside the primary digest for fallbackPlatform.
@@ -125,37 +130,53 @@ type contentDigestCatalog interface {
 //     ("" when the artifact does not publish the build platform, which the
 //     caller decides how to treat).
 //
-// It mirrors resolvePlatformDigests but reads the digest directly from the
-// manifest (via ResolveContentDigest) instead of fetching the binary blob, so
-// it does no wasted I/O. A per-platform failure or an empty digest is a hard
-// error: a lock must never record a blank or partial digest, since runtime
-// verification would then fail closed with a misleading message.
-func resolveContentDigests(ctx context.Context, cat contentDigestCatalog, ref catalog.Reference, fallbackPlatform, mediaType string) (digests map[string]string, primary string, err error) {
-	platforms, err := cat.ListPlatforms(ctx, ref)
+// It reads the digest directly from the manifest (via ResolveContentDigest)
+// instead of fetching the binary blob, so it does no wasted I/O. A per-platform
+// failure or an empty digest is a hard error: a lock must never record a blank
+// or partial digest, since runtime verification would then fail closed with a
+// misleading message.
+func resolveContentDigests(
+	ctx context.Context,
+	r pluginDigestResolver,
+	name string,
+	kind catalog.ArtifactKind,
+	version, expectedTopDigest, fallbackPlatform, mediaType string,
+	opts ...catalog.Option,
+) (digests map[string]string, primary string, err error) {
+	platforms, err := r.ListPlatforms(ctx, name, kind, version, opts...)
 	if err != nil {
 		return nil, "", fmt.Errorf("listing platforms: %w", err)
+	}
+	checkTopDigest := func(plat string, info catalog.ContentDigestInfo) error {
+		if expectedTopDigest != "" && info.Digest != "" && info.Digest != expectedTopDigest {
+			return fmt.Errorf("resolving digest for platform %s: tag %s moved from %s to %s during resolution", plat, version, expectedTopDigest, info.Digest)
+		}
+		if info.ContentDigest == "" {
+			return fmt.Errorf("resolving digest for platform %s: catalog returned an empty digest", plat)
+		}
+		return nil
 	}
 	if len(platforms) == 0 {
 		// Single-platform artifact: one binary for every os/arch. Return a nil
 		// map (the single-platform marker) and the sole digest as primary.
-		info, err := cat.ResolveContentDigest(ctx, ref, fallbackPlatform, mediaType)
+		info, err := r.ResolveContentDigest(ctx, name, kind, version, fallbackPlatform, mediaType, opts...)
 		if err != nil {
 			return nil, "", fmt.Errorf("resolving digest for platform %s: %w", fallbackPlatform, err)
 		}
-		if info.ContentDigest == "" {
-			return nil, "", fmt.Errorf("resolving digest for platform %s: catalog returned an empty digest", fallbackPlatform)
+		if err := checkTopDigest(fallbackPlatform, info); err != nil {
+			return nil, "", err
 		}
 		return nil, info.ContentDigest, nil
 	}
 
 	digests = make(map[string]string, len(platforms))
 	for _, plat := range platforms {
-		info, err := cat.ResolveContentDigest(ctx, ref, plat, mediaType)
+		info, err := r.ResolveContentDigest(ctx, name, kind, version, plat, mediaType, opts...)
 		if err != nil {
 			return nil, "", fmt.Errorf("resolving digest for platform %s: %w", plat, err)
 		}
-		if info.ContentDigest == "" {
-			return nil, "", fmt.Errorf("resolving digest for platform %s: catalog returned an empty digest", plat)
+		if err := checkTopDigest(plat, info); err != nil {
+			return nil, "", err
 		}
 		digests[plat] = info.ContentDigest
 	}
@@ -174,16 +195,14 @@ func resolveCatalog(catalogResolver RegistryAliasResolver, registry string) (str
 
 // VendorAllPluginsOptions configures VendorAllPlugins.
 type VendorAllPluginsOptions struct {
-	// CatalogResolver maps a plugin's source registry to a configured catalog
-	// alias. A registry it does not recognize is rejected, not fetched.
+	// CatalogResolver maps a plugin's canonical OCI origin to a configured
+	// catalog alias. An origin it does not recognize is rejected (or invalidates
+	// short-name lock replay), not fetched.
 	CatalogResolver RegistryAliasResolver
 
-	// Remotes maps a lowercased catalog alias to the resolver for that remote
-	// catalog (same keying as builder.buildSourcedCatalogs).
-	Remotes map[string]ArtifactResolver
-
-	// Local resolves built and short-name plugins from the local catalog.
-	Local ArtifactResolver
+	// PluginFetcher resolves plugin artifacts and per-platform content digests
+	// across the configured plugin catalog chain or scoped to a single catalog.
+	PluginFetcher PluginResolver
 
 	// Platform is the build platform (e.g. "linux/amd64"). It selects the
 	// primary digest recorded in LockPlugin.Digest.
@@ -191,56 +210,86 @@ type VendorAllPluginsOptions struct {
 
 	// VerifySignature, if set, verifies a resolved plugin's signature at lock
 	// time and returns the metadata to record in the lock entry. It receives
-	// the plugin's OCI image reference and decides itself whether a failure
-	// is fatal (enforce mode) or yields nil (warn mode). Plugins resolved
-	// without an image reference are not verified.
+	// the plugin's OCI image reference (empty when the resolved copy has no
+	// registry origin, such as a locally built plugin) and decides itself
+	// whether a failure is fatal (enforce mode) or yields nil (warn mode).
 	VerifySignature func(ctx context.Context, imageRef string) (*LockPluginSignature, error)
 }
 
 // VendorAllPlugins resolves plugin dependencies to lock entries. Plugins are
 // not downloaded: only their versions and content digests are pinned, and the
-// runtime fetches binaries as needed. A registry
-// entry in existingLock whose pinned version still satisfies the dependency's
-// constraint is replayed instead of re-resolved. Built and short-name
-// dependencies are always re-resolved from the local catalog, since local
-// content can be overwritten in place (--force) and a replayed digest could
-// be stale.
+// runtime fetches binaries as needed.
+//
+// Resolution follows three explicit paths after validating p.ValidateSource():
+//   - Registry-sourced (p.HasRegistry()): validates p.Registry() against
+//     CatalogResolver, replays a satisfying existingLock entry unless an active
+//     signature policy sees an unsigned entry, and otherwise resolves scoped to
+//     that catalog alias.
+//   - Built (p.HasBuilt()): never replays from existingLock (local builds can be
+//     overwritten in place with --force); resolves scoped to local (SourceBuilt).
+//   - Short-name (p.Source == nil): probes local (SourceBuilt) first so a local
+//     build shadows both existingLock and remote catalogs (failing closed on
+//     non-404 local errors); otherwise replays a satisfying remote lock entry
+//     whose ResolvedCanonical is still a configured catalog and whose signature
+//     satisfies any active policy; otherwise resolves across the PluginFetcher
+//     chain and reads platforms/digests scoped to the winning catalog.
 func VendorAllPlugins(ctx context.Context, plugins []solution.PluginDependency, existingLock *LockFile, opts VendorAllPluginsOptions) (*VendorPluginsResult, error) {
 	if opts.Platform == "" {
 		return nil, fmt.Errorf("plugin vendoring requires a build platform")
 	}
 	var result VendorPluginsResult
 	for _, p := range plugins {
+		if err := p.ValidateSource(); err != nil {
+			return nil, err
+		}
 		switch {
 		case p.HasRegistry():
 			catalogAlias, err := resolveCatalog(opts.CatalogResolver, p.Registry())
 			if err != nil {
 				return nil, fmt.Errorf("plugin %q: resolving catalog for registry %q: %w", p.DisplayName(), p.Registry(), err)
 			}
-			remote, ok := opts.Remotes[strings.ToLower(catalogAlias)]
-			if !ok {
-				return nil, fmt.Errorf("plugin %q: no catalog available for alias %q (registry %q)", p.DisplayName(), catalogAlias, p.Registry())
-			}
-			if locked := replayLocked(ctx, existingLock, p); locked != nil {
+			if locked := replayLockedRegistry(ctx, existingLock, p, opts.VerifySignature != nil); locked != nil {
 				result.ResolvedPlugins = append(result.ResolvedPlugins, *locked)
 				continue
 			}
-			resolved, err := resolveDependency(ctx, remote, p, opts.Platform, opts.VerifySignature)
+			if opts.PluginFetcher == nil {
+				return nil, fmt.Errorf("plugin %q: no plugin fetcher configured", p.DisplayName())
+			}
+			resolved, err := resolveDependency(ctx, opts.PluginFetcher, p, opts.Platform, opts.VerifySignature, catalog.WithCatalog(catalogAlias))
 			if err != nil {
 				return nil, fmt.Errorf("plugin %q: resolving from catalog %q: %w", p.DisplayName(), catalogAlias, err)
 			}
 			result.ResolvedPlugins = append(result.ResolvedPlugins, resolved)
-		default:
-			// Built and short-name plugins both resolve from the local catalog
-			// and are never replayed. They differ only in selector and lock
-			// Source, which resolveDependency derives from p. At runtime the
-			// plugin fetcher binds built deps back to the local catalog.
-			if opts.Local == nil {
-				return nil, fmt.Errorf("plugin %q: no local catalog configured", p.DisplayName())
+
+		case p.HasBuilt():
+			if opts.PluginFetcher == nil {
+				return nil, fmt.Errorf("plugin %q: no plugin fetcher configured", p.DisplayName())
 			}
-			resolved, err := resolveDependency(ctx, opts.Local, p, opts.Platform, opts.VerifySignature)
+			resolved, err := resolveDependency(ctx, opts.PluginFetcher, p, opts.Platform, opts.VerifySignature, catalog.WithCatalog(catalog.LocalCatalogName))
 			if err != nil {
 				return nil, fmt.Errorf("plugin %q: resolving from local catalog: %w", p.DisplayName(), err)
+			}
+			result.ResolvedPlugins = append(result.ResolvedPlugins, resolved)
+
+		default:
+			if opts.PluginFetcher == nil {
+				return nil, fmt.Errorf("plugin %q: no plugin fetcher configured", p.DisplayName())
+			}
+			resolved, ok, err := probeLocalBuiltShortName(ctx, opts.PluginFetcher, p, opts.Platform, opts.VerifySignature)
+			if err != nil {
+				return nil, fmt.Errorf("plugin %q: resolving from local catalog: %w", p.DisplayName(), err)
+			}
+			if ok {
+				result.ResolvedPlugins = append(result.ResolvedPlugins, resolved)
+				continue
+			}
+			if locked := replayLockedShortName(ctx, existingLock, p, opts.CatalogResolver, opts.VerifySignature != nil); locked != nil {
+				result.ResolvedPlugins = append(result.ResolvedPlugins, *locked)
+				continue
+			}
+			resolved, err = resolveDependency(ctx, opts.PluginFetcher, p, opts.Platform, opts.VerifySignature)
+			if err != nil {
+				return nil, fmt.Errorf("plugin %q: resolving from catalog chain: %w", p.DisplayName(), err)
 			}
 			result.ResolvedPlugins = append(result.ResolvedPlugins, resolved)
 		}
@@ -248,15 +297,52 @@ func VendorAllPlugins(ctx context.Context, plugins []solution.PluginDependency, 
 	return &result, nil
 }
 
-// replayLocked returns a copy of p's lock entry when its pinned version still
-// satisfies p's constraint, with Constraint refreshed to the current spec
-// value. It returns nil when there is no entry or the entry is stale.
-func replayLocked(ctx context.Context, existingLock *LockFile, p solution.PluginDependency) *LockPlugin {
+// replayLockedRegistry replays a registry-sourced lock entry when its pinned
+// version still satisfies p's constraint and any active signature policy is
+// satisfied by a recorded signature.
+func replayLockedRegistry(ctx context.Context, existingLock *LockFile, p solution.PluginDependency, requireSignature bool) *LockPlugin {
 	locked := existingLock.FindPluginByDep(p)
 	if locked == nil {
 		return nil
 	}
+	return replayCandidate(ctx, locked, p, requireSignature)
+}
+
+// replayLockedShortName replays a short-name lock entry only when it came from
+// a remote catalog that is still configured, its version still satisfies p's
+// constraint, and any active signature policy is satisfied by a recorded
+// signature.
+func replayLockedShortName(ctx context.Context, existingLock *LockFile, p solution.PluginDependency, catalogResolver RegistryAliasResolver, requireSignature bool) *LockPlugin {
+	locked := existingLock.FindPluginByDep(p)
+	if locked == nil || locked.IsBuilt() {
+		return nil
+	}
 	lgr := logger.FromContext(ctx)
+	if catalogResolver == nil {
+		lgr.V(1).Info("no catalog resolver configured for short-name lock replay, re-resolving",
+			"name", p.DisplayName(),
+			"kind", p.Kind)
+		return nil
+	}
+	if _, ok := catalogResolver.AliasForRegistry(locked.ResolvedCanonical); !ok {
+		lgr.V(1).Info("locked plugin catalog no longer configured, re-resolving",
+			"name", p.DisplayName(),
+			"kind", p.Kind,
+			"resolvedCanonical", locked.ResolvedCanonical)
+		return nil
+	}
+	return replayCandidate(ctx, locked, p, requireSignature)
+}
+
+func replayCandidate(ctx context.Context, locked *LockPlugin, p solution.PluginDependency, requireSignature bool) *LockPlugin {
+	lgr := logger.FromContext(ctx)
+	if requireSignature && locked.Signature == nil {
+		lgr.V(1).Info("lock entry unsigned under active signature policy, re-resolving",
+			"name", p.DisplayName(),
+			"kind", p.Kind,
+			"lockedVersion", locked.Version)
+		return nil
+	}
 	satisfies, err := CheckVersionConstraint(p.Version, locked.Version)
 	if err != nil || !satisfies {
 		lgr.V(1).Info("lock entry stale, re-resolving",
@@ -276,13 +362,36 @@ func replayLocked(ctx context.Context, existingLock *LockFile, p solution.Plugin
 	return &entry
 }
 
-// ArtifactResolver is the catalog surface plugin vendoring needs: find a
-// plugin by identity, then read its per-platform content digests without
-// downloading the binary. *catalog.LocalCatalog and *catalog.RemoteCatalog
-// satisfy it.
-type ArtifactResolver interface {
-	Find(ctx context.Context, query catalog.ArtifactQuery) (catalog.ArtifactInfo, error)
-	contentDigestCatalog // ListPlatforms + ResolveContentDigest
+// probeLocalBuiltShortName probes the local catalog for a locally built copy of
+// a short-name plugin dependency. Returns ok=true when found, ok=false when
+// absent or when the local catalog is not configured, and a non-nil error on
+// any other failure so corrupt local builds fail closed.
+func probeLocalBuiltShortName(
+	ctx context.Context,
+	r PluginResolver,
+	p solution.PluginDependency,
+	buildPlatform string,
+	signatureFunc func(ctx context.Context, imageRef string) (*LockPluginSignature, error),
+) (LockPlugin, bool, error) {
+	kind := pluginKindToArtifactKind(p.Kind)
+	query := catalog.ArtifactQuery{
+		Kind:    kind,
+		Name:    p.ArtifactName(),
+		Version: p.Version,
+		Source:  catalog.SourceSelector{Kind: catalog.SourceBuilt},
+	}
+	found, err := r.Find(ctx, query, catalog.WithCatalog(catalog.LocalCatalogName))
+	if err != nil {
+		if catalog.IsNotFound(err) || errors.Is(err, catalog.ErrCatalogNotConfigured) {
+			return LockPlugin{}, false, nil
+		}
+		return LockPlugin{}, false, fmt.Errorf("plugin %q: finding %q: %w", p.DisplayName(), p.Version, err)
+	}
+	resolved, err := finishResolveDependency(ctx, r, p, kind, found, buildPlatform, signatureFunc)
+	if err != nil {
+		return LockPlugin{}, false, err
+	}
+	return resolved, true, nil
 }
 
 // selectorFor maps a dependency's declared form to a catalog source selector.
@@ -323,7 +432,14 @@ func lockSourceFor(p solution.PluginDependency) *LockPluginSource {
 	}
 }
 
-func resolveDependency(ctx context.Context, r ArtifactResolver, p solution.PluginDependency, buildPlatform string, signatureFunc func(ctx context.Context, imageRef string) (*LockPluginSignature, error)) (LockPlugin, error) {
+func resolveDependency(
+	ctx context.Context,
+	r PluginResolver,
+	p solution.PluginDependency,
+	buildPlatform string,
+	signatureFunc func(ctx context.Context, imageRef string) (*LockPluginSignature, error),
+	findOpts ...catalog.Option,
+) (LockPlugin, error) {
 	kind := pluginKindToArtifactKind(p.Kind)
 	// NOTE: registry case sensitivity. AliasForRegistry matches the registry
 	// case-insensitively, but RemoteCatalog.servesSource compares the selector's
@@ -332,15 +448,43 @@ func resolveDependency(ctx context.Context, r ArtifactResolver, p solution.Plugi
 	// right catalog yet fails here as "not found". Users are expected to write
 	// the registry as configured; if this confuses people, improve this error
 	// (e.g. hint at the configured canonical) rather than normalizing case.
-	found, err := r.Find(ctx, catalog.ArtifactQuery{Kind: kind, Name: p.ArtifactName(), Version: p.Version, Source: selectorFor(p)})
+	found, err := r.Find(ctx, catalog.ArtifactQuery{
+		Kind:    kind,
+		Name:    p.ArtifactName(),
+		Version: p.Version,
+		Source:  selectorFor(p),
+	}, findOpts...)
 	if err != nil {
 		return LockPlugin{}, fmt.Errorf("plugin %q: finding %q: %w", p.DisplayName(), p.Version, err)
 	}
+	return finishResolveDependency(ctx, r, p, kind, found, buildPlatform, signatureFunc)
+}
+
+func finishResolveDependency(
+	ctx context.Context,
+	r PluginResolver,
+	p solution.PluginDependency,
+	kind catalog.ArtifactKind,
+	found catalog.ArtifactInfo,
+	buildPlatform string,
+	signatureFunc func(ctx context.Context, imageRef string) (*LockPluginSignature, error),
+) (LockPlugin, error) {
 	if found.Reference.Version == nil {
 		return LockPlugin{}, fmt.Errorf("plugin %q: catalog returned no resolved version", p.DisplayName())
 	}
-	// found.Reference keeps its origin (Built/Remote) -- do not rebuild it.
-	digests, primary, err := resolveContentDigests(ctx, r, found.Reference, buildPlatform, catalog.MediaTypeForKind(kind))
+	if found.Catalog == "" {
+		return LockPlugin{}, fmt.Errorf("plugin %q: catalog returned no source catalog name", p.DisplayName())
+	}
+	version := found.Reference.Version.String()
+	artifactName := found.Reference.Name
+	if artifactName == "" {
+		artifactName = p.ArtifactName()
+	}
+	// Scope platform enumeration and content-digest lookups to the winning
+	// catalog so non-winning catalogs are not re-probed per platform and
+	// digests cannot split across catalogs.
+	scope := catalog.WithCatalog(found.Catalog)
+	digests, primary, err := resolveContentDigests(ctx, r, artifactName, kind, version, found.Digest, buildPlatform, catalog.MediaTypeForKind(kind), scope)
 	if err != nil {
 		return LockPlugin{}, fmt.Errorf("plugin %q: %w", p.DisplayName(), err)
 	}
@@ -349,15 +493,8 @@ func resolveDependency(ctx context.Context, r ArtifactResolver, p solution.Plugi
 	if primary == "" {
 		return LockPlugin{}, fmt.Errorf("plugin %q: no content digest resolved for build platform %q", p.DisplayName(), buildPlatform)
 	}
-	// TODO(local-copy-signatures): LocalCatalog never sets ImageRef, so
-	// built plugins and short names that resolve to a copy pulled from a
-	// registry are never verified at lock time, while a registry
-	// declaration of the same plugin is. For a pulled copy (non-empty
-	// found.Canonical) we could rebuild the origin image reference from the
-	// canonical, name and version and verify against that. Built plugins
-	// have no origin to verify against.
 	var sig *LockPluginSignature
-	if signatureFunc != nil && found.ImageRef != "" {
+	if signatureFunc != nil {
 		s, err := signatureFunc(ctx, found.ImageRef)
 		if err != nil {
 			return LockPlugin{}, fmt.Errorf("plugin %q: signature verification failed during lock: %w", p.DisplayName(), err)
@@ -366,7 +503,7 @@ func resolveDependency(ctx context.Context, r ArtifactResolver, p solution.Plugi
 	}
 	return LockPlugin{
 		Name: p.ArtifactName(), Kind: string(p.Kind),
-		Version: found.Reference.Version.String(), Constraint: p.Version,
+		Version: version, Constraint: p.Version,
 		Digest: primary, Digests: digests,
 		ResolvedFrom: found.Catalog, ResolvedCanonical: found.Canonical,
 		Source:    lockSourceFor(p),

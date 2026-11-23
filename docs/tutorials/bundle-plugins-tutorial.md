@@ -119,8 +119,22 @@ bundle:
 ~~~
 
 By default an external plugin is resolved by its short `name` through the
-catalog chain. To pin a plugin to an explicit OCI registry instead, add a
-`source` block (`source.registry` / `source.artifact`):
+configured plugin catalog chain:
+
+1. Locally built plugins in the `local` catalog (`scafctl package plugin`)
+2. Configured user or organization OCI catalogs (in configuration order)
+3. The `official` catalog (`oci://ghcr.io/oakwood-commons`), unless disabled
+
+Both runtime execution (`scafctl run solution`) and solution packaging
+(`scafctl package solution`) walk this same chain automatically -- you do **not**
+need to run `scafctl catalog pull` beforehand to vendor short-name plugins into
+`solution.lock`. At package time, `scafctl package solution` resolves the
+matching version and multi-platform content digests directly from the winning
+catalog's OCI manifests (without downloading plugin binaries) and records
+`resolvedFrom` and `resolvedCanonical` in `solution.lock`.
+
+To pin a plugin to an explicit OCI registry instead, add a `source` block
+(`source.registry` / `source.artifact`):
 
 ~~~yaml
 bundle:
@@ -140,6 +154,19 @@ action (`provider: exec`); the real OCI coordinates are `source.registry` +
 [Pinning a plugin to a specific registry](../plugin-auto-fetch-tutorial/#pinning-a-plugin-to-a-specific-registry)
 in the Plugin Auto-Fetching tutorial for the full field reference and how the
 origin is recorded in the lock file.
+
+To require a locally built copy from the `local` catalog (`source.built`), set
+`built: true` instead of `registry`:
+
+~~~yaml
+bundle:
+  plugins:
+    - name: my-local-provider
+      kind: provider
+      version: "^0.1.0"
+      source:
+        built: true
+~~~
 
 If your solution only uses built-in providers, omit `bundle.plugins` entirely:
 

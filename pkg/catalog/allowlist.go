@@ -199,6 +199,13 @@ func (s *allowlistPluginSource) FetchByPlatform(ctx context.Context, ref Referen
 	return s.inner.FetchByPlatform(ctx, ref, platform)
 }
 
+func (s *allowlistPluginSource) ListPlatforms(ctx context.Context, ref Reference) ([]string, error) {
+	if !s.isAllowed(ref.Name) {
+		return nil, s.notFound(ref)
+	}
+	return s.inner.ListPlatforms(ctx, ref)
+}
+
 func (s *allowlistPluginSource) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
 	if !s.isAllowed(ref.Name) {
 		return ContentDigestInfo{}, s.notFound(ref)

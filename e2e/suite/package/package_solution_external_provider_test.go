@@ -210,4 +210,91 @@ bundle:
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		assertPluginDigests(remoteLock, linuxBin, darwinBin)
 	})
+
+	It("packages a solution declaring a short-name bundle.plugins entry resolved across the remote catalog chain without prior catalog pull", func() {
+		// Build and push the multi-platform provider from a SEPARATE publisher
+		// environment so isolatedEnv's LocalCatalog starts completely empty.
+		publisherEnv := utils.NewIsolatedEnv()
+		writeTestRegistryConfig(publisherEnv.Root, registryAddr)
+
+		pluginDir := "./e2e/testdata/plugins/providers/my-plugin"
+		buildDir := GinkgoT().TempDir()
+		linuxBin := filepath.Join(buildDir, "my-plugin-linux-amd64")
+		darwinBin := filepath.Join(buildDir, "my-plugin-darwin-arm64")
+
+		utils.BuildPluginBinaryForPlatform(linuxBin, pluginDir, "linux/amd64")
+		utils.BuildPluginBinaryForPlatform(darwinBin, pluginDir, "darwin/arm64")
+
+		utils.Scafctl(
+			"package", "plugin",
+			"--name", "test-provider",
+			"--kind", "provider",
+			"--version", "1.0.0",
+			"--platform", "linux/amd64="+linuxBin,
+			"--platform", "darwin/arm64="+darwinBin,
+		).WithEnv(publisherEnv.Env).Exec()
+
+		utils.Scafctl(
+			"catalog", "push",
+			registryAddr+"/scafctl/providers/test-provider@1.0.0",
+			"--insecure",
+		).WithEnv(publisherEnv.Env).Exec()
+
+		// Author a solution declaring test-provider by short name ONLY (no source block).
+		solutionPath := filepath.Join(GinkgoT().TempDir(), "solution.yaml")
+		solutionText := `# e2e fixture: solution using a short-name external provider.
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: shortname-provider
+  version: 1.0.0
+  description: A solution declaring an external provider by short name
+
+spec:
+  resolvers:
+    testResolver:
+      description: testResolver
+      type: any
+      resolve:
+        with:
+          - provider: test-provider
+            inputs:
+              input: hello-short
+bundle:
+  plugins:
+    - name: test-provider
+      kind: provider
+      version: ^1.0.0
+`
+		gomega.Expect(os.WriteFile(solutionPath, []byte(solutionText), 0o600)).To(gomega.Succeed())
+
+		buildSession := utils.Scafctl(
+			"package", "solution",
+			"-f", solutionPath,
+			"--version", "1.0.0",
+			"--skip-tests",
+		).WithEnv(isolatedEnv.Env).Exec()
+		gomega.Expect(string(buildSession.Out.Contents())).To(gomega.ContainSubstring("shortname-provider"))
+
+		lockPath := filepath.Join(filepath.Dir(solutionPath), bundler.DefaultLockFileName)
+		lock, err := bundler.LoadLockFile(lockPath)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		assertPluginDigests(lock, linuxBin, darwinBin)
+
+		lockedPlugin := lock.FindPlugin("test-provider", "provider")
+		gomega.Expect(lockedPlugin).NotTo(gomega.BeNil())
+		gomega.Expect(lockedPlugin.Source).To(gomega.BeNil(), "short-name lock entry keeps Source nil")
+		gomega.Expect(lockedPlugin.ResolvedFrom).To(gomega.Equal("test-registry"))
+		gomega.Expect(lockedPlugin.ResolvedCanonical).To(gomega.Equal(registryAddr + "/scafctl"))
+
+		runSession := utils.Scafctl(
+			"run", "resolver",
+			"-f", solutionPath,
+			"--lock-mode", "strict",
+			"-o", "json",
+		).WithEnv(isolatedEnv.Env).Exec()
+		gomega.Expect(runSession.ExitCode()).To(gomega.Equal(0), string(runSession.Err.Contents()))
+		gomega.Expect(string(runSession.Out.Contents())).To(gomega.ContainSubstring("hello-short"))
+	})
 })

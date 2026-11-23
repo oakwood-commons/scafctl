@@ -338,7 +338,7 @@ func (r *fakeOCIRegistry) handleBlobs(w http.ResponseWriter, req *http.Request, 
 // newTestRemoteCatalog creates a RemoteCatalog pointing at a fake OCI registry.
 // Uses TLS with InsecureSkipVerify because oras-go defaults to HTTPS.
 // The caller must call ts.Close() when done (or defer it).
-func newTestRemoteCatalog(t *testing.T) (*RemoteCatalog, *httptest.Server) {
+func newTestRemoteCatalog(t testing.TB) (*RemoteCatalog, *httptest.Server) {
 	t.Helper()
 
 	reg := newFakeOCIRegistry()

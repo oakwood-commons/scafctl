@@ -386,6 +386,29 @@ func TestBuildPluginFetcher_LocalNotAllowedStillCaches(t *testing.T) {
 	assert.IsType(t, &CachedRemoteCatalog{}, cats[0])
 }
 
+func TestBuildPluginFetcher_WithLocalCatalog(t *testing.T) {
+	t.Parallel()
+
+	injected, err := NewLocalCatalogAt(t.TempDir(), logr.Discard())
+	require.NoError(t, err)
+
+	f, err := BuildPluginFetcher(pluginFetcherTestConfig(), nil, logr.Discard(), WithLocalCatalog(injected))
+	require.NoError(t, err)
+
+	cats := f.Catalogs()
+	require.Equal(t, []string{LocalCatalogName, "embedder", config.CatalogNameOfficial}, catalogNames(cats))
+	assert.Same(t, injected, cats[0], "injected LocalCatalog instance must be reused directly")
+	for _, c := range cats[1:] {
+		cr, ok := c.(*CachedRemoteCatalog)
+		require.True(t, ok)
+		assert.Same(t, injected, cr.local, "CachedRemoteCatalog must share the injected LocalCatalog")
+	}
+
+	chain, err := BuildCatalogChain(pluginFetcherTestConfig(), nil, logr.Discard(), WithLocalCatalog(injected))
+	require.NoError(t, err)
+	assert.Same(t, injected, chain.Catalogs()[0])
+}
+
 func TestBuildPluginFetcher_PerCatalogArtifacts(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 

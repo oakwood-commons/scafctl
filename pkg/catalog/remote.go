@@ -1101,11 +1101,13 @@ func (c *RemoteCatalog) resolveWithKindInternal(ctx context.Context, ref Referen
 		}
 
 		return ArtifactInfo{
-			Reference: c.normalizeRemoteResultRef(ref),
-			Digest:    desc.Digest.String(),
-			Size:      desc.Size,
-			Catalog:   c.name,
-			Canonical: c.canonicalID(),
+			Reference:      c.normalizeRemoteResultRef(ref),
+			Digest:         desc.Digest.String(),
+			ManifestDigest: desc.Digest.String(),
+			ImageRef:       c.buildRepositoryPath(ref) + "@" + desc.Digest.String(),
+			Size:           desc.Size,
+			Catalog:        c.name,
+			Canonical:      c.canonicalID(),
 		}, nil
 	}
 
@@ -2386,11 +2388,17 @@ func (c *CachedRemoteCatalog) cachedFallback(ctx context.Context, query Artifact
 }
 
 // fromCache presents a cached copy as served by this catalog, so callers see
-// the same catalog identity whether the answer came from the cache or the
-// registry.
+// the same catalog identity and registry image reference whether the answer
+// came from the cache or the registry.
 func (c *CachedRemoteCatalog) fromCache(info ArtifactInfo) ArtifactInfo {
 	info.Catalog = c.Name()
 	info.Canonical = c.canonicalID()
+	if info.ImageRef == "" && info.Digest != "" {
+		info.ImageRef = c.buildRepositoryPath(info.Reference) + "@" + info.Digest
+		if info.ManifestDigest == "" {
+			info.ManifestDigest = info.Digest
+		}
+	}
 	return info
 }
 
@@ -2403,6 +2411,45 @@ func isPinnedQuery(query ArtifactQuery) bool {
 	var v VersionOrConstraint
 	v.Set(query.Version)
 	return v.Type() == IsVersion
+}
+
+// ListPlatforms returns the platforms available for ref, using the local cache
+// of this remote. A pinned ref found in the cache is served without contacting
+// the remote. An unpinned ref asks the remote first and falls back to the
+// newest cached copy when the remote is unreachable.
+func (c *CachedRemoteCatalog) ListPlatforms(ctx context.Context, ref Reference) ([]string, error) {
+	cachedRef := c.localRef(ref)
+
+	if isPinned(ref) {
+		platforms, err := c.local.ListPlatforms(ctx, cachedRef)
+		if err == nil {
+			return platforms, nil
+		}
+		if !IsNotFound(err) {
+			c.logger.V(1).Info("local cache lookup failed; asking remote",
+				"ref", ref.String(), "error", err.Error())
+		}
+		return c.RemoteCatalog.ListPlatforms(ctx, ref)
+	}
+
+	platforms, err := c.RemoteCatalog.ListPlatforms(ctx, ref)
+	if _, unreachable := IsCatalogUnreachable(err); !unreachable {
+		return platforms, err
+	}
+
+	query := queryFromRef(cachedRef)
+	info, findErr := c.local.Find(ctx, query)
+	if findErr != nil {
+		return nil, err
+	}
+	cachedPlatforms, platErr := c.local.ListPlatforms(ctx, info.Reference)
+	if platErr != nil {
+		return nil, err
+	}
+	c.logger.Info("remote unreachable; using newest locally cached version",
+		"query", query.String(),
+		"version", info.Reference.VersionOrDigest(), "error", err.Error())
+	return cachedPlatforms, nil
 }
 
 // FetchByPlatform fetches the binary for platform from the local cache of this
@@ -2439,9 +2486,12 @@ func (c *CachedRemoteCatalog) FetchByPlatform(ctx context.Context, ref Reference
 // verification. Without a manifest digest ImageRef stays empty, which signature
 // enforcement rejects.
 func (c *CachedRemoteCatalog) fromCachedFetch(ref Reference, info ArtifactInfo) ArtifactInfo {
-	info = c.fromCache(info)
+	info.Catalog = c.Name()
+	info.Canonical = c.canonicalID()
 	if info.ManifestDigest != "" {
 		info.ImageRef = c.buildRepositoryPath(ref) + "@" + info.ManifestDigest
+	} else {
+		info.ImageRef = ""
 	}
 	return info
 }
@@ -2458,7 +2508,7 @@ func (c *CachedRemoteCatalog) ResolveContentDigest(ctx context.Context, ref Refe
 	info, err := c.local.ResolveContentDigest(ctx, c.localRef(ref), platform, mediaType)
 	switch {
 	case err == nil:
-		info.ArtifactInfo = c.fromCache(info.ArtifactInfo)
+		info.ArtifactInfo = c.fromCachedFetch(ref, info.ArtifactInfo)
 		return info, nil
 	case IsPlatformNotFound(err):
 		// The cached copy is a verbatim pull of this pinned artifact, so the

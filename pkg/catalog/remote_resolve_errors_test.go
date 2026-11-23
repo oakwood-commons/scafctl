@@ -165,6 +165,20 @@ func TestRemoteCatalog_ManifestErrors_StrictChain(t *testing.T) {
 			info, err := c.ResolveContentDigest(ctx, testRef("p", "1.0.0"), "linux/amd64", MediaTypeProviderBinary)
 			return info.Catalog, err
 		},
+		"ListPlatforms": func(ctx context.Context, c *pluginSourceChain) (string, error) {
+			platforms, err := c.ListPlatforms(ctx, testRef("p", "1.0.0"))
+			if len(platforms) > 0 {
+				return platforms[0], err
+			}
+			return "primary", err
+		},
+		"ListPlatforms latest": func(ctx context.Context, c *pluginSourceChain) (string, error) {
+			platforms, err := c.ListPlatforms(ctx, testRef("p", ""))
+			if len(platforms) > 0 {
+				return platforms[0], err
+			}
+			return "primary", err
+		},
 	}
 
 	for opName, op := range ops {

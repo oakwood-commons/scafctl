@@ -207,6 +207,13 @@ var allowlistSourceOps = map[string]func(s PluginSource, name string) (string, e
 		_, info, err := s.FetchByPlatform(context.Background(), testRef(name, "1.0.0"), "linux/amd64")
 		return info.Catalog, err
 	},
+	"ListPlatforms": func(s PluginSource, name string) (string, error) {
+		platforms, err := s.ListPlatforms(context.Background(), testRef(name, "1.0.0"))
+		if len(platforms) > 0 {
+			return platforms[0], err
+		}
+		return "", err
+	},
 	"ResolveContentDigest": func(s PluginSource, name string) (string, error) {
 		info, err := s.ResolveContentDigest(context.Background(), testRef(name, "1.0.0"), "linux/amd64", MediaTypeProviderBinary)
 		return info.Catalog, err

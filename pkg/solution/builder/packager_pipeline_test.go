@@ -6,6 +6,7 @@ package builder
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -14,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 )
@@ -457,6 +460,102 @@ func TestPackager_Do_PluginErrors(t *testing.T) {
 			assert.False(t, found)
 		})
 	}
+}
+
+func TestPackager_Do_BuiltPluginSignatureModes(t *testing.T) {
+	t.Parallel()
+
+	const doc = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: demo
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: local-prov
+      kind: provider
+      version: ^1.0.0
+spec:
+  resolvers:
+    x:
+      resolve:
+        with:
+          - provider: local-prov
+`
+	f := newPipelineFixture(t, map[string]string{"solution.yaml": doc})
+	_, err := f.cat.StoreMultiPlatform(t.Context(), catalog.Reference{
+		Kind:    catalog.ArtifactKindProvider,
+		Name:    "local-prov",
+		Version: semver.MustParse("1.0.0"),
+		Built:   true,
+	}, []catalog.PlatformBinary{
+		{Platform: runtime.GOOS + "/" + runtime.GOARCH, Data: []byte("local-bin")},
+	}, nil, false)
+	require.NoError(t, err)
+
+	// Warn mode logs and succeeds on empty ImageRef (local build).
+	warnCtx := plugin.WithSignaturePolicy(t.Context(), &plugin.SignaturePolicy{
+		Mode:              plugin.SignatureModeWarn,
+		TrustedIssuers:    []string{"https://issuer.example.com"},
+		TrustedIdentities: []string{"https://github.com/org/*"},
+	})
+	res, err := f.packager(t).DryRun(true).Do(warnCtx)
+	require.NoError(t, err)
+	assert.Contains(t, res.Messages, "Pinned 1 plugin(s) in lock file")
+
+	// Enforce mode fails closed with ErrSignatureUnverifiable on empty ImageRef.
+	enforceCtx := plugin.WithSignaturePolicy(t.Context(), &plugin.SignaturePolicy{
+		Mode:              plugin.SignatureModeEnforce,
+		TrustedIssuers:    []string{"https://issuer.example.com"},
+		TrustedIdentities: []string{"https://github.com/org/*"},
+	})
+	_, err = f.packager(t).DryRun(true).Do(enforceCtx)
+	require.ErrorIs(t, err, plugin.ErrSignatureUnverifiable)
+}
+
+func TestPackager_Do_BuiltPluginPreflightWithoutArtifact(t *testing.T) {
+	t.Parallel()
+
+	const doc = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: built-demo
+  version: 1.0.0
+  description: Built plugin without source.artifact passes schema lint
+bundle:
+  plugins:
+    - name: my-local-provider
+      kind: provider
+      version: "^0.1.0"
+      source:
+        built: true
+spec:
+  resolvers:
+    out:
+      description: test output
+      resolve:
+        with:
+          - provider: my-local-provider
+`
+	f := newPipelineFixture(t, map[string]string{"solution.yaml": doc})
+	_, err := f.cat.StoreMultiPlatform(t.Context(), catalog.Reference{
+		Kind:    catalog.ArtifactKindProvider,
+		Name:    "my-local-provider",
+		Version: semver.MustParse("0.1.0"),
+		Built:   true,
+	}, []catalog.PlatformBinary{
+		{Platform: runtime.GOOS + "/" + runtime.GOARCH, Data: []byte("local-bin")},
+	}, nil, false)
+	require.NoError(t, err)
+
+	res, err := f.packager(t).
+		As(BuiltSolutionRef("built-demo", semver.MustParse("1.0.0"))).
+		Preflight(PreflightOptions{SkipTests: true, Registry: provider.NewRegistry()}).
+		Do(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, res.Preflight)
+	assert.False(t, res.Preflight.Blocked)
+	assert.Contains(t, res.Messages, "Pinned 1 plugin(s) in lock file")
 }
 
 func TestVerifyOptions_Check(t *testing.T) {

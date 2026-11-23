@@ -57,9 +57,20 @@ type ChainCatalogOptions struct {
 	allowedCatalogs     map[string]bool
 	perCatalogArtifacts map[string]PluginPolicy
 	withoutLocalBuilds  bool
+	localCatalog        *LocalCatalog
 }
 
 type ChainCatalogOption func(*ChainCatalogOptions)
+
+// WithLocalCatalog supplies an already-open LocalCatalog instance instead of
+// opening the default XDG local catalog on disk. Callers that already hold a
+// LocalCatalog handle (such as builder.Packager or embedder tests) pass it here
+// so the chain and pull-through caches share that exact catalog instance.
+func WithLocalCatalog(local *LocalCatalog) ChainCatalogOption {
+	return func(opt *ChainCatalogOptions) {
+		opt.localCatalog = local
+	}
+}
 
 // WithoutLocalBuilds excludes locally built artifacts as a plugin source in
 // BuildPluginFetcher, so plugin references resolve only against remote
@@ -132,7 +143,7 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 	options := applyChainCatalogOptions(opts)
 
 	// 1. Local catalog always comes first.
-	localCat, localAllowed, err := buildLocalCatalog(logger, options.allowedCatalogs)
+	localCat, localAllowed, err := resolveLocalCatalog(logger, options.allowedCatalogs, options.localCatalog)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +184,7 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 func BuildPluginFetcher(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger, opts ...ChainCatalogOption) (*PluginFetcher, error) {
 	options := applyChainCatalogOptions(opts)
 
-	localCat, localAllowed, err := buildLocalCatalog(logger, options.allowedCatalogs)
+	localCat, localAllowed, err := resolveLocalCatalog(logger, options.allowedCatalogs, options.localCatalog)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +256,19 @@ func applyChainCatalogOptions(opts []ChainCatalogOption) ChainCatalogOptions {
 		opt(&options)
 	}
 	return options
+}
+
+// resolveLocalCatalog uses provided when non-nil and otherwise opens the
+// default local catalog on disk.
+func resolveLocalCatalog(logger logr.Logger, allowedCatalogs map[string]bool, provided *LocalCatalog) (*LocalCatalog, bool, error) {
+	if provided != nil {
+		allowed := isCatalogAllowed(provided.Name(), allowedCatalogs)
+		if !allowed {
+			logger.V(1).Info("local catalog not in allowed list, skipping")
+		}
+		return provided, allowed, nil
+	}
+	return buildLocalCatalog(logger, allowedCatalogs)
 }
 
 // buildLocalCatalog opens the local catalog and reports whether it is an

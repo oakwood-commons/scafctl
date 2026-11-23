@@ -266,15 +266,16 @@ func (c *RemoteCatalog) resolveContentDigestInternal(ctx context.Context, ref Re
 
 	return ContentDigestInfo{
 		ArtifactInfo: ArtifactInfo{
-			Reference:   ref,
-			Tag:         tag,
-			Digest:      topDesc.Digest.String(),
-			ImageRef:    c.buildRepositoryPath(ref) + "@" + manifestDigest,
-			CreatedAt:   createdAt,
-			Size:        layer.Size,
-			Annotations: manifest.Annotations,
-			Catalog:     c.name,
-			Canonical:   c.canonicalID(),
+			Reference:      ref,
+			Tag:            tag,
+			Digest:         topDesc.Digest.String(),
+			ManifestDigest: manifestDigest,
+			ImageRef:       c.buildRepositoryPath(ref) + "@" + manifestDigest,
+			CreatedAt:      createdAt,
+			Size:           layer.Size,
+			Annotations:    manifest.Annotations,
+			Catalog:        c.name,
+			Canonical:      c.canonicalID(),
 		},
 		ContentDigest: layer.Digest.String(),
 	}, nil
