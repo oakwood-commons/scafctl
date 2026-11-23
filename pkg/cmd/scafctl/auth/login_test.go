@@ -523,6 +523,37 @@ func (m *mockDetectorConfigurerHandler) DetectAvailableFlows(ctx context.Context
 	return m.detectFn(ctx)
 }
 
+type mockLazyProfileConfigurerHandler struct {
+	*auth.MockConfigurerHandler
+	capabilitiesFn   func() []auth.Capability
+	applyOverridesFn func(ctx context.Context, overrides map[string]string) error
+	loginFn          func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error)
+}
+
+func (m *mockLazyProfileConfigurerHandler) Capabilities() []auth.Capability {
+	if m.capabilitiesFn != nil {
+		return m.capabilitiesFn()
+	}
+	return m.MockConfigurerHandler.Capabilities()
+}
+
+func (m *mockLazyProfileConfigurerHandler) ApplyOverrides(ctx context.Context, overrides map[string]string) error {
+	if err := m.MockConfigurerHandler.ApplyOverrides(ctx, overrides); err != nil {
+		return err
+	}
+	if m.applyOverridesFn != nil {
+		return m.applyOverridesFn(ctx, overrides)
+	}
+	return nil
+}
+
+func (m *mockLazyProfileConfigurerHandler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+	if m.loginFn != nil {
+		return m.loginFn(ctx, opts)
+	}
+	return m.MockConfigurerHandler.Login(ctx, opts)
+}
+
 func TestCommandLogin_EntraFlowDetectorAndProfileOverrides(t *testing.T) {
 	t.Run("flow detector selects interactive on workstation and device_code on headless fallback", func(t *testing.T) {
 		for _, wantFlow := range []auth.Flow{auth.FlowInteractive, auth.FlowDeviceCode} {
@@ -737,6 +768,115 @@ func TestCommandLogin_EntraFlowDetectorAndProfileOverrides(t *testing.T) {
 		require.NoError(t, cmdGlobal.Execute())
 		require.Len(t, base.ApplyOverridesCalls, 1)
 		assert.Equal(t, "device_code", base.ApplyOverridesCalls[0]["defaultFlow"])
+		require.Len(t, base.LoginCalls, 1)
+		assert.Equal(t, auth.FlowDeviceCode, base.LoginCalls[0].Flow)
+	})
+
+	t.Run("explicit --profile default with explicit --flow applies top-level credentials over activeProfile while preserving flow", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+		t.Setenv("XDG_DATA_HOME", tmpDir)
+		t.Setenv("XDG_STATE_HOME", tmpDir)
+
+		appCfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{
+					ClientID:      "top-level-client-id",
+					TenantID:      "top-level-tenant-id",
+					DefaultFlow:   "interactive",
+					ActiveProfile: "work",
+					Profiles: map[string]*config.EntraProfileConfig{
+						"work": {
+							ClientID:    "work-profile-client-id",
+							TenantID:    "work-profile-tenant-id",
+							DefaultFlow: "interactive",
+						},
+					},
+				},
+			},
+		}
+
+		baseCtx, buf := newTestContext(t)
+		baseCtx = config.WithConfig(baseCtx, appCfg)
+
+		base := auth.NewMockConfigurerHandler("entra")
+		base.DisplayNameValue = "Microsoft Entra ID"
+		base.CapabilitiesValue = []auth.Capability{auth.CapTenantID, auth.CapScopesOnLogin}
+		base.SetNotAuthenticated()
+		base.LoginResult = &auth.Result{Claims: &auth.Claims{Email: "user@example.com"}}
+
+		var (
+			initialized    bool
+			initialCfg     *config.EntraAuthConfig
+			effectiveCfg   *config.EntraAuthConfig
+			loginSnapCfg   *config.EntraAuthConfig
+			overrideProf   string
+			overrideProfOK bool
+		)
+
+		handler := &mockLazyProfileConfigurerHandler{
+			MockConfigurerHandler: base,
+			capabilitiesFn: func() []auth.Capability {
+				if !initialized {
+					initialized = true
+					// Mirror LazyAuthHandlerWrapper.Capabilities() initializing the
+					// cached plugin from baseCtx before CLI --profile takes effect.
+					prof := auth.ResolveActiveProfile(baseCtx, "entra")
+					resolved := auth.ResolveEntraConfig(appCfg.Auth.Entra, prof)
+					cp := *resolved
+					initialCfg = &cp
+					effectiveCfg = resolved
+				}
+				return base.CapabilitiesValue
+			},
+			applyOverridesFn: func(callCtx context.Context, overrides map[string]string) error {
+				// Mirror AuthHandlerWrapper.ApplyOverrides re-injecting the
+				// selected profile's resolved Entra config before overlaying flags.
+				overrideProf = auth.ResolveActiveProfile(callCtx, "entra")
+				overrideProfOK = auth.IsProfileResolved(callCtx)
+				resolved := auth.ResolveEntraConfig(config.FromContext(callCtx).Auth.Entra, overrideProf)
+				if v := overrides["clientId"]; v != "" {
+					resolved.ClientID = v
+				}
+				if v := overrides["tenantId"]; v != "" {
+					resolved.TenantID = v
+				}
+				if v := overrides["defaultFlow"]; v != "" {
+					resolved.DefaultFlow = v
+				}
+				effectiveCfg = resolved
+				return nil
+			},
+			loginFn: func(loginCtx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+				if effectiveCfg != nil {
+					cp := *effectiveCfg
+					loginSnapCfg = &cp
+				}
+				return base.Login(loginCtx, opts)
+			},
+		}
+		ctx := withTestHandler(baseCtx, handler)
+
+		cmd := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"entra", "--profile", "default", "--flow", "device-code"})
+
+		require.NoError(t, cmd.Execute())
+
+		require.NotNil(t, initialCfg)
+		assert.Equal(t, "work-profile-client-id", initialCfg.ClientID)
+		assert.Equal(t, "work-profile-tenant-id", initialCfg.TenantID)
+
+		require.Len(t, base.ApplyOverridesCalls, 1)
+		assert.True(t, overrideProfOK)
+		assert.Empty(t, overrideProf)
+		assert.Equal(t, "interactive", base.ApplyOverridesCalls[0]["defaultFlow"])
+
+		require.NotNil(t, loginSnapCfg)
+		assert.Equal(t, "top-level-client-id", loginSnapCfg.ClientID)
+		assert.Equal(t, "top-level-tenant-id", loginSnapCfg.TenantID)
+		assert.Empty(t, base.LastContextProfile)
+
 		require.Len(t, base.LoginCalls, 1)
 		assert.Equal(t, auth.FlowDeviceCode, base.LoginCalls[0].Flow)
 	})
