@@ -651,4 +651,13 @@ func TestStore_RoundTrip(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("SecretsDir exposes backing directory", func(t *testing.T) {
+		dir := t.TempDir()
+		s, err := New(WithSecretsDir(dir), WithKeyring(newTestKeyring()))
+		require.NoError(t, err)
+		dp, ok := s.(interface{ SecretsDir() string })
+		require.True(t, ok)
+		assert.Equal(t, dir, dp.SecretsDir())
+	})
 }

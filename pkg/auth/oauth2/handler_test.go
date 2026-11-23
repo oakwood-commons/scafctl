@@ -2938,6 +2938,7 @@ type deleteOnCorruptStore struct {
 	corruptKey       string
 	corruptErr       error
 	failSet          bool
+	failDeleteKey    string
 	cancelAfterGetFn context.CancelFunc
 	checkCtxOnGetSet bool
 }
@@ -2950,13 +2951,20 @@ func (s *deleteOnCorruptStore) Get(ctx context.Context, name string) ([]byte, er
 	}
 	if s.corruptKey != "" && name == s.corruptKey {
 		s.corruptKey = ""
-		_ = s.Delete(context.WithoutCancel(ctx), name)
+		_ = s.MockStore.Delete(context.WithoutCancel(ctx), name)
 		if s.cancelAfterGetFn != nil {
 			s.cancelAfterGetFn()
 		}
 		return nil, s.corruptErr
 	}
 	return s.MockStore.Get(ctx, name)
+}
+
+func (s *deleteOnCorruptStore) Delete(ctx context.Context, name string) error {
+	if s.failDeleteKey != "" && name == s.failDeleteKey {
+		return errors.New("delete failed: permission denied")
+	}
+	return s.MockStore.Delete(ctx, name)
 }
 
 func (s *deleteOnCorruptStore) Set(ctx context.Context, name string, value []byte) error {
@@ -3513,6 +3521,376 @@ func TestHandler_CrossFlowReLogin_ClearsStaleRefreshAndPATArtifacts(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, "cc-short-lived-token", tok.AccessToken)
 	assert.False(t, refreshSubmitted.Load(), "re-login with client_credentials must clear stale refresh_token from earlier flow")
+}
+
+func TestHandler_LogoutMarkerRestoredAfterCorruptAutoDelete(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	baseStore := secrets.NewMockStore()
+	require.NoError(t, baseStore.Set(ctx, "ambient-pat", []byte("ambient-pat-token")))
+
+	cfg := config.CustomOAuth2Config{
+		Name:        "logout-corrupt-restore",
+		Token:       "secret://ambient-pat",
+		DefaultFlow: "pat",
+	}
+	stateKey := secretKeyPrefix + "logout-corrupt-restore." + secretKeySessionStateSuffix
+	delStore := &deleteOnCorruptStore{
+		MockStore: baseStore,
+	}
+
+	h1, err := New(cfg, WithSecretStore(delStore), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	require.NoError(t, h1.Logout(ctx))
+
+	// Simulate corruption + auto-delete of session_state on h1's next read after Logout.
+	delStore.corruptKey = stateKey
+	delStore.corruptErr = secrets.NewCorruptedSecretError(stateKey, "decryption failed", errors.New("auth tag mismatch"))
+
+	_, err = h1.GetToken(ctx, auth.TokenOptions{})
+	require.Error(t, err)
+
+	// Fresh handler sharing the store must still see the restored logged_out marker and NOT reactivate ambient PAT.
+	h2, err := New(cfg, WithSecretStore(baseStore), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	st2, stErr := h2.Status(ctx)
+	require.NoError(t, stErr)
+	assert.False(t, st2.Authenticated, "fresh handler must remain logged out after session_state corruption recovery")
+
+	_, tokErr := h2.GetToken(ctx, auth.TokenOptions{})
+	require.ErrorIs(t, tokErr, auth.ErrNotAuthenticated)
+}
+
+func TestHandler_ReLogin_PropagatesRefreshDeletionFailure(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		writeJSON(w, tokenResponse{
+			AccessToken: "cc-token",
+			TokenType:   "Bearer",
+			ExpiresIn:   3600,
+		})
+	}))
+	defer srv.Close()
+
+	baseStore := secrets.NewMockStore()
+	delStore := &deleteOnCorruptStore{MockStore: baseStore}
+	ctx := context.Background()
+
+	cfg := config.CustomOAuth2Config{
+		Name:         "relogin-del-fail",
+		TokenURL:     srv.URL + "/token",
+		AuthorizeURL: srv.URL + "/authorize",
+		ClientID:     "cid",
+		ClientSecret: "csec",
+	}
+	h, err := New(cfg, WithSecretStore(delStore), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	require.NoError(t, h.storeRefreshTokenForFlow(ctx, auth.FlowInteractive, "prev-interactive-refresh"))
+	delStore.failDeleteKey = h.profileSecretKey(ctx, secretKeyRefreshSuffix)
+
+	_, err = h.Login(ctx, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.Error(t, err, "Login must fail when previous refresh_token cannot be deleted")
+	assert.Contains(t, err.Error(), "clear previous refresh token")
+}
+
+func TestHandler_HeadlessStatus_UsesValidEffectiveCacheWhenMintInputsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, tokenResponse{
+			AccessToken: "cached-access-token",
+			TokenType:   "Bearer",
+			ExpiresIn:   3600,
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Run("Workload identity Status succeeds from valid cache when token file is removed", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		jwtPath := filepath.Join(dir, "sa-jwt")
+		require.NoError(t, os.WriteFile(jwtPath, []byte("projected-jwt"), 0o600))
+
+		store := secrets.NewMockStore()
+		ctx := context.Background()
+		h, err := New(config.CustomOAuth2Config{
+			Name:               "wif-cached-status",
+			TokenURL:           srv.URL + "/token",
+			ClientID:           "wif-cid",
+			FederatedTokenFile: jwtPath,
+			DefaultFlow:        "workload_identity",
+		}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		tok, err := h.GetToken(ctx, auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "cached-access-token", tok.AccessToken)
+
+		// Remove federated token file; cached token is still valid for 1h.
+		require.NoError(t, os.Remove(jwtPath))
+
+		st, err := h.Status(ctx)
+		require.NoError(t, err)
+		assert.True(t, st.Authenticated, "Status must report Authenticated while valid WIF cached token is usable")
+		assert.Equal(t, auth.FlowWorkloadIdentity, st.Flow)
+
+		tokCached, err := h.GetToken(ctx, auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "cached-access-token", tokCached.AccessToken)
+	})
+
+	t.Run("Client credentials Status succeeds from valid cache when clientSecret file is removed", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		secPath := filepath.Join(dir, "client-secret")
+		require.NoError(t, os.WriteFile(secPath, []byte("super-secret"), 0o600))
+
+		store := secrets.NewMockStore()
+		ctx := context.Background()
+		h, err := New(config.CustomOAuth2Config{
+			Name:         "cc-cached-status",
+			TokenURL:     srv.URL + "/token",
+			ClientID:     "cc-cid",
+			ClientSecret: "file://" + secPath,
+			DefaultFlow:  "client_credentials",
+		}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		tok, err := h.GetToken(ctx, auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "cached-access-token", tok.AccessToken)
+
+		// Remove clientSecret file; cached token is still valid for 1h.
+		require.NoError(t, os.Remove(secPath))
+
+		st, err := h.Status(ctx)
+		require.NoError(t, err)
+		assert.True(t, st.Authenticated, "Status must report Authenticated while valid client_credentials cached token is usable")
+		assert.Equal(t, auth.FlowClientCredentials, st.Flow)
+
+		tokCached, err := h.GetToken(ctx, auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "cached-access-token", tokCached.AccessToken)
+	})
+}
+
+func TestHandler_PATRotation_ForceRefreshRebuildsClaimsAndRegistryUsername(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tokFile := filepath.Join(dir, "pat")
+	userFile := filepath.Join(dir, "user")
+	require.NoError(t, os.WriteFile(tokFile, []byte("pat-v1\n"), 0o600))
+	require.NoError(t, os.WriteFile(userFile, []byte("org+robot_one\n"), 0o600))
+
+	verifySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer pat-v1":
+			writeJSON(w, map[string]any{"username": "org+robot_one", "email": "one@example.com"})
+		case "Bearer pat-v2":
+			writeJSON(w, map[string]any{"username": "org+robot_two", "email": "two@example.com"})
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer verifySrv.Close()
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	cfg := config.CustomOAuth2Config{
+		Name:           "rotate-pat-claims",
+		Token:          config.SecretRef("file://" + tokFile),
+		Username:       "file://" + userFile,
+		VerifyURL:      verifySrv.URL + "/verify",
+		IdentityFields: &config.IdentityFieldMapping{Username: "username", Email: "email"},
+		DefaultFlow:    "pat",
+	}
+
+	h, err := New(cfg, WithSecretStore(store), WithHTTPClient(verifySrv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	_, err = h.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+	require.NoError(t, err)
+
+	// Rotate both PAT and username, then ForceRefresh.
+	require.NoError(t, os.WriteFile(tokFile, []byte("pat-v2\n"), 0o600))
+	require.NoError(t, os.WriteFile(userFile, []byte("org+robot_two\n"), 0o600))
+
+	tok, err := h.GetToken(ctx, auth.TokenOptions{ForceRefresh: true})
+	require.NoError(t, err)
+	assert.Equal(t, "pat-v2", tok.AccessToken)
+	assert.Equal(t, "org+robot_two", h.RegistryUsernameForContext(ctx))
+
+	st, err := h.Status(ctx)
+	require.NoError(t, err)
+	require.True(t, st.Authenticated)
+	require.NotNil(t, st.Claims)
+	assert.Equal(t, "org+robot_two", st.Claims.Username)
+	assert.Equal(t, "two@example.com", st.Claims.Email)
+
+	// Fresh handler reading persisted envelope also sees updated Status claims and RegistryUsernameForContext.
+	hFresh, err := New(cfg, WithSecretStore(store), WithHTTPClient(verifySrv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	stFresh, err := hFresh.Status(ctx)
+	require.NoError(t, err)
+	require.True(t, stFresh.Authenticated)
+	assert.Equal(t, "org+robot_two", stFresh.Claims.Username)
+	assert.Equal(t, "org+robot_two", hFresh.RegistryUsernameForContext(ctx))
+}
+
+func TestHandler_CrossHandlerAndDirStore_ConcurrentSingleUseRefresh(t *testing.T) {
+	t.Parallel()
+
+	runScenario := func(t *testing.T, makeStores func(t *testing.T) (secrets.Store, secrets.Store)) {
+		t.Helper()
+		var refreshSeq atomic.Int32
+		used := sync.Map{}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			submitted := r.FormValue("refresh_token")
+			if _, dup := used.LoadOrStore(submitted, true); dup {
+				w.WriteHeader(http.StatusBadRequest)
+				writeJSON(w, map[string]any{"error": "invalid_grant", "error_description": "refresh token reused"})
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+			n := refreshSeq.Add(1)
+			writeJSON(w, tokenResponse{
+				AccessToken:  fmt.Sprintf("access-%d", n),
+				TokenType:    "Bearer",
+				ExpiresIn:    3600,
+				RefreshToken: fmt.Sprintf("rotated-refresh-%d", n),
+			})
+		}))
+		defer srv.Close()
+
+		store1, store2 := makeStores(t)
+		ctx := context.Background()
+		cfg := config.CustomOAuth2Config{
+			Name:        "shared-refresh",
+			TokenURL:    srv.URL + "/token",
+			ClientID:    "cid",
+			DefaultFlow: "interactive",
+		}
+
+		h1, err := New(cfg, WithSecretStore(store1), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		h2, err := New(cfg, WithSecretStore(store2), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		require.NoError(t, h1.storeRefreshTokenForFlow(ctx, auth.FlowInteractive, "initial-single-use-refresh"))
+
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		tokens := make([]*auth.Token, 2)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			tokens[0], errs[0] = h1.GetToken(ctx, auth.TokenOptions{Scope: "scope-a", ForceRefresh: true})
+		}()
+		go func() {
+			defer wg.Done()
+			tokens[1], errs[1] = h2.GetToken(ctx, auth.TokenOptions{Scope: "scope-b", ForceRefresh: true})
+		}()
+		wg.Wait()
+
+		require.NoError(t, errs[0])
+		require.NoError(t, errs[1])
+		assert.NotEmpty(t, tokens[0].AccessToken)
+		assert.NotEmpty(t, tokens[1].AccessToken)
+		assert.Equal(t, int32(2), refreshSeq.Load())
+	}
+
+	t.Run("two handlers sharing MockStore", func(t *testing.T) {
+		t.Parallel()
+		runScenario(t, func(_ *testing.T) (secrets.Store, secrets.Store) {
+			s := secrets.NewMockStore()
+			return s, s
+		})
+	})
+
+	t.Run("two handlers with independent file-backed stores on same secrets directory", func(t *testing.T) {
+		t.Parallel()
+		runScenario(t, func(t *testing.T) (secrets.Store, secrets.Store) {
+			dir := t.TempDir()
+			kr := secrets.NewMockKeyring()
+			s1, err := secrets.New(secrets.WithSecretsDir(dir), secrets.WithKeyring(kr), secrets.WithLogger(logr.Discard()))
+			require.NoError(t, err)
+			s2, err := secrets.New(secrets.WithSecretsDir(dir), secrets.WithKeyring(kr), secrets.WithLogger(logr.Discard()))
+			require.NoError(t, err)
+			return s1, s2
+		})
+	})
+}
+
+func TestHandler_WorkloadIdentityTokenExchange_RefreshReusesHTTPBasicAuth(t *testing.T) {
+	t.Parallel()
+
+	var refreshCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, hasBasic := r.BasicAuth()
+		if !hasBasic || user != "conf%2Bclient" || pass != "sec%2Fret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			writeJSON(w, map[string]any{"error": "invalid_client", "error_description": "HTTP Basic auth required"})
+			return
+		}
+		require.NoError(t, r.ParseForm())
+		if r.FormValue("client_secret") != "" {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, map[string]any{"error": "invalid_request", "error_description": "client_secret must not be duplicated in form"})
+			return
+		}
+		switch r.FormValue("grant_type") {
+		case tokenExchangeGrantType:
+			writeJSON(w, tokenResponse{
+				AccessToken:  "wif-te-initial",
+				TokenType:    "Bearer",
+				ExpiresIn:    1,
+				RefreshToken: "wif-te-refresh-1",
+			})
+		case "refresh_token":
+			refreshCount.Add(1)
+			assert.Equal(t, "wif-te-refresh-1", r.FormValue("refresh_token"))
+			writeJSON(w, tokenResponse{
+				AccessToken: "wif-te-refreshed",
+				TokenType:   "Bearer",
+				ExpiresIn:   3600,
+			})
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	jwtPath := filepath.Join(dir, "jwt")
+	require.NoError(t, os.WriteFile(jwtPath, []byte("k8s-sa-jwt"), 0o600))
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	h, err := New(config.CustomOAuth2Config{
+		Name:                      "wif-basic-refresh",
+		TokenURL:                  srv.URL + "/token",
+		ClientID:                  "conf+client",
+		ClientSecret:              "sec/ret",
+		FederatedTokenFile:        jwtPath,
+		WorkloadIdentityGrantType: config.WorkloadIdentityGrantTokenExchange,
+		DefaultFlow:               "workload_identity",
+	}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	_, err = h.Login(ctx, auth.LoginOptions{Flow: auth.FlowWorkloadIdentity})
+	require.NoError(t, err)
+
+	tok, err := h.GetToken(ctx, auth.TokenOptions{MinValidFor: 5 * time.Minute})
+	require.NoError(t, err)
+	assert.Equal(t, "wif-te-refreshed", tok.AccessToken)
+	assert.Equal(t, int32(1), refreshCount.Load())
 }
 
 func BenchmarkHandler_PAT_GetToken(b *testing.B) {

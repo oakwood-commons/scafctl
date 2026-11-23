@@ -166,7 +166,6 @@ type Handler struct {
 	sessionStateSeq map[string]uint64
 	sessionGen      map[string]uint64
 	publishLocks    map[string]*sync.Mutex
-	refreshLocks    map[string]*sync.Mutex
 	memCache        map[string]*auth.Token
 	memDerived      map[string]*persistedDerivedToken
 	sfGroup         singleflight.Group
@@ -263,7 +262,6 @@ func New(cfg config.CustomOAuth2Config, opts ...Option) (*Handler, error) {
 		sessionStateSeq: make(map[string]uint64),
 		sessionGen:      make(map[string]uint64),
 		publishLocks:    make(map[string]*sync.Mutex),
-		refreshLocks:    make(map[string]*sync.Mutex),
 		memCache:        make(map[string]*auth.Token),
 		memDerived:      make(map[string]*persistedDerivedToken),
 	}
@@ -972,17 +970,27 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		// Use the primary token's expiry for the derived token since the exchange
 		// response does not carry its own expiry.
 		if storeErr := h.storeDerivedToken(ctx, derived, expiresAt, flow, scopes); storeErr != nil {
-			h.logger.V(1).Info("failed to cache derived token", "error", storeErr)
+			pubMu.Unlock()
+			settleCallback(false)
+			h.recordFailedLogin(ctx, gen)
+			return nil, auth.NewError(h.cfg.Name, "store_derived_token", storeErr)
 		}
-	} else {
-		h.clearDerivedState(ctx)
+	} else if clearDerivedErr := h.clearDerivedStateErr(ctx); clearDerivedErr != nil {
+		pubMu.Unlock()
+		settleCallback(false)
+		h.recordFailedLogin(ctx, gen)
+		return nil, auth.NewError(h.cfg.Name, "clear_derived_token", clearDerivedErr)
 	}
 	if storeErr := h.storeTokens(ctx, tokenResp, claims, expiresAt, flow, scopes); storeErr != nil {
-		h.logger.V(1).Info("failed to store tokens", "error", storeErr)
+		pubMu.Unlock()
+		settleCallback(false)
+		h.recordFailedLogin(ctx, gen)
+		return nil, auth.NewError(h.cfg.Name, "store_tokens", storeErr)
 	}
 	if clearErr := h.clearSessionState(ctx); clearErr != nil {
 		pubMu.Unlock()
 		settleCallback(false)
+		h.recordFailedLogin(ctx, gen)
 		return nil, auth.NewError(h.cfg.Name, "session_state", clearErr)
 	}
 	h.setActiveFlow(ctx, flow)
@@ -1042,14 +1050,19 @@ func (h *Handler) patLogin(ctx context.Context, scopes []string, gen uint64) (*a
 		return nil, auth.NewError(h.cfg.Name, "login", auth.ErrNotAuthenticated)
 	}
 
-	if err := h.storePATSessionSecrets(ctx, patToken, username, claims, scopes); err != nil {
-		return nil, auth.NewError(h.cfg.Name, "store_pat", err)
+	// Clear any OAuth refresh/derived/cached tokens from an earlier flow on this profile
+	// before committing the PAT session so stale refresh credentials are never retained.
+	if err := h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix)); err != nil && !errors.Is(err, secrets.ErrNotFound) {
+		return nil, auth.NewError(h.cfg.Name, "clear_refresh_token", fmt.Errorf("clear previous refresh token: %w", err))
 	}
-	// Clear any OAuth refresh/derived/cached tokens from an earlier flow on this profile.
-	_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix))
-	h.clearDerivedState(ctx)
+	if err := h.clearDerivedStateErr(ctx); err != nil {
+		return nil, auth.NewError(h.cfg.Name, "clear_derived_token", err)
+	}
 	if tc := h.profileTokenCache(ctx); tc != nil {
 		_ = tc.Clear(ctx)
+	}
+	if err := h.storePATSessionSecrets(ctx, patToken, username, claims, scopes); err != nil {
+		return nil, auth.NewError(h.cfg.Name, "store_pat", err)
 	}
 	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyMetadataSuffix), metaBytes); err != nil {
 		return nil, auth.NewError(h.cfg.Name, "store_metadata", fmt.Errorf("store metadata: %w", err))
@@ -1300,18 +1313,25 @@ func (h *Handler) headlessStatus(ctx context.Context) *auth.Status {
 			if !h.hasWorkloadIdentityConfig() {
 				continue
 			}
+			cached := h.lookupEffectiveCachedToken(ctx, auth.FlowWorkloadIdentity, scope, 0)
 			jwt, err := h.resolveFederatedToken(ctx)
-			if err != nil || jwt == "" {
+			if (err != nil || jwt == "") && cached == nil {
 				continue
 			}
 			clientID := h.effectiveClientID(ctx)
 			claims := &auth.Claims{ClientID: clientID}
-			if jwtClaims, parseErr := auth.ParseJWTClaims(jwt); parseErr == nil {
-				if jwtClaims.Subject != "" {
-					claims.Subject = jwtClaims.Subject
-				}
-				if jwtClaims.Issuer != "" {
-					claims.Issuer = jwtClaims.Issuer
+			tokenToParse := jwt
+			if tokenToParse == "" && cached != nil {
+				tokenToParse = cached.AccessToken
+			}
+			if tokenToParse != "" {
+				if jwtClaims, parseErr := auth.ParseJWTClaims(tokenToParse); parseErr == nil {
+					if jwtClaims.Subject != "" {
+						claims.Subject = jwtClaims.Subject
+					}
+					if jwtClaims.Issuer != "" {
+						claims.Issuer = jwtClaims.Issuer
+					}
 				}
 			}
 			if claims.DisplayIdentity() == "" && clientID != "" {
@@ -1325,8 +1345,10 @@ func (h *Handler) headlessStatus(ctx context.Context) *auth.Status {
 				tokenFile = strings.TrimPrefix(string(h.cfg.FederatedToken), "file://")
 			}
 			var expiresAt time.Time
-			if cached := h.lookupCachedToken(ctx, auth.FlowWorkloadIdentity, scope, 0); cached != nil {
+			if cached != nil {
 				expiresAt = cached.ExpiresAt
+			} else if primaryCached := h.lookupCachedToken(ctx, auth.FlowWorkloadIdentity, scope, 0); primaryCached != nil {
+				expiresAt = primaryCached.ExpiresAt
 			}
 			h.setActiveFlow(ctx, auth.FlowWorkloadIdentity)
 			return &auth.Status{
@@ -1344,8 +1366,9 @@ func (h *Handler) headlessStatus(ctx context.Context) *auth.Status {
 			if !h.hasClientCredentialsConfig() {
 				continue
 			}
+			cached := h.lookupEffectiveCachedToken(ctx, auth.FlowClientCredentials, scope, 0)
 			avail, _ := h.detectClientCredentialsAvailability(ctx)
-			if !avail {
+			if !avail && cached == nil {
 				continue
 			}
 			clientID := h.effectiveClientID(ctx)
@@ -1354,8 +1377,10 @@ func (h *Handler) headlessStatus(ctx context.Context) *auth.Status {
 				claims.Username = clientID
 			}
 			var expiresAt time.Time
-			if cached := h.lookupCachedToken(ctx, auth.FlowClientCredentials, scope, 0); cached != nil {
+			if cached != nil {
 				expiresAt = cached.ExpiresAt
+			} else if primaryCached := h.lookupCachedToken(ctx, auth.FlowClientCredentials, scope, 0); primaryCached != nil {
+				expiresAt = primaryCached.ExpiresAt
 			}
 			h.setActiveFlow(ctx, auth.FlowClientCredentials)
 			return &auth.Status{
@@ -1555,12 +1580,14 @@ func (h *Handler) refreshWithSingleflight(ctx context.Context, flow auth.Flow, s
 	profile := auth.ProfileFromContext(ctx)
 	sfKey := fmt.Sprintf("refresh|%s|%s|%s|min=%d|force=%t|gen=%d", profile, flow, scope, opts.MinValidFor, opts.ForceRefresh, gen)
 	return h.doSingleflightToken(ctx, sfKey, func(sfCtx context.Context) (*auth.Token, error) {
-		// Serialize refresh-token consumption per profile so concurrent requests
-		// with different scopes or options never submit the same single-use
-		// rotating refresh token simultaneously.
-		refMu := h.profileRefreshLock(profile)
-		refMu.Lock()
-		defer refMu.Unlock()
+		// Serialize refresh-token consumption across goroutines, Handler instances
+		// sharing a store, and separate CLI processes sharing a secrets directory so
+		// concurrent callers never submit the same single-use refresh token.
+		unlockRefresh, lockErr := h.acquireRefreshLock(sfCtx, profile)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		defer unlockRefresh()
 
 		if activeErr := h.ensureSessionActive(sfCtx, profile, gen); activeErr != nil {
 			return nil, activeErr
@@ -1587,7 +1614,7 @@ func (h *Handler) refreshWithSingleflight(ctx context.Context, flow auth.Flow, s
 			return nil, auth.ErrNotAuthenticated
 		}
 
-		tokenResp, refreshErr := h.refreshAccessToken(sfCtx, refreshToken, scope)
+		tokenResp, refreshErr := h.refreshAccessToken(sfCtx, flow, refreshToken, scope)
 		if refreshErr != nil {
 			return nil, refreshErr
 		}
@@ -1800,6 +1827,18 @@ func (h *Handler) acquirePATToken(ctx context.Context, scope string, updateStore
 	if err != nil {
 		return nil, auth.NewError(h.cfg.Name, "resolve_username", err)
 	}
+
+	var verifiedClaims *auth.Claims
+	if updateStored && h.secretStore != nil && h.cfg.VerifyURL != "" {
+		if existing, ok, _ := h.loadValidStoredPATSession(ctx); !ok || existing.Value != tok || existing.Username != username {
+			if vc, verifyErr := h.verifyToken(ctx, tok); verifyErr == nil && vc != nil {
+				verifiedClaims = vc
+			} else if verifyErr != nil {
+				h.logger.V(1).Info("PAT verification failed during refresh, falling back to resolved username", "error", verifyErr)
+			}
+		}
+	}
+
 	profile := auth.ProfileFromContext(ctx)
 	pubMu := h.profilePublishLock(profile)
 	pubMu.Lock()
@@ -1809,14 +1848,36 @@ func (h *Handler) acquirePATToken(ctx context.Context, scope string, updateStore
 		return nil, activeErr
 	}
 	if updateStored && h.secretStore != nil {
-		var existingClaims *auth.Claims
-		var existingScopes []string
-		if existing, ok, _ := h.loadValidStoredPATSession(ctx); ok {
-			existingClaims = existing.Claims
-			existingScopes = existing.Scopes
+		var claimsToStore *auth.Claims
+		var scopesToStore []string
+		existing, ok, _ := h.loadValidStoredPATSession(ctx)
+		if ok {
+			scopesToStore = existing.Scopes
 		}
-		if storeErr := h.storePATSessionSecrets(ctx, tok, username, existingClaims, existingScopes); storeErr != nil {
+		if scopesToStore == nil && scope != "" {
+			scopesToStore = scopeSliceFromString(scope)
+		}
+		if ok && existing.Value == tok && existing.Username == username {
+			claimsToStore = existing.Claims
+		} else {
+			if verifiedClaims != nil {
+				cp := *verifiedClaims
+				if cp.Username == "" && username != "" {
+					cp.Username = username
+				}
+				claimsToStore = &cp
+			} else {
+				claimsToStore = &auth.Claims{Username: username}
+			}
+		}
+		if storeErr := h.storePATSessionSecrets(ctx, tok, username, claimsToStore, scopesToStore); storeErr != nil {
 			return nil, auth.NewError(h.cfg.Name, "store_pat", storeErr)
+		}
+		if meta, metaErr := h.loadMetadata(ctx); metaErr == nil && meta != nil && meta.LastLoginFlow == auth.FlowPAT {
+			meta.Claims = claimsToStore
+			if metaBytes, marshalErr := json.Marshal(meta); marshalErr == nil {
+				_ = h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyMetadataSuffix), metaBytes)
+			}
 		}
 	}
 	h.setActivePAT(ctx, username)
@@ -1943,20 +2004,6 @@ func (h *Handler) profilePublishLock(profile string) *sync.Mutex {
 	return m
 }
 
-func (h *Handler) profileRefreshLock(profile string) *sync.Mutex {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.refreshLocks == nil {
-		h.refreshLocks = make(map[string]*sync.Mutex)
-	}
-	m, ok := h.refreshLocks[profile]
-	if !ok {
-		m = &sync.Mutex{}
-		h.refreshLocks[profile] = m
-	}
-	return m
-}
-
 // ensureSessionActive verifies that no Logout has occurred since gen was
 // captured and that persisted session_state is readable and not logged_out.
 func (h *Handler) ensureSessionActive(ctx context.Context, profile string, gen uint64) error {
@@ -2014,6 +2061,12 @@ func (h *Handler) markSessionStateCorrupt(ctx context.Context, profile string, s
 	}
 	if h.sessionStates != nil && h.sessionStates[profile] == sessionStateLoggedOut {
 		h.mu.Unlock()
+		// Restore the persistent logged_out marker if the secret store auto-deleted
+		// a corrupted session_state file so a subsequent handler instance cannot
+		// silently reactivate ambient credentials.
+		if h.secretStore != nil {
+			_ = h.secretStore.Set(context.WithoutCancel(ctx), h.profileSecretKey(ctx, secretKeySessionStateSuffix), []byte(sessionStateLoggedOut))
+		}
 		return
 	}
 	if h.sessionStates == nil {
@@ -3120,7 +3173,7 @@ func (h *Handler) loadRefreshTokenWithFlow(ctx context.Context) (string, auth.Fl
 	return stored.Value, stored.Flow, true, nil
 }
 
-func (h *Handler) clearDerivedState(ctx context.Context) {
+func (h *Handler) clearDerivedStateErr(ctx context.Context) error {
 	profile := auth.ProfileFromContext(ctx)
 	h.setDerivedUsername(ctx, "")
 	h.mu.Lock()
@@ -3132,9 +3185,14 @@ func (h *Handler) clearDerivedState(ctx context.Context) {
 	}
 	h.mu.Unlock()
 	if h.secretStore != nil {
-		_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, derivedTokenSuffix))
-		_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, derivedUsernameSuffix))
+		if err := h.secretStore.Delete(ctx, h.profileSecretKey(ctx, derivedTokenSuffix)); err != nil && !errors.Is(err, secrets.ErrNotFound) {
+			return fmt.Errorf("clear derived token: %w", err)
+		}
+		if err := h.secretStore.Delete(ctx, h.profileSecretKey(ctx, derivedUsernameSuffix)); err != nil && !errors.Is(err, secrets.ErrNotFound) {
+			return fmt.Errorf("clear derived username: %w", err)
+		}
 	}
+	return nil
 }
 
 func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *auth.Claims, expiresAt time.Time, flow auth.Flow, scopes []string) error {
@@ -3142,11 +3200,13 @@ func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *
 		if err := h.storeRefreshTokenForFlow(ctx, flow, resp.RefreshToken); err != nil {
 			return fmt.Errorf("store refresh token: %w", err)
 		}
-	} else {
-		_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix))
+	} else if err := h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix)); err != nil && !errors.Is(err, secrets.ErrNotFound) {
+		return fmt.Errorf("clear previous refresh token: %w", err)
 	}
 	// Clear any PAT session envelope from an earlier FlowPAT login on this profile.
-	_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix))
+	if err := h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix)); err != nil && !errors.Is(err, secrets.ErrNotFound) {
+		return fmt.Errorf("clear previous pat session: %w", err)
+	}
 	tc := h.profileTokenCache(ctx)
 	if tc != nil {
 		fingerprint := h.cacheFingerprint(ctx, flow)
@@ -3260,7 +3320,7 @@ func (h *Handler) loadMetadata(ctx context.Context) (*auth.HandlerMetadata, erro
 
 // ---------- refresh ----------
 
-func (h *Handler) refreshAccessToken(ctx context.Context, refreshToken, scope string) (*tokenResponse, error) {
+func (h *Handler) refreshAccessToken(ctx context.Context, flow auth.Flow, refreshToken, scope string) (*tokenResponse, error) {
 	clientID, clientSecret, err := h.resolveClientCredentials(ctx)
 	if err != nil {
 		return nil, err
@@ -3268,15 +3328,26 @@ func (h *Handler) refreshAccessToken(ctx context.Context, refreshToken, scope st
 	data := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
-		"client_id":     {clientID},
 	}
-	if clientSecret != "" {
-		data.Set("client_secret", clientSecret)
+	var basicAuth *basicAuthCredentials
+	if flow == auth.FlowWorkloadIdentity && h.cfg.WorkloadIdentityGrantType == config.WorkloadIdentityGrantTokenExchange {
+		if clientID != "" {
+			if clientSecret != "" {
+				basicAuth = &basicAuthCredentials{username: clientID, password: clientSecret}
+			} else {
+				data.Set("client_id", clientID)
+			}
+		}
+	} else {
+		data.Set("client_id", clientID)
+		if clientSecret != "" {
+			data.Set("client_secret", clientSecret)
+		}
 	}
 	if scope != "" {
 		data.Set("scope", scope)
 	}
-	return h.postTokenEndpoint(ctx, data)
+	return h.postTokenEndpointWithAuth(ctx, data, basicAuth)
 }
 
 // ---------- HTTP ----------

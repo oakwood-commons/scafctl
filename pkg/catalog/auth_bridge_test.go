@@ -5,12 +5,17 @@ package catalog
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/runmode"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -327,6 +332,52 @@ func TestBridgeAuthToRegistry_ContextualProfileUsername(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, RegistryUsernameDefault, uCI)
 	assert.Equal(t, "tok-ci", pCI)
+}
+
+func TestBridgeAuthToRegistry_PATRotationUpdatesStatusAndRegistryCredentials(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tokFile := filepath.Join(dir, "pat")
+	userFile := filepath.Join(dir, "user")
+	require.NoError(t, os.WriteFile(tokFile, []byte("pat-token-v1\n"), 0o600))
+	require.NoError(t, os.WriteFile(userFile, []byte("acme+robot_v1\n"), 0o600))
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	h, err := oauth2.New(config.CustomOAuth2Config{
+		Name:        "quay-pat-rotate",
+		Token:       config.SecretRef("file://" + tokFile),
+		Username:    "file://" + userFile,
+		Registry:    "quay.io",
+		DefaultFlow: "pat",
+	}, oauth2.WithSecretStore(store), oauth2.WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	_, err = h.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+	require.NoError(t, err)
+
+	u1, p1, err := BridgeAuthToRegistry(ctx, h, "quay.io", "")
+	require.NoError(t, err)
+	assert.Equal(t, "acme+robot_v1", u1)
+	assert.Equal(t, "pat-token-v1", p1)
+
+	// Rotate both PAT and username, force-refresh, and verify both Status and BridgeAuthToRegistry update together.
+	require.NoError(t, os.WriteFile(tokFile, []byte("pat-token-v2\n"), 0o600))
+	require.NoError(t, os.WriteFile(userFile, []byte("acme+robot_v2\n"), 0o600))
+	_, err = h.GetToken(ctx, auth.TokenOptions{ForceRefresh: true})
+	require.NoError(t, err)
+
+	st, err := h.Status(ctx)
+	require.NoError(t, err)
+	require.True(t, st.Authenticated)
+	require.NotNil(t, st.Claims)
+	assert.Equal(t, "acme+robot_v2", st.Claims.Username)
+
+	u2, p2, err := BridgeAuthToRegistry(ctx, h, "quay.io", "")
+	require.NoError(t, err)
+	assert.Equal(t, "acme+robot_v2", u2)
+	assert.Equal(t, "pat-token-v2", p2)
 }
 
 func TestInferDefaultScope(t *testing.T) {
