@@ -146,12 +146,10 @@ func validateSecretRefStoreName(name string, binaryNames ...string) error {
 	if !isASCIIAlphaNumeric(name[0]) {
 		return fmt.Errorf("secret:// name must start with an alphanumeric character (a-z, A-Z, 0-9)")
 	}
-	for i := range len(name) {
-		c := name[i]
-		if isASCIIAlphaNumeric(c) || c == '.' || c == '_' || c == '-' {
-			continue
+	for _, r := range name {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
+			return fmt.Errorf("secret:// name contains invalid characters (allowed: a-z, A-Z, 0-9, -, _, .)")
 		}
-		return fmt.Errorf("secret:// name contains invalid characters (allowed: a-z, A-Z, 0-9, -, _, .)")
 	}
 	for _, prefix := range ReservedSecretPrefixes(binaryNames...) {
 		if strings.HasPrefix(name, prefix) {

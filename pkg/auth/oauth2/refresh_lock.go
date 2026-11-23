@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,14 +53,16 @@ func (h *Handler) scopedLockIdentity(kind, profile string) (scopeKey, lockFilePa
 	if dp, ok := h.secretStore.(secretsDirProvider); ok {
 		if dir := dp.SecretsDir(); dir != "" {
 			cleanDir := filepath.Clean(dir)
+			if absDir, err := filepath.Abs(cleanDir); err == nil {
+				cleanDir = absDir
+			}
 			lockName := fmt.Sprintf(".oauth2-%s-%016x", kind, xxhash.Sum64String(lockKey))
 			return "dir:" + cleanDir + "|" + lockKey, filepath.Join(cleanDir, lockName)
 		}
 	}
 	if h.secretStore != nil {
-		rv := reflect.ValueOf(h.secretStore)
-		if rv.Kind() == reflect.Pointer && !rv.IsNil() {
-			return fmt.Sprintf("ptr:%T:%x|%s", h.secretStore, rv.Pointer(), lockKey), ""
+		if addr := fmt.Sprintf("%p", h.secretStore); strings.HasPrefix(addr, "0x") && addr != "0x0" {
+			return fmt.Sprintf("ptr:%T:%s|%s", h.secretStore, addr, lockKey), ""
 		}
 	}
 	return fmt.Sprintf("inst:%p|%s", h, lockKey), ""
