@@ -1120,7 +1120,11 @@ func helpDiscoveryContext(ctx context.Context, c *cobra.Command, cliParams *sett
 	if len(effective.ActionDiscoveryFileNames) == 0 {
 		cfg := config.FromContext(ctx)
 		if cfg == nil {
-			opts := []config.ManagerOption{config.WithEnvPrefix(settings.SanitizeBinaryName(effective.BinaryName))}
+			binaryName := effective.BinaryName
+			if binaryName == "" {
+				binaryName = settings.CliBinaryName
+			}
+			opts := []config.ManagerOption{config.WithEnvPrefix(settings.SafeEnvPrefix(binaryName))}
 			if raw := c.Root().Annotations["configDefaults"]; raw != "" {
 				opts = append(opts, config.WithBaseConfig([]byte(raw)))
 			}

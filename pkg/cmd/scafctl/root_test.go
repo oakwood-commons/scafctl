@@ -763,3 +763,53 @@ spec:
 		})
 	}
 }
+
+// TestRoot_ResolverHelp_EnvActionFilesDottedExeBinaryName verifies that a binary
+// name like "my.cli.exe" (which Root sanitizes once to "my.cli") derives the
+// same MY_CLI_* environment prefix during --help as during command execution
+// rather than re-sanitizing "my.cli" into "my" (MY_*).
+func TestRoot_ResolverHelp_EnvActionFilesDottedExeBinaryName(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	const deploySolutionYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: env-help-deploy
+  version: 1.0.0
+spec:
+  resolvers:
+    targetEnv:
+      type: string
+      description: target environment from env override
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: envOverrideParam
+`
+	workDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "deploy.yaml"), []byte(deploySolutionYAML), 0o600))
+	missingCfg := filepath.Join(t.TempDir(), "missing-config.yaml")
+
+	t.Setenv("MY_CLI_DISCOVERY_ACTIONFILES", "deploy.yaml")
+	t.Setenv("MY_DISCOVERY_ACTIONFILES", "wrong.yaml")
+
+	for _, args := range [][]string{
+		{"run", "resolver", "--help"},
+		{"validate", "resolver", "--help"},
+	} {
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		cmd, cleanup := Root(&RootOptions{
+			IOStreams:  ioStreams,
+			BinaryName: "my.cli.exe",
+			ConfigPath: missingCfg,
+		})
+		var buf strings.Builder
+		cmd.SetOut(&buf)
+		cmd.SetArgs(args)
+		require.NoError(t, cmd.ExecuteContext(provider.WithWorkingDirectory(t.Context(), workDir)))
+		cleanup()
+
+		assert.Contains(t, buf.String(), "envOverrideParam", "args %v must honor MY_CLI_DISCOVERY_ACTIONFILES", args)
+		assert.Contains(t, buf.String(), "target environment from env override")
+	}
+}

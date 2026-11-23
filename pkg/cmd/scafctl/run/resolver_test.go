@@ -2105,7 +2105,7 @@ spec:
 			Annotations: map[string]string{"configDefaults": "discovery:\n  actionFiles:\n    - deploy.yaml\n"},
 		}
 		parent.PersistentFlags().String("config", cfgPath, "")
-		child := CommandResolver(settings.NewCliParams(), streams, "")
+		child := CommandResolver(&settings.Run{}, streams, "")
 		parent.AddCommand(child)
 		var helpOut3 bytes.Buffer
 		parent.SetOut(&helpOut3)
