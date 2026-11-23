@@ -69,6 +69,7 @@ type DiscoverLoader struct {
 	customActionFiles []string
 	folders           []string
 	fileNames         []string
+	fallbackFileNames []string
 }
 
 var _ Loader = (*DiscoverLoader)(nil)
@@ -93,7 +94,8 @@ func WithDiscoveryMode(mode settings.DiscoveryMode) DiscoverOption {
 }
 
 // WithCustomActionFiles replaces the default action file names in
-// settings.DiscoveryModeAction. Matches are treated as action files.
+// settings.DiscoveryModeAction and the action-file fallback in
+// settings.DiscoveryModeResolver. Matches are treated as action files.
 func WithCustomActionFiles(names []string) DiscoverOption {
 	return func(l *DiscoverLoader) {
 		l.customActionFiles = names
@@ -128,16 +130,23 @@ func NewDiscoverLoader(files *FileLoader, binaryName string, opts ...DiscoverOpt
 		opt(l)
 	}
 	l.folders = settings.SolutionFoldersFor(binaryName)
-	l.fileNames = settings.FileNamesForMode(l.mode, binaryName, l.customActionFiles)
+	if l.mode == settings.DiscoveryModeResolver {
+		l.fileNames = settings.SolutionFileNamesFor(binaryName)
+		l.fallbackFileNames = settings.ActionOnlyFileNames(l.customActionFiles)
+	} else {
+		l.fileNames = settings.FileNamesForMode(l.mode, binaryName, l.customActionFiles)
+	}
 	return l
 }
 
 // Discover returns every solution file found, in priority order: folder
 // order first, then file name order. In settings.DiscoveryModeAction, action
-// files are moved ahead of solution files. AlternatePath is set on the first
-// result only. Taskfiles (taskfile.yaml/yml) that are not scafctl solutions,
-// such as go-task files, are skipped. Returns ErrNoSolutionFound when nothing
-// matches.
+// files are moved ahead of solution files. In settings.DiscoveryModeResolver,
+// solution files are searched first across all folders and action files are
+// searched only when no solution file exists. AlternatePath is set on the
+// first result only. Taskfiles (taskfile.yaml/yml) that are not scafctl
+// solutions, such as go-task files, are skipped. Returns ErrNoSolutionFound
+// when nothing matches.
 func (l *DiscoverLoader) Discover(ctx context.Context) ([]Discovery, error) {
 	_, span := telemetry.Tracer(telemetry.TracerSolution).Start(
 		ctx, "solution.load.Discover",
@@ -162,24 +171,11 @@ func (l *DiscoverLoader) Discover(ctx context.Context) ([]Discovery, error) {
 	log := logger.FromContext(ctx).WithValues("base", base, "mode", l.mode.String())
 	log.V(1).Info("searching for solution files", "folders", l.folders, "fileNames", l.fileNames)
 
-	var found []Discovery
 	seen := make(map[string]struct{})
-	for _, folder := range l.folders {
-		for _, name := range l.fileNames {
-			path := filepath.Join(base, folder, name)
-			if _, dup := seen[path]; dup || !l.isFile(path) {
-				continue
-			}
-			seen[path] = struct{}{}
-			if settings.IsTaskFile(name) && !l.mayBeSolution(path) {
-				log.V(1).Info("skipping taskfile that is not a solution", "path", path)
-				if w := writer.FromContext(ctx); w != nil {
-					w.Verbosef("Skipping %s: no recognized solution headers (apiVersion: scafctl.io/v1, kind: Solution, or non-null spec); continuing discovery", path)
-				}
-				continue
-			}
-			found = append(found, Discovery{Path: path, IsActionFile: l.isActionFile(name)})
-		}
+	found := l.searchFolders(ctx, base, l.fileNames, seen)
+	if len(found) == 0 && len(l.fallbackFileNames) > 0 {
+		log.V(1).Info("no solution files found; falling back to action files", "folders", l.folders, "fileNames", l.fallbackFileNames)
+		found = l.searchFolders(ctx, base, l.fallbackFileNames, seen)
 	}
 
 	if len(found) == 0 {
@@ -209,6 +205,31 @@ func (l *DiscoverLoader) Discover(ctx context.Context) ([]Discovery, error) {
 	)
 	log.V(1).Info("found solution files", "paths", discoveryPaths(found))
 	return found, nil
+}
+
+// searchFolders searches l.folders x fileNames under base, skipping duplicate
+// candidate paths and non-solution taskfiles.
+func (l *DiscoverLoader) searchFolders(ctx context.Context, base string, fileNames []string, seen map[string]struct{}) []Discovery {
+	log := logger.FromContext(ctx).WithValues("base", base, "mode", l.mode.String())
+	var found []Discovery
+	for _, folder := range l.folders {
+		for _, name := range fileNames {
+			path := filepath.Join(base, folder, name)
+			if _, dup := seen[path]; dup || !l.isFile(path) {
+				continue
+			}
+			seen[path] = struct{}{}
+			if settings.IsTaskFile(name) && !l.mayBeSolution(path) {
+				log.V(1).Info("skipping taskfile that is not a solution", "path", path)
+				if w := writer.FromContext(ctx); w != nil {
+					w.Verbosef("Skipping %s: no recognized solution headers (apiVersion: scafctl.io/v1, kind: Solution, or non-null spec); continuing discovery", path)
+				}
+				continue
+			}
+			found = append(found, Discovery{Path: path, IsActionFile: l.isActionFile(name)})
+		}
+	}
+	return found
 }
 
 // Load discovers the solution file and loads it with the FileLoader. With
@@ -247,12 +268,17 @@ func (l *DiscoverLoader) loadFound(ctx context.Context, found []Discovery) (*Mat
 // DiscoverPath returns the path of the solution file auto-discovery finds
 // from the context working directory (--cwd), for commands that need the file
 // itself rather than the loaded solution. It searches the default folders and
-// file names for the binary name in ctx. With DiscoveryRiskHigh, more than one
-// match fails with ErrAmbiguousSolution; with DiscoveryRiskLow the first match
-// wins. The choice is reported in verbose mode, as ReportDiscovery does.
-// Returns an error wrapping ErrNoSolutionFound when nothing is found.
-func DiscoverPath(ctx context.Context, risk DiscoveryRisk) (string, error) {
-	found, err := NewDiscoverLoader(nil, settings.BinaryNameFromContext(ctx)).Discover(ctx)
+// file names for the binary name and custom action files in ctx unless
+// overridden by opts. With DiscoveryRiskHigh, more than one match fails with
+// ErrAmbiguousSolution; with DiscoveryRiskLow the first match wins. The choice
+// is reported in verbose mode, as ReportDiscovery does. Returns an error
+// wrapping ErrNoSolutionFound when nothing is found.
+func DiscoverPath(ctx context.Context, risk DiscoveryRisk, opts ...DiscoverOption) (string, error) {
+	var defaults []DiscoverOption
+	if s, ok := settings.FromContext(ctx); ok && len(s.ActionDiscoveryFileNames) > 0 {
+		defaults = append(defaults, WithCustomActionFiles(s.ActionDiscoveryFileNames))
+	}
+	found, err := NewDiscoverLoader(nil, settings.BinaryNameFromContext(ctx), append(defaults, opts...)...).Discover(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -368,19 +394,29 @@ func (l *DiscoverLoader) alternatePath(found []Discovery) string {
 				return path
 			}
 		}
-	case settings.DiscoveryModeDefault:
+	case settings.DiscoveryModeDefault, settings.DiscoveryModeResolver:
 	}
 	return ""
 }
 
 // candidates lists every relative path searched, for error messages.
 func (l *DiscoverLoader) candidates() []string {
-	out := make([]string, 0, len(l.folders)*len(l.fileNames))
-	for _, folder := range l.folders {
-		for _, name := range l.fileNames {
-			out = append(out, filepath.Join(folder, name))
+	out := make([]string, 0, len(l.folders)*(len(l.fileNames)+len(l.fallbackFileNames)))
+	seen := make(map[string]struct{}, cap(out))
+	appendPass := func(names []string) {
+		for _, folder := range l.folders {
+			for _, name := range names {
+				p := filepath.Join(folder, name)
+				if _, dup := seen[p]; dup {
+					continue
+				}
+				seen[p] = struct{}{}
+				out = append(out, p)
+			}
 		}
 	}
+	appendPass(l.fileNames)
+	appendPass(l.fallbackFileNames)
 	return out
 }
 

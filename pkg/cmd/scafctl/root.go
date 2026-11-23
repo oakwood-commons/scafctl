@@ -202,9 +202,11 @@ type RootOptions struct {
 	// plain bool is sufficient.
 	goTemplateFuncsRegistered bool
 
-	// ActionDiscoveryFileNames overrides the file names used by "run action"
-	// auto-discovery. When empty, the defaults from
-	// settings.ActionFileNamesFor are used.
+	// ActionDiscoveryFileNames overrides the action file names used by
+	// auto-discovery in DiscoveryModeAction ("run action", "run resolver --action",
+	// "validate resolver --action") and as the fallback in DiscoveryModeResolver
+	// ("run resolver", "validate resolver"). When empty, the defaults
+	// ("actions.yaml", "actions.yml") are used.
 	ActionDiscoveryFileNames []string
 
 	// OfficialProviders overrides the default official provider registry used

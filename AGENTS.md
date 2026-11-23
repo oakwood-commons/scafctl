@@ -152,7 +152,10 @@ not repeated), which:
 
 1. Uses the explicit `-f` value if provided.
 2. Uses the first positional argument when it is unambiguously a source (URL,
-   registry reference, or versioned name `app@1.2.3`).
+   registry reference, or versioned name `app@1.2.3`), or -- with
+   `ArgsAreNamesOrCatalog` and an explicit `--catalog` or `--version` flag --
+   a bare name. Malformed reference syntax in `args[0]` (`my-app@`, `oci://`,
+   unsupported schemes) fails immediately with `source.ErrInvalidRef`.
 3. Auto-discovers solution files (`load.DiscoverLoader`) by searching folder
    prefixes (`scafctl/`, `.scafctl/`, `.`) combined with file names
    (`solution.yaml`, `solution.yml`, `scafctl.yaml`, `scafctl.yml`,
@@ -161,10 +164,14 @@ not repeated), which:
    solution headers -- `apiVersion: scafctl.io/v1`, `kind: Solution`, or a
    non-null `spec` (e.g. a go-task taskfile) -- is skipped, with a note
    under `--verbose`; explicit `-f` keeps the strict error. Action
-   file names (`actions.yaml`, `actions.yml`) are only searched in
-   `DiscoveryModeAction` (used by `run action`).
-4. With `ArgsAreNamesOrCatalog`, falls back to a bare positional name as a
-   catalog reference when nothing is discovered.
+   file names (`actions.yaml`, `actions.yml`, or embedder
+   `ActionDiscoveryFileNames`) are searched first in `DiscoveryModeAction`
+   (used by `run action` and `run`/`validate resolver --action`), and as a
+   fallback when no solution file exists in `DiscoveryModeResolver` (used by
+   `run resolver` and `validate resolver`).
+4. With `ArgsAreNamesOrCatalog`, falls back to a valid catalog bare name
+   (`catalog.IsValidName`) in the first positional argument when nothing is
+   discovered.
 
 Multi-match ambiguity handling uses risk levels:
 

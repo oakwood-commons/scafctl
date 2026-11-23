@@ -9,7 +9,9 @@
 #
 # Discovery priority (per folder): solution.yaml > solution.yml >
 # scafctl.yaml > scafctl.yml > solution.json > scafctl.json >
-# taskfile.yaml > taskfile.yml > actions.yaml > actions.yml
+# taskfile.yaml > taskfile.yml
+# (actions.yaml and actions.yml are searched first in action mode and as a
+# fallback in resolver mode when no solution file exists)
 #
 # Multi-match behavior:
 #   - Low-risk commands (run, lint, test): use first match, warn about others

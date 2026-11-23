@@ -34,11 +34,17 @@ All commands pick the solution source with `Router.Select()` from
 
 1. **Explicit flag** -- If `-f` is provided, use it directly (no discovery).
 2. **Unambiguous positional argument** -- If the first positional arg is a URL,
-   registry reference, or versioned name (`app@1.2.3`), use it.
+   registry reference, or versioned name (`app@1.2.3`), or -- under
+   `ArgsAreNamesOrCatalog` when `--catalog` or `--version` is explicitly passed
+   -- a bare name, use it. Malformed reference syntax (`my-app@`, `oci://`,
+   unsupported schemes) fails immediately with `source.ErrInvalidRef`.
 3. **Auto-discovery** -- Search configured folders and file names in priority
    order, returning all matches.
-4. **Catalog fallback** -- With `ArgsAreNamesOrCatalog`, a bare positional name
-   is used as a catalog reference when nothing is discovered.
+4. **Catalog fallback** -- With `ArgsAreNamesOrCatalog`, a valid catalog bare
+   name (`catalog.IsValidName`) in the first positional argument is used as a
+   catalog reference when nothing is discovered. CamelCase or underscore
+   resolver names (`wifToken`, `git_version`) are not valid catalog names and
+   surface `ErrNoSolutionFound` directly.
 
 ~~~go
 router := load.NewRouterFromContext(ctx, lgr,
@@ -84,11 +90,21 @@ The search combines folder prefixes with file names in this order:
 7. `taskfile.yaml`
 8. `taskfile.yml`
 
-Action file names (`actions.yaml`, `actions.yml`) are only searched when
-`DiscoveryModeAction` is active (e.g., `run action`). They are not included
-in the default search list.
-
 This produces 24 candidate paths checked in priority order (3 folders x 8 names).
+
+Action file names (`actions.yaml`, `actions.yml`, or embedder-configured
+`ActionDiscoveryFileNames`) are not included in the default 24-path list:
+
+- **`DiscoveryModeDefault` / `DiscoveryModeSolution`** (e.g., `lint`, `render`,
+  `run solution`) -- Searches only the 24 solution/taskfile candidate paths.
+- **`DiscoveryModeAction`** (`run action`, `run resolver --action`,
+  `validate resolver --action`) -- Searches action files first across all
+  folders, with solution files as fallback (taskfiles excluded).
+- **`DiscoveryModeResolver`** (`run resolver`, `validate resolver`) -- Searches
+  the 24 solution/taskfile candidate paths first across all folders; only when
+  zero solution files exist does it fall back to searching action files across
+  the 3 folders. Coexisting `solution.yaml` and `actions.yaml` files therefore
+  never trigger multi-match ambiguity warnings.
 
 ### Taskfile Content Check
 
@@ -168,7 +184,9 @@ type Discovery struct {
 
 func NewDiscoverLoader(files *FileLoader, binaryName string, opts ...DiscoverOption) *DiscoverLoader
 func WithDiscoveryMode(mode settings.DiscoveryMode) DiscoverOption
+func WithCustomActionFiles(names []string) DiscoverOption
 func WithDiscoveryRisk(risk DiscoveryRisk) DiscoverOption
+func DiscoverPath(ctx context.Context, risk DiscoveryRisk, opts ...DiscoverOption) (string, error)
 
 func (l *DiscoverLoader) Discover(ctx context.Context) ([]Discovery, error)
 func (l *DiscoverLoader) Load(ctx context.Context, c source.Classification) (*MaterializedSolution, error)

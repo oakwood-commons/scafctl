@@ -14,6 +14,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -1999,6 +2000,135 @@ func TestExtractSolutionPath_AutoDiscover(t *testing.T) {
 	assert.Empty(t, extractSolutionPath(cmd), "nothing discovered")
 }
 
+func TestExtractSolutionPath_ActionsFallbackAndActionFlag(t *testing.T) {
+	t.Parallel()
+
+	t.Run("falls back to actions.yaml when no solution file exists", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		actPath := filepath.Join(dir, "actions.yaml")
+		require.NoError(t, os.WriteFile(actPath, []byte("apiVersion: scafctl.io/v1\n"), 0o600))
+
+		streams, _, _ := terminal.NewTestIOStreams()
+		cmd := CommandResolver(settings.NewCliParams(), streams, "")
+		cmd.SetContext(provider.WithWorkingDirectory(t.Context(), dir))
+
+		assert.Equal(t, actPath, extractSolutionPath(cmd))
+	})
+
+	t.Run("prefers solution.yaml over actions.yaml without --action", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		solPath := filepath.Join(dir, "solution.yaml")
+		actPath := filepath.Join(dir, "actions.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte("apiVersion: scafctl.io/v1\n"), 0o600))
+		require.NoError(t, os.WriteFile(actPath, []byte("apiVersion: scafctl.io/v1\n"), 0o600))
+
+		streams, _, _ := terminal.NewTestIOStreams()
+		cmd := CommandResolver(settings.NewCliParams(), streams, "")
+		cmd.SetContext(provider.WithWorkingDirectory(t.Context(), dir))
+
+		assert.Equal(t, solPath, extractSolutionPath(cmd))
+	})
+
+	t.Run("prefers actions.yaml when --action is set", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		solPath := filepath.Join(dir, "solution.yaml")
+		actPath := filepath.Join(dir, "actions.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte("apiVersion: scafctl.io/v1\n"), 0o600))
+		require.NoError(t, os.WriteFile(actPath, []byte("apiVersion: scafctl.io/v1\n"), 0o600))
+
+		streams, _, _ := terminal.NewTestIOStreams()
+		cmd := CommandResolver(settings.NewCliParams(), streams, "")
+		cmd.SetContext(provider.WithWorkingDirectory(t.Context(), dir))
+		require.NoError(t, cmd.Flags().Set("action", "release"))
+
+		assert.Equal(t, actPath, extractSolutionPath(cmd))
+	})
+
+	t.Run("help func seeds embedder cliParams and appends parameter table from custom action file", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		deployYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: mycli-help-test
+  version: 1.0.0
+spec:
+  resolvers:
+    targetEnv:
+      type: string
+      description: target deployment environment
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: env
+`
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "deploy.yaml"), []byte(deployYAML), 0o600))
+
+		var helpOut bytes.Buffer
+		streams, _, _ := terminal.NewTestIOStreams()
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		cliParams.ActionDiscoveryFileNames = []string{"deploy.yaml"}
+
+		cmd := CommandResolver(cliParams, streams, "")
+		cmd.SetOut(&helpOut)
+		cmd.SetContext(provider.WithWorkingDirectory(t.Context(), dir))
+
+		require.NoError(t, cmd.Help())
+		assert.Contains(t, helpOut.String(), "env")
+		assert.Contains(t, helpOut.String(), "target deployment environment")
+	})
+
+	t.Run("extractSolutionPathWithArgs respects raw helpArgs for --action and -f", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		solPath := filepath.Join(dir, "solution.yaml")
+		actPath := filepath.Join(dir, "actions.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte("apiVersion: scafctl.io/v1\n"), 0o600))
+		require.NoError(t, os.WriteFile(actPath, []byte("apiVersion: scafctl.io/v1\n"), 0o600))
+
+		streams, _, _ := terminal.NewTestIOStreams()
+		cmd := CommandResolver(settings.NewCliParams(), streams, "")
+		cmd.SetContext(provider.WithWorkingDirectory(t.Context(), dir))
+
+		assert.Equal(t, actPath, extractSolutionPathWithArgs(cmd, []string{"--action", "release"}))
+		assert.Equal(t, actPath, extractSolutionPathWithArgs(cmd, []string{"--action=release"}))
+		assert.Equal(t, solPath, extractSolutionPathWithArgs(cmd, []string{"--", "--action", "release"}))
+		assert.Equal(t, "/custom.yaml", extractSolutionPathWithArgs(cmd, []string{"-f", "/custom.yaml"}))
+		assert.Equal(t, "/custom.yaml", extractSolutionPathWithArgs(cmd, []string{"-f=/custom.yaml"}))
+		assert.Equal(t, "/custom.yaml", extractSolutionPathWithArgs(cmd, []string{"--file=/custom.yaml"}))
+	})
+}
+
+func TestHasActionFlagInArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "empty", args: nil, want: false},
+		{name: "separate value", args: []string{"run", "resolver", "--action", "release"}, want: true},
+		{name: "equals value", args: []string{"run", "resolver", "--action=release"}, want: true},
+		{name: "trailing flag without value", args: []string{"run", "resolver", "--action"}, want: false},
+		{name: "empty separate value", args: []string{"run", "resolver", "--action", ""}, want: false},
+		{name: "empty equals value", args: []string{"run", "resolver", "--action="}, want: false},
+		{name: "after double dash terminator", args: []string{"run", "resolver", "--", "--action", "release"}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, hasActionFlagInArgs(tt.args))
+		})
+	}
+}
+
 func TestResolverArgs_AllBareWordsAreNames(t *testing.T) {
 	t.Parallel()
 
@@ -3247,5 +3377,236 @@ func TestResolverOptions_renderResolverDiagnostics_NoIOStreamsNoPanic(t *testing
 
 	assert.NotPanics(t, func() {
 		opts.renderResolverDiagnostics(context.Background(), assert.AnError)
+	})
+}
+
+func TestResolverOptions_Run_CamelCaseAndDiscoveryModes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("camelCase resolver in empty dir returns FileNotFound instead of invalid catalog ref", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.ExitOnError = false
+
+		opts := &ResolverOptions{
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams: &terminal.IOStreams{Out: &stdout, ErrOut: &stderr},
+				CliParams: cliParams,
+			},
+			Names: []string{"wifToken"},
+		}
+
+		ctx := logger.WithLogger(provider.WithWorkingDirectory(t.Context(), t.TempDir()), logger.Get(0))
+		err := opts.Run(ctx)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, load.ErrNoSolutionFound)
+		assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+		assert.NotContains(t, err.Error(), "invalid solution reference")
+	})
+
+	t.Run("malformed ref arg returns InvalidInput even when solution.yaml exists", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		solYAML := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: local\n  version: 1.0.0\nspec:\n  resolvers: {}\n"
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "solution.yaml"), []byte(solYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.ExitOnError = false
+
+		opts := &ResolverOptions{
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams: &terminal.IOStreams{Out: &stdout, ErrOut: &stderr},
+				CliParams: cliParams,
+			},
+			Names: []string{"my-app@"},
+		}
+
+		ctx := logger.WithLogger(provider.WithWorkingDirectory(t.Context(), dir), logger.Get(0))
+		err := opts.Run(ctx)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, source.ErrInvalidRef)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	})
+
+	t.Run("actions.yaml-only repo resolves camelCase resolver", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		actionsYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: actions-only
+  version: 1.0.0
+spec:
+  resolvers:
+    wifToken:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: token-from-actions
+`
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "actions.yaml"), []byte(actionsYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.ExitOnError = false
+
+		opts := &ResolverOptions{
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams:       &terminal.IOStreams{Out: &stdout, ErrOut: &stderr},
+				CliParams:       cliParams,
+				KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+				ResolverTimeout: 30 * time.Second,
+				PhaseTimeout:    5 * time.Minute,
+				registry:        testRegistry(),
+			},
+			Names: []string{"wifToken"},
+		}
+
+		ctx := logger.WithLogger(provider.WithWorkingDirectory(t.Context(), dir), logger.Get(0))
+		require.NoError(t, opts.Run(ctx))
+		assert.Contains(t, stdout.String(), "token-from-actions")
+	})
+
+	t.Run("coexisting solution.yaml and actions.yaml chooses solution without ambiguity, and --action chooses actions.yaml", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dual-solution
+  version: 1.0.0
+spec:
+  resolvers:
+    wifToken:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: from-solution-yaml
+`
+		actionsYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dual-actions
+  version: 1.0.0
+spec:
+  resolvers:
+    wifToken:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: from-actions-yaml
+  workflow:
+    actions:
+      release:
+        provider: static
+        inputs:
+          value:
+            rslvr: wifToken
+`
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "solution.yaml"), []byte(solutionYAML), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "actions.yaml"), []byte(actionsYAML), 0o600))
+
+		// Without --action: picks solution.yaml and prints no multi-match warning even under --verbose.
+		var so1, se1 bytes.Buffer
+		cli1 := settings.NewCliParams()
+		cli1.ExitOnError = false
+		cli1.Verbose = true
+		cli1.NoColor = true
+		ios1 := &terminal.IOStreams{Out: &so1, ErrOut: &se1}
+		ctx1 := writer.WithWriter(
+			settings.IntoContext(logger.WithLogger(provider.WithWorkingDirectory(t.Context(), dir), logger.Get(0)), cli1),
+			writer.New(ios1, cli1),
+		)
+
+		opts1 := &ResolverOptions{
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams:       ios1,
+				CliParams:       cli1,
+				KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+				ResolverTimeout: 30 * time.Second,
+				PhaseTimeout:    5 * time.Minute,
+				registry:        testRegistry(),
+			},
+			Names: []string{"wifToken"},
+		}
+		require.NoError(t, opts1.Run(ctx1))
+		assert.Contains(t, so1.String(), "from-solution-yaml")
+		assert.NotContains(t, se1.String(), "Multiple solution files found")
+
+		// With --action release: switches to DiscoveryModeAction and picks actions.yaml.
+		var so2, se2 bytes.Buffer
+		cli2 := settings.NewCliParams()
+		cli2.ExitOnError = false
+		ios2 := &terminal.IOStreams{Out: &so2, ErrOut: &se2}
+		ctx2 := settings.IntoContext(logger.WithLogger(provider.WithWorkingDirectory(t.Context(), dir), logger.Get(0)), cli2)
+
+		opts2 := &ResolverOptions{
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams:       ios2,
+				CliParams:       cli2,
+				KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+				ResolverTimeout: 30 * time.Second,
+				PhaseTimeout:    5 * time.Minute,
+				registry:        testRegistry(),
+			},
+			Actions: []string{"release"},
+		}
+		require.NoError(t, opts2.Run(ctx2))
+		assert.Contains(t, so2.String(), "from-actions-yaml")
+	})
+
+	t.Run("embedder binaryName mycli and ActionDiscoveryFileNames fallback", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		deployYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: mycli-deploy
+  version: 1.0.0
+spec:
+  resolvers:
+    wifToken:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: from-mycli-deploy
+`
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "deploy.yaml"), []byte(deployYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.ExitOnError = false
+		cliParams.BinaryName = "mycli"
+		cliParams.ActionDiscoveryFileNames = []string{"deploy.yaml"}
+
+		opts := &ResolverOptions{
+			BinaryName: "mycli",
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams:       &terminal.IOStreams{Out: &stdout, ErrOut: &stderr},
+				CliParams:       cliParams,
+				KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+				ResolverTimeout: 30 * time.Second,
+				PhaseTimeout:    5 * time.Minute,
+				registry:        testRegistry(),
+			},
+			Names: []string{"wifToken"},
+		}
+
+		ctx := settings.IntoContext(
+			logger.WithLogger(provider.WithWorkingDirectory(t.Context(), dir), logger.Get(0)),
+			cliParams,
+		)
+		require.NoError(t, opts.Run(ctx))
+		assert.Contains(t, stdout.String(), "from-mycli-deploy")
 	})
 }
