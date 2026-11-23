@@ -218,9 +218,63 @@ func (sw *syncWriter) Write(p []byte) (int, error) {
 	return sw.w.Write(p)
 }
 
-func newPreviewMux(parentCtx context.Context, defaultHold time.Duration, logOut io.Writer, wg *sync.WaitGroup) http.Handler {
+// taskGate coordinates bounded admission and race-free draining of concurrent
+// work items (HTTP handlers and detached callback flows).
+type taskGate struct {
+	mu      sync.Mutex
+	closing bool
+	wg      sync.WaitGroup
+}
+
+func (g *taskGate) enter() bool {
+	if g == nil {
+		return true
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closing {
+		return false
+	}
+	g.wg.Add(1)
+	return true
+}
+
+func (g *taskGate) done() {
+	if g != nil {
+		g.wg.Done()
+	}
+}
+
+func (g *taskGate) stopAdmitting() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.closing = true
+	g.mu.Unlock()
+}
+
+func (g *taskGate) closeAndWait() {
+	if g == nil {
+		return
+	}
+	g.stopAdmitting()
+	g.wg.Wait()
+}
+
+func newPreviewMux(parentCtx context.Context, defaultHold time.Duration, logOut io.Writer, flowGate *taskGate) http.Handler {
+	return newPreviewMuxWithScenarios(parentCtx, previewScenarios(), defaultHold, logOut, nil, flowGate)
+}
+
+func newPreviewMuxWithScenarios(
+	parentCtx context.Context,
+	scenarios []scenarioSpec,
+	defaultHold time.Duration,
+	logOut io.Writer,
+	handlerGate *taskGate,
+	flowGate *taskGate,
+) http.Handler {
 	safeOut := &syncWriter{w: logOut}
-	scenarios := previewScenarios()
 	byID := make(map[string]scenarioSpec, len(scenarios))
 	for _, s := range scenarios {
 		byID[s.ID] = s
@@ -291,23 +345,24 @@ func newPreviewMux(parentCtx context.Context, defaultHold time.Duration, logOut 
 			}))
 		}
 
+		if parentCtx.Err() != nil || !flowGate.enter() {
+			http.Error(w, "preview gallery shutting down", http.StatusServiceUnavailable)
+			return
+		}
+
 		flowCtx, flowCancel := context.WithTimeout(parentCtx, callbackFlowTimeout)
 		cs, err := oauth.StartCallbackServer(flowCtx, 0, state, opts...)
 		if err != nil {
 			flowCancel()
+			flowGate.done()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		_, _ = fmt.Fprintf(safeOut, "[%s] started oauth-helpers CallbackServer at %s\n", spec.ID, cs.RedirectURI)
 
-		if wg != nil {
-			wg.Add(1)
-		}
 		go func() {
-			if wg != nil {
-				defer wg.Done()
-			}
+			defer flowGate.done()
 			settlePreviewFlow(flowCtx, flowCancel, cs, spec, hold, safeOut)
 		}()
 
@@ -315,7 +370,14 @@ func newPreviewMux(parentCtx context.Context, defaultHold time.Duration, logOut 
 		http.Redirect(w, r, target, http.StatusFound)
 	})
 
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !handlerGate.enter() {
+			http.Error(w, "preview gallery shutting down", http.StatusServiceUnavailable)
+			return
+		}
+		defer handlerGate.done()
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func settlePreviewFlow(
@@ -367,7 +429,25 @@ func drainCallbackServer(cs *oauth.CallbackServer) {
 	_ = cs.Shutdown(shutdownCtx)
 }
 
+type runConfig struct {
+	scenarios       []scenarioSpec
+	shutdownTimeout time.Duration
+}
+
 func run(ctx context.Context, args []string, out io.Writer, openFn func(context.Context, string) error) error {
+	return runWithConfig(ctx, args, out, openFn, runConfig{
+		scenarios:       previewScenarios(),
+		shutdownTimeout: previewShutdownTimeout,
+	})
+}
+
+func runWithConfig(
+	ctx context.Context,
+	args []string,
+	out io.Writer,
+	openFn func(context.Context, string) error,
+	cfg runConfig,
+) error {
 	safeOut := &syncWriter{w: out}
 	fs := flag.NewFlagSet("callback-preview", flag.ContinueOnError)
 	fs.SetOutput(safeOut)
@@ -391,24 +471,28 @@ func run(ctx context.Context, args []string, out io.Writer, openFn func(context.
 	}
 	demoURL := fmt.Sprintf("http://localhost:%d", tcpAddr.Port)
 
-	flowRootCtx, cancelFlows := context.WithCancel(ctx)
-	var flowWG sync.WaitGroup
-	defer func() {
-		cancelFlows()
-		flowWG.Wait()
-	}()
+	flowRootCtx, cancelFlows := context.WithCancel(context.WithoutCancel(ctx))
+	var handlerGate, flowGate taskGate
 
 	srv := &http.Server{
-		Handler:           newPreviewMux(flowRootCtx, *hold, safeOut, &flowWG),
+		Handler:           newPreviewMuxWithScenarios(flowRootCtx, cfg.scenarios, *hold, safeOut, &handlerGate, &flowGate),
 		ReadHeaderTimeout: previewReadHdrTimeout,
 	}
 
+	stopWatch := make(chan struct{})
+	shutdownDone := make(chan struct{})
 	shutdownBaseCtx := context.WithoutCancel(ctx)
 	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(shutdownBaseCtx, previewShutdownTimeout)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		defer close(shutdownDone)
+		select {
+		case <-ctx.Done():
+			handlerGate.stopAdmitting()
+			flowGate.stopAdmitting()
+			shutdownCtx, cancel := context.WithTimeout(shutdownBaseCtx, cfg.shutdownTimeout)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+		case <-stopWatch:
+		}
 	}()
 
 	_, _ = fmt.Fprintf(safeOut, "OAuth Callback Preview Gallery running at: %s\n", demoURL)
@@ -419,7 +503,14 @@ func run(ctx context.Context, args []string, out io.Writer, openFn func(context.
 		_ = openFn(ctx, demoURL)
 	}
 
-	if serveErr := srv.Serve(ln); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+	serveErr := srv.Serve(ln)
+	close(stopWatch)
+	<-shutdownDone
+	handlerGate.closeAndWait()
+	cancelFlows()
+	flowGate.closeAndWait()
+
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return fmt.Errorf("serve preview gallery: %w", serveErr)
 	}
 	return nil

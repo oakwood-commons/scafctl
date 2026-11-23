@@ -91,8 +91,10 @@ request uses the `ProviderConfig` fields (`quiet`, `no_color`, `binary_name`,
 Auth handler plugins have full access to `HostService` callbacks (secrets, auth
 identity) via the GRPCBroker, mirroring the provider plugin pattern.
 
-`RegisterAuthHandlerPlugins` returns `[]*AuthHandlerClient`. The caller should
-defer `KillAllAuthHandlers(clients)` for cleanup.
+`RegisterAuthHandlerPlugins` and `RegisterScopedAuthHandlerPlugins` return
+`[]*AuthHandlerClient` with each discovered handler isolated to its own
+`scafctl.auth.<name>.` secret namespace before `HostService` is exposed. The
+caller should defer `KillAllAuthHandlers(clients)` for cleanup.
 
 ## HostService Callbacks
 

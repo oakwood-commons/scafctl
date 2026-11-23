@@ -6,6 +6,7 @@ package plugin
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -1212,4 +1213,119 @@ func TestRegisterAuthHandlerPlugins_EmptyDir(t *testing.T) {
 	clients, err := RegisterAuthHandlerPlugins(context.Background(), registry, []string{dir}, nil)
 	require.NoError(t, err)
 	assert.Empty(t, clients)
+}
+
+func TestRegisterScopedAuthHandlerPlugins_ScopesPerHandlerAndIsolatesPromptBroker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping auth handler plugin test in short mode (requires go build)")
+	}
+	binPath := buildTestAuthHandlerPlugin(t)
+	pluginDir := filepath.Dir(binPath)
+
+	store := &fakeSecretStore{secrets: map[string][]byte{
+		"scafctl.auth.test-auth.refresh_token": []byte("own-secret"),
+		"scafctl.auth.github.refresh_token":    []byte("other-secret"),
+	}}
+	sharedDeps := &HostServiceDeps{
+		SecretStore:  store,
+		PromptBroker: &AuthPromptBroker{},
+	}
+
+	t.Run("RegisterScopedAuthHandlerPlugins isolates secret namespace and prompt broker", func(t *testing.T) {
+		reg := auth.NewRegistry()
+		cfgCalls := 0
+		clients, err := RegisterScopedAuthHandlerPlugins(
+			context.Background(),
+			reg,
+			[]string{pluginDir},
+			func() *ProviderConfig {
+				cfgCalls++
+				return &ProviderConfig{BinaryName: "mycli"}
+			},
+			WithHostDeps(sharedDeps),
+		)
+		defer KillAllAuthHandlers(clients)
+
+		require.NoError(t, err)
+		require.Len(t, clients, 1)
+		assert.Equal(t, 1, cfgCalls)
+		assert.True(t, reg.Has("test-auth"))
+		assert.Empty(t, sharedDeps.AllowedSecretPrefix, "shared deps must remain untouched")
+
+		require.NotNil(t, clients[0].hostDeps)
+		assert.Equal(t, "scafctl.auth.test-auth.", clients[0].hostDeps.AllowedSecretPrefix)
+		assert.NotSame(t, sharedDeps.PromptBroker, clients[0].hostDeps.PromptBroker)
+
+		server := &HostServiceServer{Deps: *clients[0].hostDeps}
+		ownResp, err := server.GetSecret(context.Background(), &proto.GetSecretRequest{Name: "scafctl.auth.test-auth.refresh_token"})
+		require.NoError(t, err)
+		assert.True(t, ownResp.Found)
+		assert.Equal(t, "own-secret", ownResp.Value)
+
+		otherResp, err := server.GetSecret(context.Background(), &proto.GetSecretRequest{Name: "scafctl.auth.github.refresh_token"})
+		require.NoError(t, err)
+		assert.Contains(t, otherResp.Error, "access denied")
+	})
+
+	t.Run("RegisterAuthHandlerPlugins reuses the same per-handler scoping", func(t *testing.T) {
+		reg := auth.NewRegistry()
+		clients, err := RegisterAuthHandlerPlugins(
+			context.Background(),
+			reg,
+			[]string{pluginDir},
+			&ProviderConfig{BinaryName: "mycli"},
+			WithHostDeps(sharedDeps),
+		)
+		defer KillAllAuthHandlers(clients)
+
+		require.NoError(t, err)
+		require.Len(t, clients, 1)
+		require.NotNil(t, clients[0].hostDeps)
+		assert.Equal(t, "scafctl.auth.test-auth.", clients[0].hostDeps.AllowedSecretPrefix)
+	})
+
+	t.Run("skips already-registered handler without evaluating cfgFn", func(t *testing.T) {
+		reg := auth.NewRegistry()
+		require.NoError(t, reg.Register(auth.NewMockHandler("test-auth")))
+
+		cfgCalls := 0
+		clients, err := RegisterScopedAuthHandlerPlugins(
+			context.Background(),
+			reg,
+			[]string{pluginDir},
+			func() *ProviderConfig {
+				cfgCalls++
+				return &ProviderConfig{}
+			},
+			WithHostDeps(sharedDeps),
+		)
+		defer KillAllAuthHandlers(clients)
+
+		require.NoError(t, err)
+		assert.Empty(t, clients)
+		assert.Equal(t, 0, cfgCalls)
+	})
+
+	t.Run("rejects invalid handler name before starting HostService-enabled client", func(t *testing.T) {
+		t.Setenv("SCAFCTL_TEST_AUTH_HANDLER_NAME", "entra.evil")
+		reg := auth.NewRegistry()
+		cfgCalls := 0
+		clients, err := RegisterScopedAuthHandlerPlugins(
+			context.Background(),
+			reg,
+			[]string{pluginDir},
+			func() *ProviderConfig {
+				cfgCalls++
+				return &ProviderConfig{}
+			},
+			WithHostDeps(sharedDeps),
+		)
+		defer KillAllAuthHandlers(clients)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "entra.evil")
+		assert.Empty(t, clients)
+		assert.Equal(t, 0, cfgCalls)
+		assert.False(t, reg.Has("entra.evil"))
+	})
 }

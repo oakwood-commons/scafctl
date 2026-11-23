@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -636,31 +638,82 @@ func injectAuthHandlerSettings(ctx context.Context, handlerName string, cfg *Pro
 	cfg.Settings[handlerName] = raw
 }
 
-// RegisterAuthHandlerPlugins discovers auth handler plugins and registers them
-// with the auth registry. Returns the created clients (caller should Kill() them
-// on cleanup).
+// RegisterAuthHandlerPlugins discovers auth handler plugins in pluginDirs,
+// validates each advertised handler name, and registers an isolated per-handler
+// client scoped via WithSecretScope(name) with the auth registry. Returns the
+// created clients (caller should Kill() them on cleanup).
 func RegisterAuthHandlerPlugins(ctx context.Context, registry *auth.Registry, pluginDirs []string, cfg *ProviderConfig, clientOpts ...ClientOption) ([]*AuthHandlerClient, error) {
-	clients, err := DiscoverAuthHandlers(pluginDirs, clientOpts...)
+	var cfgFn func() *ProviderConfig
+	if cfg != nil {
+		cfgFn = func() *ProviderConfig { return cfg }
+	}
+	return RegisterScopedAuthHandlerPlugins(ctx, registry, pluginDirs, cfgFn, clientOpts...)
+}
+
+// RegisterScopedAuthHandlerPlugins discovers auth handler binaries in
+// pluginDirs without exposing HostService, validates each advertised handler
+// name as a single dot-free namespace segment, and starts an isolated client
+// per new handler scoped via WithSecretScope(name). cfgFn, when non-nil, is
+// evaluated only when at least one valid new handler is about to be registered.
+func RegisterScopedAuthHandlerPlugins(
+	ctx context.Context,
+	registry *auth.Registry,
+	pluginDirs []string,
+	cfgFn func() *ProviderConfig,
+	baseClientOpts ...ClientOption,
+) ([]*AuthHandlerClient, error) {
+	probeClients, err := DiscoverAuthHandlers(pluginDirs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover auth handler plugins: %w", err)
 	}
+	defer func() {
+		for _, p := range probeClients {
+			p.Kill()
+		}
+	}()
 
+	lgr := logger.FromContext(ctx)
 	var allClients []*AuthHandlerClient
+	var errs []error
 
-	for _, client := range clients {
-		handlers, err := client.GetAuthHandlers(ctx)
-		if err != nil {
-			client.Kill()
+	for _, probe := range probeClients {
+		binPath := probe.Path()
+		handlers, hErr := probe.GetAuthHandlers(ctx)
+		probe.Kill()
+		if hErr != nil {
 			continue
 		}
 
-		registered := configureAndRegisterAuthHandlers(ctx, registry, client, handlers, cfg)
-		propagateStartupLatency(ctx, registry, client, registered)
+		for _, info := range handlers {
+			if registry.Has(info.Name) {
+				lgr.V(1).Info("skipping auth handler: name already registered", "handler", info.Name)
+				continue
+			}
+			if !validSecretScopeName(info.Name) {
+				errs = append(errs, fmt.Errorf("auth handler plugin %s advertised invalid handler name %q", binPath, info.Name))
+				continue
+			}
 
-		allClients = append(allClients, client)
+			var cfg *ProviderConfig
+			if cfgFn != nil {
+				cfg = cfgFn()
+			}
+			scopedOpts := slices.Concat(baseClientOpts, []ClientOption{WithSecretScope(info.Name)})
+			results := []FetchResult{{
+				Name: info.Name,
+				Kind: solution.PluginKindAuthHandler,
+				Path: binPath,
+			}}
+			clients, regErr := RegisterFetchedAuthHandlerPluginsNamed(ctx, registry, results, cfg, info.Name, scopedOpts...)
+			if regErr != nil {
+				errs = append(errs, regErr)
+				continue
+			}
+			allClients = append(allClients, clients...)
+		}
 	}
 
-	return allClients, nil
+	return allClients, errors.Join(errs...)
 }
 
 // KillAllAuthHandlers terminates all auth handler plugin processes in the given client list.

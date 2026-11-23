@@ -11,18 +11,20 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/authpage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPreviewGallery_IndexAndErrorPaths(t *testing.T) {
 	var logBuf bytes.Buffer
-	var wg sync.WaitGroup
-	defer wg.Wait()
-	srv := httptest.NewServer(newPreviewMux(context.Background(), 25*time.Millisecond, &logBuf, &wg))
+	var flowGate taskGate
+	defer flowGate.closeAndWait()
+	srv := httptest.NewServer(newPreviewMux(context.Background(), 25*time.Millisecond, &logBuf, &flowGate))
 	defer srv.Close()
 
 	t.Run("gallery index lists all 8 scenarios and hold presets", func(t *testing.T) {
@@ -143,9 +145,9 @@ func TestPreviewGallery_AllEightScenariosEndToEnd(t *testing.T) {
 	}
 
 	var logBuf bytes.Buffer
-	var wg sync.WaitGroup
-	defer wg.Wait()
-	srv := httptest.NewServer(newPreviewMux(context.Background(), 0, &logBuf, &wg))
+	var flowGate taskGate
+	defer flowGate.closeAndWait()
+	srv := httptest.NewServer(newPreviewMux(context.Background(), 0, &logBuf, &flowGate))
 	defer srv.Close()
 
 	for _, tt := range tests {
@@ -230,5 +232,87 @@ func TestRun_LifecycleAndFlagErrors(t *testing.T) {
 		var out bytes.Buffer
 		err := run(context.Background(), []string{"-definitely-unknown-flag"}, &out, nil)
 		require.Error(t, err)
+	})
+
+	t.Run("drains in-flight /run handler past shutdown timeout without launching post-cancel flow", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		enteredRenderer := make(chan struct{})
+		releaseRenderer := make(chan struct{})
+		var handlerFinished atomic.Bool
+
+		slowScenario := scenarioSpec{
+			ID:         "slow-render",
+			Badge:      "TEST",
+			BadgeClass: "ok",
+			Title:      "Slow Renderer",
+			BinaryName: "scafctl",
+			Succeed:    true,
+			Renderer: func(_ context.Context, d authpage.Data) ([]byte, error) {
+				if d.State == authpage.StateSuccess {
+					close(enteredRenderer)
+					<-releaseRenderer
+					handlerFinished.Store(true)
+				}
+				return []byte("<!doctype html><html><body>ok</body></html>"), nil
+			},
+		}
+
+		openedCh := make(chan string, 1)
+		var out bytes.Buffer
+		runDone := make(chan error, 1)
+		go func() {
+			runDone <- runWithConfig(
+				ctx,
+				[]string{"-port", "0", "-hold", "0s", "-open=true"},
+				&out,
+				func(_ context.Context, targetURL string) error {
+					openedCh <- targetURL
+					return nil
+				},
+				runConfig{
+					scenarios:       []scenarioSpec{slowScenario},
+					shutdownTimeout: 15 * time.Millisecond,
+				},
+			)
+		}()
+
+		galleryURL := <-openedCh
+		noRedirectClient := &http.Client{
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+
+		reqStatusCh := make(chan int, 1)
+		go func() {
+			resp, reqErr := noRedirectClient.Get(galleryURL + "/run?scenario=slow-render") //nolint:noctx
+			if reqErr == nil {
+				_ = resp.Body.Close()
+				reqStatusCh <- resp.StatusCode
+			} else {
+				close(reqStatusCh)
+			}
+		}()
+
+		<-enteredRenderer
+		// Cancel ctx and wait longer than shutdownTimeout (15ms) while the handler is
+		// still blocked inside Renderer before flowGate.enter().
+		cancel()
+		select {
+		case err := <-runDone:
+			t.Fatalf("runWithConfig returned before in-flight /run handler drained: %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		close(releaseRenderer)
+		if code, ok := <-reqStatusCh; ok {
+			assert.Equal(t, http.StatusServiceUnavailable, code)
+		}
+
+		require.NoError(t, <-runDone)
+		assert.True(t, handlerFinished.Load())
+		assert.NotContains(t, out.String(), "[slow-render] started oauth-helpers CallbackServer")
 	})
 }

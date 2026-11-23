@@ -5,7 +5,6 @@ package scafctl
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -652,7 +651,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 			// Register auth handler plugins if directories are configured
 			if len(opts.AuthPluginDirs) > 0 {
 				lgr.V(1).Info("loading auth handler plugins", "dirs", opts.AuthPluginDirs)
-				authClients, authPluginErr := registerDirAuthHandlerPlugins(ctx, authRegistry, opts.AuthPluginDirs, authPluginCfg, baseAuthClientOpts)
+				authClients, authPluginErr := plugin.RegisterScopedAuthHandlerPlugins(ctx, authRegistry, opts.AuthPluginDirs, authPluginCfg, baseAuthClientOpts...)
 				if authPluginErr != nil {
 					w.Warningf("failed to load some auth handler plugins: %v", authPluginErr)
 				}
@@ -1012,104 +1011,6 @@ func withGroup(group string, cmd *cobra.Command) *cobra.Command {
 // "scafctl.auth.<name>." namespace, not other handlers' (e.g. refresh tokens).
 func scopedAuthClientOpts(base []plugin.ClientOption, name string) []plugin.ClientOption {
 	return slices.Concat(base, []plugin.ClientOption{plugin.WithSecretScope(name)})
-}
-
-// hasValidAuthSecretScope reports whether name resolves to a dedicated
-// single-segment "scafctl.auth.<name>." namespace rather than WithSecretScope's
-// fail-closed sentinel.
-func hasValidAuthSecretScope(name string) bool {
-	if name == "" {
-		return false
-	}
-	resolved := plugin.ResolvedHostDeps(
-		plugin.WithHostDeps(&plugin.HostServiceDeps{}),
-		plugin.WithSecretScope(name),
-	)
-	return resolved != nil && resolved.AllowedSecretPrefix == "scafctl.auth."+name+"."
-}
-
-type registerNamedAuthPluginFunc func(
-	ctx context.Context,
-	registry *auth.Registry,
-	results []plugin.FetchResult,
-	cfg *plugin.ProviderConfig,
-	only string,
-	clientOpts ...plugin.ClientOption,
-) ([]*plugin.AuthHandlerClient, error)
-
-// registerDirAuthHandlerPlugins discovers auth handler binaries in pluginDirs
-// without exposing HostService, validates each advertised handler name, and
-// starts an isolated per-handler client scoped via WithSecretScope(name).
-func registerDirAuthHandlerPlugins(
-	ctx context.Context,
-	registry *auth.Registry,
-	pluginDirs []string,
-	pluginCfgFn func() *plugin.ProviderConfig,
-	baseClientOpts []plugin.ClientOption,
-) ([]*plugin.AuthHandlerClient, error) {
-	return registerDirAuthHandlerPluginsWith(ctx, registry, pluginDirs, pluginCfgFn, baseClientOpts, plugin.RegisterFetchedAuthHandlerPluginsNamed)
-}
-
-func registerDirAuthHandlerPluginsWith(
-	ctx context.Context,
-	registry *auth.Registry,
-	pluginDirs []string,
-	pluginCfgFn func() *plugin.ProviderConfig,
-	baseClientOpts []plugin.ClientOption,
-	registerFn registerNamedAuthPluginFunc,
-) ([]*plugin.AuthHandlerClient, error) {
-	probeClients, err := plugin.DiscoverAuthHandlers(pluginDirs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to discover auth handler plugins: %w", err)
-	}
-	defer func() {
-		for _, p := range probeClients {
-			p.Kill()
-		}
-	}()
-
-	lgr := logger.FromContext(ctx)
-	var allClients []*plugin.AuthHandlerClient
-	var errs []error
-
-	for _, probe := range probeClients {
-		binPath := probe.Path()
-		handlers, hErr := probe.GetAuthHandlers(ctx)
-		probe.Kill()
-		if hErr != nil {
-			continue
-		}
-
-		for _, info := range handlers {
-			if registry.Has(info.Name) {
-				lgr.V(1).Info("skipping auth handler: name already registered", "handler", info.Name)
-				continue
-			}
-			if !hasValidAuthSecretScope(info.Name) {
-				errs = append(errs, fmt.Errorf("auth handler plugin %s advertised invalid handler name %q", binPath, info.Name))
-				continue
-			}
-
-			var cfg *plugin.ProviderConfig
-			if pluginCfgFn != nil {
-				cfg = pluginCfgFn()
-			}
-			scopedOpts := scopedAuthClientOpts(baseClientOpts, info.Name)
-			results := []plugin.FetchResult{{
-				Name: info.Name,
-				Kind: solution.PluginKindAuthHandler,
-				Path: binPath,
-			}}
-			clients, regErr := registerFn(ctx, registry, results, cfg, info.Name, scopedOpts...)
-			if regErr != nil {
-				errs = append(errs, regErr)
-				continue
-			}
-			allClients = append(allClients, clients...)
-		}
-	}
-
-	return allClients, errors.Join(errs...)
 }
 
 // cachedAuthHandlerConfig builds the lazy wrapper config for a cached official
