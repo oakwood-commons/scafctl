@@ -1328,4 +1328,51 @@ func TestRegisterScopedAuthHandlerPlugins_ScopesPerHandlerAndIsolatesPromptBroke
 		assert.Equal(t, 0, cfgCalls)
 		assert.False(t, reg.Has("entra.evil"))
 	})
+
+	t.Run("forwards WithSanitizedEnv to both discovery probe and scoped registration launches while keeping probe HostDeps nil", func(t *testing.T) {
+		// SCAFCTL_TEST_AUTH_HANDLER_NAME is not in safeEnvKeys. If the discovery
+		// probe ignores WithSanitizedEnv(), it observes "unsanitized-leak" instead
+		// of "test-auth". If only the probe sanitizes and the second launch does
+		// not, RegisterFetchedAuthHandlerPluginsNamed(..., "test-auth", ...)
+		// filters out "unsanitized-leak" and registers zero clients. Both launches
+		// must sanitize for "test-auth" to register cleanly.
+		t.Setenv("SCAFCTL_TEST_AUTH_HANDLER_NAME", "unsanitized-leak")
+
+		baseOpts := []ClientOption{WithHostDeps(sharedDeps), WithSanitizedEnv()}
+		probeResolved := resolveClientOptions(probeDiscoveryClientOpts(baseOpts))
+		assert.True(t, probeResolved.sanitizeEnv)
+		assert.Nil(t, probeResolved.hostDeps, "discovery probe must keep HostService disabled")
+
+		reg := auth.NewRegistry()
+		clients, err := RegisterScopedAuthHandlerPlugins(
+			context.Background(),
+			reg,
+			[]string{pluginDir},
+			func() *ProviderConfig { return &ProviderConfig{BinaryName: "mycli"} },
+			baseOpts...,
+		)
+		defer KillAllAuthHandlers(clients)
+
+		require.NoError(t, err)
+		require.Len(t, clients, 1)
+		assert.True(t, reg.Has("test-auth"))
+		assert.False(t, reg.Has("unsanitized-leak"))
+		require.NotNil(t, clients[0].hostDeps)
+		assert.Equal(t, "scafctl.auth.test-auth.", clients[0].hostDeps.AllowedSecretPrefix)
+
+		reg2 := auth.NewRegistry()
+		clients2, err2 := RegisterAuthHandlerPlugins(
+			context.Background(),
+			reg2,
+			[]string{pluginDir},
+			&ProviderConfig{BinaryName: "mycli"},
+			baseOpts...,
+		)
+		defer KillAllAuthHandlers(clients2)
+
+		require.NoError(t, err2)
+		require.Len(t, clients2, 1)
+		assert.True(t, reg2.Has("test-auth"))
+		assert.False(t, reg2.Has("unsanitized-leak"))
+	})
 }

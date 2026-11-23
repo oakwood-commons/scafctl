@@ -650,6 +650,14 @@ func RegisterAuthHandlerPlugins(ctx context.Context, registry *auth.Registry, pl
 	return RegisterScopedAuthHandlerPlugins(ctx, registry, pluginDirs, cfgFn, clientOpts...)
 }
 
+// probeDiscoveryClientOpts forwards caller transport/isolation options (such as
+// WithSanitizedEnv, WithStartTimeout, and WithGRPCMaxMessageSize) to discovery
+// probes while appending WithHostDeps(nil) last so HostService stays disabled
+// until handler names have been validated and scoped.
+func probeDiscoveryClientOpts(baseClientOpts []ClientOption) []ClientOption {
+	return slices.Concat(baseClientOpts, []ClientOption{WithHostDeps(nil)})
+}
+
 // RegisterScopedAuthHandlerPlugins discovers auth handler binaries in
 // pluginDirs without exposing HostService, validates each advertised handler
 // name as a single dot-free namespace segment, and starts an isolated client
@@ -662,7 +670,7 @@ func RegisterScopedAuthHandlerPlugins(
 	cfgFn func() *ProviderConfig,
 	baseClientOpts ...ClientOption,
 ) ([]*AuthHandlerClient, error) {
-	probeClients, err := DiscoverAuthHandlers(pluginDirs)
+	probeClients, err := DiscoverAuthHandlers(pluginDirs, probeDiscoveryClientOpts(baseClientOpts)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover auth handler plugins: %w", err)
 	}

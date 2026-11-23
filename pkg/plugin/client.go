@@ -29,6 +29,7 @@ type pluginConfig struct {
 	pluginName         string
 	grpcPlugin         plugin.Plugin
 	cmdFn              func(string) *exec.Cmd // builds the exec.Cmd for the plugin binary
+	skipHostEnv        bool                   // prevent go-plugin from re-appending os.Environ() when sanitized
 	logger             hclog.Logger           // if nil, a null logger is used
 	startTimeout       time.Duration          // if >0, bounds plugin startup/handshake
 	grpcMaxMessageSize int                    // if >0, overrides default gRPC max message size
@@ -72,6 +73,7 @@ func connectPlugin(pluginPath string, cfg pluginConfig) (any, *plugin.Client, er
 			cfg.pluginName: cfg.grpcPlugin,
 		},
 		Cmd:              cmdFn(pluginPath),
+		SkipHostEnv:      cfg.skipHostEnv,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		// Always set an explicit logger so HC_LOG env vars cannot force debug
 		// output during normal command invocations. When debug mode is active
@@ -454,6 +456,7 @@ func newClientWithConnector(
 				pluginName:         PluginName,
 				grpcPlugin:         &GRPCPlugin{HostDeps: o.hostDeps},
 				cmdFn:              cmdFn,
+				skipHostEnv:        o.sanitizeEnv,
 				logger:             logger,
 				startTimeout:       o.startTimeout,
 				grpcMaxMessageSize: o.grpcMaxMessageSize,
@@ -608,6 +611,7 @@ func newAuthHandlerClientWithConnector(
 				pluginName:         AuthHandlerPluginName,
 				grpcPlugin:         &AuthHandlerGRPCPlugin{HostDeps: o.hostDeps},
 				cmdFn:              cmdFn,
+				skipHostEnv:        o.sanitizeEnv,
 				logger:             logger,
 				startTimeout:       o.startTimeout,
 				grpcMaxMessageSize: o.grpcMaxMessageSize,
