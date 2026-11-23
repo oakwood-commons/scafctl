@@ -186,7 +186,7 @@ func (s *streamingBrokerMockPlugin) ExecuteProviderStream(ctx context.Context, n
 }
 
 func TestHostServiceBroker_TracksCredentialsWrapsStreamsAndIsolatesPooledRuns(t *testing.T) {
-	t.Parallel()
+	t.Setenv("GITHUB_ACTIONS", "false")
 
 	store := secrets.NewMockStore()
 	store.Data["run-a-secret"] = []byte("broker_secret_alpha_1111")

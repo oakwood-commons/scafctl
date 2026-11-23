@@ -17225,15 +17225,22 @@ spec:
 	require.NoError(t, err)
 	assert.Equal(t, secretValue, string(deliveredBytes), "provider must receive unredacted secret at execution time")
 
-	// 6. With GITHUB_ACTIONS=true, ::add-mask:: workflow command is emitted before execution.
+	// 6. With GITHUB_ACTIONS=true, ::add-mask:: workflow command is emitted on streamed output,
+	// while structured -o json output remains valid JSON without leaking raw secrets.
 	ghaEnv := make(map[string]string, len(baseEnv))
 	for k, v := range baseEnv {
 		ghaEnv[k] = v
 	}
 	ghaEnv["GITHUB_ACTIONS"] = "true"
-	ghaOut, ghaErr, ghaExit := runScafctlIsolatedEnv(t, unset, ghaEnv, "run", "solution", "-f", solPath, "-o", "json")
-	require.Equal(t, 0, ghaExit, "run solution under GITHUB_ACTIONS failed: %s", ghaErr)
+	ghaOut, ghaErr, ghaExit := runScafctlIsolatedEnv(t, unset, ghaEnv, "run", "solution", "-f", solPath)
+	require.Equal(t, 0, ghaExit, "streamed run solution under GITHUB_ACTIONS failed: %s", ghaErr)
 	assert.Contains(t, ghaOut+ghaErr, "::add-mask::"+secretValue)
+	assert.Contains(t, ghaOut+ghaErr, "[REDACTED]")
+
+	ghaJSONOut, ghaJSONErr, ghaJSONExit := runScafctlIsolatedEnv(t, unset, ghaEnv, "run", "solution", "-f", solPath, "-o", "json")
+	require.Equal(t, 0, ghaJSONExit, "json run solution under GITHUB_ACTIONS failed: %s", ghaJSONErr)
+	assert.True(t, json.Valid([]byte(ghaJSONOut)), "-o json output under GITHUB_ACTIONS must remain valid JSON: %s", ghaJSONOut)
+	assert.NotContains(t, ghaJSONOut+ghaJSONErr, secretValue)
 
 	// 7. Ad-hoc 'scafctl run provider' resolves scrt: via @inputs.yaml and scrubs output.
 	provInputsPath := filepath.Join(tmpDir, "prov-inputs.yaml")
