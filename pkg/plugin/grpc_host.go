@@ -15,8 +15,12 @@ import (
 
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	hostnameresolver "github.com/oakwood-commons/scafctl/pkg/auth/hostname"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -57,6 +61,16 @@ type HostServiceDeps struct {
 	// AllowedSecretPrefix restricts secret access to names starting with this prefix.
 	// If empty, all secrets are accessible (for backward compatibility).
 	AllowedSecretPrefix string `json:"allowedSecretPrefix,omitempty" yaml:"allowedSecretPrefix,omitempty" doc:"Prefix restriction for secret access."`
+	// ReadOnlySecrets blocks SetSecret and DeleteSecret RPCs when true.
+	// Enforced automatically on ProviderPlugin clients.
+	ReadOnlySecrets bool `json:"readOnlySecrets,omitempty" yaml:"readOnlySecrets,omitempty" doc:"Block secret write and delete RPCs."`
+	// DeniedSecretPrefixes lists secret name prefixes that are rejected by GetSecret,
+	// SetSecret, and DeleteSecret and filtered from ListSecrets (e.g. "scafctl.").
+	DeniedSecretPrefixes []string `json:"deniedSecretPrefixes,omitempty" yaml:"deniedSecretPrefixes,omitempty" doc:"Denied secret name prefixes."`
+	// providerDeniedPrefixes carries context-derived internal prefixes (e.g. embedder
+	// binary name) to apply when constructing ProviderPlugin clients without affecting
+	// AuthHandlerPlugin clients sharing the same ClientOption slice.
+	providerDeniedPrefixes []string
 	// AuthIdentityFunc returns claims for a named auth handler and scope.
 	// handler may be empty for the default handler. May be nil if auth is unavailable.
 	AuthIdentityFunc func(ctx context.Context, handler, scope string) (*proto.Claims, error) `json:"-" yaml:"-" doc:"Auth identity callback (not serialized)."`
@@ -70,6 +84,9 @@ type HostServiceDeps struct {
 	// Plugins call this for authenticated HTTP requests and token refresh on 401.
 	// May be nil if auth is unavailable.
 	AuthTokenFunc func(ctx context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) `json:"-" yaml:"-" doc:"Auth token callback (not serialized)."`
+	// AuthTokenWithHostnameFunc retrieves a valid access token with optional per-cluster/server
+	// hostname selection. When set, GetAuthToken prefers this callback over AuthTokenFunc.
+	AuthTokenWithHostnameFunc func(ctx context.Context, handler, scope, hostname string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) `json:"-" yaml:"-" doc:"Auth token callback with hostname support (not serialized)."`
 	// AuthGroupsFunc retrieves group memberships for the authenticated user.
 	// Only handlers that implement auth.GroupsProvider (e.g. Entra) return
 	// results; others yield an actionable error. Wired in production by
@@ -86,6 +103,10 @@ type HostServiceDeps struct {
 	// installed by the login UI. When nil, the RPC is Unimplemented.
 	// Populated by HostDepsFromAuthRegistry.
 	PromptBroker *AuthPromptBroker `json:"-" yaml:"-" doc:"Paste-back prompt broker (not serialized)."`
+	// HostConfig carries the host's loaded configuration so incoming gRPC
+	// GetAuthToken callbacks can resolve configured hostname aliases and
+	// dynamic hostname inventories.
+	HostConfig *config.Config `json:"-" yaml:"-" doc:"Host configuration for auth hostname resolution (not serialized)."`
 }
 
 // isSecretAllowed checks whether the given secret name is within the allowed
@@ -95,6 +116,15 @@ func (d *HostServiceDeps) isSecretAllowed(name string) bool {
 		return true
 	}
 	return strings.HasPrefix(name, d.AllowedSecretPrefix)
+}
+
+func (d *HostServiceDeps) isSecretDenied(name string) bool {
+	for _, prefix := range d.DeniedSecretPrefixes {
+		if prefix != "" && strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isAuthHandlerAllowed checks whether the given handler name is in the
@@ -138,6 +168,9 @@ func (h *HostServiceServer) GetSecret(ctx context.Context, req *proto.GetSecretR
 	if !h.Deps.isSecretAllowed(req.Name) {
 		return &proto.GetSecretResponse{Error: "access denied: secret name outside allowed scope"}, nil
 	}
+	if h.Deps.isSecretDenied(req.Name) {
+		return &proto.GetSecretResponse{Error: "access denied: secret name is in a reserved internal namespace"}, nil
+	}
 
 	value, err := h.Deps.SecretStore.Get(ctx, req.Name)
 	if err != nil {
@@ -162,6 +195,11 @@ func (h *HostServiceServer) SetSecret(ctx context.Context, req *proto.SetSecretR
 			Error: "secret store not available",
 		}, nil
 	}
+	if h.Deps.ReadOnlySecrets {
+		return &proto.SetSecretResponse{
+			Error: "access denied: secret store is read-only for provider plugins",
+		}, nil
+	}
 
 	if err := validateSecretName(req.Name); err != nil {
 		//nolint:nilerr // Error is communicated via response, not gRPC error
@@ -169,6 +207,9 @@ func (h *HostServiceServer) SetSecret(ctx context.Context, req *proto.SetSecretR
 	}
 	if !h.Deps.isSecretAllowed(req.Name) {
 		return &proto.SetSecretResponse{Error: "access denied: secret name outside allowed scope"}, nil
+	}
+	if h.Deps.isSecretDenied(req.Name) {
+		return &proto.SetSecretResponse{Error: "access denied: secret name is in a reserved internal namespace"}, nil
 	}
 
 	if err := h.Deps.SecretStore.Set(ctx, req.Name, []byte(req.Value)); err != nil {
@@ -187,6 +228,11 @@ func (h *HostServiceServer) DeleteSecret(ctx context.Context, req *proto.DeleteS
 			Error: "secret store not available",
 		}, nil
 	}
+	if h.Deps.ReadOnlySecrets {
+		return &proto.DeleteSecretResponse{
+			Error: "access denied: secret store is read-only for provider plugins",
+		}, nil
+	}
 
 	if err := validateSecretName(req.Name); err != nil {
 		//nolint:nilerr // Error is communicated via response, not gRPC error
@@ -194,6 +240,9 @@ func (h *HostServiceServer) DeleteSecret(ctx context.Context, req *proto.DeleteS
 	}
 	if !h.Deps.isSecretAllowed(req.Name) {
 		return &proto.DeleteSecretResponse{Error: "access denied: secret name outside allowed scope"}, nil
+	}
+	if h.Deps.isSecretDenied(req.Name) {
+		return &proto.DeleteSecretResponse{Error: "access denied: secret name is in a reserved internal namespace"}, nil
 	}
 
 	if err := h.Deps.SecretStore.Delete(ctx, req.Name); err != nil {
@@ -228,6 +277,17 @@ func (h *HostServiceServer) ListSecrets(ctx context.Context, req *proto.ListSecr
 		filtered := make([]string, 0, len(names))
 		for _, n := range names {
 			if strings.HasPrefix(n, h.Deps.AllowedSecretPrefix) {
+				filtered = append(filtered, n)
+			}
+		}
+		names = filtered
+	}
+
+	// Exclude denied internal secret prefixes
+	if len(h.Deps.DeniedSecretPrefixes) > 0 {
+		filtered := make([]string, 0, len(names))
+		for _, n := range names {
+			if !h.Deps.isSecretDenied(n) {
 				filtered = append(filtered, n)
 			}
 		}
@@ -332,7 +392,7 @@ func (h *HostServiceServer) ListAuthHandlers(ctx context.Context, _ *proto.ListA
 
 // GetAuthToken implements HostService.GetAuthToken
 func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuthTokenRequest) (*proto.GetAuthTokenResponse, error) {
-	if h.Deps.AuthTokenFunc == nil {
+	if h.Deps.AuthTokenFunc == nil && h.Deps.AuthTokenWithHostnameFunc == nil {
 		return &proto.GetAuthTokenResponse{
 			Error: "auth token service not available",
 		}, nil
@@ -366,7 +426,24 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 		ctx = auth.WithProfileResolved(ctx)
 	}
 
-	resp, err := h.Deps.AuthTokenFunc(ctx, req.HandlerName, req.Scope, req.MinValidForSeconds, req.ForceRefresh)
+	if h.Deps.HostConfig != nil && config.FromContext(ctx) == nil {
+		ctx = config.WithConfig(ctx, h.Deps.HostConfig)
+	}
+
+	var (
+		resp *proto.GetAuthTokenResponse
+		err  error
+	)
+	switch {
+	case h.Deps.AuthTokenWithHostnameFunc != nil:
+		resp, err = h.Deps.AuthTokenWithHostnameFunc(ctx, req.HandlerName, req.Scope, req.Hostname, req.MinValidForSeconds, req.ForceRefresh)
+	case req.Hostname != "":
+		return &proto.GetAuthTokenResponse{
+			Error: "auth token service does not support hostname selection",
+		}, nil
+	default:
+		resp, err = h.Deps.AuthTokenFunc(ctx, req.HandlerName, req.Scope, req.MinValidForSeconds, req.ForceRefresh)
+	}
 	if err != nil {
 		return &proto.GetAuthTokenResponse{
 			Error: fmt.Sprintf("get auth token: %v", err),
@@ -666,14 +743,41 @@ func (c *HostServiceClient) ListAuthHandlers(ctx context.Context) (handlers []st
 	return resp.HandlerNames, resp.DefaultHandler, nil
 }
 
+// AuthTokenRequest configures a HostServiceClient.GetAuthTokenWithOptions call.
+type AuthTokenRequest struct {
+	Handler            string `json:"handler" yaml:"handler" doc:"Auth handler name" maxLength:"128" example:"github"`
+	Scope              string `json:"scope,omitempty" yaml:"scope,omitempty" doc:"Requested OAuth scope" maxLength:"2048" example:"read:user"`
+	MinValidForSeconds int64  `json:"minValidForSeconds,omitempty" yaml:"minValidForSeconds,omitempty" doc:"Minimum remaining token validity in seconds" maximum:"86400" example:"60"`
+	ForceRefresh       bool   `json:"forceRefresh,omitempty" yaml:"forceRefresh,omitempty" doc:"Bypass cached tokens and force refresh"`
+	Profile            string `json:"profile,omitempty" yaml:"profile,omitempty" doc:"Auth profile override" maxLength:"128" example:"work"`
+	Hostname           string `json:"hostname,omitempty" yaml:"hostname,omitempty" doc:"Cluster or server hostname for token_hostname handlers" maxLength:"512" example:"prod-east"`
+}
+
 // GetAuthToken retrieves a valid access token from the host's auth registry.
 func (c *HostServiceClient) GetAuthToken(ctx context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) {
-	resp, err := c.client.GetAuthToken(ctx, &proto.GetAuthTokenRequest{
-		HandlerName:        handler,
+	return c.GetAuthTokenWithOptions(ctx, AuthTokenRequest{
+		Handler:            handler,
 		Scope:              scope,
 		MinValidForSeconds: minValidFor,
 		ForceRefresh:       forceRefresh,
-		Profile:            auth.ProfileFromContext(ctx),
+	})
+}
+
+// GetAuthTokenWithOptions retrieves a valid access token from the host's auth
+// registry using structured options, including optional per-instance Hostname
+// and Profile override (falling back to auth.ProfileFromContext(ctx)).
+func (c *HostServiceClient) GetAuthTokenWithOptions(ctx context.Context, opts AuthTokenRequest) (*proto.GetAuthTokenResponse, error) {
+	profile := opts.Profile
+	if profile == "" {
+		profile = auth.ProfileFromContext(ctx)
+	}
+	resp, err := c.client.GetAuthToken(ctx, &proto.GetAuthTokenRequest{
+		HandlerName:        opts.Handler,
+		Scope:              opts.Scope,
+		MinValidForSeconds: opts.MinValidForSeconds,
+		ForceRefresh:       opts.ForceRefresh,
+		Profile:            profile,
+		Hostname:           opts.Hostname,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("host GetAuthToken: %w", err)
@@ -706,49 +810,80 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 	if authReg == nil {
 		return nil
 	}
+	tokenWithHostname := func(ctx context.Context, handler, scope, hostname string, minValidFor int64, forceRefresh bool) *proto.GetAuthTokenResponse {
+		if auth.RegistryFromContext(ctx) == nil {
+			ctx = auth.WithRegistry(ctx, authReg)
+		}
+		// Resolve empty handler name to the default (first registered) handler.
+		if handler == "" {
+			handlers := authReg.List()
+			if len(handlers) == 0 {
+				return &proto.GetAuthTokenResponse{
+					Error: "no auth handlers registered",
+				}
+			}
+			handler = handlers[0]
+		}
+		h, err := authReg.GetContext(ctx, handler)
+		if err != nil {
+			return &proto.GetAuthTokenResponse{
+				Error: fmt.Sprintf("auth handler %q: %v", handler, err),
+			}
+		}
+		var resolvedHostname string
+		if rawHostname := strings.TrimSpace(hostname); rawHostname != "" {
+			if !auth.HasCapability(h.Capabilities(), auth.CapTokenHostname) {
+				return &proto.GetAuthTokenResponse{
+					Error: fmt.Sprintf("auth handler %q does not support per-request hostname %q (missing %s capability)", handler, rawHostname, auth.CapTokenHostname),
+				}
+			}
+			resolved, rErr := hostnameresolver.Resolve(ctx, handler, rawHostname)
+			if rErr != nil {
+				return &proto.GetAuthTokenResponse{
+					Error: fmt.Sprintf("resolve hostname %q for %q: %v", rawHostname, handler, rErr),
+				}
+			}
+			resolvedHostname = resolved
+		}
+		// Clamp to non-negative so a malicious/buggy plugin cannot
+		// bypass the DefaultMinValidFor fallback in token acquisition.
+		if minValidFor < 0 {
+			minValidFor = 0
+		}
+		token, err := h.GetToken(ctx, auth.TokenOptions{
+			Scope:        scope,
+			MinValidFor:  time.Duration(minValidFor) * time.Second,
+			ForceRefresh: forceRefresh,
+			Hostname:     resolvedHostname,
+		})
+		if err != nil {
+			return &proto.GetAuthTokenResponse{
+				Error: fmt.Sprintf("get token from %q: %v", handler, err),
+			}
+		}
+		if token == nil || token.AccessToken == "" {
+			return &proto.GetAuthTokenResponse{
+				Error: fmt.Sprintf("get token from %q: handler returned empty token", handler),
+			}
+		}
+		return &proto.GetAuthTokenResponse{
+			AccessToken:   token.AccessToken,
+			TokenType:     token.TokenType,
+			ExpiresAtUnix: token.ExpiresAt.Unix(),
+			Scope:         token.Scope,
+		}
+	}
+
 	return &HostServiceDeps{
 		// One broker per deps: the login wrapper and the HostServiceServer
 		// for the same plugin client share this instance (the pointer
 		// survives the struct copies WithSecretScope makes).
 		PromptBroker: &AuthPromptBroker{},
 		AuthTokenFunc: func(ctx context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) {
-			// Resolve empty handler name to the default (first registered) handler.
-			if handler == "" {
-				handlers := authReg.List()
-				if len(handlers) == 0 {
-					return &proto.GetAuthTokenResponse{
-						Error: "no auth handlers registered",
-					}, nil
-				}
-				handler = handlers[0]
-			}
-			h, err := authReg.Get(handler)
-			if err != nil {
-				return &proto.GetAuthTokenResponse{
-					Error: fmt.Sprintf("auth handler %q: %v", handler, err),
-				}, nil
-			}
-			// Clamp to non-negative so a malicious/buggy plugin cannot
-			// bypass the DefaultMinValidFor fallback in token acquisition.
-			if minValidFor < 0 {
-				minValidFor = 0
-			}
-			token, err := h.GetToken(ctx, auth.TokenOptions{
-				Scope:        scope,
-				MinValidFor:  time.Duration(minValidFor) * time.Second,
-				ForceRefresh: forceRefresh,
-			})
-			if err != nil {
-				return &proto.GetAuthTokenResponse{
-					Error: fmt.Sprintf("get token from %q: %v", handler, err),
-				}, nil
-			}
-			return &proto.GetAuthTokenResponse{
-				AccessToken:   token.AccessToken,
-				TokenType:     token.TokenType,
-				ExpiresAtUnix: token.ExpiresAt.Unix(),
-				Scope:         token.Scope,
-			}, nil
+			return tokenWithHostname(ctx, handler, scope, "", minValidFor, forceRefresh), nil
+		},
+		AuthTokenWithHostnameFunc: func(ctx context.Context, handler, scope, hostname string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) {
+			return tokenWithHostname(ctx, handler, scope, hostname, minValidFor, forceRefresh), nil
 		},
 		AuthHandlersFunc: func(_ context.Context) ([]string, string, error) {
 			handlers := authReg.List()
@@ -845,22 +980,88 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 	}
 }
 
-// AuthClientOptsFromContext extracts the auth registry from ctx and returns
-// ClientOption(s) that wire host-side auth deps into plugin clients.
-// Returns nil when no auth registry is available in the context.
+// AuthClientOptsFromContext extracts the auth registry and secret store from ctx
+// and returns ClientOption(s) that wire host-side deps into plugin clients.
+// Returns nil when neither an auth registry nor a secret store is in context.
 func AuthClientOptsFromContext(ctx context.Context) []ClientOption {
 	authReg := auth.RegistryFromContext(ctx)
-	if authReg == nil {
+	secretStore := secrets.FromContext(ctx)
+	if authReg == nil && secretStore == nil {
 		return nil
 	}
-	deps := HostDepsFromAuthRegistry(authReg)
+	var deps *HostServiceDeps
+	if authReg != nil {
+		deps = HostDepsFromAuthRegistry(authReg)
+		if deps != nil {
+			// Wire profile resolution so plugin providers inherit the host's active
+			// auth profile (from --auth-profile flag or config activeProfile).
+			deps.ProfileResolverFunc = func(handlerName string) string {
+				return auth.ResolveActiveProfile(ctx, handlerName)
+			}
+		}
+	}
 	if deps == nil {
+		deps = &HostServiceDeps{}
+	}
+	if secretStore != nil {
+		deps.SecretStore = secretStore
+	}
+	deps.HostConfig = config.FromContext(ctx)
+	deps.providerDeniedPrefixes = deniedSecretPrefixesFromContext(ctx)
+	return []ClientOption{WithHostDeps(deps)}
+}
+
+func deniedSecretPrefixesFromContext(ctx context.Context) []string {
+	prefixes := []string{secrets.InternalSecretPrefix}
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		for _, existing := range prefixes {
+			if existing == p {
+				return
+			}
+		}
+		prefixes = append(prefixes, p)
+	}
+	add(secrets.InternalSecretPrefixFor(paths.AppName()))
+	if bin := settings.BinaryNameFromContext(ctx); bin != "" {
+		add(secrets.InternalSecretPrefixFor(settings.SanitizeBinaryName(bin)))
+		add(secrets.InternalSecretPrefixFor(bin))
+	}
+	return prefixes
+}
+
+// providerPluginHostDeps returns a shallow copy of src enforcing read-only,
+// internal-prefix-isolated secret store access for ProviderPlugin clients,
+// without mutating src (which may also be passed to AuthHandlerPlugin clients).
+func providerPluginHostDeps(src *HostServiceDeps) *HostServiceDeps {
+	if src == nil {
 		return nil
 	}
-	// Wire profile resolution so plugin providers inherit the host's active
-	// auth profile (from --auth-profile flag or config activeProfile).
-	deps.ProfileResolverFunc = func(handlerName string) string {
-		return auth.ResolveActiveProfile(ctx, handlerName)
+	cp := *src
+	cp.ReadOnlySecrets = true
+
+	denied := make([]string, 0, len(src.DeniedSecretPrefixes)+len(src.providerDeniedPrefixes)+2)
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		for _, existing := range denied {
+			if existing == p {
+				return
+			}
+		}
+		denied = append(denied, p)
 	}
-	return []ClientOption{WithHostDeps(deps)}
+	add(secrets.InternalSecretPrefix)
+	add(secrets.InternalSecretPrefixFor(paths.AppName()))
+	for _, p := range src.DeniedSecretPrefixes {
+		add(p)
+	}
+	for _, p := range src.providerDeniedPrefixes {
+		add(p)
+	}
+	cp.DeniedSecretPrefixes = denied
+	return &cp
 }

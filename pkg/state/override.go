@@ -141,7 +141,7 @@ func alwaysEnabled(enabled *spec.ValueRef) bool {
 		return true
 	}
 	on, ok := enabled.Literal.(bool)
-	return ok && on && enabled.Expr == nil && enabled.Tmpl == nil && enabled.Resolver == nil
+	return ok && on && enabled.Expr == nil && enabled.Tmpl == nil && enabled.Resolver == nil && enabled.Secret == nil && enabled.Token == nil
 }
 
 // materializeExtends returns a copy of cfg in which every extends: load save

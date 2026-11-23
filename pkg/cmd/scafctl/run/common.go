@@ -1436,9 +1436,9 @@ func resolversAcceptAllParameters(resolvers []*resolver.Resolver) bool {
 				}
 				continue
 			}
-			// Non-literal "all" (rslvr/expr/tmpl): could resolve to true at
+			// Non-literal "all" (rslvr/expr/tmpl/scrt/tkn): could resolve to true at
 			// runtime, so fail open and skip typo validation.
-			if allRef.Resolver != nil || allRef.Expr != nil || allRef.Tmpl != nil {
+			if allRef.Resolver != nil || allRef.Expr != nil || allRef.Tmpl != nil || allRef.Secret != nil || allRef.Token != nil {
 				return true
 			}
 		}

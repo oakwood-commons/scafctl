@@ -140,7 +140,7 @@ tmpl: "{{ .name }}"`,
 			var vr ValueRef
 			err := yaml.Unmarshal([]byte(tt.yaml), &vr)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "expected exactly one of rslvr, expr, or tmpl, but found")
+			assert.Contains(t, err.Error(), "expected exactly one of rslvr, expr, tmpl, scrt, or tkn, but found")
 		})
 	}
 }
@@ -817,7 +817,7 @@ func TestValueRef_UnmarshalJSON_MultipleFields_Error(t *testing.T) {
 	var vr ValueRef
 	err := json.Unmarshal([]byte(`{"rslvr":"environment","expr":"_.env"}`), &vr)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "expected exactly one of rslvr, expr, or tmpl, but found")
+	assert.Contains(t, err.Error(), "expected exactly one of rslvr, expr, tmpl, scrt, or tkn, but found")
 }
 
 func TestValueRef_JSON_RoundTrip(t *testing.T) {

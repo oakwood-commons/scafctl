@@ -123,6 +123,20 @@ func checkDynamicInput(inputs map[string]*spec.ValueRef, field, location string)
 			Expression: *vr.Resolver,
 		}
 	}
+	if vr.Secret != nil {
+		return &DynamicPathWarning{
+			Location:   location,
+			Kind:       "scrt",
+			Expression: *vr.Secret,
+		}
+	}
+	if vr.Token != nil {
+		return &DynamicPathWarning{
+			Location:   location,
+			Kind:       "tkn",
+			Expression: vr.Token.Handler,
+		}
+	}
 
 	return nil
 }

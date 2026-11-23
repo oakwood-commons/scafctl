@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -148,6 +149,9 @@ func runServe(ctx context.Context, opts *ServeOptions) error {
 	}
 	if authReg != nil {
 		serverOpts = append(serverOpts, mcpserver.WithServerAuthRegistry(authReg))
+	}
+	if secretStore := secrets.FromContext(ctx); secretStore != nil {
+		serverOpts = append(serverOpts, mcpserver.WithSecretStore(secretStore))
 	}
 	if opts.WorkerPoolSize > 0 {
 		serverOpts = append(serverOpts, mcpserver.WithWorkerPoolSize(opts.WorkerPoolSize))

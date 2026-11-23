@@ -51,6 +51,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/version"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/credentialhelper"
+	"github.com/oakwood-commons/scafctl/pkg/credentials"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/kube"
 	"github.com/oakwood-commons/scafctl/pkg/kube/clusterconfig"
@@ -61,6 +62,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -177,6 +179,12 @@ type RootOptions struct {
 	// startup before config-based or plugin handlers, and appear in
 	// 'auth list' immediately.
 	BuiltinAuthHandlers []auth.Handler
+
+	// SecretStore overrides the shared secrets.Store used by auth handlers,
+	// credential ValueRefs (scrt:), and provider plugin HostService callbacks.
+	// When nil, a default store is initialized via secrets.New using the
+	// active configuration.
+	SecretStore secrets.Store
 
 	// GoTemplateFuncs are custom Go-template functions the embedder compiles
 	// into the binary. They are registered additively at startup (built-ins win
@@ -537,16 +545,28 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				opts.goTemplateFuncsRegistered = true
 			}
 
-			// Initialize shared secrets store with config-aware settings.
+			// Initialize shared secrets store with config-aware settings (or use the
+			// embedder-provided SecretStore when supplied on RootOptions).
 			// Auth handlers that receive this store will not create their own.
-			sharedSecretStore, secretErr := secrets.New(
-				secrets.WithRequireSecureKeyring(cfg.Settings.RequireSecureKeyring),
-				secrets.WithLogger(*lgr),
-				secrets.WithOrphanCleanup(true),
-			)
-			if secretErr != nil {
-				lgr.V(1).Info("shared secrets store unavailable; auth handlers will create their own", "error", secretErr)
+			var sharedSecretStore secrets.Store
+			var secretErr error
+			if opts.SecretStore != nil {
+				sharedSecretStore = opts.SecretStore
+			} else {
+				sharedSecretStore, secretErr = secrets.New(
+					secrets.WithRequireSecureKeyring(cfg.Settings.RequireSecureKeyring),
+					secrets.WithLogger(*lgr),
+					secrets.WithOrphanCleanup(true),
+				)
+				if secretErr != nil {
+					lgr.V(1).Info("shared secrets store unavailable; auth handlers will create their own", "error", secretErr)
+				}
 			}
+			if sharedSecretStore != nil {
+				ctx = secrets.WithStore(ctx, sharedSecretStore)
+			}
+			ctx = credentials.WithResolver(ctx, credentials.NewResolver())
+			ctx = redact.WithTracker(ctx, redact.NewTracker())
 
 			// Initialize auth registry
 			authRegistry := auth.NewRegistry()
@@ -642,6 +662,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				authHostDeps.SecretStore = sharedSecretStore
 			}
 			if authHostDeps != nil {
+				authHostDeps.HostConfig = cfg
 				authHostDeps.ProfileResolverFunc = func(handlerName string) string {
 					return auth.ResolveActiveProfile(cCmd.Context(), handlerName)
 				}

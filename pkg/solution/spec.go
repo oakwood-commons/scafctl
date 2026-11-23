@@ -182,19 +182,34 @@ func (s *Spec) ReferencedProviderNames() []string {
 }
 
 // ReferencedAuthHandlerNames returns the unique, sorted set of auth handler
-// names statically referenced in the solution's resolvers. This scans for
-// identity provider usages with a literal "handler" input value.
-// Dynamic references (CEL expressions, Go templates, resolver refs) are
-// excluded since their values cannot be determined at prepare time.
+// names statically referenced in the solution spec (via the identity provider's
+// literal "handler" input or tkn: ValueRefs across resolvers, workflow actions,
+// finally actions, and spec.calls).
 func (s *Spec) ReferencedAuthHandlerNames() []string {
 	if s == nil {
 		return nil
 	}
 	seen := make(map[string]struct{})
 
-	// Helper: extract handler name from an inputs map if it uses the identity provider.
-	extractHandler := func(provider string, inputs map[string]*resolver.ValueRef) {
-		if provider != "identity" || inputs == nil {
+	addValueRefs := func(m map[string]*spec.ValueRef) {
+		for _, vr := range m {
+			for _, h := range vr.ReferencedAuthHandlers() {
+				seen[h] = struct{}{}
+			}
+		}
+	}
+	addValueRef := func(vr *spec.ValueRef) {
+		for _, h := range vr.ReferencedAuthHandlers() {
+			seen[h] = struct{}{}
+		}
+	}
+
+	// Helper: extract handler name from an inputs map if it uses the identity provider,
+	// plus any tkn: ValueRefs in the map.
+	extractStep := func(providerName string, inputs, args map[string]*resolver.ValueRef) {
+		addValueRefs(inputs)
+		addValueRefs(args)
+		if providerName != "identity" || inputs == nil {
 			return
 		}
 		handlerRef, ok := inputs["handler"]
@@ -213,19 +228,57 @@ func (s *Spec) ReferencedAuthHandlerNames() []string {
 		}
 		if r.Resolve != nil {
 			for _, src := range r.Resolve.With {
-				extractHandler(src.Provider, src.Inputs)
+				extractStep(src.Provider, src.Inputs, src.Args)
+				if src.ForEach != nil {
+					addValueRef(src.ForEach.In)
+				}
 			}
 		}
 		if r.Transform != nil {
 			for _, t := range r.Transform.With {
-				extractHandler(t.Provider, t.Inputs)
+				extractStep(t.Provider, t.Inputs, t.Args)
+				if t.ForEach != nil {
+					addValueRef(t.ForEach.In)
+				}
 			}
 		}
 		if r.Validate != nil {
 			for _, v := range r.Validate.With {
-				extractHandler(v.Provider, v.Inputs)
+				extractStep(v.Provider, v.Inputs, v.Args)
+				addValueRef(v.Message)
 			}
 		}
+		if r.Messages != nil {
+			addValueRef(r.Messages.Error)
+		}
+	}
+
+	if s.Workflow != nil {
+		for _, act := range s.Workflow.Actions {
+			if act == nil {
+				continue
+			}
+			extractStep(act.Provider, act.Inputs, act.Args)
+			if act.ForEach != nil {
+				addValueRef(act.ForEach.In)
+			}
+		}
+		for _, act := range s.Workflow.Finally {
+			if act == nil {
+				continue
+			}
+			extractStep(act.Provider, act.Inputs, act.Args)
+			if act.ForEach != nil {
+				addValueRef(act.ForEach.In)
+			}
+		}
+	}
+
+	for _, c := range s.Calls {
+		if c == nil {
+			continue
+		}
+		extractStep(c.Provider, c.Inputs, nil)
 	}
 
 	if len(seen) == 0 {

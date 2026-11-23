@@ -98,6 +98,7 @@ Action workflows demonstrate executing tasks with dependencies, parallelism, and
 | [go-template-inline.yaml](actions/go-template-inline.yaml) | Inline Go templates with loops/conditionals | `scafctl run solution -f examples/actions/go-template-inline.yaml` |
 | [complex-workflow.yaml](actions/complex-workflow.yaml) | Full CI/CD-style workflow | `scafctl run solution -f examples/actions/complex-workflow.yaml` |
 | [tmpl-with-actions.yaml](actions/tmpl-with-actions.yaml) | Using tmpl: to format __actions results | `scafctl run solution -f examples/actions/tmpl-with-actions.yaml` |
+| [credentials-valueref.yaml](actions/credentials-valueref.yaml) | Inject secrets (`scrt:`) and auth tokens (`tkn:`) with dry-run placeholders and output redaction | `scafctl run solution -f examples/actions/credentials-valueref.yaml --dry-run` |
 
 ---
 

@@ -454,7 +454,7 @@ func newClientWithConnector(
 			return pluginConfig{
 				handshake:          HandshakeConfig,
 				pluginName:         PluginName,
-				grpcPlugin:         &GRPCPlugin{HostDeps: o.hostDeps},
+				grpcPlugin:         &GRPCPlugin{HostDeps: providerPluginHostDeps(o.hostDeps)},
 				cmdFn:              cmdFn,
 				skipHostEnv:        o.sanitizeEnv,
 				logger:             logger,

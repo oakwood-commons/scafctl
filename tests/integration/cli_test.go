@@ -3588,7 +3588,7 @@ func TestIntegration_RunSolution_BadSolutionYAML(t *testing.T) {
 	)
 
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "expected exactly one of rslvr, expr, or tmpl, but found")
+	assert.Contains(t, stderr, "expected exactly one of rslvr, expr, tmpl, scrt, or tkn, but found")
 	assert.Contains(t, stderr, "line")
 }
 
@@ -17095,4 +17095,223 @@ settings:
 		assert.Contains(t, hdr2, "STATUS:200")
 		assert.Equal(t, "<!doctype html><html><body>CACHED-LAZY:mycli:success</body></html>", html2)
 	})
+}
+
+// ── Credential ValueRef (scrt: & tkn:) & Output Redaction ────────────────────
+
+func TestIntegration_CredentialsValueRef_SecretStoreAndRedaction(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skipf("deterministic headless secret store isolation requires linux D-Bus override (skipped on %s)", runtime.GOOS)
+	}
+
+	tmpDir := t.TempDir()
+	dataHome := filepath.Join(tmpDir, "data")
+	cfgHome := filepath.Join(tmpDir, "config")
+	cacheHome := filepath.Join(tmpDir, "cache")
+	proofFile := filepath.Join(tmpDir, "delivered-secret.txt")
+	solPath := filepath.Join(tmpDir, "solution.yaml")
+
+	const secretValue = "super-secret-cred-value-987654"
+
+	baseEnv := map[string]string{
+		"XDG_DATA_HOME":                  dataHome,
+		"XDG_CONFIG_HOME":                cfgHome,
+		"XDG_CACHE_HOME":                 cacheHome,
+		"DBUS_SESSION_BUS_ADDRESS":       "unix:path=/nonexistent/scafctl-cred-test-no-dbus",
+		"SCAFCTL_REQUIRE_SECURE_KEYRING": "false",
+		"GITHUB_ACTIONS":                 "false",
+	}
+	unset := []string{"SCAFCTL_SECRET_KEY"}
+
+	// 1. Store a user secret in the isolated secret store.
+	_, setErr, setExit := runScafctlIsolatedEnv(t, unset, baseEnv, "secrets", "set", "deploy-secret", "--value", secretValue)
+	require.Equal(t, 0, setExit, "secrets set failed: %s", setErr)
+
+	solutionYAML := fmt.Sprintf(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cred-integration-test
+  version: 1.0.0
+  description: End-to-end credential ValueRef injection and redaction test
+spec:
+  calls:
+    write_proof:
+      description: Write secret to target file to verify unredacted delivery to provider
+      provider: file
+      inputs:
+        operation: write
+        path: %q
+        content:
+          scrt: deploy-secret
+
+  resolvers:
+    raw_secret:
+      description: Sensitive secret resolver
+      type: string
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                scrt: deploy-secret
+
+    accidental_echo:
+      description: Non-sensitive resolver whose output accidentally embeds a tracked secret
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"echo=" + _.raw_secret'
+
+  workflow:
+    actions:
+      deliver:
+        description: Deliver secret to file via call
+        call: write_proof
+      log_resolver_only:
+        description: Action consuming only sensitive resolver via rslvr (zero scrt/tkn in action)
+        provider: message
+        inputs:
+          message:
+            rslvr: raw_secret
+          type: info
+      log_attempt:
+        description: Emit message referencing secret to verify stream and result scrubbing
+        dependsOn:
+          - deliver
+          - log_resolver_only
+        provider: message
+        inputs:
+          label:
+            expr: _.accidental_echo
+          message:
+            scrt: deploy-secret
+          type: info
+`, filepath.ToSlash(proofFile))
+	require.NoError(t, os.WriteFile(solPath, []byte(solutionYAML), 0o600))
+
+	// 2. Lint and strict validation pass cleanly with 0 errors and 0 warnings.
+	lintOut, lintErr, lintExit := runScafctlIsolatedEnv(t, unset, baseEnv, "lint", "-f", solPath)
+	assert.Equal(t, 0, lintExit, "lint should pass; stdout=%s stderr=%s", lintOut, lintErr)
+	valOut, valErr, valExit := runScafctlIsolatedEnv(t, unset, baseEnv, "validate", "solution", "-f", solPath, "--strict")
+	assert.Equal(t, 0, valExit, "validate solution --strict should pass; stdout=%s stderr=%s", valOut, valErr)
+
+	// 3. Render solution emits symbolic references and never touches or prints the secret.
+	renderOut, renderErr, renderExit := runScafctlIsolatedEnv(t, unset, baseEnv, "render", "solution", "-f", solPath, "-o", "json")
+	assert.Equal(t, 0, renderExit, "render solution failed: %s", renderErr)
+	assert.Contains(t, renderOut, "scrt:deploy-secret")
+	assert.NotContains(t, renderOut, secretValue)
+	assert.NotContains(t, renderErr, secretValue)
+
+	// 4. Dry-run emits placeholders/deferred refs, does NOT write proofFile, and never leaks secretValue.
+	dryOut, dryErr, dryExit := runScafctlIsolatedEnv(t, unset, baseEnv, "run", "solution", "-f", solPath, "--dry-run", "-o", "json")
+	assert.Equal(t, 0, dryExit, "dry-run failed: %s", dryErr)
+	assert.Contains(t, dryOut, "scrt:deploy-secret")
+	assert.NotContains(t, dryOut, secretValue)
+	assert.NotContains(t, dryErr, secretValue)
+	assert.NoFileExists(t, proofFile)
+
+	// 5. Live run delivers real secret to provider while scrubbing stdout, stderr, ActionResult.Inputs, and non-sensitive resolvers.
+	runOut, runErr, runExit := runScafctlIsolatedEnv(t, unset, baseEnv, "run", "solution", "-f", solPath, "-o", "json")
+	require.Equal(t, 0, runExit, "run solution failed: stdout=%s stderr=%s", runOut, runErr)
+	assert.NotContains(t, runOut, secretValue, "stdout must never contain raw secret")
+	assert.NotContains(t, runErr, secretValue, "stderr must never contain raw secret")
+	assert.Contains(t, runOut, "[REDACTED]")
+
+	deliveredBytes, err := os.ReadFile(proofFile) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, secretValue, string(deliveredBytes), "provider must receive unredacted secret at execution time")
+
+	// 6. With GITHUB_ACTIONS=true, ::add-mask:: workflow command is emitted before execution.
+	ghaEnv := make(map[string]string, len(baseEnv))
+	for k, v := range baseEnv {
+		ghaEnv[k] = v
+	}
+	ghaEnv["GITHUB_ACTIONS"] = "true"
+	ghaOut, ghaErr, ghaExit := runScafctlIsolatedEnv(t, unset, ghaEnv, "run", "solution", "-f", solPath, "-o", "json")
+	require.Equal(t, 0, ghaExit, "run solution under GITHUB_ACTIONS failed: %s", ghaErr)
+	assert.Contains(t, ghaOut+ghaErr, "::add-mask::"+secretValue)
+
+	// 7. Ad-hoc 'scafctl run provider' resolves scrt: via @inputs.yaml and scrubs output.
+	provInputsPath := filepath.Join(tmpDir, "prov-inputs.yaml")
+	require.NoError(t, os.WriteFile(provInputsPath, []byte("message:\n  scrt: deploy-secret\n"), 0o600))
+	provOut, provErr, provExit := runScafctlIsolatedEnv(t, unset, baseEnv,
+		"run", "provider", "message",
+		"@"+provInputsPath,
+		"-o", "json",
+	)
+	assert.Equal(t, 0, provExit, "run provider failed: %s", provErr)
+	assert.NotContains(t, provOut, secretValue)
+	assert.NotContains(t, provErr, secretValue)
+
+	// 8. Reserved internal secret prefix (scafctl.*) is rejected at lint time and runtime.
+	internalSolPath := filepath.Join(tmpDir, "internal-deny.yaml")
+	internalYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cred-internal-deny
+  version: 1.0.0
+spec:
+  workflow:
+    actions:
+      bad:
+        provider: message
+        inputs:
+          message:
+            scrt: scafctl.auth.github.token
+`
+	require.NoError(t, os.WriteFile(internalSolPath, []byte(internalYAML), 0o600))
+
+	badLintOut, badLintErr, badLintExit := runScafctlIsolatedEnv(t, unset, baseEnv, "lint", "-f", internalSolPath, "-o", "json")
+	assert.NotEqual(t, 0, badLintExit)
+	assert.Contains(t, badLintOut+badLintErr, "invalid-credential-ref")
+
+	badRunOut, badRunErr, badRunExit := runScafctlIsolatedEnv(t, unset, baseEnv, "run", "solution", "-f", internalSolPath)
+	assert.NotEqual(t, 0, badRunExit)
+	assert.Contains(t, badRunOut+badRunErr, "reserved internal namespace")
+}
+
+func TestIntegration_CredentialsValueRef_ExplainAndLintRules(t *testing.T) {
+	t.Parallel()
+
+	vrOut, vrErr, vrExit := runScafctl(t, "explain", "valueref")
+	assert.Equal(t, 0, vrExit, "explain valueref failed: %s", vrErr)
+	assert.Contains(t, vrOut, "scrt")
+	assert.Contains(t, vrOut, "tkn")
+
+	tknOut, tknErr, tknExit := runScafctl(t, "explain", "tokenref")
+	assert.Equal(t, 0, tknExit, "explain tokenref failed: %s", tknErr)
+	assert.Contains(t, tknOut, "handler")
+	assert.Contains(t, tknOut, "hostname")
+
+	rule1Out, rule1Err, rule1Exit := runScafctl(t, "lint", "explain", "invalid-credential-ref")
+	assert.Equal(t, 0, rule1Exit, "lint explain invalid-credential-ref failed: %s", rule1Err)
+	assert.Contains(t, rule1Out, "invalid-credential-ref")
+
+	rule2Out, rule2Err, rule2Exit := runScafctl(t, "lint", "explain", "unmarked-sensitive-credential-resolver")
+	assert.Equal(t, 0, rule2Exit, "lint explain unmarked-sensitive-credential-resolver failed: %s", rule2Err)
+	assert.Contains(t, rule2Out, "sensitive: true")
+}
+
+func TestIntegration_CredentialsValueRef_SolutionFixture(t *testing.T) {
+	t.Parallel()
+
+	const fixture = "tests/integration/solutions/credentials/solution.yaml"
+
+	lintOut, lintErr, lintExit := runScafctl(t, "lint", "-f", fixture)
+	assert.Equal(t, 0, lintExit, "lint failed: stdout=%s stderr=%s", lintOut, lintErr)
+
+	valOut, valErr, valExit := runScafctl(t, "validate", "solution", "-f", fixture, "--strict")
+	assert.Equal(t, 0, valExit, "validate solution --strict failed: stdout=%s stderr=%s", valOut, valErr)
+
+	renderOut, renderErr, renderExit := runScafctl(t, "render", "solution", "-f", fixture, "-o", "json")
+	assert.Equal(t, 0, renderExit, "render solution failed: %s", renderErr)
+	assert.Contains(t, renderOut, "scrt:service-shared-secret")
+
+	dryOut, dryErr, dryExit := runScafctl(t, "run", "solution", "-f", fixture, "--dry-run", "-o", "json")
+	assert.Equal(t, 0, dryExit, "dry-run failed: %s", dryErr)
+	assert.Contains(t, dryOut, "scrt:service-shared-secret")
 }

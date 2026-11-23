@@ -7,8 +7,10 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/credentials"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -21,6 +23,7 @@ type contextConfig struct {
 	config       *config.Config
 	logger       *logr.Logger
 	authRegistry *auth.Registry
+	secretStore  secrets.Store
 	settings     *settings.Run
 	ioStreams    *terminal.IOStreams
 }
@@ -45,6 +48,13 @@ func WithLogger(lgr logr.Logger) ContextOption {
 func WithAuthRegistry(reg *auth.Registry) ContextOption {
 	return func(c *contextConfig) {
 		c.authRegistry = reg
+	}
+}
+
+// WithContextSecretStore injects a secret store into the MCP context.
+func WithContextSecretStore(store secrets.Store) ContextOption {
+	return func(c *contextConfig) {
+		c.secretStore = store
 	}
 }
 
@@ -101,6 +111,12 @@ func NewContext(opts ...ContextOption) context.Context {
 		authReg = auth.NewRegistry()
 	}
 	ctx = auth.WithRegistry(ctx, authReg)
+
+	// Secret store and credential resolver
+	if cfg.secretStore != nil {
+		ctx = secrets.WithStore(ctx, cfg.secretStore)
+	}
+	ctx = credentials.WithResolver(ctx, credentials.NewResolver())
 
 	// Settings
 	s := cfg.settings

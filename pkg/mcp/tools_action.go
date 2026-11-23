@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // registerActionTools registers action-related MCP tools.
@@ -111,6 +112,9 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	if bundleCwd, cwdErr := os.Getwd(); cwdErr == nil && bundleCwd != originalCwd {
 		ctx = provider.WithWorkingDirectory(ctx, bundleCwd)
 	}
+
+	// Preview never accesses keyrings or mints live tokens.
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
 
 	// Separate action context resolves paths against the caller's CWD.
 	actionCtx := provider.WithWorkingDirectory(ctx, originalCwd)
@@ -248,18 +252,11 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 			}
 		}
 
-		// Map deferred inputs to their expression strings
+		// Map deferred inputs to their symbolic expression/credential summaries
 		if len(ea.DeferredInputs) > 0 {
 			preview.DeferredInputs = make(map[string]string, len(ea.DeferredInputs))
 			for k, v := range ea.DeferredInputs {
-				expr := v.OriginalExpr
-				if expr == "" {
-					expr = v.OriginalTmpl
-				}
-				if expr == "" && v.Deferred {
-					expr = "(deferred)"
-				}
-				preview.DeferredInputs[k] = expr
+				preview.DeferredInputs[k] = v.Summary()
 			}
 		}
 

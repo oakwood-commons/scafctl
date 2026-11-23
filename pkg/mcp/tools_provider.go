@@ -425,6 +425,9 @@ func (s *Server) handleGetProviderOutputShape(ctx context.Context, request mcp.C
 
 // handleRunProvider executes a provider directly and returns structured output.
 func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.ctx != nil {
+		ctx = mergeContext(ctx, s.ctx)
+	}
 	name, err := request.RequireString("provider")
 	if err != nil {
 		return newStructuredError(ErrCodeInvalidInput, err.Error(),

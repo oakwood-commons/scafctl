@@ -6,10 +6,12 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -34,6 +36,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/validationprovider"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
@@ -3013,4 +3016,126 @@ func TestAPI_HostAllowlist(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestAPI_Solutions_CredentialsAndRedaction(t *testing.T) {
+	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+
+	store := secrets.NewMockStore()
+	const apiSecret = "api-server-super-secret-556677"
+	store.Data["api-deploy-secret"] = []byte(apiSecret)
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(staticprovider.New()))
+	require.NoError(t, reg.Register(celprovider.NewCelProvider()))
+	require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
+	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+		api.WithServerCompositeRegistry(provider.NewCompositeRegistryFromBase(reg)),
+		api.WithServerPluginPool(&mockPluginPool{}),
+		api.WithServerSecretStore(store),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+	endpoints.RegisterAll(srv.API(), srv.Router(), srv.HandlerCtx())
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	outDir := t.TempDir()
+	proofFile := filepath.Join(outDir, "api-delivered.txt")
+
+	// Crucially, workflow actions consume ONLY rslvr: bearer_secret (zero scrt:/tkn:
+	// in workflow.actions) to verify run-scoped redact.Tracker propagation from
+	// resolver execution into action execution and HTTP response serialization.
+	content := fmt.Sprintf(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: api-credentials-test
+  version: 1.0.0
+  description: API server credential resolution and redaction test
+spec:
+  resolvers:
+    bearer_secret:
+      type: string
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                scrt: api-deploy-secret
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"Bearer " + __self'
+  workflow:
+    actions:
+      write_file:
+        provider: file
+        inputs:
+          operation: write
+          path: %q
+          content:
+            rslvr: bearer_secret
+      echo_header:
+        dependsOn:
+          - write_file
+        provider: message
+        inputs:
+          message:
+            rslvr: bearer_secret
+`, filepath.ToSlash(proofFile))
+
+	solServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-yaml")
+		_, _ = w.Write([]byte(content))
+	}))
+	defer solServer.Close()
+	solURL := solServer.URL + "/solution.yaml"
+
+	// 1. POST /v1/solutions/render returns placeholder without touching live secrets.
+	renderObj := e.POST("/v1/solutions/render").
+		WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
+		Expect().
+		Status(http.StatusOK).
+		JSON().Object()
+	renderObj.Value("resolverData").Object().HasValue("bearer_secret", "Bearer <redacted:scrt:api-deploy-secret>")
+
+	// 2. POST /v1/solutions/dryrun emits preview without writing file or leaking secret.
+	dryBody := e.POST("/v1/solutions/dryrun").
+		WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort", "verbose": true}).
+		Expect().
+		Status(http.StatusOK).
+		Body().Raw()
+	assert.NotContains(t, dryBody, apiSecret)
+	assert.NoFileExists(t, proofFile)
+
+	// 3. POST /v1/solutions/run delivers real secret to file while scrubbing resolverData and actionResult!
+	runBody := e.POST("/v1/solutions/run").
+		WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
+		Expect().
+		Status(http.StatusOK).
+		Body().Raw()
+	assert.NotContains(t, runBody, apiSecret, "API run response must scrub resolved secrets")
+	assert.Contains(t, runBody, "[REDACTED]")
+
+	gotBytes, err := os.ReadFile(proofFile) //nolint:gosec // test path
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer "+apiSecret, string(gotBytes))
 }

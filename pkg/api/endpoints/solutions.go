@@ -20,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/executionregistry"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
@@ -27,6 +28,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // ── Request / Response types ──
@@ -217,9 +219,15 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 			return nil, err
 		}
 
+		ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+		var resolverData map[string]any
+		if sol.Spec.HasResolvers() {
+			resolverData, _ = execute.ResolversForPreview(ctx, sol, nil, executionRegistry)
+		}
 		opts := dryrun.Options{
-			Registry: executionRegistry,
-			Verbose:  input.Body.Verbose,
+			Registry:     executionRegistry,
+			ResolverData: resolverData,
+			Verbose:      input.Body.Verbose,
 		}
 		report, err := dryrun.Generate(ctx, sol, opts)
 		if err != nil {
@@ -275,6 +283,10 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 			return nil, huma.NewError(http.StatusUnprocessableEntity, fmt.Sprintf("solution validation failed: %v", validation.Errors))
 		}
 
+		if redact.FromContext(ctx) == nil {
+			ctx = redact.WithTracker(ctx, redact.NewTracker())
+		}
+
 		// Execute resolvers
 		resolverCfg := execute.ResolverExecutionConfigFromContext(ctx)
 		resolverResult, err := execute.Resolvers(ctx, sol, input.Body.Params, executionRegistry, resolverCfg)
@@ -283,7 +295,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		}
 
 		resp := &SolutionRunResponse{}
-		resp.Body.ResolverData = resolverResult.Data
+		resp.Body.ResolverData = redact.FromContext(ctx).RedactMap(resolverResult.Data)
 
 		// Execute actions if workflow exists. Like the CLI, actions resolve
 		// relative output paths against the caller's working directory, while

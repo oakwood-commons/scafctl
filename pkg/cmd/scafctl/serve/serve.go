@@ -26,6 +26,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
@@ -225,6 +226,9 @@ func runServe(ctx context.Context, opts *Options) error {
 	}
 	if authReg != nil {
 		serverOpts = append(serverOpts, api.WithServerAuthRegistry(authReg))
+	}
+	if secretStore := secrets.FromContext(ctx); secretStore != nil {
+		serverOpts = append(serverOpts, api.WithServerSecretStore(secretStore))
 	}
 	if pluginFetcher != nil {
 		serverOpts = append(serverOpts, api.WithServerPluginFetcher(pluginFetcher))

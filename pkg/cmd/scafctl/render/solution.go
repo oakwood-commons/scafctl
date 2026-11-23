@@ -30,6 +30,7 @@ import (
 	solrender "github.com/oakwood-commons/scafctl/pkg/solution/render"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
@@ -306,6 +307,10 @@ func (o *SolutionOptions) getEffectiveResolverConfig(ctx context.Context) solren
 // Run executes the render solution command
 func (o *SolutionOptions) Run(ctx context.Context) error {
 	lgr := logger.FromContext(ctx)
+
+	// Render never touches keyrings or mints live tokens; resolver-side scrt:/tkn:
+	// references emit symbolic placeholder strings.
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
 
 	// Detect @- / -f - conflict early: stdin can only be consumed once.
 	if o.File == "-" && flags.ContainsStdinRef(o.ResolverParams) {

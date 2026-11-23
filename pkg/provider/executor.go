@@ -6,8 +6,10 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -167,6 +169,14 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	// Check if this is a dry-run
 	dryRun := DryRunFromContext(ctx)
 
+	// Ensure a redaction tracker is active before resolving inputs so any scrt:/tkn:
+	// credentials resolved by InputResolver or upstream callers are scrubbed.
+	tracker := redact.FromContext(ctx)
+	if tracker == nil {
+		tracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, tracker)
+	}
+
 	// Start timing
 	startTime := time.Now()
 
@@ -176,17 +186,17 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	// Resolve inputs
 	resolvedInputs, err := inputResolver.ResolveInputs(inputs)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve inputs: %w", err)
+		return nil, tracker.RedactError(fmt.Errorf("failed to resolve inputs: %w", err))
 	}
 
 	// Check for write operations in resolver context
 	if err := ValidateWriteOperation(ctx, provider, resolvedInputs); err != nil {
-		return nil, err
+		return nil, tracker.RedactError(err)
 	}
 
 	// Validate resolved inputs
 	if err := e.schemaValidator.ValidateInputs(resolvedInputs, desc.Schema); err != nil {
-		return nil, fmt.Errorf("input validation failed: %w", err)
+		return nil, tracker.RedactError(fmt.Errorf("input validation failed: %w", err))
 	}
 
 	// Determine what to pass to Execute:
@@ -196,13 +206,48 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	if desc.Decode != nil {
 		decoded, err := desc.Decode(resolvedInputs)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode inputs: %w", err)
+			return nil, tracker.RedactError(fmt.Errorf("failed to decode inputs: %w", err))
 		}
 		executionInput = decoded
 	}
 
+	// Wrap IOStreams with rolling holdback redaction and emit GitHub Actions
+	// workflow mask commands before executing the provider when credentials
+	// have been tracked in this execution context.
+	execCtx := ctx
+	var outSW, errSW *redact.StreamWriter
+	if tracker.Count() > 0 {
+		if streams, ok := IOStreamsFromContext(ctx); ok && streams != nil {
+			if streams.Out != nil {
+				tracker.EmitGitHubActionsMasks(streams.Out)
+				outSW = redact.NewStreamWriter(streams.Out, tracker)
+			} else {
+				tracker.EmitGitHubActionsMasks(os.Stdout)
+			}
+			if streams.ErrOut != nil {
+				errSW = redact.NewStreamWriter(streams.ErrOut, tracker)
+			}
+			wrapped := *streams
+			if outSW != nil {
+				wrapped.Out = outSW
+			}
+			if errSW != nil {
+				wrapped.ErrOut = errSW
+			}
+			execCtx = WithIOStreams(ctx, &wrapped)
+		} else {
+			tracker.EmitGitHubActionsMasks(os.Stdout)
+		}
+	}
+
 	// Execute the provider with either typed input or map
-	outputPtr, err := provider.Execute(ctx, executionInput)
+	outputPtr, err := provider.Execute(execCtx, executionInput)
+	if outSW != nil {
+		_ = outSW.Flush()
+	}
+	if errSW != nil {
+		_ = errSW.Flush()
+	}
 
 	// Calculate execution duration
 	executionDuration := time.Since(startTime)
@@ -211,9 +256,10 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	GlobalMetrics.Record(ctx, desc.Name, executionDuration, err == nil)
 
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, fmt.Errorf("provider execution failed: %w", err)
+		redactedErr := tracker.RedactError(fmt.Errorf("provider execution failed: %w", err))
+		span.RecordError(redactedErr)
+		span.SetStatus(codes.Error, redactedErr.Error())
+		return nil, redactedErr
 	}
 	if outputPtr == nil {
 		nilErr := fmt.Errorf("provider returned nil output")
@@ -222,6 +268,8 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 		return nil, nilErr
 	}
 	output := *outputPtr
+	output.Warnings = tracker.RedactSlice(output.Warnings)
+	output.Metadata = tracker.RedactMap(output.Metadata)
 
 	// Output validation is intentionally not performed per-capability here.
 	// The executor operates at the provider level and does not know which
@@ -233,13 +281,13 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	// single-responsibility boundary between provider execution and
 	// solution orchestration.
 
-	// Build result
+	// Build result (scrubbing ResolvedInputs so debugging fields never retain raw credentials)
 	result := &ExecutionResult{
 		Provider:          provider,
 		Output:            output,
 		DryRun:            dryRun,
 		ExecutionDuration: executionDuration,
-		ResolvedInputs:    resolvedInputs,
+		ResolvedInputs:    tracker.RedactMap(resolvedInputs),
 	}
 
 	return result, nil

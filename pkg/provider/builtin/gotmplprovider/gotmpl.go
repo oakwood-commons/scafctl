@@ -1591,6 +1591,12 @@ func isValueRefShapedData(dataMap map[string]any) bool {
 	if _, ok := dataMap["tmpl"]; ok {
 		return true
 	}
+	if _, ok := dataMap["scrt"]; ok {
+		return true
+	}
+	if _, ok := dataMap["tkn"]; ok {
+		return true
+	}
 	return false
 }
 

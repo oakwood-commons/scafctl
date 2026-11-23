@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // RegistryAdapter adapts provider.Registry to action.RegistryInterface and
@@ -154,6 +155,10 @@ type ProviderLookUp interface {
 // runResolvers executes the given resolvers and returns the populated resolver
 // context. Calls are wired from the solution when present.
 func runResolvers(ctx context.Context, sol *solution.Solution, resolvers []*resolver.Resolver, params map[string]any, registry ProviderLookUp, cfg ResolverConfig, extraOpts ...resolver.ExecutorOption) (*resolver.Context, error) {
+	// Render never touches keyrings or mints live tokens; resolver-side scrt:/tkn:
+	// references emit symbolic placeholder strings.
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+
 	var opts []resolver.ExecutorOption
 	if sol.Spec.HasCalls() {
 		opts = append(opts, resolver.WithCalls(sol.Spec.Calls))

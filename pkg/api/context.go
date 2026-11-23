@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
@@ -45,6 +46,7 @@ type HandlerContext struct {
 	Config           *config.Config
 	ProviderRegistry *provider.Registry
 	AuthRegistry     *auth.Registry
+	SecretStore      secrets.Store
 	Logger           logr.Logger
 	IsShuttingDown   *int32
 	StartTime        time.Time

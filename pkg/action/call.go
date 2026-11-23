@@ -8,8 +8,6 @@ import (
 	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/call"
-	"github.com/oakwood-commons/scafctl/pkg/celexp"
-	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
@@ -41,6 +39,16 @@ func (e *Executor) expandActionCall(ctx context.Context, action *ExpandedAction,
 
 	additionalVars := e.buildAdditionalVars(aliasMap)
 
+	var iterCtx *spec.IterationContext
+	if action.ForEachMetadata != nil && action.ForEach != nil {
+		iterCtx = &spec.IterationContext{
+			Item:       action.ForEachMetadata.Item,
+			Index:      action.ForEachMetadata.Index,
+			ItemAlias:  action.ForEach.Item,
+			IndexAlias: action.ForEach.Index,
+		}
+	}
+
 	// Resolve each call-site argument in the action's context (resolver data plus
 	// the __actions namespace for args that read prior action results).
 	resolvedArgs := make(map[string]any, len(action.Args))
@@ -48,7 +56,7 @@ func (e *Executor) expandActionCall(ctx context.Context, action *ExpandedAction,
 		if vr == nil {
 			return nil, fmt.Errorf("call %q: argument %q has no value (nil)", action.Call, name)
 		}
-		v, err := e.resolveArgRef(ctx, vr, additionalVars)
+		v, err := e.resolveArgRef(ctx, vr, additionalVars, iterCtx)
 		if err != nil {
 			return nil, fmt.Errorf("call %q: failed to resolve argument %q: %w", action.Call, name, err)
 		}
@@ -67,7 +75,7 @@ func (e *Executor) expandActionCall(ctx context.Context, action *ExpandedAction,
 		if vr == nil {
 			return nil, fmt.Errorf("call %q: definition input %q has no value (nil)", action.Call, name)
 		}
-		resolved, err := vr.Resolve(ctx, enriched, nil)
+		resolved, err := vr.ResolveWithIterationContext(ctx, enriched, nil, iterCtx)
 		if err != nil {
 			return nil, fmt.Errorf("call %q: failed to resolve definition input %q: %w", action.Call, name, err)
 		}
@@ -90,32 +98,8 @@ func (e *Executor) expandActionCall(ctx context.Context, action *ExpandedAction,
 }
 
 // resolveArgRef resolves a single call-site argument ValueRef. Arguments that
-// reference the __actions namespace are evaluated against the merged action data
-// (mirroring deferred input evaluation); all others resolve against resolver data.
-func (e *Executor) resolveArgRef(ctx context.Context, vr *spec.ValueRef, additionalVars map[string]any) (any, error) {
-	if vr.ReferencesVariable(celexp.VarActions) {
-		if vr.Expr != nil {
-			return celexp.EvaluateExpression(ctx, string(*vr.Expr), e.resolverData, additionalVars)
-		}
-		if vr.Tmpl != nil {
-			templateData := make(map[string]any, len(e.resolverData)+len(additionalVars))
-			for k, v := range e.resolverData {
-				templateData[k] = v
-			}
-			for k, v := range additionalVars {
-				templateData[k] = v
-			}
-			result, err := gotmpl.Execute(ctx, gotmpl.TemplateOptions{
-				Content:    string(*vr.Tmpl),
-				Data:       templateData,
-				MissingKey: gotmpl.MissingKeyError,
-			})
-			if err != nil {
-				return nil, err
-			}
-			return result.Output, nil
-		}
-		return nil, fmt.Errorf("argument references %s but is not an expression or template", celexp.VarActions)
-	}
-	return vr.Resolve(ctx, e.resolverData, nil)
+// reference the __actions namespace, aliases, or credentials are evaluated
+// against the merged action data and iteration context.
+func (e *Executor) resolveArgRef(ctx context.Context, vr *spec.ValueRef, additionalVars map[string]any, iterCtx *spec.IterationContext) (any, error) {
+	return evaluateValueRefWithActionVars(ctx, vr, e.resolverData, additionalVars, iterCtx)
 }

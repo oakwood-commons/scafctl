@@ -370,9 +370,9 @@ func createExpandedAction(
 				continue
 			}
 
-			// Check if the value references __actions or an alias (needs deferral)
-			if referencesActionsOrAlias(valueRef, aliasNames) {
-				dv, err := materializeDeferred(valueRef)
+			// Check if the value references __actions, an alias, or a credential (scrt:/tkn:)
+			if referencesActionsOrAlias(valueRef, aliasNames) || valueRef.ContainsCredentialRef() {
+				dv, err := materializeDeferredWithIter(valueRef, iterCtx)
 				if err != nil {
 					return nil, fmt.Errorf("failed to defer input %q: %w", inputName, err)
 				}

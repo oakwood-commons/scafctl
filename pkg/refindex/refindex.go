@@ -293,6 +293,8 @@ func Build(sol *solution.Solution) (*Index, error) {
 				b.addCELRefs(path, vr.Expr)
 			case vr.Tmpl != nil:
 				b.addTemplateRefs(path+".tmpl", vr.Tmpl)
+			case vr.Secret != nil, vr.Token != nil:
+				// Credential references address host secrets and auth handlers, not solution symbols.
 			case vr.Literal != nil:
 				// walk.Walk does not descend into literal maps/arrays, but scafctl
 				// resolves inline ValueRefs ({rslvr}/{expr}/{tmpl}) nested inside

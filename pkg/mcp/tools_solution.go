@@ -30,6 +30,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 )
 
@@ -900,6 +901,7 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	progress.report(ctx, 1, "Loading and validating solution")
 
 	progress.report(ctx, 2, fmt.Sprintf("Executing %d resolvers", len(sol.Spec.Resolvers)))
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
 	result, err := execute.Resolvers(ctx, sol, params, reg, cfg)
 	if err != nil {
 		return buildResolverExecutionError(err, sol), nil

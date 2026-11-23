@@ -796,6 +796,28 @@ var KnownRules = map[string]RuleMeta{
 			"# Correct:\nactions:\n  build:\n    sources:\n      - 'src/**/*.go'\n    fingerprint:\n      scope: files\n    provider: exec\n    inputs:\n      command: go build",
 		},
 	},
+	"invalid-credential-ref": {
+		Rule:        "invalid-credential-ref",
+		Severity:    string(SeverityError),
+		Category:    "security",
+		Description: "A 'scrt:' or 'tkn:' credential ValueRef has an invalid secret name, references a reserved internal secret namespace, or specifies malformed token options.",
+		Why:         "Invalid secret names, reserved 'scafctl.*' internal secret references, malformed auth handler names, invalid profiles, or non-positive minValidFor durations fail at runtime when credentials are resolved.",
+		Fix:         "Use a valid user secret name in 'scrt:' (not starting with 'scafctl.') and valid 'handler', 'profile', and positive Go duration 'minValidFor' fields in 'tkn:'.",
+		Examples: []string{
+			"# Valid credential references:\ninputs:\n  env:\n    NPM_TOKEN:\n      scrt: npm-token\n    GH_TOKEN:\n      tkn: github\n    GCP_TOKEN:\n      tkn:\n        handler: gcp\n        scope: https://www.googleapis.com/auth/cloud-platform\n        minValidFor: 5m",
+		},
+	},
+	"unmarked-sensitive-credential-resolver": {
+		Rule:        "unmarked-sensitive-credential-resolver",
+		Severity:    string(SeverityWarning),
+		Category:    "security",
+		Description: "A resolver references a credential via 'scrt:' or 'tkn:' without setting 'sensitive: true'.",
+		Why:         "Non-sensitive resolvers scrub tracked secrets from their emitted output, and unredacted derived values would risk exposure in snapshots, tables, or persisted state. Marking the resolver 'sensitive: true' preserves the value in memory for downstream steps while redacting it in display and state outputs.",
+		Fix:         "Add 'sensitive: true' to the resolver definition, or move the 'scrt:' / 'tkn:' reference directly onto the consuming workflow action input.",
+		Examples: []string{
+			"resolvers:\n  authHeader:\n    sensitive: true\n    resolve:\n      with:\n        - provider: static\n          inputs:\n            value:\n              tkn: github",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

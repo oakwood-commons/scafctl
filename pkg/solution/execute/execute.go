@@ -21,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // ---------------------------------------------------------------------------
@@ -483,6 +484,11 @@ func ResolversForPreview(
 	if !sol.Spec.HasResolvers() {
 		return make(map[string]any), nil
 	}
+
+	// Use the side-effect-free placeholder CredentialResolver during render/preview
+	// so resolver-side scrt:/tkn: references emit symbolic placeholders without
+	// touching keyrings or minting live tokens.
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
 
 	if registry == nil {
 		reg, err := builtin.DefaultRegistry(ctx)

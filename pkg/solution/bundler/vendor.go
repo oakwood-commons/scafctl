@@ -476,7 +476,7 @@ func rewriteSourceInput(inputs map[string]*spec.ValueRef, catalogRef, vendorPath
 		return
 	}
 	// Only rewrite literal string values
-	if vr.Expr != nil || vr.Tmpl != nil || vr.Resolver != nil {
+	if vr.Expr != nil || vr.Tmpl != nil || vr.Resolver != nil || vr.Secret != nil || vr.Token != nil {
 		return
 	}
 	s, ok := vr.Literal.(string)

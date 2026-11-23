@@ -24,6 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -32,6 +33,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -515,6 +517,10 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
+	if redact.FromContext(ctx) == nil {
+		ctx = redact.WithTracker(ctx, redact.NewTracker())
+	}
+
 	// Inject CLI overrides into context before dry-run or live execution,
 	// so both paths honour --output-dir, --on-conflict, and --backup.
 	actionCtx := ctx
@@ -741,6 +747,9 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 // actionCtx carries CLI overrides (output-dir, on-conflict, backup, working-dir)
 // so that dryrun.Generate / WhatIf sees the same context as real execution.
 func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg providerLookup, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
+	// Never touch keyrings or mint live tokens during --dry-run.
+	resolverCtx = spec.WithCredentialResolver(resolverCtx, spec.PlaceholderCredentialResolver())
+	actionCtx = spec.WithCredentialResolver(actionCtx, spec.PlaceholderCredentialResolver())
 	// Execute resolvers via the shared method so that IOStreams, progress
 	// callbacks, and CLI-flag-driven config are wired identically to the
 	// live execution path. Resolver providers are side-effect-free, so we

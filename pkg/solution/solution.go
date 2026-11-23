@@ -651,3 +651,53 @@ func (s *Solution) ReferencedProviderNames() []string {
 	slices.Sort(merged)
 	return merged
 }
+
+// ReferencedAuthHandlerNames returns the unique, sorted set of auth handler
+// names statically referenced anywhere in the solution -- including
+// Spec.ReferencedAuthHandlerNames() (identity provider literal "handler" inputs
+// and tkn: ValueRefs across resolvers, workflow actions, finally actions, and
+// spec.calls), state configuration (enabled, load.inputs, save[*].enabled,
+// save[*].inputs), and bundle.plugins[*].defaults.
+func (s *Solution) ReferencedAuthHandlerNames() []string {
+	if s == nil {
+		return nil
+	}
+	names := s.Spec.ReferencedAuthHandlerNames()
+	merged := slices.Clone(names)
+	add := func(h string) {
+		if h != "" && !slices.Contains(merged, h) {
+			merged = append(merged, h)
+		}
+	}
+	addVR := func(vr *spec.ValueRef) {
+		for _, h := range vr.ReferencedAuthHandlers() {
+			add(h)
+		}
+	}
+	addMap := func(m map[string]*spec.ValueRef) {
+		for _, vr := range m {
+			addVR(vr)
+		}
+	}
+
+	if s.State != nil {
+		addVR(s.State.Enabled)
+		if s.State.Load != nil {
+			addMap(s.State.Load.Inputs)
+		}
+		for _, target := range s.State.Save {
+			addVR(target.Enabled)
+			addMap(target.Inputs)
+		}
+	}
+
+	for _, bp := range s.Bundle.Plugins {
+		addMap(bp.Defaults)
+	}
+
+	if len(merged) == len(names) {
+		return names
+	}
+	slices.Sort(merged)
+	return merged
+}

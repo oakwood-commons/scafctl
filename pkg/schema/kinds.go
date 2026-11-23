@@ -265,5 +265,24 @@ typed parameters (exposed inside the body under the args namespace) and exactly
 one body: a CEL expression (cel) or a Go template (template).`,
 			TypeInstance: (*spec.Function)(nil),
 		},
+		{
+			Name:    "valueref",
+			Aliases: []string{"valuerefs", "vref"},
+			Description: `ValueRef represents a flexible input value used across resolvers, actions,
+reusable calls, and state configuration. A ValueRef may be a literal value
+(scalar, array, or map with nested inline ValueRefs) or a single-key reference:
+rslvr (resolver output), expr (CEL expression), tmpl (Go template),
+scrt (host secret store entry), or tkn (auth-handler token).`,
+			TypeInstance: (*spec.ValueRef)(nil),
+		},
+		{
+			Name:    "tokenref",
+			Aliases: []string{"tokenrefs", "tkn"},
+			Description: `TokenRef configures a tkn: ValueRef that mints an access token from a
+registered auth handler. It accepts either a scalar handler name shorthand
+(tkn: github) or an object specifying handler plus optional scope, profile,
+hostname, and minValidFor fields.`,
+			TypeInstance: (*spec.TokenRef)(nil),
+		},
 	}
 }

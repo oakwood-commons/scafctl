@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
@@ -316,6 +317,11 @@ func (e *Executor) Execute(ctx context.Context, w *Workflow) (*ExecutionResult, 
 
 	// Reset the opt-in de-duplication memo at the start of each run.
 	e.dedupMemo = call.NewMemo()
+
+	// Ensure a run-scoped secret redaction tracker is present in ctx.
+	if redact.FromContext(ctx) == nil {
+		ctx = redact.WithTracker(ctx, redact.NewTracker())
+	}
 
 	// Create a span for the full workflow execution.
 	ctx, span := telemetry.Tracer(telemetry.TracerAction).Start(ctx, "action.Execute",
@@ -717,6 +723,12 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		callPlan       *actionCallPlan
 		err            error
 	)
+	actionTracker := redact.FromContext(ctx)
+	if actionTracker == nil {
+		actionTracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, actionTracker)
+	}
+
 	if action.HasCall() {
 		callPlan, err = e.expandActionCall(ctx, action, graph.AliasMap)
 		if err == nil {
@@ -728,6 +740,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		providerName = action.Provider
 	}
 	if err != nil {
+		err = actionTracker.RedactError(err)
 		e.actionContext.MarkFailed(actionName, fmt.Sprintf("input resolution failed: %v", err))
 		if e.progressCallback != nil {
 			e.progressCallback.OnActionFailed(actionName, err)
@@ -736,6 +749,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		span.SetStatus(codes.Error, err.Error())
 		return err
 	}
+
+	redactedInputs := actionTracker.RedactMap(resolvedInputs)
 
 	// Phase 2: Input-based fingerprint check (only when files were fresh).
 	// Compares resolved inputs hash against stored state to detect resolver changes.
@@ -751,7 +766,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 			return nil
 		}
 
-		fpResult, fpErr := e.fingerprintChecker.CheckInputs(ctx, actionName, resolvedInputs)
+		fpResult, fpErr := e.fingerprintChecker.CheckInputs(ctx, actionName, redactedInputs)
 		if fpErr != nil {
 			logger.FromContext(ctx).V(0).Info("fingerprint inputs check failed, executing action",
 				"action", actionName, "error", fpErr.Error())
@@ -764,8 +779,9 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		}
 	}
 
-	// Mark as running
-	e.actionContext.MarkRunning(actionName, resolvedInputs)
+	// Mark as running with redacted inputs so plaintext credentials never leak
+	// into __actions.<name>.inputs or API/CLI execution envelopes.
+	e.actionContext.MarkRunning(actionName, redactedInputs)
 	if e.progressCallback != nil {
 		e.progressCallback.OnActionStart(actionName, action.Description)
 	}
@@ -833,10 +849,11 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	// Execute with retry
 	var retryCallback RetryCallback
 	if e.progressCallback != nil {
-		retryCallback = &progressRetryAdapter{callback: e.progressCallback, actionName: actionName}
+		retryCallback = &progressRetryAdapter{callback: e.progressCallback, actionName: actionName, tracker: actionTracker}
 	}
 
 	output, attempts, err := retryExecutor.ExecuteWithRetry(actionCtx, actionName, execFunc, retryCallback)
+	err = actionTracker.RedactError(err)
 	maxAttempts := retryExecutor.MaxAttempts()
 	e.actionContext.RecordAttempts(actionName, attempts)
 
@@ -864,7 +881,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 			// An invalid continueOnError expression/config is itself a failure;
 			// surface it (and record it on the span) instead of masking it
 			// behind the original action error.
-			err = errors.Join(err, decideErr)
+			err = errors.Join(err, actionTracker.RedactError(decideErr))
 		} else if cont {
 			return nil
 		}
@@ -873,10 +890,11 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		return err
 	}
 
-	// Success
+	// Success (read output without mutating it in place, since dedupMemo may
+	// share the *provider.Output pointer across concurrent actions in a phase).
 	var results any
 	if output != nil {
-		results = output.Data
+		results = actionTracker.RedactAny(output.Data)
 	}
 
 	// Validate result against schema if defined
@@ -920,12 +938,13 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	e.actionContext.MarkSucceeded(actionName, results)
 
-	// Record fingerprint after successful execution
+	// Record fingerprint after successful execution (using redacted inputs so
+	// rotating JWT iat/exp claims do not invalidate idempotency caches).
 	if e.fingerprintChecker != nil && len(action.Sources) > 0 {
 		scope := fingerprintScope(action.Action)
 		var recordInputs map[string]any
 		if scope != FingerprintScopeFiles {
-			recordInputs = resolvedInputs
+			recordInputs = redactedInputs
 		}
 		if recordErr := e.fingerprintChecker.Record(ctx, actionName, action.Sources, action.Generates, e.cwd, recordInputs); recordErr != nil {
 			logger.FromContext(ctx).V(0).Info("fingerprint record failed",
@@ -1101,11 +1120,12 @@ func (e *Executor) Reset() {
 type progressRetryAdapter struct {
 	callback   RetryObserver
 	actionName string
+	tracker    *redact.Tracker
 }
 
 func (a *progressRetryAdapter) OnRetryAttempt(actionName string, attempt, maxAttempts int, err error) {
 	if a.callback != nil {
-		a.callback.OnRetryAttempt(actionName, attempt, maxAttempts, err)
+		a.callback.OnRetryAttempt(actionName, attempt, maxAttempts, a.tracker.RedactError(err))
 	}
 }
 

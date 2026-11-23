@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -405,6 +406,10 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	validationPolicy, err := o.resolveValidationPolicy(ctx)
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
+	if redact.FromContext(ctx) == nil {
+		ctx = redact.WithTracker(ctx, redact.NewTracker())
 	}
 
 	// Inject CLI overrides into context

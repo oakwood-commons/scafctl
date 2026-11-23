@@ -294,6 +294,16 @@ scafctl secrets export --encrypt --output secrets-backup.enc
 {{% /tab %}}
 {{< /tabs >}}
 
+### Credential Injection and Output Redaction (`scrt:` and `tkn:`)
+
+Prefer `scrt:` and `tkn:` `ValueRef` inputs over passing secrets through plain environment variables or non-sensitive resolvers:
+
+- `scafctl render solution` and `--dry-run` substitute symbolic placeholders (`<redacted:scrt:<name>>`, `<redacted:tkn:<handler>>`, `scrt:<name>`, `tkn:<handler>`) without contacting the secret store or minting tokens.
+- Resolved credential values (`>= 4` bytes, including trimmed values and individual lines `>= 4` bytes of multi-line credentials) are scrubbed to `[REDACTED]` across streaming `IOStreams`, non-sensitive provider outputs, `ActionResult.Inputs`, warnings, metadata, and errors, and emit `::add-mask::` workflow commands when `GITHUB_ACTIONS=true`.
+- Provider plugins receive read-only access to user secrets via `HostService.GetSecret` while `<binary>.*` internal auth secrets and write/delete RPCs remain blocked.
+
+See the [Credential Injection & Redaction Tutorial](credentials-tutorial.md) for syntax examples and lint rules.
+
 ## Plugin Security
 
 ### Mandatory Digest Verification

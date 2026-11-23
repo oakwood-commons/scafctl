@@ -21,6 +21,7 @@ Step-by-step guides for learning scafctl features.
 - [Parameterized Calls Tutorial](calls-tutorial.md) — Define reusable, argument-driven provider requests with `spec.calls`
 - [Actions Tutorial](actions-tutorial.md) — Learn how to use actions for workflow automation
 - [Authentication Tutorial](auth-tutorial.md) — Set up authentication for your workflows
+- [Credential Injection & Redaction Tutorial](credentials-tutorial.md) -- Inject secrets (`scrt:`) and auth tokens (`tkn:`) with dry-run placeholders and automatic output scrubbing
 - [Eval Tutorial](eval-tutorial.md) — Test CEL expressions and Go templates from the CLI
 - [Linting Tutorial](linting-tutorial.md) — Validate solutions, explore lint rules, and fix issues
 - [Refactoring Tutorial](refactor-tutorial.md) — Rename a resolver, action, call, or function and every reference to it with `refactor rename`
