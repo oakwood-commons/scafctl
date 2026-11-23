@@ -712,7 +712,10 @@ func TestHandler_ImplicitGrantLogin_RequiresAuthorizeURL(t *testing.T) {
 		cfg.AuthorizeURL = "" // missing
 	})
 
-	_, err := h.authCodeLogin(context.Background(), nil, 0)
+	_, cb1, _, err := h.authCodeLogin(context.Background(), nil, 0)
+	if cb1 != nil {
+		_ = cb1.Close()
+	}
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "authorizeURL is required")
 }
@@ -728,7 +731,10 @@ func TestHandler_ImplicitGrantLogin_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	_, err := h.implicitGrantLogin(ctx, nil, 0)
+	_, cb2, _, err := h.implicitGrantLogin(ctx, nil, 0)
+	if cb2 != nil {
+		_ = cb2.Close()
+	}
 	// Should fail with context cancelled (server can't start or times out)
 	assert.Error(t, err)
 }
@@ -839,10 +845,10 @@ func TestHandler_CallbackOpts(t *testing.T) {
 		path    string
 		wantLen int
 	}{
-		{"no overrides", "", "", 0},
-		{"host only", "127.0.0.1", "", 1},
-		{"path only", "", "/auth/callback", 1},
-		{"both", "127.0.0.1", "/auth/callback", 2},
+		{"no overrides", "", "", 2},
+		{"host only", "127.0.0.1", "", 3},
+		{"path only", "", "/auth/callback", 3},
+		{"both", "127.0.0.1", "/auth/callback", 4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -850,7 +856,7 @@ func TestHandler_CallbackOpts(t *testing.T) {
 				cfg.CallbackHost = tt.host
 				cfg.CallbackPath = tt.path
 			})
-			opts := h.callbackOpts()
+			opts := h.callbackOpts(context.Background())
 			assert.Len(t, opts, tt.wantLen)
 		})
 	}

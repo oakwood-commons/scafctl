@@ -422,3 +422,52 @@ func TestLazyAuthHandlerWrapper_ActivateServerMode_DelegatesToWrapper(t *testing
 	err := lazy.ActivateServerMode(context.Background(), json.RawMessage(`{"tenant_id":"abc"}`))
 	require.NoError(t, err)
 }
+
+func TestLazyAuthHandlerWrapper_PluginCfgFn_DeferredAndPreservedOnApplyOverrides(t *testing.T) {
+	cfgFnCalls := 0
+	pages := &AuthCallbackPages{
+		SuccessHTML: []byte("<!doctype html><html><body>LAZY-SUCCESS</body></html>"),
+		FailureHTML: []byte("<!doctype html><html><body>LAZY-FAILURE</body></html>"),
+	}
+	lazyCfg := LazyAuthHandlerConfig{
+		Name:    "entra",
+		BinPath: "/unused/in/unit/test",
+		PluginCfgFn: func() *ProviderConfig {
+			cfgFnCalls++
+			return &ProviderConfig{
+				BinaryName:        "mycli",
+				Profile:           "work",
+				AuthCallbackPages: pages,
+			}
+		},
+	}
+
+	// Constructing NewLazyAuthHandlerWrapper MUST NOT evaluate PluginCfgFn.
+	lazy := NewLazyAuthHandlerWrapper(lazyCfg)
+	assert.Equal(t, 0, cfgFnCalls)
+	assert.Equal(t, "entra", lazy.Name())
+	assert.Equal(t, 0, cfgFnCalls)
+
+	// When the lazy wrapper initializes and configures its underlying wrapper,
+	// PluginCfgFn is evaluated and hostCfg preserves AuthCallbackPages & Profile
+	// across runtime CLI overrides (--tenant / --client-id).
+	mockImpl := &MockAuthHandlerPlugin{}
+	ahClient := &AuthHandlerClient{plugin: mockImpl}
+	info := AuthHandlerInfo{Name: "entra", DisplayName: "Microsoft Entra ID"}
+	wrapper := configureLazyWrapper(context.Background(), ahClient, info, lazyCfg)
+
+	assert.Equal(t, 1, cfgFnCalls)
+	require.NotNil(t, mockImpl.lastConfig)
+	require.NotNil(t, mockImpl.lastConfig.AuthCallbackPages)
+	assert.Equal(t, pages.SuccessHTML, mockImpl.lastConfig.AuthCallbackPages.SuccessHTML)
+	assert.Equal(t, "work", mockImpl.lastConfig.Profile)
+
+	require.NoError(t, wrapper.ApplyOverrides(context.Background(), map[string]string{
+		"tenantId": "11111111-2222-3333-4444-555555555555",
+	}))
+	require.NotNil(t, mockImpl.lastConfig.AuthCallbackPages)
+	assert.Equal(t, pages.SuccessHTML, mockImpl.lastConfig.AuthCallbackPages.SuccessHTML)
+	assert.Equal(t, pages.FailureHTML, mockImpl.lastConfig.AuthCallbackPages.FailureHTML)
+	assert.Equal(t, "mycli", mockImpl.lastConfig.BinaryName)
+	assert.Equal(t, "work", mockImpl.lastConfig.Profile)
+}

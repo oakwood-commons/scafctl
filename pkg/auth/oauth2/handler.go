@@ -25,9 +25,11 @@ import (
 	"github.com/go-logr/logr"
 	oauth "github.com/oakwood-commons/oauth-helpers"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/authpage"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 const (
@@ -38,6 +40,7 @@ const (
 	derivedTokenSuffix      = "derived_token"        //nolint:gosec // key suffix, not credential
 	derivedUsernameSuffix   = "derived_username"     //nolint:gosec // key suffix, not credential
 	defaultTimeout          = 5 * time.Minute
+	callbackShutdownTimeout = 5 * time.Second
 	defaultPollInterval     = 5
 	maxResponseBody         = 1 << 20
 	defaultTokenType        = "Bearer"
@@ -93,6 +96,9 @@ type Handler struct {
 	httpClient      *http.Client
 	logger          logr.Logger
 	secretKeyPrefix string
+	binaryName      string
+	pageRenderer    authpage.Renderer
+	openBrowser     func(context.Context, string) error
 }
 
 // Compile-time interface assertions.
@@ -127,6 +133,25 @@ func WithSecretKeyPrefix(prefix string) Option {
 	return func(h *Handler) { h.secretKeyPrefix = prefix }
 }
 
+// WithBinaryName sets the CLI binary name passed to the authentication callback
+// page renderer. When empty, defaults to settings.CliBinaryName ("scafctl").
+func WithBinaryName(name string) Option {
+	return func(h *Handler) {
+		if strings.TrimSpace(name) == "" {
+			h.binaryName = settings.CliBinaryName
+			return
+		}
+		h.binaryName = name
+	}
+}
+
+// WithAuthPageRenderer overrides the HTML renderer used for interactive browser
+// callback pages (authorization code and implicit grant flows). When nil,
+// authpage.DefaultRenderer is used.
+func WithAuthPageRenderer(r authpage.Renderer) Option {
+	return func(h *Handler) { h.pageRenderer = r }
+}
+
 // New creates a new generic OAuth2 auth handler from a CustomOAuth2Config.
 func New(cfg config.CustomOAuth2Config, opts ...Option) (*Handler, error) {
 	// Implicit grant flow does not use PKCE.
@@ -138,6 +163,8 @@ func New(cfg config.CustomOAuth2Config, opts ...Option) (*Handler, error) {
 		cfg:             cfg,
 		logger:          logr.Discard(),
 		secretKeyPrefix: secretKeyPrefix,
+		binaryName:      settings.CliBinaryName,
+		openBrowser:     oauth.OpenBrowser,
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -354,7 +381,30 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 	}
 
 	var tokenResp *tokenResponse
+	var cbServer *oauth.CallbackServer
+	var callbackHit bool
 	var loginErr error
+	defer func() {
+		if cbServer != nil {
+			_ = cbServer.Close()
+		}
+	}()
+
+	settleCallback := func(success bool) {
+		if cbServer == nil {
+			return
+		}
+		if !callbackHit {
+			_ = cbServer.Close()
+			cbServer = nil
+			return
+		}
+		cbServer.Complete(success)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), callbackShutdownTimeout)
+		defer shutdownCancel()
+		_ = cbServer.Shutdown(shutdownCtx)
+		cbServer = nil
+	}
 
 	switch flow { //nolint:exhaustive // only generic OAuth2 flows are supported
 	case auth.FlowInteractive:
@@ -362,7 +412,7 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		if callbackPort == 0 {
 			callbackPort = h.cfg.CallbackPort
 		}
-		tokenResp, loginErr = h.authCodeLogin(ctx, scopes, callbackPort)
+		tokenResp, cbServer, callbackHit, loginErr = h.authCodeLogin(ctx, scopes, callbackPort)
 	case auth.FlowDeviceCode:
 		tokenResp, loginErr = h.deviceCodeLogin(ctx, opts, scopes)
 	case auth.FlowClientCredentials:
@@ -372,6 +422,7 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 			fmt.Errorf("%w: %s (supported: %v)", auth.ErrFlowNotSupported, flow, h.SupportedFlows()))
 	}
 	if loginErr != nil {
+		settleCallback(false)
 		return nil, loginErr
 	}
 
@@ -380,6 +431,7 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 	if h.cfg.TokenExchange != nil {
 		derived, exchangeErr := h.executeTokenExchange(ctx, tokenResp.AccessToken)
 		if exchangeErr != nil {
+			settleCallback(false)
 			return nil, auth.NewError(h.cfg.Name, "token_exchange", exchangeErr)
 		}
 		// Use the primary token's expiry for the derived token since the exchange
@@ -406,6 +458,7 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		h.logger.V(1).Info("failed to store tokens", "error", storeErr)
 	}
 
+	settleCallback(true)
 	return &auth.Result{Claims: claims, ExpiresAt: expiresAt}, nil
 }
 
@@ -632,9 +685,24 @@ func (e *tokenEndpointError) Error() string {
 	return e.ErrorCode
 }
 
-// callbackOpts builds CallbackOptions from the handler's config.
-func (h *Handler) callbackOpts() []oauth.CallbackOption {
-	var opts []oauth.CallbackOption
+func (h *Handler) effectiveBinaryName() string {
+	if strings.TrimSpace(h.binaryName) == "" {
+		return settings.CliBinaryName
+	}
+	return h.binaryName
+}
+
+// callbackOpts builds CallbackOptions from the handler's config and pre-renders
+// the success/failure HTML pages for deferred completion.
+func (h *Handler) callbackOpts(ctx context.Context) []oauth.CallbackOption {
+	bundle := authpage.RenderBundle(ctx, h.pageRenderer, h.effectiveBinaryName())
+	opts := []oauth.CallbackOption{
+		oauth.WithCallbackPages(oauth.CallbackPages{
+			SuccessHTML: bundle.SuccessHTML,
+			FailureHTML: bundle.FailureHTML,
+		}),
+		oauth.WithDeferredCompletion(),
+	}
 	if h.cfg.CallbackHost != "" {
 		opts = append(opts, oauth.WithCallbackHost(h.cfg.CallbackHost))
 	}
@@ -646,9 +714,9 @@ func (h *Handler) callbackOpts() []oauth.CallbackOption {
 
 // ---------- flow: authorization code + PKCE ----------
 
-func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPort int) (*tokenResponse, error) {
+func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPort int) (*tokenResponse, *oauth.CallbackServer, bool, error) {
 	if h.cfg.AuthorizeURL == "" {
-		return nil, fmt.Errorf("authorizeURL is required for interactive flow")
+		return nil, nil, false, fmt.Errorf("authorizeURL is required for interactive flow")
 	}
 
 	// Implicit grant flow (response_type=token) uses a different callback mechanism.
@@ -661,24 +729,24 @@ func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPo
 		var err error
 		verifier, err = oauth.GenerateCodeVerifier()
 		if err != nil {
-			return nil, fmt.Errorf("generate PKCE verifier: %w", err)
+			return nil, nil, false, fmt.Errorf("generate PKCE verifier: %w", err)
 		}
 	}
 
 	state, err := oauth.GenerateCodeVerifier()
 	if err != nil {
-		return nil, fmt.Errorf("generate state: %w", err)
+		return nil, nil, false, fmt.Errorf("generate state: %w", err)
 	}
 
-	callbackServer, err := oauth.StartCallbackServer(ctx, callbackPort, state, h.callbackOpts()...)
+	callbackServer, err := oauth.StartCallbackServer(ctx, callbackPort, state, h.callbackOpts(ctx)...)
 	if err != nil {
-		return nil, fmt.Errorf("start callback server: %w", err)
+		return nil, nil, false, fmt.Errorf("start callback server: %w", err)
 	}
-	defer callbackServer.Close()
 
 	authURL, err := url.Parse(h.cfg.AuthorizeURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse authorizeURL: %w", err)
+		_ = callbackServer.Close()
+		return nil, nil, false, fmt.Errorf("parse authorizeURL: %w", err)
 	}
 	q := authURL.Query()
 	q.Set("response_type", "code")
@@ -695,18 +763,26 @@ func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPo
 	}
 	authURL.RawQuery = q.Encode()
 
-	if openErr := oauth.OpenBrowser(ctx, authURL.String()); openErr != nil {
+	openFn := h.openBrowser
+	if openFn == nil {
+		openFn = oauth.OpenBrowser
+	}
+	if openErr := openFn(ctx, authURL.String()); openErr != nil {
 		h.logger.V(1).Info("failed to open browser", "url", authURL.String(), "error", openErr)
 	}
 
 	select {
 	case result := <-callbackServer.ResultChan():
 		if result.Err != nil {
-			return nil, fmt.Errorf("callback error: %w", result.Err)
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), callbackShutdownTimeout)
+			defer cancel()
+			_ = callbackServer.Shutdown(shutdownCtx)
+			return nil, nil, false, fmt.Errorf("callback error: %w", result.Err)
 		}
-		return h.exchangeAuthCode(ctx, result.Code, callbackServer.RedirectURI, verifier, scopes)
+		tok, exErr := h.exchangeAuthCode(ctx, result.Code, callbackServer.RedirectURI, verifier, scopes)
+		return tok, callbackServer, true, exErr
 	case <-ctx.Done():
-		return nil, auth.ErrTimeout
+		return nil, callbackServer, false, auth.ErrTimeout
 	}
 }
 
@@ -732,21 +808,21 @@ func (h *Handler) exchangeAuthCode(ctx context.Context, code, redirectURI, codeV
 
 // ---------- flow: implicit grant (response_type=token) ----------
 
-func (h *Handler) implicitGrantLogin(ctx context.Context, scopes []string, callbackPort int) (*tokenResponse, error) {
+func (h *Handler) implicitGrantLogin(ctx context.Context, scopes []string, callbackPort int) (*tokenResponse, *oauth.CallbackServer, bool, error) {
 	state, err := oauth.GenerateCodeVerifier()
 	if err != nil {
-		return nil, fmt.Errorf("generate state: %w", err)
+		return nil, nil, false, fmt.Errorf("generate state: %w", err)
 	}
 
-	callbackServer, err := oauth.StartImplicitCallbackServer(ctx, callbackPort, state, h.callbackOpts()...)
+	callbackServer, err := oauth.StartImplicitCallbackServer(ctx, callbackPort, state, h.callbackOpts(ctx)...)
 	if err != nil {
-		return nil, fmt.Errorf("start callback server: %w", err)
+		return nil, nil, false, fmt.Errorf("start callback server: %w", err)
 	}
-	defer callbackServer.Close()
 
 	authURL, err := url.Parse(h.cfg.AuthorizeURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse authorizeURL: %w", err)
+		_ = callbackServer.Close()
+		return nil, nil, false, fmt.Errorf("parse authorizeURL: %w", err)
 	}
 	q := authURL.Query()
 	q.Set("response_type", "token")
@@ -758,14 +834,21 @@ func (h *Handler) implicitGrantLogin(ctx context.Context, scopes []string, callb
 	}
 	authURL.RawQuery = q.Encode()
 
-	if openErr := oauth.OpenBrowser(ctx, authURL.String()); openErr != nil {
+	openFn := h.openBrowser
+	if openFn == nil {
+		openFn = oauth.OpenBrowser
+	}
+	if openErr := openFn(ctx, authURL.String()); openErr != nil {
 		h.logger.V(1).Info("failed to open browser", "url", authURL.String(), "error", openErr)
 	}
 
 	select {
 	case result := <-callbackServer.ResultChan():
 		if result.Err != nil {
-			return nil, fmt.Errorf("callback error: %w", result.Err)
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), callbackShutdownTimeout)
+			defer cancel()
+			_ = callbackServer.Shutdown(shutdownCtx)
+			return nil, nil, false, fmt.Errorf("callback error: %w", result.Err)
 		}
 		resp := &tokenResponse{
 			AccessToken: result.AccessToken,
@@ -786,9 +869,9 @@ func (h *Handler) implicitGrantLogin(ctx context.Context, scopes []string, callb
 			h.logger.V(1).Info("expires_in not provided by implicit grant server, defaulting to 3600")
 			resp.ExpiresIn = 3600
 		}
-		return resp, nil
+		return resp, callbackServer, true, nil
 	case <-ctx.Done():
-		return nil, auth.ErrTimeout
+		return nil, callbackServer, false, auth.ErrTimeout
 	}
 }
 

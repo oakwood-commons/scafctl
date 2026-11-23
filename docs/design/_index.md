@@ -17,6 +17,7 @@ Architecture and design documentation for scafctl.
 - [Actions](actions.md) — Actions system design
 - [Effective Solution Rendering](effective-solution-render.md) — Deterministic post-compose document rendering for fidelity diffing
 - [Authentication](auth.md) — Authentication architecture
+- [Custom Browser Authentication Pages](auth-callback-pages.md) -- Customizing or replacing OAuth callback pages from an embedder
 - [CEL Integration](cel.md) — CEL expression language integration
 - [Go-Template Embedder Functions](gotmpl-embedder-funcs.md) -- Registering custom Go-template functions from an embedder
 - [Catalog](catalog.md) — Catalog system design

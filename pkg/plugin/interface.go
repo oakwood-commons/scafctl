@@ -11,6 +11,14 @@ import sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
 // after plugin load via the ConfigureProvider RPC.
 type ProviderConfig = sdkplugin.ProviderConfig
 
+// AuthCallbackPages holds complete pre-rendered HTML documents for an auth
+// handler plugin's localhost OAuth callback server.
+type AuthCallbackPages = sdkplugin.AuthCallbackPages
+
+// MaxAuthCallbackPageBytes is the maximum size in bytes accepted for each HTML
+// document in AuthCallbackPages across the gRPC configure boundary.
+const MaxAuthCallbackPageBytes = sdkplugin.MaxAuthCallbackPageBytes
+
 // StreamChunk represents one chunk from a streaming provider execution.
 type StreamChunk = sdkplugin.StreamChunk
 

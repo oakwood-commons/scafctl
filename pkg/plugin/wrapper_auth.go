@@ -93,17 +93,18 @@ type AuthHandlerWrapper struct {
 	// trust domains.
 	requireTrustedDomains bool
 	startupLatency        time.Duration
-	hostCfg               hostConfig // host-level config (Quiet, NoColor, BinaryName)
+	hostCfg               hostConfig // host-level config preserved across ApplyOverrides
 	mu                    sync.RWMutex
 }
 
 // hostConfig stores host-level ProviderConfig fields so ApplyOverrides
 // can reconstruct a full config without zeroing them.
 type hostConfig struct {
-	Quiet      bool
-	NoColor    bool
-	BinaryName string
-	Profile    string
+	Quiet             bool
+	NoColor           bool
+	BinaryName        string
+	Profile           string
+	AuthCallbackPages *AuthCallbackPages
 }
 
 // NewAuthHandlerWrapper creates a new wrapper for a plugin auth handler.
@@ -391,14 +392,16 @@ func (w *AuthHandlerWrapper) ApplyOverrides(ctx context.Context, overrides map[s
 	}
 
 	// Reconstruct the ProviderConfig with the override settings merged.
-	// Preserve host-level fields (Quiet, NoColor, BinaryName) from initial config.
+	// Preserve host-level fields (Quiet, NoColor, BinaryName, Profile, AuthCallbackPages) from initial config.
+	hc := w.getHostConfig()
 	cfg := ProviderConfig{
-		Quiet:         w.hostCfg.Quiet,
-		NoColor:       w.hostCfg.NoColor,
-		BinaryName:    w.hostCfg.BinaryName,
-		Profile:       w.hostCfg.Profile,
-		Settings:      map[string]json.RawMessage{w.handlerName: settingsJSON},
-		HostServiceID: w.client.HostServiceID(),
+		Quiet:             hc.Quiet,
+		NoColor:           hc.NoColor,
+		BinaryName:        hc.BinaryName,
+		Profile:           hc.Profile,
+		AuthCallbackPages: hc.AuthCallbackPages,
+		Settings:          map[string]json.RawMessage{w.handlerName: settingsJSON},
+		HostServiceID:     w.client.HostServiceID(),
 	}
 
 	// Inject base settings from app config first, then overlay overrides.
@@ -442,6 +445,18 @@ func (w *AuthHandlerWrapper) SetStartupLatency(d time.Duration) {
 	w.startupLatency = d
 }
 
+func (w *AuthHandlerWrapper) setHostConfig(hc hostConfig) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.hostCfg = hc
+}
+
+func (w *AuthHandlerWrapper) getHostConfig() hostConfig {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.hostCfg
+}
+
 // configureAndRegisterAuthHandlers configures each handler with host-side
 // settings (when cfg is non-nil) and registers it in the auth registry.
 // It also sets trusted verification domains on each wrapper from the official
@@ -476,6 +491,16 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 		// wrapper and fail closed on device-code verification when none resolve.
 		applyTrustedDomains(wrapper, info.Name, officialReg, cfgDomains, handlerCfgs[info.Name].TrustedVerificationDomains)
 
+		if cfg != nil {
+			wrapper.setHostConfig(hostConfig{
+				Quiet:             cfg.Quiet,
+				NoColor:           cfg.NoColor,
+				BinaryName:        cfg.BinaryName,
+				Profile:           cfg.Profile,
+				AuthCallbackPages: cfg.AuthCallbackPages,
+			})
+		}
+
 		if err := registry.Register(wrapper); err != nil {
 			lgr.V(1).Info("failed to register auth handler", "handler", info.Name, "error", err)
 			continue
@@ -494,12 +519,6 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 				lgr.Info("failed to configure auth handler plugin",
 					"handler", info.Name,
 					"error", cfgErr)
-			}
-			wrapper.hostCfg = hostConfig{
-				Quiet:      cfg.Quiet,
-				NoColor:    cfg.NoColor,
-				BinaryName: cfg.BinaryName,
-				Profile:    cfg.Profile,
 			}
 		}
 	}

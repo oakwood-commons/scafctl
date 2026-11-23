@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth/handlerdep"
 	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/authpage"
 	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
@@ -234,6 +235,15 @@ type RootOptions struct {
 	// default), partial success exits 0, matching direct scafctl behavior.
 	// The per-invocation --detailed-exit-code flag overrides this default.
 	DetailedExitCode bool
+
+	// AuthPageRenderer overrides the complete HTML document rendered on the
+	// localhost browser callback server for interactive OAuth logins (both
+	// custom OAuth2 handlers and auth handler plugins that consume the SDK
+	// callback page bundle). When nil, authpage.DefaultRenderer is used:
+	// Blueprint with the embedded scafctl logo when BinaryName is unset or
+	// "scafctl", and Blueprint with a plain-text brand wordmark when
+	// BinaryName is set to a custom CLI name.
+	AuthPageRenderer authpage.Renderer
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -589,7 +599,11 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 					continue
 				}
 				var customOpts []customoauth2.Option
-				customOpts = append(customOpts, customoauth2.WithLogger(*lgr))
+				customOpts = append(customOpts,
+					customoauth2.WithLogger(*lgr),
+					customoauth2.WithBinaryName(binaryName),
+					customoauth2.WithAuthPageRenderer(opts.AuthPageRenderer),
+				)
 				if secretErr == nil {
 					customOpts = append(customOpts, customoauth2.WithSecretStore(sharedSecretStore))
 				}
@@ -603,15 +617,41 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				}
 			}
 
-			// Register auth handler plugins if directories are configured
-			if len(opts.AuthPluginDirs) > 0 {
-				lgr.V(1).Info("loading auth handler plugins", "dirs", opts.AuthPluginDirs)
-				pluginCfg := &plugin.ProviderConfig{
+			// Render the browser OAuth callback page bundle lazily at most once per
+			// Root() execution so commands that never configure an auth handler
+			// plugin incur zero HTML template work.
+			authPluginCfg := sync.OnceValue(func() *plugin.ProviderConfig {
+				renderCtx := cCmd.Context()
+				if renderCtx == nil {
+					renderCtx = ctx
+				}
+				bundle := authpage.RenderBundle(renderCtx, opts.AuthPageRenderer, binaryName)
+				return &plugin.ProviderConfig{
 					Quiet:      cliParams.IsQuiet,
 					NoColor:    cliParams.NoColor,
 					BinaryName: binaryName,
+					AuthCallbackPages: &plugin.AuthCallbackPages{
+						SuccessHTML: bundle.SuccessHTML,
+						FailureHTML: bundle.FailureHTML,
+					},
 				}
-				authClients, authPluginErr := plugin.RegisterAuthHandlerPlugins(ctx, authRegistry, opts.AuthPluginDirs, pluginCfg)
+			})
+
+			authHostDeps := plugin.HostDepsFromAuthRegistry(authRegistry)
+			if authHostDeps != nil && secretErr == nil {
+				authHostDeps.SecretStore = sharedSecretStore
+			}
+			if authHostDeps != nil {
+				authHostDeps.ProfileResolverFunc = func(handlerName string) string {
+					return auth.ResolveActiveProfile(cCmd.Context(), handlerName)
+				}
+			}
+			baseAuthClientOpts := []plugin.ClientOption{plugin.WithHostDeps(authHostDeps)}
+
+			// Register auth handler plugins if directories are configured
+			if len(opts.AuthPluginDirs) > 0 {
+				lgr.V(1).Info("loading auth handler plugins", "dirs", opts.AuthPluginDirs)
+				authClients, authPluginErr := plugin.RegisterAuthHandlerPlugins(ctx, authRegistry, opts.AuthPluginDirs, authPluginCfg(), baseAuthClientOpts...)
 				if authPluginErr != nil {
 					w.Warningf("failed to load some auth handler plugins: %v", authPluginErr)
 				}
@@ -679,24 +719,9 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 					}
 				}
 				cooldown := plugin.NewFetchCooldown(settings.PluginCacheDirFor(binaryName), cooldownDuration)
-				pluginCfg := &plugin.ProviderConfig{
-					Quiet:      cliParams.IsQuiet,
-					NoColor:    cliParams.NoColor,
-					BinaryName: binaryName,
-				}
-				hostDeps := plugin.HostDepsFromAuthRegistry(authRegistry)
-				if hostDeps != nil && secretErr == nil {
-					hostDeps.SecretStore = sharedSecretStore
-				}
-				if hostDeps != nil {
-					hostDeps.ProfileResolverFunc = func(handlerName string) string {
-						return auth.ResolveActiveProfile(cCmd.Context(), handlerName)
-					}
-				}
-				clientOpts := []plugin.ClientOption{plugin.WithHostDeps(hostDeps)}
 
 				authRegistry.SetFallbackResolver(func(resolverCtx context.Context, name string) (auth.Handler, error) {
-					scopedOpts := scopedAuthClientOpts(clientOpts, name)
+					scopedOpts := scopedAuthClientOpts(baseAuthClientOpts, name)
 					// Use cCmd.Context() to capture the fully-wired context at
 					// call time, not the stale ctx from closure capture time.
 					// Values like the official provider registry are added to
@@ -731,7 +756,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 					// Register only the requested handler: the client is scoped to
 					// its namespace, so extra handlers the binary advertises would
 					// be denied their own secrets.
-					clients, regErr := plugin.RegisterFetchedAuthHandlerPluginsNamed(liveCtx, authRegistry, results, pluginCfg, name, scopedOpts...)
+					clients, regErr := plugin.RegisterFetchedAuthHandlerPluginsNamed(liveCtx, authRegistry, results, authPluginCfg(), name, scopedOpts...)
 					if regErr != nil {
 						_ = cooldown.RecordFailure(name)
 						return nil, fmt.Errorf("registering auth handler plugin %q: %w", name, regErr)
@@ -758,21 +783,6 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 			// This makes it visible in registry.List() without spawning any
 			// subprocesses. The plugin is started on first actual use.
 			if officialReg := authofficial.RegistryFromContext(ctx); officialReg != nil {
-				pluginCfg := &plugin.ProviderConfig{
-					Quiet:      cliParams.IsQuiet,
-					NoColor:    cliParams.NoColor,
-					BinaryName: binaryName,
-				}
-				hostDeps := plugin.HostDepsFromAuthRegistry(authRegistry)
-				if hostDeps != nil && secretErr == nil {
-					hostDeps.SecretStore = sharedSecretStore
-				}
-				if hostDeps != nil {
-					hostDeps.ProfileResolverFunc = func(handlerName string) string {
-						return auth.ResolveActiveProfile(cCmd.Context(), handlerName)
-					}
-				}
-				clientOpts := []plugin.ClientOption{plugin.WithHostDeps(hostDeps)}
 				cache := plugin.NewCache(settings.PluginCacheDirFor(binaryName))
 
 				for _, name := range officialReg.Names() {
@@ -784,7 +794,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 					if !ok {
 						continue // not cached, skip (will use fallback on demand)
 					}
-					lazy := plugin.NewLazyAuthHandlerWrapper(cachedAuthHandlerConfig(name, binPath, pluginCfg, clientOpts, officialReg))
+					lazy := plugin.NewLazyAuthHandlerWrapper(cachedAuthHandlerConfig(name, binPath, authPluginCfg, baseAuthClientOpts, officialReg))
 					lazy.SetContext(ctx)
 					if err := authRegistry.Register(lazy); err != nil {
 						lgr.V(1).Info("failed to register lazy auth handler", "handler", name, "error", err)
@@ -1005,11 +1015,12 @@ func scopedAuthClientOpts(base []plugin.ClientOption, name string) []plugin.Clie
 
 // cachedAuthHandlerConfig builds the lazy wrapper config for a cached official
 // auth handler, with client options scoped to that handler's namespace.
-func cachedAuthHandlerConfig(name, binPath string, pluginCfg *plugin.ProviderConfig, base []plugin.ClientOption, officialReg *authofficial.Registry) plugin.LazyAuthHandlerConfig {
+// pluginCfgFn is evaluated lazily only if the handler is actually started.
+func cachedAuthHandlerConfig(name, binPath string, pluginCfgFn func() *plugin.ProviderConfig, base []plugin.ClientOption, officialReg *authofficial.Registry) plugin.LazyAuthHandlerConfig {
 	return plugin.LazyAuthHandlerConfig{
 		Name:             name,
 		BinPath:          binPath,
-		PluginCfg:        pluginCfg,
+		PluginCfgFn:      pluginCfgFn,
 		ClientOpts:       scopedAuthClientOpts(base, name),
 		OfficialRegistry: officialReg,
 	}

@@ -289,11 +289,12 @@ func (s *AuthHandlerGRPCServer) ConfigureAuthHandler(ctx context.Context, req *p
 	}
 
 	cfg := ProviderConfig{
-		Quiet:      req.Quiet,
-		NoColor:    req.NoColor,
-		BinaryName: req.BinaryName,
-		Profile:    req.Profile,
-		Settings:   settings,
+		Quiet:             req.Quiet,
+		NoColor:           req.NoColor,
+		BinaryName:        req.BinaryName,
+		Profile:           req.Profile,
+		Settings:          settings,
+		AuthCallbackPages: authCallbackPagesFromProto(req.AuthCallbackPages),
 	}
 	if req.HostServiceId != 0 && s.broker != nil {
 		cfg.HostServiceID = req.HostServiceId
@@ -479,14 +480,15 @@ func (c *AuthHandlerGRPCClient) ConfigureAuthHandler(ctx context.Context, handle
 	}
 
 	req := &proto.ConfigureAuthHandlerRequest{
-		HandlerName:     handlerName,
-		Quiet:           cfg.Quiet,
-		NoColor:         cfg.NoColor,
-		BinaryName:      cfg.BinaryName,
-		Profile:         cfg.Profile,
-		HostServiceId:   c.hostServiceID,
-		Settings:        protoSettings,
-		ProtocolVersion: PluginProtocolVersion,
+		HandlerName:       handlerName,
+		Quiet:             cfg.Quiet,
+		NoColor:           cfg.NoColor,
+		BinaryName:        cfg.BinaryName,
+		Profile:           cfg.Profile,
+		HostServiceId:     c.hostServiceID,
+		Settings:          protoSettings,
+		ProtocolVersion:   PluginProtocolVersion,
+		AuthCallbackPages: authCallbackPagesToProto(cfg.AuthCallbackPages),
 	}
 	// Advertise the paste-back host capability so plugin handlers can rank
 	// interactive (authorization code + PKCE) flows for sessions where the
@@ -512,6 +514,40 @@ func (c *AuthHandlerGRPCClient) ConfigureAuthHandler(ctx context.Context, handle
 // broker actually serves.
 func (c *AuthHandlerGRPCClient) hostCapabilities() *proto.HostCapabilities {
 	return &proto.HostCapabilities{PromptAuthResponse: c.supportsPromptAuth}
+}
+
+func authCallbackPagesToProto(p *AuthCallbackPages) *proto.AuthCallbackPages {
+	if p == nil || (len(p.SuccessHTML) == 0 && len(p.FailureHTML) == 0) {
+		return nil
+	}
+	var out proto.AuthCallbackPages
+	if len(p.SuccessHTML) > 0 && len(p.SuccessHTML) <= MaxAuthCallbackPageBytes {
+		out.SuccessHtml = append([]byte(nil), p.SuccessHTML...)
+	}
+	if len(p.FailureHTML) > 0 && len(p.FailureHTML) <= MaxAuthCallbackPageBytes {
+		out.FailureHtml = append([]byte(nil), p.FailureHTML...)
+	}
+	if len(out.SuccessHtml) == 0 && len(out.FailureHtml) == 0 {
+		return nil
+	}
+	return &out
+}
+
+func authCallbackPagesFromProto(p *proto.AuthCallbackPages) *AuthCallbackPages {
+	if p == nil {
+		return nil
+	}
+	var out AuthCallbackPages
+	if len(p.SuccessHtml) > 0 && len(p.SuccessHtml) <= MaxAuthCallbackPageBytes {
+		out.SuccessHTML = append([]byte(nil), p.SuccessHtml...)
+	}
+	if len(p.FailureHtml) > 0 && len(p.FailureHtml) <= MaxAuthCallbackPageBytes {
+		out.FailureHTML = append([]byte(nil), p.FailureHtml...)
+	}
+	if len(out.SuccessHTML) == 0 && len(out.FailureHTML) == 0 {
+		return nil
+	}
+	return &out
 }
 
 // DetectAvailableFlows implements AuthHandlerPlugin.DetectAvailableFlows.

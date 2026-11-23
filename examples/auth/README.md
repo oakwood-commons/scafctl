@@ -365,5 +365,7 @@ Pin the artifact and declare trust via `auth.handlers.<name>` -- see
 - [kubectl Exec Credential](kubectl-exec-credential.md) -- use scafctl as a Kubernetes credential plugin
 - [Kubernetes login / logout](kube-login.md) -- automate kubeconfig setup with `scafctl kube login`
 - [Third-party handler config](third-party-handler-config.yaml) -- pin a catalog auth handler and declare its trust domains
+- [Custom browser auth page (Embedder API)](custom-auth-page.md) -- customize or replace the OAuth callback page via `RootOptions.AuthPageRenderer`
+- [OAuth callback page preview gallery](callback-preview/README.md) -- launch the 8-scenario local browser preview with `task preview:authpage`
 - [HTTP Provider with Entra](../providers/http-entra.yaml) -- example HTTP call with Entra auth
 - [GitHub API Provider](../providers/github-api.yaml) -- example GitHub API call

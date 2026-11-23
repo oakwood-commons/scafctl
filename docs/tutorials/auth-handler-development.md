@@ -660,7 +660,8 @@ type AuthHandlerPlugin interface {
 
     // ConfigureAuthHandler sends host-side configuration to a named handler
     // once after plugin load. Receives quiet/noColor/binaryName/settings,
-    // the HostService broker ID, and protocol version.
+    // the HostService broker ID, protocol version, host capabilities, and
+    // pre-rendered browser OAuth callback pages (cfg.AuthCallbackPages).
     ConfigureAuthHandler(ctx context.Context, handlerName string, cfg ProviderConfig) error
 
     // Login initiates authentication. The callback relays device-code prompts.
@@ -876,6 +877,31 @@ terminal the login keeps the `kvx` status box active with a concise endpoint
 summary, `Copy URL` / `Open URL` actions, and an inline masked redirect-URL
 input that pre-validates user submissions before resolving `PromptAuthResponse`
 (so accidental typos can be retried inline without consuming your RPC call).
+
+### Browser Callback Pages & Deferred Completion
+
+Interactive authorization-code handlers using `github.com/oakwood-commons/oauth-helpers`
+should enable deferred completion and forward `cfg.AuthCallbackPages` (received
+during `ConfigureAuthHandler`) so the browser tab stays pending until token
+exchange, credential storage, and claims extraction succeed, then displays the
+host's Blueprint or custom embedder HTML page:
+
+~~~go
+callbackOpts := []oauth.CallbackOption{oauth.WithDeferredCompletion()}
+if pages := p.cfg.AuthCallbackPages; pages != nil {
+    callbackOpts = append(callbackOpts, oauth.WithCallbackPages(oauth.CallbackPages{
+        SuccessHTML: pages.SuccessHTML,
+        FailureHTML: pages.FailureHTML,
+    }))
+}
+callbackServer, err := oauth.StartCallbackServer(ctx, req.CallbackPort, state, callbackOpts...)
+~~~
+
+After all fatal post-callback steps succeed, call `callbackServer.Complete(true)`
+followed by `callbackServer.Shutdown(shutdownCtx)` (using a fresh bounded
+context). If any post-callback step fails, call `callbackServer.Complete(false)`
+followed by `callbackServer.Shutdown(shutdownCtx)` so the browser receives HTTP
+`503 Service Unavailable` with the safe failure page.
 
 ### gRPC Serialization
 

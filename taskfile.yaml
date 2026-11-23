@@ -827,6 +827,11 @@ tasks:
     cmds:
       - '{{.DIST}}/{{.OUTPUT_FILE}} serve'
 
+  preview:authpage:
+    desc: "Launch the local 8-scenario OAuth callback page preview gallery"
+    cmds:
+      - 'go run ./examples/auth/callback-preview{{ if .CLI_ARGS }} {{ .CLI_ARGS }}{{ end }}'
+
   # ──────────────────────────────────────────────────────────────────────────────
   # Testing
   # ──────────────────────────────────────────────────────────────────────────────
