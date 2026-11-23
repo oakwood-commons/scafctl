@@ -86,6 +86,7 @@ type AuthHandlerGRPCServer struct {
 //
 //nolint:revive // req is required by gRPC interface even if unused
 func (s *AuthHandlerGRPCServer) GetAuthHandlers(ctx context.Context, _ *proto.GetAuthHandlersRequest) (*proto.GetAuthHandlersResponse, error) {
+	ctx = extractIncomingLineageToContext(ctx)
 	handlers, err := s.Impl.GetAuthHandlers(ctx)
 	if err != nil {
 		return nil, err

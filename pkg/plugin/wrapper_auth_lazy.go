@@ -242,7 +242,7 @@ func (l *LazyAuthHandlerWrapper) init(ctx context.Context) (*AuthHandlerWrapper,
 	initID := newCallLineageID()
 	initCtx := withCallbackLineage(ctx, initID)
 	ids := lineageFromContext(initCtx)
-	l.initLineage = make(map[string]struct{}, len(ids))
+	l.initLineage = make(map[string]struct{}, maxCallbackLineageDepth)
 	for _, id := range ids {
 		l.initLineage[id] = struct{}{}
 	}

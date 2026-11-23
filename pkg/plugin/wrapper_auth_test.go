@@ -2072,4 +2072,22 @@ func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "nested:srv:srv-v2", afterTok.AccessToken)
 	})
+
+	t.Run("sanitizeLineageSlice bounds count and token length on untrusted gRPC metadata", func(t *testing.T) {
+		t.Parallel()
+		raw := make([]string, 0, maxCallbackLineageDepth+20)
+		raw = append(raw, "", string(make([]byte, maxCallbackLineageIDLen+1)))
+		for i := range maxCallbackLineageDepth + 10 {
+			raw = append(raw, fmt.Sprintf("id-%03d", i))
+		}
+		pairs := make([]string, 0, len(raw)*2)
+		for _, v := range raw {
+			pairs = append(pairs, authLineageMetadataKey, v)
+		}
+		inCtx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(pairs...))
+		extracted := extractIncomingLineageToContext(inCtx)
+		got := lineageFromContext(extracted)
+		assert.Len(t, got, maxCallbackLineageDepth)
+		assert.Equal(t, "id-000", got[0])
+	})
 }

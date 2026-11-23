@@ -41,7 +41,34 @@ const authProfileMetadataKey = "x-plugin-auth-profile"
 // incompatible reconfigurations.
 const authLineageMetadataKey = "x-plugin-auth-lineage"
 
+const (
+	// maxCallbackLineageDepth bounds the number of nested callback-lineage IDs
+	// accepted or forwarded across gRPC metadata.
+	maxCallbackLineageDepth = 64
+	// maxCallbackLineageIDLen bounds the byte length of each callback-lineage ID.
+	maxCallbackLineageIDLen = 64
+)
+
 type callbackLineageCtxKey struct{}
+
+func sanitizeLineageSlice(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	var out []string
+	const maxScan = maxCallbackLineageDepth * 2
+	for i := 0; i < len(in) && i < maxScan && len(out) < maxCallbackLineageDepth; i++ {
+		v := in[i]
+		if v == "" || len(v) > maxCallbackLineageIDLen {
+			continue
+		}
+		if out == nil {
+			out = make([]string, 0, maxCallbackLineageDepth)
+		}
+		out = append(out, v)
+	}
+	return out
+}
 
 func lineageFromContext(ctx context.Context) []string {
 	ids, _ := ctx.Value(callbackLineageCtxKey{}).([]string)
@@ -49,21 +76,22 @@ func lineageFromContext(ctx context.Context) []string {
 }
 
 func withCallbackLineage(ctx context.Context, ids ...string) context.Context {
-	existing := lineageFromContext(ctx)
-	merged := make([]string, 0, len(existing)+len(ids))
-	seen := make(map[string]struct{}, len(existing)+len(ids))
+	existing := sanitizeLineageSlice(lineageFromContext(ctx))
+	incoming := sanitizeLineageSlice(ids)
+	if len(existing) == 0 && len(incoming) == 0 {
+		return ctx
+	}
+	merged := make([]string, 0, maxCallbackLineageDepth)
+	seen := make(map[string]struct{}, maxCallbackLineageDepth)
 	for _, id := range existing {
-		if id == "" {
-			continue
-		}
 		if _, ok := seen[id]; !ok {
 			seen[id] = struct{}{}
 			merged = append(merged, id)
 		}
 	}
-	for _, id := range ids {
-		if id == "" {
-			continue
+	for _, id := range incoming {
+		if len(merged) >= maxCallbackLineageDepth {
+			break
 		}
 		if _, ok := seen[id]; !ok {
 			seen[id] = struct{}{}
@@ -84,14 +112,14 @@ func withoutCallbackLineage(ctx context.Context) context.Context {
 }
 
 func appendOutgoingLineageMetadata(ctx context.Context) context.Context {
-	ids := lineageFromContext(ctx)
+	ids := sanitizeLineageSlice(lineageFromContext(ctx))
 	if len(ids) == 0 {
 		ids = incomingMetadataLineage(ctx)
 	}
 	if len(ids) == 0 {
 		return ctx
 	}
-	pairs := make([]string, 0, len(ids)*2)
+	pairs := make([]string, 0, maxCallbackLineageDepth*2)
 	for _, id := range ids {
 		pairs = append(pairs, authLineageMetadataKey, id)
 	}
@@ -100,13 +128,13 @@ func appendOutgoingLineageMetadata(ctx context.Context) context.Context {
 
 func incomingMetadataLineage(ctx context.Context) []string {
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if vals := md.Get(authLineageMetadataKey); len(vals) > 0 {
-			return append([]string(nil), vals...)
+		if vals := sanitizeLineageSlice(md.Get(authLineageMetadataKey)); len(vals) > 0 {
+			return vals
 		}
 	}
 	if md, ok := metadata.FromOutgoingContext(ctx); ok {
-		if vals := md.Get(authLineageMetadataKey); len(vals) > 0 {
-			return append([]string(nil), vals...)
+		if vals := sanitizeLineageSlice(md.Get(authLineageMetadataKey)); len(vals) > 0 {
+			return vals
 		}
 	}
 	return nil
