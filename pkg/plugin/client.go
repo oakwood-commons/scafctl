@@ -781,6 +781,17 @@ func (c *AuthHandlerClient) registerWrapper(w *AuthHandlerWrapper) {
 	}
 }
 
+func (c *AuthHandlerClient) unregisterWrapper(w *AuthHandlerWrapper) {
+	if c == nil || w == nil {
+		return
+	}
+	c.wrappersMu.Lock()
+	c.wrappers = slices.DeleteFunc(c.wrappers, func(cur *AuthHandlerWrapper) bool {
+		return cur == w
+	})
+	c.wrappersMu.Unlock()
+}
+
 // ensureAndSnapshotWrappers ensures self is registered on c (handling struct-literal
 // wrappers in tests) and returns a snapshot of all wrappers sharing c in
 // deterministic registration order.
@@ -810,8 +821,10 @@ func (c *AuthHandlerClient) markServerMode() {
 }
 
 func (c *AuthHandlerClient) ActivateServerMode(ctx context.Context, settings []byte) error {
-	if sm, ok := c.plugin.(*AuthHandlerGRPCClient); ok {
-		return sm.ActivateServerMode(ctx, settings)
+	if c != nil {
+		if sm, ok := c.plugin.(*AuthHandlerGRPCClient); ok {
+			return sm.ActivateServerMode(ctx, settings)
+		}
 	}
 	if !hasServerModeSettings(settings) {
 		return nil

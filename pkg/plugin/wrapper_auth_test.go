@@ -2235,4 +2235,64 @@ func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "nested:srv:shared-srv", ghAfter.AccessToken)
 	})
+
+	t.Run("failed sibling registration, mid-RPC wrapper registration, and nil client do not deadlock or panic ActivateServerMode", func(t *testing.T) {
+		t.Parallel()
+		// 1. Nil client wrapper handles nil and non-empty ActivateServerMode without panicking.
+		nilClientWrapper := NewAuthHandlerWrapper(nil, AuthHandlerInfo{Name: "entra"})
+		require.NoError(t, nilClientWrapper.ActivateServerMode(context.Background(), nil))
+		require.ErrorContains(t, nilClientWrapper.ActivateServerMode(context.Background(), json.RawMessage(`{"clientId":"srv"}`)), "plugin does not support server mode")
+
+		// 2. Failed registry.Register on a second handler (empty name) must unregister it from client.wrappers
+		// rather than leaving a zombie reconfiguring wrapper that deadlocks ActivateServerMode.
+		reg := auth.NewRegistry()
+		pluginImpl := &callbackAwareStatefulPlugin{}
+		grpcServer := &AuthHandlerGRPCServer{Impl: pluginImpl}
+		var sharedClient *AuthHandlerClient
+		var lateWrapper *AuthHandlerWrapper
+		wireSvc := &concurrentWireServiceClient{server: grpcServer}
+		wireSvc.onActivate = func(_ context.Context, _ json.RawMessage) error {
+			// Register a late wrapper mid-RPC whose own initial ConfigureAuthHandler is in progress (reconfiguring == true).
+			lateWrapper = NewAuthHandlerWrapper(sharedClient, AuthHandlerInfo{Name: "late"})
+			lateWrapper.configMu.Lock()
+			lateWrapper.reconfiguring = true
+			lateWrapper.configMu.Unlock()
+			return nil
+		}
+		sharedClient = NewAuthHandlerClientFromPlugin(NewAuthHandlerGRPCClient(wireSvc))
+
+		registered := configureAndRegisterAuthHandlers(
+			baseCtx,
+			reg,
+			sharedClient,
+			[]AuthHandlerInfo{
+				{Name: "entra", DisplayName: "Entra"},
+				{Name: "", DisplayName: "InvalidEmptyName"},
+			},
+			&ProviderConfig{BinaryName: "mycli"},
+		)
+		assert.Equal(t, []string{"entra"}, registered)
+
+		entraH, err := reg.Get("entra")
+		require.NoError(t, err)
+		entraW := entraH.(*AuthHandlerWrapper)
+
+		actDone := make(chan error, 1)
+		go func() {
+			actDone <- entraW.ActivateServerMode(context.Background(), json.RawMessage(`{"clientId":"srv-clean"}`))
+		}()
+		select {
+		case actErr := <-actDone:
+			require.NoError(t, actErr)
+		case <-time.After(2 * time.Second):
+			t.Fatal("deadlock: failed sibling registration left zombie reconfiguring wrapper on shared client")
+		}
+
+		require.NotNil(t, lateWrapper)
+		lateWrapper.configMu.Lock()
+		assert.True(t, lateWrapper.reconfiguring, "ActivateServerMode must not clear reconfiguring on a wrapper registered mid-RPC")
+		assert.True(t, lateWrapper.serverMode, "ActivateServerMode must propagate serverMode to wrappers registered mid-RPC")
+		lateWrapper.reconfiguring = false
+		lateWrapper.configMu.Unlock()
+	})
 }

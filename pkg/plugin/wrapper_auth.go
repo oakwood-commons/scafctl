@@ -1034,12 +1034,20 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 				AuthCallbackPages: cfg.AuthCallbackPages,
 				BaseSettings:      cloneSettingsMap(cfg.Settings),
 			})
-			// Mark reconfiguring before registration so concurrent callers
-			// obtaining wrapper from registry wait until initial configuration completes.
+			// Mark reconfiguring under configMu before registration so concurrent
+			// callers obtaining wrapper from registry or client.wrappers wait until
+			// initial configuration completes without racing.
+			wrapper.configMu.Lock()
 			wrapper.reconfiguring = true
+			wrapper.configMu.Unlock()
 		}
 
 		if err := registry.Register(wrapper); err != nil {
+			client.unregisterWrapper(wrapper)
+			wrapper.configMu.Lock()
+			wrapper.reconfiguring = false
+			wrapper.broadcastLocked()
+			wrapper.configMu.Unlock()
 			lgr.V(1).Info("failed to register auth handler", "handler", info.Name, "error", err)
 			continue
 		}
@@ -1359,7 +1367,9 @@ func (w *AuthHandlerWrapper) ActivateServerMode(ctx context.Context, settings js
 				endFn()
 			}
 			for _, sib := range finalSiblings {
-				sib.reconfiguring = false
+				if slices.Contains(siblings, sib) {
+					sib.reconfiguring = false
+				}
 				if setServerMode {
 					sib.serverMode = true
 				}
