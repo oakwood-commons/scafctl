@@ -169,7 +169,7 @@ scafctl config get httpClient.timeout
 
 ### Write Values
 
-> **Warning (`config.d` drop-in fragments):** When non-empty `config.d/*.yaml` fragments are loaded, `scafctl config set` only persists `logging.level`, `logging.format`, `logging.timestamps`, `logging.enableProfiling`, `settings.quiet`, `settings.noColor`, `settings.defaultCatalog`, `httpClient.allowPrivateIPs`, `httpClient.trustProxyResolution`, `httpClient.trustedProxy`, and `httpClient.allowedPrivateCIDRs` to `config.yaml`. For any other key (such as `settings.disableOfficialAuthHandlers`, `apiServer.*`, `resolver.*`, or `httpClient.timeout`), edit `config.yaml` or a `config.d/*.yaml` fragment directly so changes survive reload.
+> **Warning (`config.d` drop-in fragments):** When non-empty `config.d/*.yaml` fragments are loaded, `scafctl config set` only persists `logging.level`, `logging.format`, `logging.timestamps`, `logging.enableProfiling`, `settings.quiet`, `settings.noColor`, `settings.defaultCatalog`, `httpClient.allowPrivateIPs`, `httpClient.trustProxyResolution`, `httpClient.trustedProxy`, `httpClient.allowedPrivateCIDRs`, and `auth.browser` to `config.yaml`. For any other key (such as `settings.disableOfficialAuthHandlers`, `apiServer.*`, `resolver.*`, or `httpClient.timeout`), edit `config.yaml` or a `config.d/*.yaml` fragment directly so changes survive reload.
 
 {{< tabs "config-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
@@ -460,6 +460,7 @@ shown as `(not present)`.
 | `plugins.fetchCooldown` | duration | `5m` | Cooldown between failed plugin auto-fetch retries |
 | `settings.disableOfficialAuthHandlers` | bool | `false` | Disable auto-resolution of the official auth handlers (`entra`, `github`, `gcp`) |
 | `settings.disableThirdPartyAuthHandlers` | bool | `false` | Disable catalog-by-name resolution of non-official auth handlers (official-only policy) |
+| `auth.browser` | string | unset | Preferred web browser for interactive login (`msedge`, `chrome`, `firefox`, `safari`, `default`, or an executable path; overridden by `--browser`, falls back to `$BROWSER` and OS default) |
 | `auth.entra.*` | object | -- | Entra (Azure AD) CLI auth handler config (`tenantId` defaults to `common`, `defaultFlow` defaults to `interactive`; supports `clientId`, `authority`, `defaultScopes`, `defaultFlow`, `clientSecret`, `federatedTokenFile`, `federatedToken`, `httpClient`, `activeProfile`, `profiles`) |
 | `auth.github.hostname` | string | `github.com` | GitHub hostname (or GHES hostname) |
 | `auth.github.clientId` | string | built-in | OAuth App client ID |

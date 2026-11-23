@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -180,6 +181,14 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 	lgr := logger.FromContext(ctx)
 	lgr.V(1).Info("login via plugin auth handler", "handler", w.handlerName)
 
+	effectiveBrowser := auth.ResolveBrowserPreference(ctx, opts.Browser)
+	if err := config.ValidateBrowser(effectiveBrowser); err != nil {
+		return nil, fmt.Errorf("plugin auth handler %s login: invalid browser preference: %w", w.handlerName, err)
+	}
+	if w.willOpenBrowserOnLogin(ctx, opts.Flow, effectiveBrowser) {
+		auth.WarnIfBrowserUnavailable(ctx, effectiveBrowser)
+	}
+
 	req := LoginRequest{
 		TenantID:     opts.TenantID,
 		Hostname:     opts.Hostname,
@@ -187,6 +196,7 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 		Flow:         opts.Flow,
 		Timeout:      opts.Timeout,
 		CallbackPort: opts.CallbackPort,
+		Browser:      effectiveBrowser,
 	}
 
 	// Bridge the LoginOptions.DeviceCodeCallback to the plugin's streaming callback.
@@ -736,4 +746,31 @@ func KillAllAuthHandlers(clients []*AuthHandlerClient) {
 
 func (w *AuthHandlerWrapper) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
 	return w.client.ActivateServerMode(ctx, settings)
+}
+
+// willOpenBrowserOnLogin reports whether delegating Login to the plugin will
+// attempt to launch a web browser on the host. When flow is empty (e.g. from
+// 'scafctl kube login' or library callers) and a browser preference or $BROWSER
+// is set, it consults DetectAvailableFlows and Entra's configured defaultFlow
+// so headless/CI flows (device_code, service_principal, workload_identity, pat)
+// never emit spurious browser warnings.
+func (w *AuthHandlerWrapper) willOpenBrowserOnLogin(ctx context.Context, flow auth.Flow, effectiveBrowser string) bool {
+	if effectiveBrowser == "" && strings.TrimSpace(os.Getenv("BROWSER")) == "" {
+		return false
+	}
+	if flow != "" {
+		return flow == auth.FlowInteractive
+	}
+	if available, err := w.DetectAvailableFlows(ctx); err == nil {
+		for _, fa := range available {
+			if fa.Available {
+				return auth.Flow(fa.Flow) == auth.FlowInteractive
+			}
+		}
+	}
+	if w.handlerName == "entra" {
+		return auth.ResolveEntraDefaultFlow(ctx) == auth.FlowInteractive
+	}
+	supported := w.SupportedFlows()
+	return len(supported) == 0 || slices.Contains(supported, auth.FlowInteractive)
 }

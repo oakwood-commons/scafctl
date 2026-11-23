@@ -34,6 +34,11 @@ import (
 
 // CommandLogin creates the top-level 'login' command.
 func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+	binaryName := settings.CliBinaryName
+	if cliParams != nil && cliParams.BinaryName != "" {
+		binaryName = cliParams.BinaryName
+	}
+
 	var (
 		handlerName    string
 		server         string
@@ -44,6 +49,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		namespace      string
 		kubeconfigPath string
 		profile        string
+		browser        string
 		setCurrent     bool
 		insecure       bool
 		verify         bool
@@ -52,7 +58,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		timeout        time.Duration
 		outputFlags    flags.KvxOutputFlags
 	)
-	outputFlags.AppName = cliParams.BinaryName
+	outputFlags.AppName = binaryName
 
 	cmd := &cobra.Command{
 		Use:   "login [cluster]",
@@ -74,6 +80,9 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			  # Login to a resolver-known cluster (handler comes from the resolver)
 			  scafctl kube login prod
 
+			  # Login using a specific web browser
+			  scafctl kube login prod --browser msedge
+
 			  # Override the handler the resolver would choose
 			  scafctl kube login prod --handler oidc
 
@@ -82,7 +91,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			  # Login, make the new context current, and verify the identity
 			  scafctl kube login prod --current --verify
-		`), settings.CliBinaryName, cliParams.BinaryName),
+		`), settings.CliBinaryName, binaryName),
 		SilenceUsage:      true,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: clusterArgCompletion,
@@ -92,10 +101,27 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			if w == nil {
 				return fmt.Errorf("writer not initialized in context")
 			}
+			if !loginTUIEligibleFormat(outputFlags.Output) {
+				w = w.Clone(writer.WithHumanToStderr())
+				ctx = writer.WithWriter(ctx, w)
+			}
 
 			var cluster string
 			if len(args) == 1 {
 				cluster = args[0]
+			}
+
+			if cmd.Flags().Changed("browser") {
+				if err := auth.ValidateBrowserFlag(browser); err != nil {
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+			} else if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.Browser != "" {
+				if err := config.ValidateBrowser(cfg.Auth.Browser); err != nil {
+					err = fmt.Errorf("invalid auth.browser configuration: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.ConfigError)
+				}
 			}
 
 			// --save-alias needs a non-empty name to key the persisted alias.
@@ -107,12 +133,12 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			mgr := kubeconfig.NewManager(cliParams.BinaryName)
+			mgr := kubeconfig.NewManager(binaryName)
 			defer func() { _ = mgr.Close() }()
 			deps := kubelogin.Deps{
 				Kubeconfig: mgr,
 				Resolver:   kubeapi.ResolverFromContext(ctx),
-				BinaryName: cliParams.BinaryName,
+				BinaryName: binaryName,
 				// Route a detected cluster AuthType to a default handler when the
 				// caller supplies neither --handler nor a cluster DefaultHandler:
 				// OpenShift OAuth clusters -> "openshift", OIDC clusters -> "entra".
@@ -127,10 +153,10 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			// when stdout is a terminal and the output is not structured or
 			// quiet. Piped, non-TTY, -o json/table, or -o quiet output keeps the
 			// plain line-based path.
-			if skvx.IsTerminal(ioStreams.Out) && loginTUIEligibleFormat(outputFlags.Output) {
+			if ioStreams != nil && skvx.IsTerminal(ioStreams.Out) && loginTUIEligibleFormat(outputFlags.Output) {
 				deps.LoginRunner = func(ctx context.Context, h kubelogin.Authenticator, opts auth.LoginOptions) (*auth.Result, error) {
 					if handler, ok := h.(auth.Handler); ok {
-						return loginui.RunLogin(ctx, w, cliParams.BinaryName, handler, opts)
+						return loginui.RunLogin(ctx, w, binaryName, handler, opts)
 					}
 					return h.Login(ctx, opts)
 				}
@@ -146,6 +172,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				Namespace:         namespace,
 				KubeconfigPath:    kubeconfigPath,
 				Profile:           profile,
+				Browser:           auth.ResolveBrowserPreference(ctx, browser),
 				SetCurrentContext: setCurrent,
 				InsecureSkipTLS:   insecure,
 				Verify:            verify,
@@ -192,6 +219,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "Default namespace set on the written context (overrides the resolved cluster)")
 	cmd.Flags().StringVar(&kubeconfigPath, "kubeconfig", "", "Path to the kubeconfig file (defaults to KUBECONFIG or ~/.kube/config)")
 	cmd.Flags().StringVar(&profile, "profile", "", "Auth profile baked into the exec credential args")
+	cmd.Flags().StringVar(&browser, "browser", "", "Browser to open for interactive login (e.g., msedge, chrome, firefox, safari; overrides auth.browser and $BROWSER)")
 	cmd.Flags().BoolVar(&setCurrent, "current", false, "Set the new context as the current context")
 	cmd.Flags().BoolVar(&insecure, "insecure-skip-tls-verify", false, "Disable API server TLS verification (development only)")
 	cmd.Flags().BoolVar(&verify, "verify", false, "Verify the authenticated identity via a post-login whoami (requires the kubeconfig provider)")

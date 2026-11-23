@@ -712,7 +712,7 @@ func TestHandler_ImplicitGrantLogin_RequiresAuthorizeURL(t *testing.T) {
 		cfg.AuthorizeURL = "" // missing
 	})
 
-	_, cb1, _, err := h.authCodeLogin(context.Background(), nil, 0)
+	_, cb1, _, err := h.authCodeLogin(context.Background(), auth.LoginOptions{}, nil, 0)
 	if cb1 != nil {
 		_ = cb1.Close()
 	}
@@ -731,7 +731,7 @@ func TestHandler_ImplicitGrantLogin_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	_, cb2, _, err := h.implicitGrantLogin(ctx, nil, 0)
+	_, cb2, _, err := h.implicitGrantLogin(ctx, auth.LoginOptions{}, nil, 0)
 	if cb2 != nil {
 		_ = cb2.Close()
 	}

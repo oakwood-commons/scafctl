@@ -49,6 +49,7 @@ type SanitizedCatAuth struct {
 
 // SanitizedAuth redacts client secrets and tokens from auth config.
 type SanitizedAuth struct {
+	Browser                    string                          `json:"browser,omitempty" yaml:"browser,omitempty" doc:"Preferred browser for interactive authentication flows (e.g., msedge, chrome, firefox, safari, default, or an executable path)" example:"msedge" maxLength:"256"`
 	HTTPClient                 *HTTPClientConfig               `json:"httpClient,omitempty" yaml:"httpClient,omitempty" doc:"HTTP client overrides for auth handlers"`
 	Entra                      *SanitizedEntraAuth             `json:"entra,omitempty" yaml:"entra,omitempty" doc:"Entra ID auth configuration (redacted)"`
 	GitHub                     *SanitizedGitHubAuth            `json:"github,omitempty" yaml:"github,omitempty" doc:"GitHub auth configuration (redacted)"`
@@ -259,6 +260,7 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 	}
 
 	// Sanitize auth -- redact secrets
+	s.Auth.Browser = cfg.Auth.Browser
 	s.Auth.HTTPClient = cfg.Auth.HTTPClient
 	s.Auth.TrustedVerificationDomains = cfg.Auth.TrustedVerificationDomains
 	if cfg.Auth.Entra != nil {

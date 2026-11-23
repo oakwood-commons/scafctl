@@ -40,6 +40,9 @@ scafctl auth login github --flow github-app
 
 # GitHub interactive with custom callback port
 scafctl auth login github --callback-port 8400
+
+# Interactive login with a specific browser (overrides auth.browser and $BROWSER)
+scafctl auth login entra --browser msedge
 ```
 
 ---

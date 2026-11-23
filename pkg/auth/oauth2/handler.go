@@ -30,6 +30,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
 const (
@@ -164,7 +165,6 @@ func New(cfg config.CustomOAuth2Config, opts ...Option) (*Handler, error) {
 		logger:          logr.Discard(),
 		secretKeyPrefix: secretKeyPrefix,
 		binaryName:      settings.CliBinaryName,
-		openBrowser:     oauth.OpenBrowser,
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -359,6 +359,11 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		return nil, err
 	}
 
+	opts.Browser = auth.ResolveBrowserPreference(ctx, opts.Browser)
+	if err := config.ValidateBrowser(opts.Browser); err != nil {
+		return nil, auth.NewError(h.cfg.Name, "login", fmt.Errorf("invalid browser preference: %w", err))
+	}
+
 	timeout := opts.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
@@ -412,7 +417,7 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		if callbackPort == 0 {
 			callbackPort = h.cfg.CallbackPort
 		}
-		tokenResp, cbServer, callbackHit, loginErr = h.authCodeLogin(ctx, scopes, callbackPort)
+		tokenResp, cbServer, callbackHit, loginErr = h.authCodeLogin(ctx, opts, scopes, callbackPort)
 	case auth.FlowDeviceCode:
 		tokenResp, loginErr = h.deviceCodeLogin(ctx, opts, scopes)
 	case auth.FlowClientCredentials:
@@ -712,16 +717,38 @@ func (h *Handler) callbackOpts(ctx context.Context) []oauth.CallbackOption {
 	return opts
 }
 
+func (h *Handler) launchBrowser(ctx context.Context, rawURL, browser string) error {
+	if h.openBrowser != nil {
+		return h.openBrowser(ctx, rawURL)
+	}
+	return auth.OpenBrowser(ctx, rawURL, browser)
+}
+
+func (h *Handler) notifyManualAuthURL(ctx context.Context, opts auth.LoginOptions, rawURL string) {
+	if ctx.Err() != nil {
+		return
+	}
+	if opts.DeviceCodeCallback != nil {
+		opts.DeviceCodeCallback("", rawURL, "")
+		return
+	}
+	if w := writer.FromContext(ctx); w != nil {
+		w.Plainln("")
+		w.Plainln("To sign in, use a web browser to open the page:")
+		w.Plainln("  " + rawURL)
+	}
+}
+
 // ---------- flow: authorization code + PKCE ----------
 
-func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPort int) (*tokenResponse, *oauth.CallbackServer, bool, error) {
+func (h *Handler) authCodeLogin(ctx context.Context, opts auth.LoginOptions, scopes []string, callbackPort int) (*tokenResponse, *oauth.CallbackServer, bool, error) {
 	if h.cfg.AuthorizeURL == "" {
 		return nil, nil, false, fmt.Errorf("authorizeURL is required for interactive flow")
 	}
 
 	// Implicit grant flow (response_type=token) uses a different callback mechanism.
 	if h.cfg.ResponseType == "token" {
-		return h.implicitGrantLogin(ctx, scopes, callbackPort)
+		return h.implicitGrantLogin(ctx, opts, scopes, callbackPort)
 	}
 
 	var verifier string
@@ -763,12 +790,9 @@ func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPo
 	}
 	authURL.RawQuery = q.Encode()
 
-	openFn := h.openBrowser
-	if openFn == nil {
-		openFn = oauth.OpenBrowser
-	}
-	if openErr := openFn(ctx, authURL.String()); openErr != nil {
+	if openErr := h.launchBrowser(ctx, authURL.String(), opts.Browser); openErr != nil {
 		h.logger.V(1).Info("failed to open browser", "url", authURL.String(), "error", openErr)
+		h.notifyManualAuthURL(ctx, opts, authURL.String())
 	}
 
 	select {
@@ -808,7 +832,7 @@ func (h *Handler) exchangeAuthCode(ctx context.Context, code, redirectURI, codeV
 
 // ---------- flow: implicit grant (response_type=token) ----------
 
-func (h *Handler) implicitGrantLogin(ctx context.Context, scopes []string, callbackPort int) (*tokenResponse, *oauth.CallbackServer, bool, error) {
+func (h *Handler) implicitGrantLogin(ctx context.Context, opts auth.LoginOptions, scopes []string, callbackPort int) (*tokenResponse, *oauth.CallbackServer, bool, error) {
 	state, err := oauth.GenerateCodeVerifier()
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("generate state: %w", err)
@@ -834,12 +858,9 @@ func (h *Handler) implicitGrantLogin(ctx context.Context, scopes []string, callb
 	}
 	authURL.RawQuery = q.Encode()
 
-	openFn := h.openBrowser
-	if openFn == nil {
-		openFn = oauth.OpenBrowser
-	}
-	if openErr := openFn(ctx, authURL.String()); openErr != nil {
+	if openErr := h.launchBrowser(ctx, authURL.String(), opts.Browser); openErr != nil {
 		h.logger.V(1).Info("failed to open browser", "url", authURL.String(), "error", openErr)
+		h.notifyManualAuthURL(ctx, opts, authURL.String())
 	}
 
 	select {

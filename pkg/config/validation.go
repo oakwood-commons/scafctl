@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -120,6 +122,66 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("apiServer: %w", err)
 	}
 
+	// Validate auth config
+	if err := c.Auth.Validate(); err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+
+	return nil
+}
+
+// Validate validates global authentication configuration.
+func (a *GlobalAuthConfig) Validate() error {
+	if err := ValidateBrowser(a.Browser); err != nil {
+		return fmt.Errorf("browser: %w", err)
+	}
+	return nil
+}
+
+// ValidateBrowser validates a browser preference string (such as auth.browser
+// or --browser). An empty string is valid (unset). Non-empty values must fit
+// within MaxAuthBrowserLength, contain valid UTF-8 with no control characters,
+// not be whitespace-only, and not start with '-' so config or flag values
+// cannot inject command-line options into browser launchers.
+func ValidateBrowser(browser string) error {
+	if browser == "" {
+		return nil
+	}
+	if len(browser) > MaxAuthBrowserLength {
+		return fmt.Errorf("exceeds maximum length of %d characters", MaxAuthBrowserLength)
+	}
+	if !utf8.ValidString(browser) {
+		return errors.New("contains invalid UTF-8")
+	}
+	for _, r := range browser {
+		if r < 0x20 || r == 0x7f || unicode.IsControl(r) {
+			return errors.New("must not contain control characters")
+		}
+	}
+	trimmed := strings.TrimSpace(browser)
+	if trimmed == "" {
+		return errors.New("must not be whitespace-only")
+	}
+	unquoted := trimmed
+	switch {
+	case len(unquoted) >= 2 && unquoted[0] == '"' && unquoted[len(unquoted)-1] == '"':
+		unquoted = strings.TrimSpace(unquoted[1 : len(unquoted)-1])
+	case len(unquoted) >= 2 && unquoted[0] == '\'' && unquoted[len(unquoted)-1] == '\'':
+		unquoted = strings.TrimSpace(unquoted[1 : len(unquoted)-1])
+	}
+	if unquoted == "" {
+		return errors.New("must not be empty")
+	}
+	if strings.ContainsRune(unquoted, '"') {
+		return errors.New("must not contain double quotes")
+	}
+	strippedQuotes := strings.TrimLeft(unquoted, "' ")
+	if strippedQuotes == "" {
+		return errors.New("must not be empty")
+	}
+	if strings.HasPrefix(trimmed, "-") || strings.HasPrefix(unquoted, "-") || strings.HasPrefix(strippedQuotes, "-") {
+		return fmt.Errorf("must not start with '-' (got %q)", browser)
+	}
 	return nil
 }
 

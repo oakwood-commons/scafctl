@@ -131,7 +131,7 @@ type GroupsProvider interface {
 
 | Type | Fields | Purpose |
 | ------ | -------- | --------- |
-| `LoginOptions` | `TenantID`, `Hostname`, `Scopes`, `Flow`, `Timeout`, `DeviceCodeCallback` | Input to `Login()` |
+| `LoginOptions` | `TenantID`, `Hostname`, `Scopes`, `Flow`, `Timeout`, `CallbackPort`, `Browser`, `DeviceCodeCallback` | Input to `Login()` |
 | `TokenOptions` | `Scope`, `MinValidFor`, `ForceRefresh`, `Hostname`, `ServerContext`, `Assertion`, `Caller` | Input to `GetToken()` / `InjectAuth()` |
 | `Result` | `Claims`, `ExpiresAt` | Output from `Login()` |
 | `Status` | `Authenticated`, `Claims`, `ExpiresAt`, `LastRefresh`, `TenantID`, `IdentityType`, `ClientID`, `TokenFile`, `Scopes` | Output from `Status()` |
@@ -897,6 +897,10 @@ if pages := p.cfg.AuthCallbackPages; pages != nil {
 callbackServer, err := oauth.StartCallbackServer(ctx, req.CallbackPort, state, callbackOpts...)
 ~~~
 
+Open the authorization URL with `oauth.OpenBrowserWithPreference(ctx, authURL, req.Browser)`
+so `--browser` and `auth.browser` preferences forwarded on `LoginRequest.Browser`
+are honored consistently.
+
 After all fatal post-callback steps succeed, call `callbackServer.Complete(true)`
 followed by `callbackServer.Shutdown(shutdownCtx)` (using a fresh bounded
 context). If any post-callback step fails, call `callbackServer.Complete(false)`
@@ -910,7 +914,7 @@ Types preserved over the gRPC round-trip:
 | Type | Transmitted |
 | ------ | :----------: |
 | `AuthHandlerInfo` (name, display_name, flows, capabilities) | ✅ |
-| `LoginRequest` (tenant_id, scopes, flow, timeout) | ✅ |
+| `LoginRequest` (tenant_id, hostname, scopes, flow, timeout, callback_port, browser) | ✅ |
 | `LoginResponse` (claims, expires_at) | ✅ |
 | `Status` (all fields including claims) | ✅ |
 | `TokenResponse` (access_token, token_type, expires_at, scope, cached_at, flow, session_id) | ✅ |
