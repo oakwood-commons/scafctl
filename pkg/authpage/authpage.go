@@ -178,13 +178,8 @@ func DefaultRenderer(_ context.Context, data Data) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// FallbackHTML returns a minimal, dependency-free, HTML-escaped document that
-// preserves the true authentication outcome when a custom renderer errors,
-// returns empty output, or exceeds MaxDocumentBytes.
-func FallbackHTML(data Data) []byte {
-	norm := normalizeData(data)
-	escapedBrand := html.EscapeString(norm.BinaryName)
-	if norm.State == StateSuccess {
+func fallbackHTMLForBrand(escapedBrand string, state State) []byte {
+	if state == StateSuccess {
 		return []byte(fmt.Sprintf(
 			"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>%s | Authentication complete</title></head><body><h1>You're connected.</h1><p>Return to your terminal to continue. You can close this window.</p></body></html>",
 			escapedBrand,
@@ -194,6 +189,20 @@ func FallbackHTML(data Data) []byte {
 		"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>%s | Authentication unsuccessful</title></head><body><h1>Couldn't connect.</h1><p>Return to your terminal for details and try signing in again. You can close this window.</p></body></html>",
 		escapedBrand,
 	))
+}
+
+// FallbackHTML returns a minimal, dependency-free, HTML-escaped document that
+// preserves the true authentication outcome when a custom renderer errors,
+// returns empty output, or exceeds MaxDocumentBytes. If an oversized BinaryName
+// causes the escaped fallback itself to exceed MaxDocumentBytes, FallbackHTML
+// regenerates the document with settings.CliBinaryName so the size cap holds.
+func FallbackHTML(data Data) []byte {
+	norm := normalizeData(data)
+	doc := fallbackHTMLForBrand(html.EscapeString(norm.BinaryName), norm.State)
+	if len(doc) > MaxDocumentBytes {
+		doc = fallbackHTMLForBrand(html.EscapeString(settings.CliBinaryName), norm.State)
+	}
+	return doc
 }
 
 // RenderSafe invokes r (or DefaultRenderer when r is nil) and guarantees a

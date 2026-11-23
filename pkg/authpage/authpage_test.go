@@ -200,6 +200,22 @@ func TestRenderSafe_CustomAndFallbackPaths(t *testing.T) {
 			data:       Data{BinaryName: "acme-cli", State: StateSuccess},
 			wantSubstr: "You're connected.",
 		},
+		{
+			name:       "oversized binary name with HTML entity expansion stays within MaxDocumentBytes",
+			renderer:   nil,
+			data:       Data{BinaryName: strings.Repeat("&", MaxDocumentBytes), State: StateSuccess},
+			wantSubstr: "<title>scafctl | Authentication complete</title>",
+			wantNoSub:  "&amp;&amp;",
+		},
+		{
+			name: "oversized binary name on custom renderer error stays within MaxDocumentBytes",
+			renderer: func(_ context.Context, _ Data) ([]byte, error) {
+				return nil, errors.New("custom renderer failed")
+			},
+			data:       Data{BinaryName: strings.Repeat("<", MaxDocumentBytes), State: StateFailure},
+			wantSubstr: "<title>scafctl | Authentication unsuccessful</title>",
+			wantNoSub:  "&lt;&lt;",
+		},
 	}
 
 	for _, tt := range tests {
@@ -213,6 +229,15 @@ func TestRenderSafe_CustomAndFallbackPaths(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("FallbackHTML directly enforces MaxDocumentBytes on oversized binary name", func(t *testing.T) {
+		for _, st := range []State{StateSuccess, StateFailure} {
+			doc := FallbackHTML(Data{BinaryName: strings.Repeat("x", MaxDocumentBytes+64), State: st})
+			require.NotEmpty(t, doc)
+			assert.LessOrEqual(t, len(doc), MaxDocumentBytes)
+			assert.Contains(t, string(doc), settings.CliBinaryName)
+		}
+	})
 }
 
 func TestRenderBundle_ProducesDistinctSuccessAndFailurePages(t *testing.T) {
