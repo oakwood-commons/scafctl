@@ -445,6 +445,7 @@ func NewAuthHandlerGRPCClient(client proto.AuthHandlerServiceClient) *AuthHandle
 
 // GetAuthHandlers implements AuthHandlerPlugin.GetAuthHandlers.
 func (c *AuthHandlerGRPCClient) GetAuthHandlers(ctx context.Context) ([]AuthHandlerInfo, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	resp, err := c.client.GetAuthHandlers(ctx, &proto.GetAuthHandlersRequest{})
 	if err != nil {
 		return nil, err

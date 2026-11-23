@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 func TestInjectAuthHandlerSettings(t *testing.T) {
@@ -1019,37 +1020,61 @@ func TestAuthHandlerWrapper_ConcurrentMultiProfileRace(t *testing.T) {
 	wg.Wait()
 }
 
+func simulateGRPCWireHop(ctx context.Context, strip bool) context.Context {
+	if !strip {
+		return ctx
+	}
+	wireCtx := context.Background()
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		wireCtx = metadata.NewIncomingContext(wireCtx, md.Copy())
+	}
+	return wireCtx
+}
+
 type concurrentWireServiceClient struct {
 	proto.AuthHandlerServiceClient
-	server *AuthHandlerGRPCServer
+	server       *AuthHandlerGRPCServer
+	stripWireCtx bool
+	onActivate   func(ctx context.Context, settings json.RawMessage) error
 }
 
 func (c *concurrentWireServiceClient) ConfigureAuthHandler(ctx context.Context, req *proto.ConfigureAuthHandlerRequest, _ ...grpc.CallOption) (*proto.ConfigureAuthHandlerResponse, error) {
-	return c.server.ConfigureAuthHandler(ctx, req)
+	return c.server.ConfigureAuthHandler(simulateGRPCWireHop(ctx, c.stripWireCtx), req)
 }
 
 func (c *concurrentWireServiceClient) GetStatus(ctx context.Context, req *proto.GetStatusRequest, _ ...grpc.CallOption) (*proto.GetStatusResponse, error) {
-	return c.server.GetStatus(ctx, req)
+	return c.server.GetStatus(simulateGRPCWireHop(ctx, c.stripWireCtx), req)
 }
 
 func (c *concurrentWireServiceClient) GetToken(ctx context.Context, req *proto.GetTokenRequest, _ ...grpc.CallOption) (*proto.GetTokenResponse, error) {
-	return c.server.GetToken(ctx, req)
+	return c.server.GetToken(simulateGRPCWireHop(ctx, c.stripWireCtx), req)
 }
 
 func (c *concurrentWireServiceClient) DetectAvailableFlows(ctx context.Context, req *proto.DetectAvailableFlowsRequest, _ ...grpc.CallOption) (*proto.DetectAvailableFlowsResponse, error) {
-	return c.server.DetectAvailableFlows(ctx, req)
+	return c.server.DetectAvailableFlows(simulateGRPCWireHop(ctx, c.stripWireCtx), req)
 }
 
 func (c *concurrentWireServiceClient) Logout(ctx context.Context, req *proto.LogoutRequest, _ ...grpc.CallOption) (*proto.LogoutResponse, error) {
-	return c.server.Logout(ctx, req)
+	return c.server.Logout(simulateGRPCWireHop(ctx, c.stripWireCtx), req)
 }
 
 func (c *concurrentWireServiceClient) ListCachedTokens(ctx context.Context, req *proto.ListCachedTokensRequest, _ ...grpc.CallOption) (*proto.ListCachedTokensResponse, error) {
-	return c.server.ListCachedTokens(ctx, req)
+	return c.server.ListCachedTokens(simulateGRPCWireHop(ctx, c.stripWireCtx), req)
 }
 
 func (c *concurrentWireServiceClient) PurgeExpiredTokens(ctx context.Context, req *proto.PurgeExpiredTokensRequest, _ ...grpc.CallOption) (*proto.PurgeExpiredTokensResponse, error) {
-	return c.server.PurgeExpiredTokens(ctx, req)
+	return c.server.PurgeExpiredTokens(simulateGRPCWireHop(ctx, c.stripWireCtx), req)
+}
+
+func (c *concurrentWireServiceClient) ActivateServerMode(ctx context.Context, req *proto.ActivateServerModeRequest, _ ...grpc.CallOption) (*proto.ActivateServerModeResponse, error) {
+	hopCtx := simulateGRPCWireHop(ctx, c.stripWireCtx)
+	if c.onActivate != nil {
+		if err := c.onActivate(hopCtx, req.Settings); err != nil {
+			//nolint:nilerr // Error is communicated via response, not gRPC error
+			return &proto.ActivateServerModeResponse{Error: err.Error()}, nil
+		}
+	}
+	return &proto.ActivateServerModeResponse{}, nil
 }
 
 func TestAuthHandlerWrapper_ServerModeProtectsCredentialsAndConfigLessCtxPreservesStartup(t *testing.T) {
@@ -1468,19 +1493,20 @@ func TestAuthHandlerWrapper_StatefulPluginConfigurationStability(t *testing.T) {
 
 type inProcHostServiceAdapter struct {
 	proto.HostServiceClient
-	server *HostServiceServer
+	server       *HostServiceServer
+	stripWireCtx bool
 }
 
 func (a *inProcHostServiceAdapter) GetAuthIdentity(ctx context.Context, req *proto.GetAuthIdentityRequest, _ ...grpc.CallOption) (*proto.GetAuthIdentityResponse, error) {
-	return a.server.GetAuthIdentity(ctx, req)
+	return a.server.GetAuthIdentity(simulateGRPCWireHop(ctx, a.stripWireCtx), req)
 }
 
 func (a *inProcHostServiceAdapter) GetAuthToken(ctx context.Context, req *proto.GetAuthTokenRequest, _ ...grpc.CallOption) (*proto.GetAuthTokenResponse, error) {
-	return a.server.GetAuthToken(ctx, req)
+	return a.server.GetAuthToken(simulateGRPCWireHop(ctx, a.stripWireCtx), req)
 }
 
 func (a *inProcHostServiceAdapter) GetAuthGroups(ctx context.Context, req *proto.GetAuthGroupsRequest, _ ...grpc.CallOption) (*proto.GetAuthGroupsResponse, error) {
-	return a.server.GetAuthGroups(ctx, req)
+	return a.server.GetAuthGroups(simulateGRPCWireHop(ctx, a.stripWireCtx), req)
 }
 
 func TestHostService_GetAuthIdentityAndDefaultHandlerResolution(t *testing.T) {
@@ -1720,7 +1746,7 @@ func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
 	workCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, "work"))
 	prodCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, "prod"))
 
-	newCallbackHarness := func(t *testing.T, outerFn func(ctx context.Context, hostClient *HostServiceClient, hostSrv *HostServiceServer, wrapper *AuthHandlerWrapper) (string, error)) (*AuthHandlerWrapper, *HostServiceClient, *HostServiceServer) {
+	newCallbackHarnessOpts := func(t *testing.T, wireOnlyMetadata bool, outerFn func(ctx context.Context, hostClient *HostServiceClient, hostSrv *HostServiceServer, wrapper *AuthHandlerWrapper) (string, error)) (*AuthHandlerWrapper, *HostServiceClient, *HostServiceServer, *callbackAwareStatefulPlugin, *concurrentWireServiceClient) {
 		t.Helper()
 		reg := auth.NewRegistry()
 		deps := HostDepsFromAuthRegistry(reg)
@@ -1728,8 +1754,11 @@ func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
 		deps.ProfileResolverFunc = func(handlerName string) string {
 			return auth.ResolveActiveProfile(baseCtx, handlerName)
 		}
+		if wireOnlyMetadata {
+			deps.callbackLineage = nil
+		}
 		hostSrv := &HostServiceServer{Deps: *deps}
-		hostClient := &HostServiceClient{client: &inProcHostServiceAdapter{server: hostSrv}}
+		hostClient := &HostServiceClient{client: &inProcHostServiceAdapter{server: hostSrv, stripWireCtx: wireOnlyMetadata}}
 
 		var wrapper *AuthHandlerWrapper
 		pluginImpl := &callbackAwareStatefulPlugin{}
@@ -1737,7 +1766,7 @@ func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
 			return outerFn(ctx, hostClient, hostSrv, wrapper)
 		}
 		grpcServer := &AuthHandlerGRPCServer{Impl: pluginImpl}
-		wireSvc := &concurrentWireServiceClient{server: grpcServer}
+		wireSvc := &concurrentWireServiceClient{server: grpcServer, stripWireCtx: wireOnlyMetadata}
 		authClient := &AuthHandlerClient{
 			plugin:   NewAuthHandlerGRPCClient(wireSvc),
 			hostDeps: deps,
@@ -1745,7 +1774,12 @@ func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
 		wrapper = NewAuthHandlerWrapper(authClient, AuthHandlerInfo{Name: "entra"})
 		wrapper.setHostConfig(hostConfig{AppConfig: appCfg})
 		require.NoError(t, reg.Register(wrapper))
-		return wrapper, hostClient, hostSrv
+		return wrapper, hostClient, hostSrv, pluginImpl, wireSvc
+	}
+
+	newCallbackHarness := func(t *testing.T, outerFn func(ctx context.Context, hostClient *HostServiceClient, hostSrv *HostServiceServer, wrapper *AuthHandlerWrapper) (string, error)) (*AuthHandlerWrapper, *HostServiceClient, *HostServiceServer) {
+		w, hc, hs, _, _ := newCallbackHarnessOpts(t, false, outerFn)
+		return w, hc, hs
 	}
 
 	t.Run("compatible nested HostService callback succeeds via gRPC metadata while writer is queued", func(t *testing.T) {
@@ -1753,7 +1787,7 @@ func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
 		enteredOuter := make(chan struct{}, 1)
 		proceedCallback := make(chan struct{})
 
-		wrapper, _, _ := newCallbackHarness(t, func(ctx context.Context, hostClient *HostServiceClient, _ *HostServiceServer, _ *AuthHandlerWrapper) (string, error) {
+		wrapper, _, _, _, _ := newCallbackHarnessOpts(t, true, func(ctx context.Context, hostClient *HostServiceClient, _ *HostServiceServer, _ *AuthHandlerWrapper) (string, error) {
 			enteredOuter <- struct{}{}
 			<-proceedCallback
 			tokResp, err := hostClient.GetAuthTokenWithOptions(ctx, AuthTokenRequest{
@@ -1918,5 +1952,124 @@ func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("deadlock: incompatible nested callback waited on its own parent")
 		}
+	})
+
+	t.Run("serverMode counts in-flight RPCs, blocks concurrent ActivateServerMode, allows compatible callbacks, and rejects nested activation", func(t *testing.T) {
+		t.Parallel()
+		enteredOuter := make(chan struct{}, 1)
+		proceedCallback := make(chan struct{})
+		activateEntered := make(chan struct{}, 1)
+
+		var (
+			wrapper    *AuthHandlerWrapper
+			pluginImpl *callbackAwareStatefulPlugin
+			wireSvc    *concurrentWireServiceClient
+			hostClient *HostServiceClient
+		)
+		wrapper, hostClient, _, pluginImpl, wireSvc = newCallbackHarnessOpts(t, true, func(ctx context.Context, hc *HostServiceClient, _ *HostServiceServer, w *AuthHandlerWrapper) (string, error) {
+			// Nested ActivateServerMode inside an active server-mode RPC must fail fast.
+			nestedActErr := w.ActivateServerMode(ctx, json.RawMessage(`{"clientId":"nested-bad"}`))
+			if nestedActErr == nil {
+				return "", fmt.Errorf("expected nested ActivateServerMode to fail")
+			}
+
+			enteredOuter <- struct{}{}
+			<-proceedCallback
+
+			// Compatible nested callback must succeed even while concurrent ActivateServerMode is queued.
+			tokResp, err := hc.GetAuthTokenWithOptions(ctx, AuthTokenRequest{
+				Handler: "entra",
+				Scope:   "inner",
+			})
+			if err != nil {
+				return "", err
+			}
+			return tokResp.AccessToken + "|" + nestedActErr.Error(), nil
+		})
+
+		wireSvc.onActivate = func(ctx context.Context, raw json.RawMessage) error {
+			var m map[string]string
+			_ = json.Unmarshal(raw, &m)
+			if m["clientId"] == "reentrant-from-activate" {
+				// Nested GetToken callback while ActivateServerMode is actively reconfiguring must fail fast.
+				_, cbErr := hostClient.GetAuthTokenWithOptions(ctx, AuthTokenRequest{
+					Handler: "entra",
+					Scope:   "inner",
+				})
+				if cbErr == nil {
+					return fmt.Errorf("expected nested callback during ActivateServerMode to fail")
+				}
+				return nil
+			}
+			select {
+			case activateEntered <- struct{}{}:
+			default:
+			}
+			pluginImpl.mu.Lock()
+			pluginImpl.configuredProfile = "srv"
+			pluginImpl.configuredClient = m["clientId"]
+			pluginImpl.mu.Unlock()
+			return nil
+		}
+
+		// Initial server-mode activation (plus verify nested callback during ActivateServerMode fails fast).
+		require.NoError(t, wrapper.ActivateServerMode(context.Background(), json.RawMessage(`{"clientId":"reentrant-from-activate"}`)))
+		require.NoError(t, wrapper.ActivateServerMode(context.Background(), json.RawMessage(`{"clientId":"srv-v1"}`)))
+		// Drain initial activateEntered signal.
+		<-activateEntered
+
+		type result struct {
+			tok *auth.Token
+			err error
+		}
+		outerDone := make(chan result, 1)
+		go func() {
+			tok, err := wrapper.GetToken(baseCtx, auth.TokenOptions{Scope: "outer"})
+			outerDone <- result{tok: tok, err: err}
+		}()
+
+		<-enteredOuter
+
+		// Concurrent ActivateServerMode must wait for in-flight server-mode GetToken.
+		activateDone := make(chan error, 1)
+		go func() {
+			activateDone <- wrapper.ActivateServerMode(context.Background(), json.RawMessage(`{"clientId":"srv-v2"}`))
+		}()
+
+		require.Eventually(t, func() bool {
+			wrapper.configMu.Lock()
+			defer wrapper.configMu.Unlock()
+			return wrapper.writersWaiting >= 1 && wrapper.inFlight == 1
+		}, 2*time.Second, 5*time.Millisecond)
+
+		select {
+		case <-activateEntered:
+			t.Fatal("concurrent ActivateServerMode entered while server-mode GetToken was still in flight")
+		default:
+		}
+
+		close(proceedCallback)
+
+		select {
+		case out := <-outerDone:
+			require.NoError(t, out.err)
+			// Outer GetToken saw srv-v1 both before and after nested callback (never srv-v2 mid-RPC).
+			assert.Contains(t, out.tok.AccessToken, "srv:srv-v1->nested:srv:srv-v1|")
+			assert.Contains(t, out.tok.AccessToken, "|srv:srv-v1")
+			assert.Contains(t, out.tok.AccessToken, "cannot reconfigure inside a nested callback")
+		case <-time.After(2 * time.Second):
+			t.Fatal("deadlock: server-mode outer GetToken blocked while ActivateServerMode was queued")
+		}
+
+		select {
+		case actErr := <-activateDone:
+			require.NoError(t, actErr)
+		case <-time.After(2 * time.Second):
+			t.Fatal("queued ActivateServerMode did not complete after server-mode GetToken finished")
+		}
+
+		afterTok, err := wrapper.GetToken(baseCtx, auth.TokenOptions{Scope: "post-rotate"})
+		require.NoError(t, err)
+		assert.Equal(t, "nested:srv:srv-v2", afterTok.AccessToken)
 	})
 }

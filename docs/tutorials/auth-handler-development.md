@@ -925,7 +925,7 @@ Types preserved over the gRPC round-trip:
 | Type | Transmitted |
 | ------ | :----------: |
 | `AuthHandlerInfo` (name, display_name, flows, capabilities) | ✅ |
-| `LoginRequest` (tenant_id, hostname, scopes, flow, timeout, callback_port, browser) | ✅ |
+| `LoginRequest` (tenant_id, hostname, scopes, flow, timeout, callback_port, browser, settings) | ✅ |
 | `LoginResponse` (claims, expires_at) | ✅ |
 | `Status` (all fields including claims) | ✅ |
 | `TokenResponse` (access_token, token_type, expires_at, scope, cached_at, flow, session_id) | ✅ |

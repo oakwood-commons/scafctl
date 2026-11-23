@@ -76,8 +76,18 @@ func withCallbackLineage(ctx context.Context, ids ...string) context.Context {
 	return context.WithValue(ctx, callbackLineageCtxKey{}, merged)
 }
 
+func withoutCallbackLineage(ctx context.Context) context.Context {
+	if len(lineageFromContext(ctx)) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, callbackLineageCtxKey{}, ([]string)(nil))
+}
+
 func appendOutgoingLineageMetadata(ctx context.Context) context.Context {
 	ids := lineageFromContext(ctx)
+	if len(ids) == 0 {
+		ids = incomingMetadataLineage(ctx)
+	}
 	if len(ids) == 0 {
 		return ctx
 	}
@@ -727,13 +737,6 @@ func (h *HostServiceServer) ListSecrets(ctx context.Context, req *proto.ListSecr
 	}, nil
 }
 
-// resolveHostAuthCallback selects the default handler when requestedHandler is
-// empty (via AuthHandlersFunc) before resolving the effective auth profile.
-// Profile precedence:
-//  1. Explicit request field (including "default" / "built-in" markers)
-//  2. Incoming gRPC metadata (for RPCs without a proto profile field)
-//  3. Active provider execution profile captured on trackerSlot
-//  4. Host ProfileResolverFunc(effectiveHandler)
 func (h *HostServiceServer) restoreCallbackLineage(ctx context.Context) context.Context {
 	if mdIDs := incomingMetadataLineage(ctx); len(mdIDs) > 0 {
 		return withCallbackLineage(ctx, mdIDs...)
@@ -744,6 +747,14 @@ func (h *HostServiceServer) restoreCallbackLineage(ctx context.Context) context.
 	return ctx
 }
 
+// resolveHostAuthCallback selects the default handler when requestedHandler is
+// empty (via AuthHandlersFunc) before resolving the effective auth profile.
+// Profile precedence:
+//  1. Explicit request field (including "default" / "built-in" markers)
+//  2. Incoming gRPC metadata (for RPCs without a proto profile field)
+//  3. Active provider execution profile captured on trackerSlot
+//  4. Active auth handler callback profile on callbackLineage
+//  5. Host ProfileResolverFunc(effectiveHandler)
 func (h *HostServiceServer) resolveHostAuthCallback(
 	ctx context.Context,
 	requestedHandler string,
@@ -1329,6 +1340,13 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 		if err != nil {
 			return &proto.GetAuthTokenResponse{
 				Error: fmt.Sprintf("auth handler %q: %v", handler, err),
+			}
+		}
+		if rc, ok := h.(reentrantInitChecker); ok {
+			if err := rc.checkReentrantInit(ctx); err != nil {
+				return &proto.GetAuthTokenResponse{
+					Error: fmt.Sprintf("get token from %q: %v", handler, err),
+				}
 			}
 		}
 		var resolvedHostname string

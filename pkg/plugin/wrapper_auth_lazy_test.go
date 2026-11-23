@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -577,4 +579,167 @@ func TestLazyAuthHandlerWrapper_ProfileForwardedAfterCapabilitiesInitAndFirstTou
 		require.Len(t, rec.configCalls, 1)
 		assert.Empty(t, rec.configCalls[0].Profile)
 	})
+}
+
+type lazyInitCallbackPlugin struct {
+	callbackAwareStatefulPlugin
+	onConfigure func(ctx context.Context) error
+}
+
+func (p *lazyInitCallbackPlugin) ConfigureAuthHandler(ctx context.Context, handlerName string, cfg ProviderConfig) error {
+	if err := p.callbackAwareStatefulPlugin.ConfigureAuthHandler(ctx, handlerName, cfg); err != nil {
+		return err
+	}
+	if p.onConfigure != nil {
+		return p.onConfigure(ctx)
+	}
+	return nil
+}
+
+func TestLazyAuthHandlerWrapper_ReentrantCallbackDuringInit_FailsFastWithoutDeadlock(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ActiveProfile: "work",
+				ClientID:      "default-client",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {ClientID: "work-client"},
+				},
+			},
+		},
+	}
+	baseCtx := config.WithConfig(context.Background(), appCfg)
+
+	reg := auth.NewRegistry()
+	deps := HostDepsFromAuthRegistry(reg)
+	deps.HostConfig = appCfg
+	deps.ProfileResolverFunc = func(handlerName string) string {
+		return auth.ResolveActiveProfile(baseCtx, handlerName)
+	}
+	hostSrv := &HostServiceServer{Deps: *deps}
+	hostClient := &HostServiceClient{client: &inProcHostServiceAdapter{server: hostSrv, stripWireCtx: true}}
+
+	enteredConfigure := make(chan struct{}, 1)
+	releaseConfigure := make(chan struct{})
+	var callbackSummary string
+
+	pluginImpl := &lazyInitCallbackPlugin{}
+	pluginImpl.onConfigure = func(ctx context.Context) error {
+		// 1. Metadata-bearing token callback (including Hostname, which exercises tokenWithHostname before Capabilities).
+		_, tokErr := hostClient.GetAuthTokenWithOptions(ctx, AuthTokenRequest{
+			Handler:  "entra",
+			Scope:    "init-inner",
+			Hostname: "login.example.com",
+		})
+		if tokErr == nil {
+			return fmt.Errorf("expected nested GetAuthTokenWithOptions during lazy init to fail")
+		}
+
+		// 2. Metadata-bearing identity callback.
+		_, idErr := hostClient.GetAuthIdentity(ctx, "entra", "")
+		if idErr == nil {
+			return fmt.Errorf("expected nested GetAuthIdentity during lazy init to fail")
+		}
+
+		// 3. Bare context.Background() callback (simulating SDK v0.19.0 plugin without metadata forwarding).
+		bareResp, bareErr := hostSrv.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{
+			HandlerName: "entra",
+			Scope:       "bare-inner",
+		})
+		if bareErr != nil {
+			return bareErr
+		}
+		if bareResp.Error == "" {
+			return fmt.Errorf("expected bare nested GetAuthToken during lazy init to return response error")
+		}
+
+		callbackSummary = tokErr.Error() + " | " + idErr.Error() + " | " + bareResp.Error
+
+		select {
+		case enteredConfigure <- struct{}{}:
+		default:
+		}
+		<-releaseConfigure
+		return nil
+	}
+
+	grpcServer := &AuthHandlerGRPCServer{Impl: pluginImpl}
+	wireSvc := &concurrentWireServiceClient{server: grpcServer, stripWireCtx: true}
+	authClient := &AuthHandlerClient{
+		plugin:   NewAuthHandlerGRPCClient(wireSvc),
+		hostDeps: deps,
+	}
+
+	lazyCfg := LazyAuthHandlerConfig{
+		Name:      "entra",
+		PluginCfg: &ProviderConfig{BinaryName: "mycli"},
+	}
+	lazy := &LazyAuthHandlerWrapper{
+		name:        "entra",
+		displayName: "entra",
+		initFn: func(ctx context.Context) (*AuthHandlerWrapper, error) {
+			info := AuthHandlerInfo{
+				Name:         "entra",
+				DisplayName:  "Microsoft Entra ID",
+				Capabilities: []auth.Capability{auth.CapTokenHostname},
+			}
+			return configureLazyWrapper(ctx, authClient, info, lazyCfg), nil
+		},
+	}
+	require.NoError(t, reg.Register(lazy))
+
+	outerDone := make(chan error, 1)
+	go func() {
+		tok, err := lazy.GetToken(baseCtx, auth.TokenOptions{Scope: "post-init"})
+		if err != nil {
+			outerDone <- err
+			return
+		}
+		if tok.AccessToken != "nested:work:work-client" {
+			outerDone <- fmt.Errorf("unexpected token %q", tok.AccessToken)
+			return
+		}
+		outerDone <- nil
+	}()
+
+	select {
+	case <-enteredConfigure:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deadlock: lazy init ConfigureAuthHandler callbacks blocked on reentrant init")
+	}
+
+	// Unrelated concurrent caller must wait cleanly for lazy init to finish rather than failing.
+	unrelatedDone := make(chan error, 1)
+	go func() {
+		st, err := lazy.Status(baseCtx)
+		if err != nil {
+			unrelatedDone <- err
+			return
+		}
+		if !st.Authenticated || st.ClientID != "work-client" {
+			unrelatedDone <- fmt.Errorf("unexpected status: %+v", st)
+			return
+		}
+		unrelatedDone <- nil
+	}()
+
+	close(releaseConfigure)
+
+	select {
+	case err := <-outerDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("outer lazy GetToken did not finish after ConfigureAuthHandler completed")
+	}
+
+	select {
+	case err := <-unrelatedDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("unrelated concurrent Status caller did not finish after lazy init completed")
+	}
+
+	assert.Contains(t, callbackSummary, "cannot invoke nested callback during lazy initialization")
 }

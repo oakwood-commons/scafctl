@@ -609,22 +609,37 @@ func (w *AuthHandlerWrapper) acquireCallSlot(
 	lineage := lineageFromContext(ctx)
 	w.configMu.Lock()
 	for {
+		isReentrant := w.hasActiveParentLocked(lineage)
+
 		// In server mode (scafctl serve), ActivateServerMode owns the plugin's
-		// confidential credentials; never clobber them with CLI settings.
-		if w.serverMode && !w.reconfiguring {
-			callCtx, endLineage := w.startLineageLocked(ctx, "", false)
+		// confidential credentials; never clobber them with CLI settings, while
+		// still counting in-flight RPCs so concurrent or nested ActivateServerMode
+		// calls wait for active server-mode RPCs or fail fast on reentrancy.
+		if w.serverMode {
+			if !w.reconfiguring && (w.writersWaiting == 0 || isReentrant) {
+				w.inFlight++
+				callCtx, endLineage := w.startLineageLocked(ctx, "", false)
+				w.configMu.Unlock()
+				return callCtx, w.releaseCallSlotOnce(endLineage), nil
+			}
+			if isReentrant {
+				w.configMu.Unlock()
+				return ctx, nil, fmt.Errorf(
+					"plugin auth handler %s cannot reconfigure inside a nested callback",
+					w.handlerName,
+				)
+			}
+			waitCh := w.waitChanLocked()
 			w.configMu.Unlock()
-			var once sync.Once
-			return callCtx, func() {
-				once.Do(func() {
-					w.configMu.Lock()
-					endLineage()
-					w.configMu.Unlock()
-				})
-			}, nil
+			select {
+			case <-waitCh:
+				w.configMu.Lock()
+			case <-ctx.Done():
+				return ctx, nil, ctx.Err()
+			}
+			continue
 		}
 
-		isReentrant := w.hasActiveParentLocked(lineage)
 		rawForConfigure, rpcSettings, hasConfigSource, err := w.resolveHandlerSettingsLocked(ctx, hc, profile)
 		if err != nil {
 			w.configMu.Unlock()
@@ -646,7 +661,14 @@ func (w *AuthHandlerWrapper) acquireCallSlot(
 			if w.reconfiguring && activeProf == "" {
 				activeProf = w.configuredProfile
 			}
+			reconfigInProgress := w.reconfiguring
 			w.configMu.Unlock()
+			if reconfigInProgress || activeProf == profile {
+				return ctx, nil, fmt.Errorf(
+					"plugin auth handler %s cannot reconfigure inside a nested callback",
+					w.handlerName,
+				)
+			}
 			return ctx, nil, fmt.Errorf(
 				"plugin auth handler %s cannot reconfigure from profile %q to %q inside a nested callback",
 				w.handlerName, auth.DisplayProfileName(activeProf), auth.DisplayProfileName(profile),
@@ -1325,7 +1347,12 @@ func (w *AuthHandlerWrapper) willOpenBrowserOnLogin(ctx context.Context, flow au
 		}
 	}
 	if w.handlerName == "entra" {
-		return auth.ResolveEntraDefaultFlow(ctx) == auth.FlowInteractive, nil
+		hc := w.getHostConfig()
+		cfgCtx := ctx
+		if config.FromContext(cfgCtx) == nil && hc.AppConfig != nil {
+			cfgCtx = config.WithConfig(cfgCtx, hc.AppConfig)
+		}
+		return auth.ResolveEntraDefaultFlow(cfgCtx) == auth.FlowInteractive, nil
 	}
 	supported := w.SupportedFlows()
 	return len(supported) == 0 || slices.Contains(supported, auth.FlowInteractive), nil

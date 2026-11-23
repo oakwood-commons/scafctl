@@ -32,6 +32,10 @@ var (
 // when triggered by metadata queries (SupportedFlows, Capabilities).
 const lazyInitTimeout = 30 * time.Second
 
+type reentrantInitChecker interface {
+	checkReentrantInit(ctx context.Context) error
+}
+
 // LazyAuthHandlerWrapper implements auth.Handler by deferring plugin subprocess
 // startup until the first method that requires it. Name() and DisplayName() are
 // served from static metadata, so registry.List() and registry.Has() work
@@ -41,12 +45,16 @@ type LazyAuthHandlerWrapper struct {
 	displayName string
 
 	// initFn starts the plugin subprocess and returns the real wrapper.
-	// It is called at most once via sync.Once.
+	// It is called at most once under initMu.
 	initFn func(ctx context.Context) (*AuthHandlerWrapper, error)
 
-	once    sync.Once
-	wrapper atomic.Pointer[AuthHandlerWrapper]
-	initErr error
+	initMu       sync.Mutex
+	initializing bool
+	initDone     bool
+	initLineage  map[string]struct{}
+	initWaitCh   chan struct{}
+	wrapper      atomic.Pointer[AuthHandlerWrapper]
+	initErr      error
 
 	// baseCtx holds the wired application context captured from the first
 	// context-bearing call (Login, ApplyOverrides, etc.). It is used as a
@@ -95,6 +103,8 @@ func NewLazyAuthHandlerWrapper(cfg LazyAuthHandlerConfig) *LazyAuthHandlerWrappe
 			if err != nil {
 				return nil, fmt.Errorf("starting auth handler plugin %s: %w", cfg.Name, err)
 			}
+			popInitLineage := client.authCallbackLineage().push(cfg.Name, "", false, lineageFromContext(ctx))
+			defer popInitLineage()
 
 			handlers, err := client.GetAuthHandlers(ctx)
 			if err != nil {
@@ -173,31 +183,103 @@ func configureLazyWrapper(ctx context.Context, client *AuthHandlerClient, info A
 	return wrapper
 }
 
+func (l *LazyAuthHandlerWrapper) hasInitLineageLocked(lineage []string) bool {
+	if len(lineage) == 0 || len(l.initLineage) == 0 {
+		return false
+	}
+	for _, id := range lineage {
+		if _, ok := l.initLineage[id]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *LazyAuthHandlerWrapper) checkReentrantInit(ctx context.Context) error {
+	l.initMu.Lock()
+	defer l.initMu.Unlock()
+	if l.initializing && l.hasInitLineageLocked(lineageFromContext(ctx)) {
+		return fmt.Errorf("plugin auth handler %s cannot invoke nested callback during lazy initialization", l.name)
+	}
+	return nil
+}
+
 // init starts the plugin if not already started. The provided context is used
-// for the initialization call only.
+// for the initialization call only; reentrant callbacks arriving from the
+// active initialization lineage fail fast instead of deadlocking.
 func (l *LazyAuthHandlerWrapper) init(ctx context.Context) (*AuthHandlerWrapper, error) {
 	l.storeBaseCtx(ctx)
-	l.once.Do(func() {
-		w, err := l.initFn(ctx)
-		l.initErr = err
-		if w != nil {
-			l.wrapper.Store(w)
+	if w := l.wrapper.Load(); w != nil {
+		return w, nil
+	}
+
+	l.initMu.Lock()
+	if l.initDone {
+		err := l.initErr
+		l.initMu.Unlock()
+		return l.wrapper.Load(), err
+	}
+	if l.initializing {
+		if l.hasInitLineageLocked(lineageFromContext(ctx)) {
+			l.initMu.Unlock()
+			return nil, fmt.Errorf("plugin auth handler %s cannot invoke nested callback during lazy initialization", l.name)
 		}
-	})
-	return l.wrapper.Load(), l.initErr
+		waitCh := l.initWaitCh
+		l.initMu.Unlock()
+		select {
+		case <-waitCh:
+			l.initMu.Lock()
+			err := l.initErr
+			l.initMu.Unlock()
+			return l.wrapper.Load(), err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	l.initializing = true
+	l.initWaitCh = make(chan struct{})
+	initID := newCallLineageID()
+	initCtx := withCallbackLineage(ctx, initID)
+	ids := lineageFromContext(initCtx)
+	l.initLineage = make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		l.initLineage[id] = struct{}{}
+	}
+	l.initMu.Unlock()
+
+	var (
+		w   *AuthHandlerWrapper
+		err error
+	)
+	if l.initFn != nil {
+		w, err = l.initFn(initCtx)
+	}
+
+	l.initMu.Lock()
+	l.initErr = err
+	if w != nil {
+		l.wrapper.Store(w)
+	}
+	l.initializing = false
+	l.initDone = true
+	l.initLineage = nil
+	close(l.initWaitCh)
+	l.initMu.Unlock()
+
+	return w, err
 }
 
 // storeBaseCtx captures the first non-background context for use by metadata
 // methods that lack a context parameter. The captured context is stripped of
-// cancellation via context.WithoutCancel so that a transient request context
-// cannot later invalidate long-lived metadata calls on this handler; only
-// values (e.g. host service identifiers) are retained.
+// cancellation and transient call lineage so that a single request context
+// cannot later invalidate or taint metadata calls on this handler.
 func (l *LazyAuthHandlerWrapper) storeBaseCtx(ctx context.Context) {
 	if ctx != nil && ctx != context.Background() && ctx != context.TODO() {
 		l.baseCtxMu.Lock()
 		defer l.baseCtxMu.Unlock()
 		if !l.baseCtxSet {
-			l.baseCtx = context.WithoutCancel(ctx)
+			l.baseCtx = withoutCallbackLineage(context.WithoutCancel(ctx))
 			l.baseCtxSet = true
 		}
 	}
