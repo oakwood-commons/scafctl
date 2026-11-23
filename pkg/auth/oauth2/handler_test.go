@@ -4313,6 +4313,277 @@ func TestHandler_SubprocessRefreshLock_FileContentionCancelAndSingleUseRotation(
 	assert.Equal(t, int32(3), refreshSeq.Load())
 }
 
+func TestHandler_CrossHandlerBlockedLogin_CannotUndoSharedStoreLogout(t *testing.T) {
+	t.Parallel()
+
+	t.Run("OAuth Login on h1 blocked at TokenURL cannot undo Logout on h2 sharing store", func(t *testing.T) {
+		t.Parallel()
+		entered := make(chan struct{})
+		release := make(chan struct{})
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			close(entered)
+			<-release
+			writeJSON(w, tokenResponse{
+				AccessToken:  "h1-late-access",
+				TokenType:    "Bearer",
+				ExpiresIn:    3600,
+				RefreshToken: "h1-late-refresh",
+			})
+		}))
+		defer srv.Close()
+
+		store := secrets.NewMockStore()
+		cfg := config.CustomOAuth2Config{
+			Name:         "shared-logout-oauth",
+			TokenURL:     srv.URL + "/token",
+			ClientID:     "cid",
+			ClientSecret: "csec",
+			DefaultFlow:  "client_credentials",
+		}
+		h1, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		h2, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		errCh := make(chan error, 1)
+		go func() {
+			_, lErr := h1.Login(ctx, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+			errCh <- lErr
+		}()
+
+		<-entered
+		require.NoError(t, h2.Logout(ctx))
+		close(release)
+
+		require.ErrorIs(t, <-errCh, auth.ErrNotAuthenticated)
+
+		st, stErr := h2.Status(ctx)
+		require.NoError(t, stErr)
+		assert.False(t, st.Authenticated, "blocked OAuth Login on h1 must not delete h2 Logout marker")
+
+		_, tokErr := h2.GetToken(ctx, auth.TokenOptions{})
+		require.ErrorIs(t, tokErr, auth.ErrNotAuthenticated)
+	})
+
+	t.Run("PAT Login on h1 blocked at VerifyURL cannot undo Logout on h2 sharing store", func(t *testing.T) {
+		t.Parallel()
+		entered := make(chan struct{})
+		release := make(chan struct{})
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			close(entered)
+			<-release
+			writeJSON(w, map[string]any{"username": "robot-user"})
+		}))
+		defer srv.Close()
+
+		store := secrets.NewMockStore()
+		ctx := context.Background()
+		require.NoError(t, store.Set(ctx, "shared-pat", []byte("pat-secret")))
+
+		cfg := config.CustomOAuth2Config{
+			Name:           "shared-logout-pat",
+			Token:          "secret://shared-pat",
+			Username:       "acme+robot",
+			VerifyURL:      srv.URL + "/verify",
+			IdentityFields: &config.IdentityFieldMapping{Username: "username"},
+			DefaultFlow:    "pat",
+		}
+		h1, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		h2, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		errCh := make(chan error, 1)
+		go func() {
+			_, lErr := h1.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+			errCh <- lErr
+		}()
+
+		<-entered
+		require.NoError(t, h2.Logout(ctx))
+		close(release)
+
+		require.ErrorIs(t, <-errCh, auth.ErrNotAuthenticated)
+
+		st, stErr := h2.Status(ctx)
+		require.NoError(t, stErr)
+		assert.False(t, st.Authenticated, "blocked PAT Login on h1 must not delete h2 Logout marker")
+
+		_, tokErr := h2.GetToken(ctx, auth.TokenOptions{})
+		require.ErrorIs(t, tokErr, auth.ErrNotAuthenticated)
+	})
+}
+
+func TestHandler_BlockedHeadlessMint_CannotOverwriteInteractiveReLogin(t *testing.T) {
+	t.Parallel()
+
+	enteredMint := make(chan struct{})
+	releaseMint := make(chan struct{})
+
+	dir := t.TempDir()
+	jwtPath := filepath.Join(dir, "wif-jwt")
+	require.NoError(t, os.WriteFile(jwtPath, []byte("projected-wif-jwt"), 0o600))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			require.NoError(t, r.ParseForm())
+			switch r.FormValue("grant_type") {
+			case "client_credentials":
+				close(enteredMint)
+				<-releaseMint
+				writeJSON(w, tokenResponse{
+					AccessToken: "wif-primary-access",
+					TokenType:   "Bearer",
+					ExpiresIn:   3600,
+				})
+			case "urn:ietf:params:oauth:grant-type:device_code":
+				writeJSON(w, tokenResponse{
+					AccessToken:  "interactive-primary-access",
+					TokenType:    "Bearer",
+					ExpiresIn:    3600,
+					RefreshToken: "interactive-refresh-1",
+				})
+			}
+		case "/device":
+			writeJSON(w, map[string]any{
+				"device_code":      "dev-1",
+				"user_code":        "ABCD",
+				"verification_uri": "https://example.com/activate",
+				"expires_in":       300,
+				"interval":         1,
+			})
+		case "/exchange":
+			if r.Header.Get("Authorization") == "Bearer interactive-primary-access" {
+				writeJSON(w, map[string]any{"token": "interactive-derived-apptoken", "user": "interactive-alice"})
+			} else {
+				writeJSON(w, map[string]any{"token": "wif-derived-apptoken", "user": "wif-bot"})
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	cfg := config.CustomOAuth2Config{
+		Name:               "mint-vs-login",
+		TokenURL:           srv.URL + "/token",
+		DeviceAuthURL:      srv.URL + "/device",
+		ClientID:           "hybrid-cid",
+		FederatedTokenFile: jwtPath,
+		DefaultFlow:        "device_code",
+		TokenExchange: &config.TokenExchangeConfig{
+			URL:              srv.URL + "/exchange",
+			TokenJSONPath:    "token",
+			UsernameJSONPath: "user",
+		},
+	}
+
+	h, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	mintErrCh := make(chan error, 1)
+	go func() {
+		_, mErr := h.GetToken(ctx, auth.TokenOptions{})
+		mintErrCh <- mErr
+	}()
+
+	<-enteredMint
+	_, loginErr := h.Login(ctx, auth.LoginOptions{Flow: auth.FlowDeviceCode})
+	require.NoError(t, loginErr)
+
+	close(releaseMint)
+	require.ErrorIs(t, <-mintErrCh, auth.ErrNotAuthenticated, "stale WIF mint pre-dating device_code Login must be fenced")
+
+	assert.Equal(t, auth.FlowDeviceCode, h.ActiveFlow(ctx))
+	assert.Equal(t, "interactive-alice", h.RegistryUsernameForContext(ctx))
+
+	tok, err := h.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "interactive-derived-apptoken", tok.AccessToken)
+	assert.Equal(t, auth.FlowDeviceCode, tok.Flow)
+}
+
+func TestHandler_LockIdentity_CollidingHandlerAndProfileShareRefreshLock(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	s1, err := newSubprocessSharedStore(dir)
+	require.NoError(t, err)
+	s2, err := newSubprocessSharedStore(dir)
+	require.NoError(t, err)
+
+	var refreshSeq atomic.Int32
+	used := sync.Map{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		submitted := r.FormValue("refresh_token")
+		if _, dup := used.LoadOrStore(submitted, true); dup {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, map[string]any{"error": "invalid_grant"})
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+		n := refreshSeq.Add(1)
+		writeJSON(w, tokenResponse{
+			AccessToken:  fmt.Sprintf("colliding-access-%d", n),
+			TokenType:    "Bearer",
+			ExpiresIn:    3600,
+			RefreshToken: fmt.Sprintf("colliding-refresh-%d", n),
+		})
+	}))
+	defer srv.Close()
+
+	// (handler="quay.prod", profile="") and (handler="quay", profile="prod") map to the exact same persisted secret keys.
+	hDot, err := New(config.CustomOAuth2Config{
+		Name:        "quay.prod",
+		TokenURL:    srv.URL + "/token",
+		ClientID:    "cid",
+		DefaultFlow: "interactive",
+	}, WithSecretStore(s1), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	hProf, err := New(config.CustomOAuth2Config{
+		Name:        "quay",
+		TokenURL:    srv.URL + "/token",
+		ClientID:    "cid",
+		DefaultFlow: "interactive",
+	}, WithSecretStore(s2), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	scope1, lockPath1 := hDot.scopedLockIdentity("refresh", "")
+	scope2, lockPath2 := hProf.scopedLockIdentity("refresh", "prod")
+	assert.Equal(t, scope1, scope2)
+	assert.Equal(t, lockPath1, lockPath2)
+
+	ctxDot := context.Background()
+	ctxProf := auth.WithProfile(context.Background(), "prod")
+	require.NoError(t, hDot.storeRefreshTokenForFlow(ctxDot, auth.FlowInteractive, "colliding-refresh-0"))
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, errs[0] = hDot.GetToken(ctxDot, auth.TokenOptions{Scope: "s1", ForceRefresh: true})
+	}()
+	go func() {
+		defer wg.Done()
+		_, errs[1] = hProf.GetToken(ctxProf, auth.TokenOptions{Scope: "s2", ForceRefresh: true})
+	}()
+	wg.Wait()
+
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+	assert.Equal(t, int32(2), refreshSeq.Load())
+}
+
 func BenchmarkHandler_PAT_GetToken(b *testing.B) {
 	store := secrets.NewMockStore()
 	ctx := context.Background()

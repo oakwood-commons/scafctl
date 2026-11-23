@@ -40,23 +40,30 @@ func acquireInProcessKeyLock(ctx context.Context, key string) (func(), error) {
 	}
 }
 
+func (h *Handler) persistedLockKey(kind, profile string) string {
+	suffix := "refresh"
+	if kind == "commit" {
+		suffix = "session"
+	}
+	return h.secretKeyWithProfile(profile, suffix)
+}
+
 func (h *Handler) scopedLockIdentity(kind, profile string) (scopeKey, lockFilePath string) {
-	handlerProfile := kind + "|" + h.cfg.Name + "|" + profile
-	fullScope := kind + "|" + h.secretKeyPrefix + h.cfg.Name + "|" + profile
+	lockKey := h.persistedLockKey(kind, profile)
 	if dp, ok := h.secretStore.(secretsDirProvider); ok {
 		if dir := dp.SecretsDir(); dir != "" {
 			cleanDir := filepath.Clean(dir)
-			lockName := fmt.Sprintf(".oauth2-%s-%016x", kind, xxhash.Sum64String(handlerProfile))
-			return "dir:" + cleanDir + "|" + fullScope, filepath.Join(cleanDir, lockName)
+			lockName := fmt.Sprintf(".oauth2-%s-%016x", kind, xxhash.Sum64String(lockKey))
+			return "dir:" + cleanDir + "|" + lockKey, filepath.Join(cleanDir, lockName)
 		}
 	}
 	if h.secretStore != nil {
 		rv := reflect.ValueOf(h.secretStore)
 		if rv.Kind() == reflect.Pointer && !rv.IsNil() {
-			return fmt.Sprintf("ptr:%T:%x|%s", h.secretStore, rv.Pointer(), fullScope), ""
+			return fmt.Sprintf("ptr:%T:%x|%s", h.secretStore, rv.Pointer(), lockKey), ""
 		}
 	}
-	return fmt.Sprintf("inst:%p|%s", h, fullScope), ""
+	return fmt.Sprintf("inst:%p|%s", h, lockKey), ""
 }
 
 func (h *Handler) acquireScopedLock(ctx context.Context, kind, profile string) (func(), error) {
@@ -87,7 +94,7 @@ func (h *Handler) acquireRefreshLock(ctx context.Context, profile string) (func(
 }
 
 // acquireSessionCommitLock serializes fast local session/credential commits
-// across Login, patLogin, Logout, and post-HTTP refresh persistence without
+// across Login, patLogin, Logout, and post-HTTP refresh/mint persistence without
 // ever being held across network I/O.
 func (h *Handler) acquireSessionCommitLock(ctx context.Context, profile string) (func(), error) {
 	return h.acquireScopedLock(ctx, "commit", profile)
