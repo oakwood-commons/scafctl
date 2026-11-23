@@ -383,8 +383,14 @@ func (b *syncBuffer) String() string {
 
 func stubInteractiveRunner(t *testing.T, binaryName string, handler *mockHandler, stub func(any, tui.Config, ...tea.ProgramOption) error) (wait func() (*auth.Result, error), out *syncBuffer) {
 	t.Helper()
+	waitFn, outBuf, _ := stubInteractiveRunnerWithStreams(t, binaryName, handler, stub)
+	return waitFn, outBuf
+}
+
+func stubInteractiveRunnerWithStreams(t *testing.T, binaryName string, handler *mockHandler, stub func(any, tui.Config, ...tea.ProgramOption) error) (wait func() (*auth.Result, error), out, errOut *syncBuffer) {
+	t.Helper()
 	out = &syncBuffer{}
-	errOut := &bytes.Buffer{}
+	errOut = &syncBuffer{}
 	ioStreams := &terminal.IOStreams{
 		In:     io.NopCloser(bytes.NewReader(nil)),
 		Out:    out,
@@ -412,7 +418,7 @@ func stubInteractiveRunner(t *testing.T, binaryName string, handler *mockHandler
 			t.Fatal("runner did not return; test gates left open?")
 		}
 		return result, err
-	}, out
+	}, out, errOut
 }
 
 // TestRunInteractiveTUI_StaysActiveWhilePasteBackParked verifies that a plugin
@@ -720,6 +726,227 @@ func TestRunInteractiveTUI_TUIStartErrorFallsBackToPlain(t *testing.T) {
 	assert.Contains(t, outStr, "https://auth.example/authorize")
 	assert.Contains(t, outStr, waitingMessage)
 	assert.NotContains(t, outStr, "tui boom")
+}
+
+// TestRunInteractiveTUI_TUIStartErrorPlainPasteFallback verifies that when the
+// status TUI fails to start during a remote or paste-only login, PasteBackFunc
+// switches to hidden plain-text terminal input, warns and retries on invalid
+// pastes without echoing secrets, and completes authentication on a valid paste.
+func TestRunInteractiveTUI_TUIStartErrorPlainPasteFallback(t *testing.T) {
+	authURL := "https://login.example.com/oauth2/v2.0/authorize?client_id=abc&state=xyz"
+	handler := &mockHandler{
+		name: "entra",
+		loginFunc: func(ctx context.Context, _ auth.LoginOptions) (*auth.Result, error) {
+			prompt := auth.PasteBackFromContext(ctx)
+			if prompt == nil {
+				return nil, errors.New("expected PasteBackFunc in context")
+			}
+			val, err := prompt(ctx, authURL, "http://localhost:45189/callback")
+			if err != nil {
+				return nil, err
+			}
+			if val != "http://localhost:45189/callback?code=REMOTE_CODE_1&state=xyz" {
+				return nil, fmt.Errorf("unexpected normalized paste: %s", val)
+			}
+			return &auth.Result{Claims: &auth.Claims{Email: "remote@example.com"}}, nil
+		},
+	}
+
+	var calls int
+	prevReader := readPlainPasteLine
+	readPlainPasteLine = func(_ context.Context, _ io.Reader, _ io.Writer) (string, error) {
+		calls++
+		if calls == 1 {
+			return "https://login.example.com/oauth2/v2.0/authorize?code=SECRET_BAD", nil
+		}
+		return "localhost:45189/callback?code=REMOTE_CODE_1&state=xyz", nil
+	}
+	t.Cleanup(func() { readPlainPasteLine = prevReader })
+
+	stub := func(_ any, _ tui.Config, _ ...tea.ProgramOption) error {
+		return errors.New("tui startup failed")
+	}
+
+	wait, out, errOut := stubInteractiveRunnerWithStreams(t, "scafctl", handler, stub)
+	result, err := wait()
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "remote@example.com", result.Claims.DisplayIdentity())
+	assert.Equal(t, 2, calls)
+
+	outStr := out.String()
+	assert.Equal(t, 1, strings.Count(outStr, signInHeading))
+	assert.Equal(t, 1, strings.Count(outStr, authURL))
+	assert.Equal(t, 1, strings.Count(outStr, pasteBackPromptText))
+
+	errStr := errOut.String()
+	assert.Contains(t, errStr, "Invalid redirect URL")
+	assert.NotContains(t, errStr, "SECRET_BAD", "validation warnings must never echo pasted values")
+}
+
+// TestRunInteractiveTUI_TUIStartErrorUnblocksPasteBackWhenInputUnavailable
+// verifies that when the status TUI fails to start and plain-text terminal
+// line input is unavailable, PasteBackFunc fails immediately with the TUI
+// startup error instead of blocking indefinitely on OnStatusInput, while still
+// allowing a handler to fall back to device code on the plain screen.
+func TestRunInteractiveTUI_TUIStartErrorUnblocksPasteBackWhenInputUnavailable(t *testing.T) {
+	t.Run("paste-only handler fails promptly with TUI startup error", func(t *testing.T) {
+		tuiErr := errors.New("terminal raw mode failed")
+		handler := &mockHandler{
+			name: "entra",
+			loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+				opts.DeviceCodeCallback("", "https://auth.example/authorize", "")
+				prompt := auth.PasteBackFromContext(ctx)
+				if prompt == nil {
+					return nil, errors.New("expected PasteBackFunc in context")
+				}
+				_, err := prompt(ctx, "https://auth.example/authorize", "http://localhost:8400/callback")
+				return nil, err
+			},
+		}
+
+		stub := func(_ any, _ tui.Config, _ ...tea.ProgramOption) error {
+			return tuiErr
+		}
+
+		wait, out := stubInteractiveRunner(t, "scafctl", handler, stub)
+		_, err := wait()
+		require.Error(t, err)
+		assert.ErrorIs(t, err, tuiErr)
+		assert.NotContains(t, out.String(), pasteBackPromptText, "dead paste prompt must not print when line input is unavailable")
+	})
+
+	t.Run("handler falling back to device code after prompt error prints device code", func(t *testing.T) {
+		tuiErr := errors.New("terminal raw mode failed")
+		handler := &mockHandler{
+			name: "entra",
+			loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+				opts.DeviceCodeCallback("", "https://auth.example/authorize", "")
+				prompt := auth.PasteBackFromContext(ctx)
+				if prompt == nil {
+					return nil, errors.New("expected PasteBackFunc in context")
+				}
+				if _, err := prompt(ctx, "https://auth.example/authorize", "http://localhost:8400/callback"); err == nil {
+					return nil, errors.New("expected PasteBackFunc to fail when plain input is unavailable")
+				}
+				opts.DeviceCodeCallback("WXYZ-9876", "https://verify.example/device", "")
+				return &auth.Result{Claims: &auth.Claims{Username: "fallback-user"}}, nil
+			},
+		}
+
+		stub := func(_ any, _ tui.Config, _ ...tea.ProgramOption) error {
+			return tuiErr
+		}
+
+		wait, out := stubInteractiveRunner(t, "scafctl", handler, stub)
+		result, err := wait()
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, "fallback-user", result.Claims.DisplayIdentity())
+		assert.Contains(t, out.String(), "Enter the code: WXYZ-9876")
+	})
+}
+
+// TestRunInteractiveTUI_TUIStartErrorLocalCallbackCancelsPlainPaste verifies
+// that when the status TUI fails to start and plain-text paste fallback is
+// waiting for terminal input, a local browser callback cancelling pasteCtx
+// unblocks the plain-text reader cleanly and completes authentication.
+func TestRunInteractiveTUI_TUIStartErrorLocalCallbackCancelsPlainPaste(t *testing.T) {
+	outcomeGate := make(chan struct{})
+	pasteErrCh := make(chan error, 1)
+	readerWaiting := make(chan struct{})
+
+	prevReader := readPlainPasteLine
+	readPlainPasteLine = func(ctx context.Context, _ io.Reader, _ io.Writer) (string, error) {
+		close(readerWaiting)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	t.Cleanup(func() { readPlainPasteLine = prevReader })
+
+	handler := &mockHandler{
+		name: "entra",
+		loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+			pasteCtx, cancelPaste := context.WithCancel(ctx)
+			defer cancelPaste()
+
+			opts.DeviceCodeCallback("", "https://auth.example/authorize", "")
+			prompt := auth.PasteBackFromContext(ctx)
+			if prompt != nil {
+				go func() {
+					_, err := prompt(pasteCtx, "https://auth.example/authorize", "http://localhost:8400/callback")
+					pasteErrCh <- err
+				}()
+			}
+
+			select {
+			case <-outcomeGate:
+				cancelPaste()
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &auth.Result{Claims: &auth.Claims{Username: "local-user"}}, nil
+		},
+	}
+
+	stub := func(_ any, _ tui.Config, _ ...tea.ProgramOption) error {
+		return errors.New("tui boom")
+	}
+
+	wait, out := stubInteractiveRunner(t, "scafctl", handler, stub)
+	select {
+	case <-readerWaiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("plain paste fallback reader was never entered")
+	}
+	close(outcomeGate)
+
+	result, err := wait()
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "local-user", result.Claims.DisplayIdentity())
+	assert.Contains(t, out.String(), pasteBackPromptText)
+
+	select {
+	case pErr := <-pasteErrCh:
+		assert.ErrorIs(t, pErr, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("plain paste fallback did not unblock on pasteCtx cancellation")
+	}
+}
+
+// TestRunInteractiveTUI_TUIStartErrorReaderFailurePropagates verifies that a
+// plain-text terminal reader failure after a TUI startup error wraps both
+// errors and unblocks the login immediately.
+func TestRunInteractiveTUI_TUIStartErrorReaderFailurePropagates(t *testing.T) {
+	tuiErr := errors.New("tui init failed")
+	readErr := errors.New("termios read failed")
+
+	prevReader := readPlainPasteLine
+	readPlainPasteLine = func(_ context.Context, _ io.Reader, _ io.Writer) (string, error) {
+		return "", readErr
+	}
+	t.Cleanup(func() { readPlainPasteLine = prevReader })
+
+	handler := &mockHandler{
+		name: "entra",
+		loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+			opts.DeviceCodeCallback("", "https://auth.example/authorize", "")
+			prompt := auth.PasteBackFromContext(ctx)
+			_, err := prompt(ctx, "https://auth.example/authorize", "http://localhost:8400/callback")
+			return nil, err
+		},
+	}
+
+	stub := func(_ any, _ tui.Config, _ ...tea.ProgramOption) error {
+		return tuiErr
+	}
+
+	wait, _ := stubInteractiveRunner(t, "scafctl", handler, stub)
+	_, err := wait()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, tuiErr)
+	assert.ErrorIs(t, err, readErr)
 }
 
 func TestRunInteractiveTUI_CancelledWithoutOutcome(t *testing.T) {

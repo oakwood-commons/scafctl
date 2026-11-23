@@ -6,9 +6,10 @@
 // kvx status-screen TUI for both device-code and browser flows: browser flows
 // display a concise endpoint summary with copy/open actions for the full
 // authorization URL alongside an auto-focused masked inline input for pasting
-// localhost redirect URLs in remote SSH or dev-container sessions. Non-terminal
-// and quiet sessions fall back to a clean plain-text layout without installing
-// an interactive paste prompt.
+// localhost redirect URLs in remote SSH or dev-container sessions, falling back
+// to a hidden plain-text paste prompt if the status TUI cannot start.
+// Non-terminal and quiet sessions fall back to a clean plain-text layout
+// without installing an interactive paste prompt.
 //
 // RunLogin returns the login Result and never prints the final success line or
 // error text — callers render their own output. This lets both commands share
@@ -19,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -31,6 +33,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
 	skvx "github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"golang.org/x/term"
@@ -40,6 +43,10 @@ const (
 	// signInHeading is the single heading under which a sign-in URL is
 	// printed on plain-text fallback surfaces.
 	signInHeading = "To sign in, use a web browser to open the page:"
+	// pasteBackPromptText is printed on plain-text fallback surfaces when the
+	// status TUI cannot start and hidden terminal line input is available.
+	// Prompt wording is always host-authored so plugins supply only URLs.
+	pasteBackPromptText = "If your browser shows a connection error after sign-in, paste the full address from its address bar (input is hidden):"
 	// waitingMessage closes the URL block while the login is in flight.
 	waitingMessage = "Waiting for authentication..."
 	// pasteInputLabel explains the inline redirect URL input rendered inside
@@ -295,7 +302,9 @@ func runStatusTUI(
 }
 
 // pasteSession coordinates the in-TUI redirect URL input (OnStatusInput) with
-// the background PasteBackFunc invoked by HostService.PromptAuthResponse.
+// the background PasteBackFunc invoked by HostService.PromptAuthResponse, and
+// transitions PasteBackFunc to a plain-text terminal reader (or an immediate
+// unavailability error) if the status TUI fails to start.
 // Submitted values wait briefly for an active PromptAuthResponse window and are
 // pre-validated against its expected redirect URI before entering the one-shot
 // channel so malformed or premature pastes surface an inline warning flash and
@@ -304,14 +313,19 @@ type pasteSession struct {
 	mu                  sync.Mutex
 	expectedRedirectURI string
 	active              bool
+	fallbackErr         error
+	lastPrintedPrompt   *deviceCodeData
 	ready               chan struct{}
 	readyOnce           sync.Once
+	tuiFailed           chan struct{}
+	tuiFailedOnce       sync.Once
 	submitted           chan string
 }
 
 func newPasteSession() *pasteSession {
 	return &pasteSession{
 		ready:     make(chan struct{}),
+		tuiFailed: make(chan struct{}),
 		submitted: make(chan string, 1),
 	}
 }
@@ -341,6 +355,115 @@ func (ps *pasteSession) state() (active bool, expectedRedirectURI string) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	return ps.active, ps.expectedRedirectURI
+}
+
+// enterPlainFallback records the TUI startup error and closes tuiFailed so any
+// parked or future PasteBackFunc switches away from the dead OnStatusInput path.
+func (ps *pasteSession) enterPlainFallback(err error) {
+	ps.tuiFailedOnce.Do(func() {
+		ps.mu.Lock()
+		ps.fallbackErr = err
+		ps.mu.Unlock()
+		close(ps.tuiFailed)
+	})
+}
+
+func (ps *pasteSession) plainFallbackErr() error {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	return ps.fallbackErr
+}
+
+func (ps *pasteSession) isPlainFallback() bool {
+	select {
+	case <-ps.tuiFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// printPlainBlockOnce prints a sign-in block under ps.mu when d carries a URL
+// and differs from the most recently printed plain block.
+func (ps *pasteSession) printPlainBlockOnce(w *writer.Writer, d deviceCodeData) {
+	if d.verificationURI == "" {
+		return
+	}
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	if ps.lastPrintedPrompt != nil && *ps.lastPrintedPrompt == d {
+		return
+	}
+	cur := d
+	ps.lastPrintedPrompt = &cur
+	printSignInBlock(w, d.verificationURI, d.userCode)
+}
+
+func (ps *pasteSession) hasPrintedPlainBlock() bool {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	return ps.lastPrintedPrompt != nil
+}
+
+// readPlainFallback serves PasteBackFunc when the status TUI could not start.
+// When cancellation-safe terminal line reading is available, it prints the
+// host-authored paste instructions and reads/validates hidden input; otherwise
+// it fails immediately with the TUI error so PromptAuthResponse never hangs.
+func (ps *pasteSession) readPlainFallback(
+	pasteCtx context.Context,
+	loginCtx context.Context,
+	w *writer.Writer,
+	ioStreams *terminal.IOStreams,
+	authorizationURL string,
+	redirectURI string,
+) (string, error) {
+	tuiErr := ps.plainFallbackErr()
+	if !canReadPlainPaste(ioStreams) {
+		return "", fmt.Errorf("paste-back prompt unavailable after status TUI error: %w", tuiErr)
+	}
+
+	if !ps.hasPrintedPlainBlock() && authorizationURL != "" {
+		ps.printPlainBlockOnce(w, deviceCodeData{verificationURI: authorizationURL})
+	}
+
+	ps.mu.Lock()
+	w.Plainln("")
+	w.Plainln(pasteBackPromptText)
+	ps.mu.Unlock()
+
+	readCtx, cancelRead := context.WithCancel(pasteCtx)
+	stop := context.AfterFunc(loginCtx, cancelRead)
+	defer func() {
+		stop()
+		cancelRead()
+	}()
+
+	reader := input.ReadInteractiveLine
+	if readPlainPasteLine != nil {
+		reader = readPlainPasteLine
+	}
+
+	for {
+		line, err := reader(readCtx, ioStreams.In, io.Discard)
+		if err != nil {
+			if pasteCtx.Err() != nil {
+				return "", pasteCtx.Err()
+			}
+			if loginCtx.Err() != nil {
+				return "", loginCtx.Err()
+			}
+			return "", fmt.Errorf("reading pasted redirect URL after status TUI error (%w): %w", tuiErr, err)
+		}
+		// Hidden input does not echo a newline to the terminal.
+		w.PlainStderr("")
+
+		normalized, valErr := validateStatusPasteInput(line, redirectURI)
+		if valErr != nil {
+			w.WarnStderr(fmt.Sprintf("Invalid redirect URL: %v", valErr))
+			continue
+		}
+		return normalized, nil
+	}
 }
 
 // submit validates a redirect URL pasted into the status TUI input before
@@ -433,6 +556,18 @@ func (oc *outcomeCapture) wait(ctx context.Context) (*auth.Result, error) {
 // deterministically without a PTY. Production code never reassigns it.
 var runStatusScreen = tui.Run
 
+// readPlainPasteLine overrides input.ReadInteractiveLine in tests so plain-text
+// paste fallback can be exercised deterministically without a PTY. Production
+// code leaves it nil.
+var readPlainPasteLine func(ctx context.Context, in io.Reader, echo io.Writer) (string, error)
+
+func canReadPlainPaste(ioStreams *terminal.IOStreams) bool {
+	if readPlainPasteLine != nil {
+		return true
+	}
+	return input.InteractiveLineSupported() && isTTY(ioStreams.In)
+}
+
 // runInteractiveTUI runs an interactive browser login inside the kvx status TUI
 // with an auto-focused masked inline input for redirect URL paste-back:
 //
@@ -448,6 +583,10 @@ var runStatusScreen = tui.Run
 //     ..." before exiting. When the user pastes a redirect URL into the TUI,
 //     OnStatusInput pre-validates it before resolving PasteBackFunc so typos or
 //     wrong URLs flash a retryable warning inline without consuming the RPC.
+//     If the status TUI fails to start, runInteractiveTUI prints the plain
+//     sign-in block and switches PasteBackFunc to hidden plain-text terminal
+//     input (or fails PasteBackFunc immediately if terminal line input is
+//     unavailable).
 func runInteractiveTUI(
 	ctx context.Context,
 	w *writer.Writer,
@@ -465,9 +604,13 @@ func runInteractiveTUI(
 	ps := newPasteSession()
 
 	opts.DeviceCodeCallback = func(userCode, verificationURI, _ string) {
+		d := deviceCodeData{userCode: userCode, verificationURI: verificationURI}
 		select {
-		case urlChan <- deviceCodeData{userCode: userCode, verificationURI: verificationURI}:
+		case urlChan <- d:
 		default:
+		}
+		if ps.isPlainFallback() {
+			ps.printPlainBlockOnce(w, d)
 		}
 	}
 
@@ -482,6 +625,8 @@ func runInteractiveTUI(
 		select {
 		case val := <-ps.submitted:
 			return val, nil
+		case <-ps.tuiFailed:
+			return ps.readPlainFallback(pasteCtx, ctx, w, ioStreams, authorizationURL, redirectURI)
 		case <-pasteCtx.Done():
 			return "", pasteCtx.Err()
 		case <-ctx.Done():
@@ -520,9 +665,12 @@ func runInteractiveTUI(
 			return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
 		}
 		// If the TUI could not start (e.g. an unusable terminal configuration),
-		// fall back to printing the plain sign-in block so a local browser
-		// callback can still complete the login.
-		printSignInBlock(w, prompt.verificationURI, prompt.userCode)
+		// print the plain sign-in block and switch PasteBackFunc to plain-text
+		// terminal line input (or fail PasteBackFunc immediately when terminal
+		// line input is unavailable) so neither local callbacks nor remote
+		// paste-back logins stall.
+		ps.printPlainBlockOnce(w, prompt)
+		ps.enterPlainFallback(runErr)
 		return oc.wait(ctx)
 	}
 
