@@ -33,7 +33,7 @@ require (
 	github.com/mark3labs/mcp-go v1.1.1
 	github.com/oakwood-commons/celexp v0.1.0
 	github.com/oakwood-commons/httpc v0.3.0
-	github.com/oakwood-commons/kvx v0.17.0
+	github.com/oakwood-commons/kvx v0.18.0
 	github.com/oakwood-commons/oauth-helpers v0.2.0
 	github.com/oakwood-commons/scafctl-plugin-sdk v0.18.0
 	github.com/opencontainers/go-digest v1.0.0

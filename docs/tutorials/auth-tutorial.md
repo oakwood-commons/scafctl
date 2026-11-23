@@ -1174,32 +1174,31 @@ machine running scafctl. In a remote workspace -- OpenShift DevSpaces,
 Codespaces, and similar -- the browser runs on your laptop, so the redirect
 cannot reach the workspace.
 
-On a terminal, the login presents a status box with the sign-in URL (press
-`c` to copy it, `o` to open it). When the host supports it and the redirect
-cannot arrive, the box exits cleanly to a plain-text paste prompt the moment
-it becomes useful -- and quitting the box early (`q`) also drops to the
-plain flow, which is the manual way to reach the prompt:
+On an interactive terminal, the login presents the `kvx` status box with a
+concise `scheme://host/path` summary of the sign-in endpoint (press `F2` or
+`Alt+c` to copy the full authorization URL, `F3` or `Alt+o` to open it in a
+browser) alongside an auto-focused masked input field directly inside the
+status box. Press `Esc` once to clear any typed characters, or `Esc` / `Ctrl+C`
+with an empty input to cancel the login.
 
-```
-To sign in, use a web browser to open the page:
-  https://login.example.com/authorize?...
+If your browser shows a `localhost` connection error after sign-in, copy the
+redirect address from the browser's address bar, paste it directly into the
+status box's masked input field, and press `Enter`:
 
-If your browser shows a connection error after sign-in, paste the full address from its address bar (input is hidden):
-```
+- Both full loopback URLs (`http://localhost:<port>/?code=...`) and scheme-less
+  addresses copied from Chromium-based browsers (`localhost:<port>/?code=...`)
+  are accepted and normalized automatically.
+- Invalid pastes (such as pasting the sign-in URL instead of the `localhost`
+  redirect URL, or omitting `code=`) show an inline warning inside the status
+  box and let you paste again without restarting the login.
+- When a local callback arrives directly (for example on a workstation or over
+  port forwarding), the status box flashes `Authenticated as ...` and exits
+  automatically without requiring any paste input.
 
-Non-interactive sessions (CI, MCP, and other non-terminal contexts) get the
-same plain layout minus the paste line, since there is no terminal to read
-an answer from.
-
-Copy the full address from the browser's address bar after sign-in and paste
-it at the prompt (the pasted text is not echoed, since it carries an
-authorization code), then press Enter; scafctl completes the login from the
-pasted authorization code. The prompt only appears while a login is in progress, its wording is
-host-written (handlers cannot inject text), and it requires an interactive
-terminal -- in CI, MCP sessions, and other non-interactive contexts the
-handler is told the prompt is unavailable and falls back to another flow.
-When the local callback does arrive first (for example over a port-forward),
-the prompt disappears on its own and the pasted value is never logged.
+Non-interactive sessions (CI, MCP, piped streams, and `--quiet`) render the
+plain sign-in URL block without installing a paste prompt; the handler is told
+paste-back is unavailable and falls back to another flow when supported. The
+pasted redirect URL is masked on screen and never logged at any verbosity.
 
 ---
 

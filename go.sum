@@ -630,8 +630,8 @@ github.com/oakwood-commons/celexp v0.1.0 h1:U3R2Ta/1SHb1+ECQmua2084QiYvqF6+KEevJ
 github.com/oakwood-commons/celexp v0.1.0/go.mod h1:rlPDWHCP7O8vgXdtiNE7OQ1kXYgx2+78ojI8S1oJCWE=
 github.com/oakwood-commons/httpc v0.3.0 h1:tcLf3naVcNuajO3irGoX4+gYcofe63ZxEx/G9fx2Q6Y=
 github.com/oakwood-commons/httpc v0.3.0/go.mod h1:/b4+JOpD/Ym+L8ajYjQTAX0ltzSporVmCft9nNxPg8E=
-github.com/oakwood-commons/kvx v0.17.0 h1:ii4O0aIKR1c1h0oAyDmC7WM9DakjdbNbphFiMd9xxgQ=
-github.com/oakwood-commons/kvx v0.17.0/go.mod h1:9V23NUWeCZW6HH9EN1QDWI8zpjvBdOWr+ZAeXB77ltw=
+github.com/oakwood-commons/kvx v0.18.0 h1:IQOUuMnrOyiCZtNF53iSCQUD2mjHQdGCiKMMH6LySuk=
+github.com/oakwood-commons/kvx v0.18.0/go.mod h1:9V23NUWeCZW6HH9EN1QDWI8zpjvBdOWr+ZAeXB77ltw=
 github.com/oakwood-commons/oauth-helpers v0.2.0 h1:IIu8AitRWCNp51oRvfBU0D7JGM3Tt3QXUejLwEFZk+Q=
 github.com/oakwood-commons/oauth-helpers v0.2.0/go.mod h1:+VhuszKORoPc9H0HwvS92I/U0828up8XejsUpXS7FvE=
 github.com/oakwood-commons/scafctl-plugin-sdk v0.18.0 h1:BdIaqQWr2VAZzJyz03hI/2l3oRoVvMHI22MlJC8O7xI=

@@ -910,6 +910,94 @@ func TestOutputOptions_Write_JSON_WithWhere_InvalidExpression(t *testing.T) {
 	assert.Contains(t, err.Error(), "where filter failed")
 }
 
+func TestOutputOptions_Write_StructuredWithWhere_TypedStructSlice(t *testing.T) {
+	t.Parallel()
+
+	type summaryRow struct {
+		Name        string `json:"name" yaml:"name"`
+		DisplayName string `json:"displayName" yaml:"displayName"`
+		Category    string `json:"category" yaml:"category"`
+		Deprecated  bool   `json:"deprecated" yaml:"deprecated"`
+	}
+
+	items := []summaryRow{
+		{Name: "http", DisplayName: "HTTP Provider", Category: "network"},
+		{Name: "exec", DisplayName: "Exec Provider", Category: "system"},
+	}
+
+	t.Run("JSON filters typed struct slice using json tag names", func(t *testing.T) {
+		t.Parallel()
+		out := &bytes.Buffer{}
+		opts := NewOutputOptions(&terminal.IOStreams{Out: out})
+		opts.Format = OutputFormatJSON
+		opts.Where = `_.displayName == "HTTP Provider"`
+
+		require.NoError(t, opts.Write(items))
+		assert.Contains(t, out.String(), `"name": "http"`)
+		assert.Contains(t, out.String(), `"displayName": "HTTP Provider"`)
+		assert.NotContains(t, out.String(), `"exec"`)
+	})
+
+	t.Run("YAML filters typed struct slice using yaml tag names", func(t *testing.T) {
+		t.Parallel()
+		out := &bytes.Buffer{}
+		opts := NewOutputOptions(&terminal.IOStreams{Out: out})
+		opts.Format = OutputFormatYAML
+		opts.Where = `_.category == "system"`
+
+		require.NoError(t, opts.Write(items))
+		assert.Contains(t, out.String(), "name: exec")
+		assert.Contains(t, out.String(), "displayName: Exec Provider")
+		assert.NotContains(t, out.String(), "http")
+	})
+
+	t.Run("JSON emits [] when 0 items match on typed struct slice", func(t *testing.T) {
+		t.Parallel()
+		out := &bytes.Buffer{}
+		opts := NewOutputOptions(&terminal.IOStreams{Out: out})
+		opts.Format = OutputFormatJSON
+		opts.Where = `_.name == "nonexistent"`
+
+		require.NoError(t, opts.Write(items))
+		assert.Equal(t, "[]\n", out.String())
+	})
+
+	t.Run("YAML emits [] when 0 items match on typed struct slice", func(t *testing.T) {
+		t.Parallel()
+		out := &bytes.Buffer{}
+		opts := NewOutputOptions(&terminal.IOStreams{Out: out})
+		opts.Format = OutputFormatYAML
+		opts.Where = `_.name == "nonexistent"`
+
+		require.NoError(t, opts.Write(items))
+		assert.Equal(t, "[]\n\n", out.String())
+	})
+
+	t.Run("typed nil struct slice with -w emits []", func(t *testing.T) {
+		t.Parallel()
+		var nilItems []summaryRow
+		out := &bytes.Buffer{}
+		opts := NewOutputOptions(&terminal.IOStreams{Out: out})
+		opts.Format = OutputFormatJSON
+		opts.Where = `_.name == "http"`
+
+		require.NoError(t, opts.Write(nilItems))
+		assert.Equal(t, "[]\n", out.String())
+	})
+
+	t.Run("non-list struct with -w passes through unchanged via ErrNotList", func(t *testing.T) {
+		t.Parallel()
+		out := &bytes.Buffer{}
+		opts := NewOutputOptions(&terminal.IOStreams{Out: out})
+		opts.Format = OutputFormatJSON
+		opts.Where = `_.name == "other"`
+
+		single := summaryRow{Name: "solo", DisplayName: "Solo"}
+		require.NoError(t, opts.Write(single))
+		assert.Contains(t, out.String(), `"name": "solo"`)
+	})
+}
+
 func TestResolveColumnHints_BothEmpty(t *testing.T) {
 	result := resolveColumnHints(nil, nil)
 	assert.Nil(t, result)

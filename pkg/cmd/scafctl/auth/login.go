@@ -529,7 +529,7 @@ func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, hand
 		return err
 	}
 
-	w.Info("")
+	w.Plainln("")
 	return displayLoginResult(w, result, flow, handler.DisplayName(), auth.ProfileFromContext(ctx))
 }
 

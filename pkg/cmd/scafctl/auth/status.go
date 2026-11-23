@@ -72,6 +72,51 @@ var authStatusSchema = []byte(`{
 	}
 }`)
 
+// Column width and priority hints tailored for the "Auth Handlers" section table
+// so standard ~90-120 column terminals render a bordered table rather than
+// collapsing into per-row key/value blocks.
+const (
+	authHandlerProfileMaxWidth        = 20
+	authHandlerClusterProfileMaxWidth = 60
+	authHandlerUserMinWidth           = 14
+	authHandlerFlowMaxWidth           = 14
+	authHandlerProfilePriority        = 5
+	authHandlerUserPriority           = 10
+	authHandlerFlowPriority           = 15
+)
+
+// authHandlerColumnHints builds programmatic ColumnHints for the "Auth Handlers"
+// table section: hides the redundant "kind" ("auth") column, caps "flow" and
+// non-cluster "profile" widths (preserving the wider cap when cluster-scoped
+// rows are present), and marks "user" as Flex so the table fits ~90-100 column
+// terminals while expanding cleanly on wider screens.
+func authHandlerColumnHints(hasClusterRows bool) map[string]tui.ColumnHint {
+	profileMaxWidth := authHandlerProfileMaxWidth
+	if hasClusterRows {
+		profileMaxWidth = authHandlerClusterProfileMaxWidth
+	}
+	return map[string]tui.ColumnHint{
+		"kind":    {Hidden: true},
+		"profile": {DisplayName: "Profile", MaxWidth: profileMaxWidth, Priority: authHandlerProfilePriority},
+		"user":    {DisplayName: "User", MaxWidth: authHandlerUserMinWidth, Flex: true, Priority: authHandlerUserPriority},
+		"flow":    {DisplayName: "Flow", MaxWidth: authHandlerFlowMaxWidth, Priority: authHandlerFlowPriority},
+	}
+}
+
+// hasClusterScopedRows reports whether any row represents a per-cluster session
+// (either tagged by expandInstanceRows or formatted as "<profile> / <cluster>").
+func hasClusterScopedRows(rows []map[string]any) bool {
+	for _, r := range rows {
+		if scoped, ok := r["_clusterScoped"].(bool); ok && scoped {
+			return true
+		}
+		if p, ok := r["profile"].(string); ok && strings.Contains(p, " / ") {
+			return true
+		}
+	}
+	return false
+}
+
 // CommandStatus creates the 'auth status' command.
 func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var outputFlags flags.KvxOutputFlags
@@ -236,6 +281,8 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				}
 			}
 
+			hasClusterRows := hasClusterScopedRows(handlerResults)
+
 			// Remove internal fields (prefixed with _) before output rendering.
 			for _, r := range results {
 				for k := range r {
@@ -272,6 +319,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					kvx.WithOutputColumnOrder([]string{"handler", "profile", "status", "user", "flow", "expiresIn"}),
 					kvx.WithOutputColumnarMode(tui.ColumnarModeAlways),
 					kvx.WithOutputSchemaJSON(authStatusSchema),
+					kvx.WithOutputColumnHints(authHandlerColumnHints(hasClusterRows)),
 				)
 
 				if len(handlerResults) > 0 {
@@ -592,6 +640,7 @@ func expandInstanceRows(ctx context.Context, handlerName string, handler auth.Ha
 	rows := make([]map[string]any, 0, len(sessions))
 	for _, s := range sessions {
 		row := cloneStatusRow(base)
+		row["_clusterScoped"] = true
 
 		clusterLabel := s.ClusterLabel
 		if s.Active {

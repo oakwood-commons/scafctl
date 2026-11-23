@@ -342,6 +342,21 @@ func TestIntegration_GetProviderJSON(t *testing.T) {
 	assert.Contains(t, stdout, "http")
 }
 
+func TestIntegration_GetProviderJSON_WhereFilter(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "get", "provider", "-o", "json", "-w", `_.name == "http"`)
+	assert.Equal(t, 0, exitCode)
+	var matched []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &matched))
+	require.Len(t, matched, 1)
+	assert.Equal(t, "http", matched[0]["name"])
+
+	emptyOut, _, emptyExit := runScafctl(t, "get", "provider", "-o", "json", "-w", `_.name == "nonexistent_provider"`)
+	assert.Equal(t, 0, emptyExit)
+	assert.Equal(t, "[]\n", emptyOut)
+}
+
 // ============================================================================
 // Get CEL Functions Tests
 // ============================================================================
@@ -5126,9 +5141,8 @@ func TestIntegration_ConfigSchema_Expression(t *testing.T) {
 }
 
 // TestIntegration_ConfigSchema_WhereOnObjectIsNoOp guards the applyWhereFilter
-// non-list no-op: -w on a map/object command must not fail even though kvx's
-// EvaluateWhere itself rejects non-list data; see
-// https://github.com/oakwood-commons/kvx/issues/102.
+// non-list no-op: -w on a map/object command returns the object unchanged when
+// Engine.FilterWhere reports core.ErrNotList.
 func TestIntegration_ConfigSchema_WhereOnObjectIsNoOp(t *testing.T) {
 	t.Parallel()
 
