@@ -87,6 +87,56 @@ func TestResolveActiveProfile(t *testing.T) {
 			handlerName: "unknown",
 			want:        "",
 		},
+		{
+			name: "explicit resolved empty profile overrides global and config activeProfile",
+			ctx: WithProfileResolved(WithProfile(
+				config.WithConfig(
+					WithGlobalProfile(context.Background(), "global"),
+					&config.Config{
+						Auth: config.GlobalAuthConfig{
+							Entra: &config.EntraAuthConfig{ActiveProfile: "work"},
+						},
+					},
+				),
+				"",
+			)),
+			handlerName: "entra",
+			want:        "",
+		},
+		{
+			name: "config active profile for generic auth.handlers entry",
+			ctx: config.WithConfig(context.Background(), &config.Config{
+				Auth: config.GlobalAuthConfig{
+					Handlers: map[string]config.HandlerConfig{
+						"openshift": {ActiveProfile: "corp"},
+					},
+				},
+			}),
+			handlerName: "openshift",
+			want:        "corp",
+		},
+		{
+			name: "config active profile fallback from generic handler settings map",
+			ctx: config.WithConfig(context.Background(), &config.Config{
+				Auth: config.GlobalAuthConfig{
+					Handlers: map[string]config.HandlerConfig{
+						"openshift": {Settings: map[string]any{"activeProfile": "corp-settings"}},
+					},
+				},
+			}),
+			handlerName: "openshift",
+			want:        "corp-settings",
+		},
+		{
+			name: "invalid config active profile returns empty",
+			ctx: config.WithConfig(context.Background(), &config.Config{
+				Auth: config.GlobalAuthConfig{
+					Entra: &config.EntraAuthConfig{ActiveProfile: "has spaces"},
+				},
+			}),
+			handlerName: "entra",
+			want:        "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1158,4 +1208,261 @@ func TestResolveGCPConfig(t *testing.T) {
 			tt.check(t, result)
 		})
 	}
+}
+
+func TestGenericHandlerProfiles(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ListConfiguredProfiles and ConfigActiveProfile support auth.handlers", func(t *testing.T) {
+		t.Parallel()
+		ctx := config.WithConfig(context.Background(), &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Handlers: map[string]config.HandlerConfig{
+					"openshift": {
+						ActiveProfile: "work",
+						Profiles: map[string]map[string]any{
+							"work":    {"apitimeout": 60},
+							"staging": {"apitimeout": 30},
+						},
+					},
+				},
+			},
+		})
+		assert.Equal(t, "work", ConfigActiveProfile(ctx, "openshift"))
+		assert.Equal(t, []string{"staging", "work"}, ListConfiguredProfiles(ctx, "openshift"))
+	})
+
+	t.Run("ValidateAuthProfiles validates auth.handlers entries", func(t *testing.T) {
+		t.Parallel()
+		validCfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Handlers: map[string]config.HandlerConfig{
+					"openshift": {
+						ActiveProfile: "work",
+						Profiles: map[string]map[string]any{
+							"work": {},
+						},
+					},
+				},
+			},
+		}
+		assert.NoError(t, ValidateAuthProfiles(validCfg))
+
+		badActive := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Handlers: map[string]config.HandlerConfig{
+					"openshift": {ActiveProfile: "bad profile"},
+				},
+			},
+		}
+		err := ValidateAuthProfiles(badActive)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "auth.handlers.openshift.activeProfile")
+
+		badKey := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Handlers: map[string]config.HandlerConfig{
+					"openshift": {
+						Profiles: map[string]map[string]any{
+							"bad@key": {},
+						},
+					},
+				},
+			},
+		}
+		err = ValidateAuthProfiles(badKey)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "auth.handlers.openshift.profiles")
+	})
+
+	t.Run("EnsureProfileRegistered and DeleteProfile support existing auth.handlers entry", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Handlers: map[string]config.HandlerConfig{
+					"openshift": {
+						ActiveProfile: "work",
+						Profiles: map[string]map[string]any{
+							"work": {"apitimeout": 60},
+						},
+					},
+				},
+			},
+		}
+		EnsureProfileRegistered(cfg, "openshift", "staging")
+		assert.Contains(t, cfg.Auth.Handlers["openshift"].Profiles, "staging")
+		assert.Equal(t, 60, cfg.Auth.Handlers["openshift"].Profiles["work"]["apitimeout"])
+
+		found, err := DeleteProfile(cfg, "openshift", "work")
+		assert.NoError(t, err)
+		assert.True(t, found)
+		assert.Equal(t, "", cfg.Auth.Handlers["openshift"].ActiveProfile)
+		assert.NotContains(t, cfg.Auth.Handlers["openshift"].Profiles, "work")
+		assert.Contains(t, cfg.Auth.Handlers["openshift"].Profiles, "staging")
+	})
+
+	t.Run("HasHandlerSettingsOrProfiles distinguishes host-only from plugin settings", func(t *testing.T) {
+		t.Parallel()
+		hostOnly := config.HandlerConfig{
+			Hostname:                   &config.HostnameConfig{Aliases: map[string]string{"a": "https://a.example.com"}},
+			TrustedVerificationDomains: []string{"sso.example.com"},
+		}
+		assert.False(t, HasHandlerSettingsOrProfiles(hostOnly))
+
+		withProfiles := config.HandlerConfig{
+			Profiles: map[string]map[string]any{
+				"work": {"apitimeout": 60},
+			},
+		}
+		assert.True(t, HasHandlerSettingsOrProfiles(withProfiles))
+
+		withSettings := config.HandlerConfig{
+			Settings: map[string]any{"apitimeout": 30},
+		}
+		assert.True(t, HasHandlerSettingsOrProfiles(withSettings))
+	})
+
+	t.Run("ResolveHandlerSettings merges profile overrides and strips reserved keys", func(t *testing.T) {
+		t.Parallel()
+		hc := config.HandlerConfig{
+			ActiveProfile: "work",
+			Profiles: map[string]map[string]any{
+				"work": {
+					"apitimeout": 60,
+					"scopes":     []string{"user:full"},
+					"hostname":   "must-be-stripped",
+				},
+			},
+			Settings: map[string]any{
+				"apitimeout":                 30,
+				"cabundlepath":               "/etc/ssl/base.pem",
+				"nested":                     map[string]any{"k": "v"},
+				"hostname":                   "must-not-leak",
+				"plugin":                     "must-not-leak",
+				"trustedVerificationDomains": []string{"x"},
+				"activeProfile":              "work",
+				"profiles": map[string]any{
+					"fallback": map[string]any{"apitimeout": 90},
+				},
+			},
+		}
+
+		defaultResolved := ResolveHandlerSettings(hc, "")
+		assert.Equal(t, 30, defaultResolved["apitimeout"])
+		assert.Equal(t, "/etc/ssl/base.pem", defaultResolved["cabundlepath"])
+		assert.NotContains(t, defaultResolved, "hostname")
+		assert.NotContains(t, defaultResolved, "plugin")
+		assert.NotContains(t, defaultResolved, "trustedVerificationDomains")
+		assert.NotContains(t, defaultResolved, "activeProfile")
+		assert.NotContains(t, defaultResolved, "profiles")
+
+		workResolved := ResolveHandlerSettings(hc, "Work")
+		assert.Equal(t, 60, workResolved["apitimeout"])
+		assert.Equal(t, "/etc/ssl/base.pem", workResolved["cabundlepath"])
+		assert.Equal(t, []string{"user:full"}, workResolved["scopes"])
+		assert.NotContains(t, workResolved, "hostname")
+
+		// Mutating the returned map must not mutate the source config.
+		workResolved["nested"].(map[string]any)["k"] = "mutated"
+		assert.Equal(t, "v", hc.Settings["nested"].(map[string]any)["k"])
+
+		// Fallback when Profiles struct field is nil and profiles live in Settings.
+		hcSettingsOnly := config.HandlerConfig{
+			Settings: map[string]any{
+				"apitimeout": 30,
+				"clientid":   "base-client",
+				"profiles": map[string]any{
+					"alt": map[string]any{
+						"apitimeout": 45,
+						"clientId":   "alt-client",
+						"items":      []any{"a", map[string]string{"x": "y"}},
+					},
+				},
+			},
+		}
+		altResolved := ResolveHandlerSettings(hcSettingsOnly, "ALT")
+		assert.Equal(t, 45, altResolved["apitimeout"])
+		assert.Equal(t, "alt-client", altResolved["clientId"])
+		assert.NotContains(t, altResolved, "clientid", "case-colliding lowercased key must be replaced")
+		assert.Equal(t, []any{"a", map[string]string{"x": "y"}}, altResolved["items"])
+
+		// Unknown profile returns base settings without panicking.
+		missResolved := ResolveHandlerSettings(hc, "nonexistent")
+		assert.Equal(t, 30, missResolved["apitimeout"])
+	})
+
+	t.Run("ListConfiguredProfiles filters invalid keys and ResetProfileResolution clears per-handler state", func(t *testing.T) {
+		t.Parallel()
+		ctx := config.WithConfig(context.Background(), &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{
+					Profiles: map[string]*config.EntraProfileConfig{
+						"valid":      {},
+						"../invalid": {},
+					},
+				},
+				Handlers: map[string]config.HandlerConfig{
+					"openshift": {
+						Profiles: map[string]map[string]any{
+							"corp":       {},
+							"bad spaces": {},
+						},
+					},
+				},
+			},
+		})
+		assert.Equal(t, []string{"valid"}, ListConfiguredProfiles(ctx, "entra"))
+		assert.Equal(t, []string{"corp"}, ListConfiguredProfiles(ctx, "openshift"))
+
+		scopedCtx := WithProfileResolved(WithProfile(WithGlobalProfile(ctx, "global-prof"), "handler-prof"))
+		resetCtx := ResetProfileResolution(scopedCtx)
+		assert.Empty(t, ProfileFromContext(resetCtx))
+		assert.False(t, IsProfileResolved(resetCtx))
+		assert.Equal(t, "global-prof", GlobalProfileFromContext(resetCtx))
+	})
+
+	t.Run("DeleteProfile and EnsureProfileRegistered handle Viper lowercased keys", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{
+					ActiveProfile: "myWork",
+					Profiles: map[string]*config.EntraProfileConfig{
+						"mywork": {ClientID: "entra-work-client"},
+					},
+				},
+				Handlers: map[string]config.HandlerConfig{
+					"openshift": {
+						ActiveProfile: "myWork",
+						Profiles: map[string]map[string]any{
+							"mywork": {"apitimeout": 60},
+						},
+					},
+				},
+			},
+		}
+		ctx := config.WithConfig(context.Background(), cfg)
+		assert.Equal(t, "mywork", ConfigActiveProfile(ctx, "entra"))
+		assert.Equal(t, "mywork", ConfigActiveProfile(ctx, "openshift"))
+		assert.Equal(t, []string{"mywork"}, ListConfiguredProfiles(ctx, "entra"))
+		assert.Equal(t, []string{"mywork"}, ListConfiguredProfiles(ctx, "openshift"))
+		assert.Equal(t, "entra-work-client", ResolveEntraConfig(cfg.Auth.Entra, "myWork").ClientID)
+
+		EnsureProfileRegistered(cfg, "entra", "myWork")
+		EnsureProfileRegistered(cfg, "openshift", "myWork")
+		assert.Len(t, cfg.Auth.Entra.Profiles, 1, "must not duplicate case-variant profile key")
+		assert.Len(t, cfg.Auth.Handlers["openshift"].Profiles, 1, "must not duplicate case-variant profile key")
+
+		foundEntra, err := DeleteProfile(cfg, "entra", "myWork")
+		assert.NoError(t, err)
+		assert.True(t, foundEntra)
+		assert.Empty(t, cfg.Auth.Entra.ActiveProfile)
+		assert.Empty(t, cfg.Auth.Entra.Profiles)
+
+		found, err := DeleteProfile(cfg, "openshift", "myWork")
+		assert.NoError(t, err)
+		assert.True(t, found)
+		assert.Empty(t, cfg.Auth.Handlers["openshift"].ActiveProfile)
+		assert.Empty(t, cfg.Auth.Handlers["openshift"].Profiles)
+	})
 }

@@ -193,7 +193,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			res, err := kubelogin.Login(ctx, deps, req)
 			if err != nil {
 				w.Errorf("%v", err)
-				if errors.Is(err, kubelogin.ErrNoHandler) || errors.Is(err, kubelogin.ErrNoServer) || errors.Is(err, kubelogin.ErrNoAudience) {
+				if errors.Is(err, kubelogin.ErrNoHandler) || errors.Is(err, kubelogin.ErrNoServer) || errors.Is(err, kubelogin.ErrNoAudience) || errors.Is(err, kubelogin.ErrInvalidProfile) {
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 				if errors.Is(err, kubelogin.ErrVerificationFailed) && res != nil {

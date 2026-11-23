@@ -568,6 +568,35 @@ func restoreAuthProfileEntries(v *viper.Viper, cfg *Config) {
 			}
 		}
 	}
+
+	// Restore empty profile maps under auth.handlers.<name>.profiles as well.
+	// Viper's flattenAndMergeMap drops empty map[string]any{} leaves during
+	// Unmarshal, which would otherwise erase profiles registered by 'auth login'.
+	if rawHandlers, ok := v.Get("auth.handlers").(map[string]any); ok {
+		for handlerName, rawHandler := range rawHandlers {
+			handlerMap, ok := rawHandler.(map[string]any)
+			if !ok {
+				continue
+			}
+			rawProfiles, ok := handlerMap["profiles"].(map[string]any)
+			if !ok || len(rawProfiles) == 0 {
+				continue
+			}
+			if cfg.Auth.Handlers == nil {
+				cfg.Auth.Handlers = make(map[string]HandlerConfig)
+			}
+			hc := cfg.Auth.Handlers[handlerName]
+			if hc.Profiles == nil {
+				hc.Profiles = make(map[string]map[string]any, len(rawProfiles))
+			}
+			for profileName := range rawProfiles {
+				if _, exists := hc.Profiles[profileName]; !exists {
+					hc.Profiles[profileName] = map[string]any{}
+				}
+			}
+			cfg.Auth.Handlers[handlerName] = hc
+		}
+	}
 }
 
 // Save saves the current configuration to file.

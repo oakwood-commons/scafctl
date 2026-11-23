@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
@@ -456,14 +455,11 @@ func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequ
 	pluginVersion := request.GetString("plugin_version", "")
 
 	// Per-call auth profile override.
-	profile, profileErr := profileFromRequest(request.GetArguments())
+	ctx, profileErr := applyProfileFromRequest(ctx, request.GetArguments())
 	if profileErr != nil {
 		return newStructuredError(ErrCodeInvalidInput, profileErr.Error(),
 			WithField("profile"),
 		), nil
-	}
-	if profile != "" {
-		ctx = auth.WithProfile(ctx, profile)
 	}
 
 	if s.registry == nil {

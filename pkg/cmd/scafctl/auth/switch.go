@@ -142,9 +142,12 @@ func CommandSwitch(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *co
 				}
 				cfg.Auth.GCP.ActiveProfile = profileName
 			default:
-				err := fmt.Errorf("handler %q does not support profile switching (only entra, github, gcp)", handlerName)
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.InvalidInput)
+				if cfg.Auth.Handlers == nil {
+					cfg.Auth.Handlers = make(map[string]appconfig.HandlerConfig)
+				}
+				hc := cfg.Auth.Handlers[handlerName]
+				hc.ActiveProfile = profileName
+				cfg.Auth.Handlers[handlerName] = hc
 			}
 
 			if err := mgr.Save(); err != nil {

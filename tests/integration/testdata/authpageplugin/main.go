@@ -46,6 +46,7 @@ func (p *authPageTestPlugin) GetAuthHandlers(_ context.Context) ([]sdkplugin.Aut
 		Flows:       []auth.Flow{auth.FlowInteractive, auth.FlowDeviceCode},
 		Capabilities: []auth.Capability{
 			auth.CapScopesOnLogin,
+			auth.CapScopesOnTokenRequest,
 			auth.CapTenantID,
 			auth.CapCallbackPort,
 			auth.CapFlowOverride,
@@ -184,16 +185,41 @@ func shutdownServer(cs *oauth.CallbackServer) {
 	_ = cs.Shutdown(shutdownCtx)
 }
 
+func (p *authPageTestPlugin) effectiveSettings(ctx context.Context) (sdkplugin.ProviderConfig, handlerSettings) {
+	cfg, hs := p.snapshotConfig()
+	if reqSettings, ok := sdkplugin.RequestSettingsFromContext(ctx); ok {
+		hs = handlerSettings{}
+		raw, err := json.Marshal(reqSettings)
+		if err == nil {
+			_ = json.Unmarshal(raw, &hs)
+		}
+	}
+	return cfg, hs
+}
+
 func (p *authPageTestPlugin) Logout(_ context.Context, _ string, _ sdkplugin.LogoutRequest) error {
 	return nil
 }
 
-func (p *authPageTestPlugin) GetStatus(_ context.Context, _ string, _ sdkplugin.StatusRequest) (*auth.Status, error) {
-	return &auth.Status{}, nil
+func (p *authPageTestPlugin) GetStatus(ctx context.Context, _ string, _ sdkplugin.StatusRequest) (*auth.Status, error) {
+	_, hs := p.effectiveSettings(ctx)
+	return &auth.Status{
+		Authenticated: false,
+		ClientID:      hs.ClientID,
+		TenantID:      hs.TenantID,
+	}, nil
 }
 
-func (p *authPageTestPlugin) GetToken(_ context.Context, _ string, _ sdkplugin.TokenRequest) (*sdkplugin.TokenResponse, error) {
-	return &sdkplugin.TokenResponse{}, nil
+func (p *authPageTestPlugin) GetToken(ctx context.Context, _ string, req sdkplugin.TokenRequest) (*sdkplugin.TokenResponse, error) {
+	_, hs := p.effectiveSettings(ctx)
+	prof := auth.ProfileFromContext(ctx)
+	return &sdkplugin.TokenResponse{
+		AccessToken: fmt.Sprintf("subproc-tok:%s:%s:%s:%s", prof, hs.ClientID, hs.TenantID, req.Scope),
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		Scope:       req.Scope,
+		Flow:        auth.FlowInteractive,
+	}, nil
 }
 
 func (p *authPageTestPlugin) ListCachedTokens(_ context.Context, _ string) ([]*auth.CachedTokenInfo, error) {

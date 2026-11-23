@@ -635,6 +635,7 @@ func (s *Server) freshConfigContext(ctx context.Context) context.Context {
 	// Apply session-level profile override set by auth_set_profile tool.
 	if p, ok := s.profileOverride.Load().(*string); ok && p != nil && *p != "" {
 		merged = auth.WithProfile(merged, *p)
+		merged = auth.WithProfileResolved(merged)
 	}
 	return merged
 }

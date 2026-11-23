@@ -468,6 +468,8 @@ shown as `(not present)`.
 | `auth.handlers.<name>.plugin.ref` | string | handler name | Catalog artifact name for a pinned third-party auth handler |
 | `auth.handlers.<name>.plugin.version` | string | `latest` | Version constraint for a pinned third-party auth handler |
 | `auth.handlers.<name>.trustedVerificationDomains` | []string | -- | Per-handler trusted device-code verification domains (required trust source for third-party handlers) |
+| `auth.handlers.<name>.activeProfile` | string | -- | Default named auth profile for the handler |
+| `auth.handlers.<name>.profiles` | map | -- | Named auth profiles with per-profile setting overrides inherited from top-level handler settings |
 | `apiServer.auth.handlers.<name>` | object | -- | Server-mode settings forwarded to an auth handler plugin's `ActivateServerMode` RPC during `scafctl serve` |
 
 ### Config File Location

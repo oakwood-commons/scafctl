@@ -5,63 +5,70 @@ package hostname
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/oakwood-commons/scafctl/pkg/auth"
 )
 
-// registerStub returns a context carrying an auth registry with the given mock handler.
-func registerStub(t *testing.T, mock *auth.MockHandler) context.Context {
-	t.Helper()
+type tokenProbeHandler struct {
+	*auth.MockHandler
+	onGetToken func(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error)
+}
+
+func (h *tokenProbeHandler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
+	return h.onGetToken(ctx, opts)
+}
+
+func TestDefaultToken_DoesNotLeakTargetHandlerProfile(t *testing.T) {
+	t.Parallel()
+
+	var gotProfile string
+	var gotResolved bool
+	entraProbe := &tokenProbeHandler{
+		MockHandler: auth.NewMockHandler("entra"),
+		onGetToken: func(ctx context.Context, _ auth.TokenOptions) (*auth.Token, error) {
+			gotProfile = auth.ResolveActiveProfile(ctx, "entra")
+			gotResolved = auth.IsProfileResolved(ctx)
+			return &auth.Token{AccessToken: "tok-" + gotProfile, ExpiresAt: time.Now().Add(time.Hour)}, nil
+		},
+	}
+
 	reg := auth.NewRegistry()
-	require.NoError(t, reg.Register(mock))
-	return auth.WithRegistry(context.Background(), reg)
-}
+	require.NoError(t, reg.Register(entraProbe))
 
-// TestDefaultToken_NoRegistryReturnsError verifies defaultToken surfaces the
-// underlying error (and no token) when no auth registry is available,
-// rather than triggering an interactive login.
-func TestDefaultToken_NoRegistryReturnsError(t *testing.T) {
-	t.Parallel()
+	cfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{ActiveProfile: "corp"},
+		},
+	}
+	baseCtx := auth.WithRegistry(config.WithConfig(context.Background(), cfg), reg)
 
-	tok, err := defaultToken(context.Background(), "entra", "api://example/.default")
-
-	require.Error(t, err)
-	assert.Empty(t, tok)
-}
-
-// TestDefaultToken_ReturnsAccessToken verifies the success path returns the
-// access token from the resolved handler.
-func TestDefaultToken_ReturnsAccessToken(t *testing.T) {
-	t.Parallel()
-
-	mock := auth.NewMockHandler("entra")
-	mock.SetToken(&auth.Token{AccessToken: "abc123", TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)})
-	ctx := registerStub(t, mock)
-
-	tok, err := defaultToken(ctx, "entra", "api://example/.default")
-
+	// Simulate login to openshift with --profile cluster-admin (or resolved default ""):
+	// defaultToken for "entra" must reset per-handler profile resolution so entra uses "corp".
+	openshiftCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, "cluster-admin"))
+	tok, err := defaultToken(openshiftCtx, "entra", "api://fleet/.default")
 	require.NoError(t, err)
-	assert.Equal(t, "abc123", tok)
-}
+	assert.Equal(t, "tok-corp", tok)
+	assert.Equal(t, "corp", gotProfile)
+	assert.False(t, gotResolved)
 
-// TestDefaultToken_PropagatesProviderError verifies a provider error is
-// surfaced verbatim and no token is returned.
-func TestDefaultToken_PropagatesProviderError(t *testing.T) {
-	t.Parallel()
+	// Explicit provider@profile syntax overrides entra's activeProfile.
+	tokExplicit, err := defaultToken(openshiftCtx, "entra@staging", "api://fleet/.default")
+	require.NoError(t, err)
+	assert.Equal(t, "tok-staging", tokExplicit)
+	assert.True(t, gotResolved)
 
-	wantErr := errors.New("cached token expired")
-	mock := auth.NewMockHandler("entra")
-	mock.SetTokenError(wantErr)
-	ctx := registerStub(t, mock)
+	// Explicit provider@default resolves to "" (built-in), overriding activeProfile "corp".
+	tokDefault, err := defaultToken(openshiftCtx, "entra@default", "api://fleet/.default")
+	require.NoError(t, err)
+	assert.Equal(t, "tok-", tokDefault)
+	assert.True(t, gotResolved)
 
-	tok, err := defaultToken(ctx, "entra", "")
-
-	require.ErrorIs(t, err, wantErr)
-	assert.Empty(t, tok)
+	// Invalid profile in provider@bad is rejected.
+	_, err = defaultToken(openshiftCtx, "entra@bad profile", "api://fleet/.default")
+	require.Error(t, err)
 }

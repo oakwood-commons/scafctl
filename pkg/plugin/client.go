@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -316,18 +317,20 @@ func (o *clientOptions) applySecretScope() {
 	o.hostDeps = &scoped
 }
 
-// isolatePromptBroker gives this client its own AuthPromptBroker. Deps are
-// commonly shared across every auth client (and WithSecretScope only
-// shallow-copies them), so a shared broker would let plugin B answer a
-// prompt window opened for plugin A's login. The copy keeps the value passed
-// to WithHostDeps unmodified; the per-client broker is shared by this
-// client's login wrapper and HostService server.
+// isolatePromptBroker gives this client its own AuthPromptBroker and callback
+// lineage tracker. Deps are commonly shared across every auth client (and
+// WithSecretScope only shallow-copies them), so a shared broker would let
+// plugin B answer a prompt window opened for plugin A's login or confuse
+// reentrant callback lineage across plugins.
 func (o *clientOptions) isolatePromptBroker() {
-	if o.hostDeps == nil || o.hostDeps.PromptBroker == nil {
+	if o.hostDeps == nil {
 		return
 	}
 	isolated := *o.hostDeps
-	isolated.PromptBroker = &AuthPromptBroker{}
+	if o.hostDeps.PromptBroker != nil {
+		isolated.PromptBroker = &AuthPromptBroker{}
+	}
+	isolated.callbackLineage = newAuthCallbackLineage()
 	o.hostDeps = &isolated
 }
 
@@ -622,6 +625,11 @@ type AuthHandlerClient struct {
 	name            string
 	startupDuration time.Duration
 	hostDeps        *HostServiceDeps
+
+	wrappersMu  sync.Mutex
+	multiLockMu sync.Mutex
+	serverMode  bool
+	wrappers    []*AuthHandlerWrapper
 }
 
 // newAuthHandlerClientWithConnector creates an auth handler plugin client
@@ -683,6 +691,15 @@ func NewAuthHandlerClient(pluginPath string, opts ...ClientOption) (*AuthHandler
 	return newAuthHandlerClientWithConnector(pluginPath, connectPlugin, opts...)
 }
 
+// NewAuthHandlerClientFromPlugin wraps an in-process AuthHandlerPlugin
+// implementation in an AuthHandlerClient without spawning a subprocess.
+// Primarily used by embedders and tests exercising AuthHandlerWrapper directly.
+func NewAuthHandlerClientFromPlugin(impl AuthHandlerPlugin) *AuthHandlerClient {
+	return &AuthHandlerClient{
+		plugin: impl,
+	}
+}
+
 // GetAuthHandlers returns all auth handler names exposed by this plugin.
 func (c *AuthHandlerClient) GetAuthHandlers(ctx context.Context) ([]AuthHandlerInfo, error) {
 	return c.plugin.GetAuthHandlers(ctx)
@@ -730,17 +747,89 @@ func (c *AuthHandlerClient) HostServiceID() uint32 {
 // authPromptBroker returns the shared PromptAuthResponse broker for this
 // client's HostService, or nil when no host deps are wired.
 func (c *AuthHandlerClient) authPromptBroker() *AuthPromptBroker {
-	if c.hostDeps == nil {
+	if c == nil || c.hostDeps == nil {
 		return nil
 	}
 	return c.hostDeps.PromptBroker
 }
 
-func (c *AuthHandlerClient) ActivateServerMode(ctx context.Context, settings []byte) error {
-	if sm, ok := c.plugin.(*AuthHandlerGRPCClient); ok {
-		return sm.ActivateServerMode(ctx, settings)
+// authCallbackLineage returns the shared callback lineage tracker for this
+// client's HostService, or nil when no host deps are wired.
+func (c *AuthHandlerClient) authCallbackLineage() *authCallbackLineage {
+	if c == nil || c.hostDeps == nil {
+		return nil
 	}
-	return fmt.Errorf("plugin does not support server mode")
+	return c.hostDeps.callbackLineage
+}
+
+// registerWrapper records w on this client in registration order and propagates
+// serverMode if plugin-wide server mode was already activated on the client.
+func (c *AuthHandlerClient) registerWrapper(w *AuthHandlerWrapper) {
+	if c == nil || w == nil {
+		return
+	}
+	c.wrappersMu.Lock()
+	if !slices.Contains(c.wrappers, w) {
+		c.wrappers = append(c.wrappers, w)
+	}
+	active := c.serverMode
+	c.wrappersMu.Unlock()
+	if active {
+		w.configMu.Lock()
+		w.serverMode = true
+		w.configMu.Unlock()
+	}
+}
+
+func (c *AuthHandlerClient) unregisterWrapper(w *AuthHandlerWrapper) {
+	if c == nil || w == nil {
+		return
+	}
+	c.wrappersMu.Lock()
+	c.wrappers = slices.DeleteFunc(c.wrappers, func(cur *AuthHandlerWrapper) bool {
+		return cur == w
+	})
+	c.wrappersMu.Unlock()
+}
+
+// ensureAndSnapshotWrappers ensures self is registered on c (handling struct-literal
+// wrappers in tests) and returns a snapshot of all wrappers sharing c in
+// deterministic registration order.
+func (c *AuthHandlerClient) ensureAndSnapshotWrappers(self *AuthHandlerWrapper) []*AuthHandlerWrapper {
+	if c == nil {
+		if self == nil {
+			return nil
+		}
+		return []*AuthHandlerWrapper{self}
+	}
+	c.wrappersMu.Lock()
+	if self != nil && !slices.Contains(c.wrappers, self) {
+		c.wrappers = append(c.wrappers, self)
+	}
+	out := slices.Clone(c.wrappers)
+	c.wrappersMu.Unlock()
+	return out
+}
+
+func (c *AuthHandlerClient) markServerMode() {
+	if c == nil {
+		return
+	}
+	c.wrappersMu.Lock()
+	c.serverMode = true
+	c.wrappersMu.Unlock()
+}
+
+func (c *AuthHandlerClient) ActivateServerMode(ctx context.Context, settings []byte) error {
+	if c != nil {
+		if sm, ok := c.plugin.(*AuthHandlerGRPCClient); ok {
+			return sm.ActivateServerMode(ctx, settings)
+		}
+	}
+	if !hasServerModeSettings(settings) {
+		return nil
+	}
+	return fmt.Errorf("activate server mode failed: plugin does not support server mode")
 }
 
 // Kill terminates the plugin process.

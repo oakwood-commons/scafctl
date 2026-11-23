@@ -122,27 +122,14 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			outputFlags.AppName = cliParams.BinaryName
 			handlerName := args[0]
 
-			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile
-			// Track whether profile was explicitly set (even if normalized to empty/default).
-			profileExplicit := cmd.Flags().Changed("profile")
-			effectiveProfile := auth.NormalizeProfileName(profile)
-			if effectiveProfile == "" && !profileExplicit {
-				effectiveProfile = auth.NormalizeProfileName(auth.GlobalProfileFromContext(ctx))
+			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile.
+			ctx, _, profileExplicit, err := resolveCommandProfile(ctx, cmd, profile)
+			if err != nil {
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
-			if effectiveProfile == "" && !profileExplicit {
-				effectiveProfile = auth.ResolveActiveProfile(ctx, handlerName)
-			}
-			if effectiveProfile != "" {
-				if err := auth.ValidateProfileName(effectiveProfile); err != nil {
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.InvalidInput)
-				}
-				ctx = auth.WithProfile(ctx, effectiveProfile)
-			}
-			// Mark profile as resolved so GetToken doesn't re-resolve.
-			// This is needed when --profile built-in normalizes to "" (default).
-			if profileExplicit {
-				ctx = auth.WithProfileResolved(ctx)
+			if !profileExplicit {
+				ctx, _ = withHandlerActiveProfile(ctx, handlerName)
 			}
 
 			// --force is an alias for --force-refresh

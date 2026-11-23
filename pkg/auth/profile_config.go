@@ -6,22 +6,32 @@ package auth
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/config"
 )
 
 // ResolveActiveProfile determines which profile should be active for a handler
 // given the current context and configuration. Precedence (highest first):
-//  1. Profile from context (set by solution YAML or --profile flag)
+//  1. Profile from context (set by solution YAML or --profile flag, including explicit default)
 //  2. Profile from --auth-profile global flag / SCAFCTL_AUTH_PROFILE env var
 //  3. ActiveProfile from handler config
 //  4. Empty string (default profile)
 func ResolveActiveProfile(ctx context.Context, handlerName string) string {
 	// 1. Per-command/solution profile (already set in context by CLI flag or HTTP provider)
 	if p := ProfileFromContext(ctx); p != "" {
-		return p
+		normalized := NormalizeProfileName(p)
+		if normalized != "" {
+			if err := ValidateProfileName(normalized); err != nil {
+				return ""
+			}
+		}
+		return normalized
 	}
+	// An explicit built-in/default selection normalizes to "" and marks the
+	// context resolved; honor it and skip global/config fallbacks.
 	if IsProfileResolved(ctx) {
 		return ""
 	}
@@ -30,7 +40,13 @@ func ResolveActiveProfile(ctx context.Context, handlerName string) string {
 	// Check raw value first: if the user explicitly set --auth-profile (even
 	// to "built-in" or "default"), honor it and skip config-level fallback.
 	if gp := GlobalProfileFromContext(ctx); gp != "" {
-		return NormalizeProfileName(gp)
+		normalized := NormalizeProfileName(gp)
+		if normalized != "" {
+			if err := ValidateProfileName(normalized); err != nil {
+				return ""
+			}
+		}
+		return normalized
 	}
 
 	// 3. Config-level active profile
@@ -52,6 +68,13 @@ func ResolveActiveProfile(ctx context.Context, handlerName string) string {
 	case "gcp":
 		if cfg.Auth.GCP != nil {
 			active = cfg.Auth.GCP.ActiveProfile
+		}
+	default:
+		if hc, ok := cfg.Auth.Handlers[handlerName]; ok {
+			active = hc.ActiveProfile
+			if active == "" {
+				active = handlerSettingsActiveProfile(hc.Settings)
+			}
 		}
 	}
 
@@ -75,22 +98,36 @@ func ConfigActiveProfile(ctx context.Context, handlerName string) string {
 		return ""
 	}
 
+	var active string
 	switch handlerName {
 	case "entra":
 		if cfg.Auth.Entra != nil {
-			return cfg.Auth.Entra.ActiveProfile
+			active = cfg.Auth.Entra.ActiveProfile
 		}
 	case "github":
 		if cfg.Auth.GitHub != nil {
-			return cfg.Auth.GitHub.ActiveProfile
+			active = cfg.Auth.GitHub.ActiveProfile
 		}
 	case "gcp":
 		if cfg.Auth.GCP != nil {
-			return cfg.Auth.GCP.ActiveProfile
+			active = cfg.Auth.GCP.ActiveProfile
+		}
+	default:
+		if hc, ok := cfg.Auth.Handlers[handlerName]; ok {
+			active = hc.ActiveProfile
+			if active == "" {
+				active = handlerSettingsActiveProfile(hc.Settings)
+			}
 		}
 	}
 
-	return ""
+	normalized := NormalizeProfileName(active)
+	if normalized != "" {
+		if err := ValidateProfileName(normalized); err != nil {
+			return ""
+		}
+	}
+	return normalized
 }
 
 // ListConfiguredProfiles returns the profile names configured for a handler.
@@ -112,6 +149,10 @@ func ListConfiguredProfiles(ctx context.Context, handlerName string) []string {
 	case "gcp":
 		if cfg.Auth.GCP != nil {
 			return mapKeys(cfg.Auth.GCP.Profiles)
+		}
+	default:
+		if hc, ok := cfg.Auth.Handlers[handlerName]; ok {
+			return handlerProfileKeys(hc)
 		}
 	}
 
@@ -140,6 +181,37 @@ func ValidateAuthProfiles(cfg *config.Config) error {
 			return err
 		}
 	}
+	if len(cfg.Auth.Handlers) > 0 {
+		handlerNames := make([]string, 0, len(cfg.Auth.Handlers))
+		for name := range cfg.Auth.Handlers {
+			handlerNames = append(handlerNames, name)
+		}
+		sort.Strings(handlerNames)
+		for _, name := range handlerNames {
+			hc := cfg.Auth.Handlers[name]
+			active := hc.ActiveProfile
+			if active == "" {
+				active = handlerSettingsActiveProfile(hc.Settings)
+			}
+			if active != "" {
+				if err := ValidateProfileName(active); err != nil {
+					return fmt.Errorf("auth.handlers.%s.activeProfile: %w", name, err)
+				}
+			}
+			for profileName := range hc.Profiles {
+				if err := ValidateProfileName(profileName); err != nil {
+					return fmt.Errorf("auth.handlers.%s.profiles[%q]: %w", name, profileName, err)
+				}
+			}
+			if rawProfiles, ok := handlerSettingsProfilesMap(hc.Settings); ok {
+				for profileName := range rawProfiles {
+					if err := ValidateProfileName(profileName); err != nil {
+						return fmt.Errorf("auth.handlers.%s.profiles[%q]: %w", name, profileName, err)
+					}
+				}
+			}
+		}
+	}
 
 	return nil
 }
@@ -164,6 +236,7 @@ func validateProfileMap[T any](handlerName, activeProfile string, profiles map[s
 // ListConfiguredProfiles and auth switch without requiring manual config edits.
 // Does nothing for the default (empty) profile.
 func EnsureProfileRegistered(cfg *config.Config, handlerName, profile string) {
+	profile = NormalizeProfileName(profile)
 	if cfg == nil || profile == "" {
 		return
 	}
@@ -176,7 +249,7 @@ func EnsureProfileRegistered(cfg *config.Config, handlerName, profile string) {
 		if cfg.Auth.Entra.Profiles == nil {
 			cfg.Auth.Entra.Profiles = make(map[string]*config.EntraProfileConfig)
 		}
-		if _, exists := cfg.Auth.Entra.Profiles[profile]; !exists {
+		if _, exists := lookupTypedProfileMap(cfg.Auth.Entra.Profiles, profile); !exists {
 			cfg.Auth.Entra.Profiles[profile] = &config.EntraProfileConfig{}
 		}
 	case "github":
@@ -186,7 +259,7 @@ func EnsureProfileRegistered(cfg *config.Config, handlerName, profile string) {
 		if cfg.Auth.GitHub.Profiles == nil {
 			cfg.Auth.GitHub.Profiles = make(map[string]*config.GitHubProfileConfig)
 		}
-		if _, exists := cfg.Auth.GitHub.Profiles[profile]; !exists {
+		if _, exists := lookupTypedProfileMap(cfg.Auth.GitHub.Profiles, profile); !exists {
 			cfg.Auth.GitHub.Profiles[profile] = &config.GitHubProfileConfig{}
 		}
 	case "gcp":
@@ -196,8 +269,20 @@ func EnsureProfileRegistered(cfg *config.Config, handlerName, profile string) {
 		if cfg.Auth.GCP.Profiles == nil {
 			cfg.Auth.GCP.Profiles = make(map[string]*config.GCPProfileConfig)
 		}
-		if _, exists := cfg.Auth.GCP.Profiles[profile]; !exists {
+		if _, exists := lookupTypedProfileMap(cfg.Auth.GCP.Profiles, profile); !exists {
 			cfg.Auth.GCP.Profiles[profile] = &config.GCPProfileConfig{}
+		}
+	default:
+		if cfg.Auth.Handlers != nil {
+			if hc, ok := cfg.Auth.Handlers[handlerName]; ok {
+				if hc.Profiles == nil {
+					hc.Profiles = make(map[string]map[string]any)
+				}
+				if _, exists := lookupHandlerProfileMap(hc.Profiles, profile); !exists {
+					hc.Profiles[profile] = map[string]any{}
+				}
+				cfg.Auth.Handlers[handlerName] = hc
+			}
 		}
 	}
 }
@@ -209,6 +294,7 @@ func DeleteProfile(cfg *config.Config, handlerName, profile string) (bool, error
 	if cfg == nil {
 		return false, fmt.Errorf("config is nil")
 	}
+	profile = NormalizeProfileName(profile)
 	if profile == "" {
 		return false, fmt.Errorf("cannot delete the unnamed built-in profile")
 	}
@@ -217,9 +303,8 @@ func DeleteProfile(cfg *config.Config, handlerName, profile string) (bool, error
 	switch handlerName {
 	case "entra":
 		if cfg.Auth.Entra != nil {
-			if _, exists := cfg.Auth.Entra.Profiles[profile]; exists {
-				delete(cfg.Auth.Entra.Profiles, profile)
-				if cfg.Auth.Entra.ActiveProfile == profile {
+			if deleteTypedProfileEntries(cfg.Auth.Entra.Profiles, profile) {
+				if strings.EqualFold(cfg.Auth.Entra.ActiveProfile, profile) {
 					cfg.Auth.Entra.ActiveProfile = ""
 				}
 				found = true
@@ -227,9 +312,8 @@ func DeleteProfile(cfg *config.Config, handlerName, profile string) (bool, error
 		}
 	case "github":
 		if cfg.Auth.GitHub != nil {
-			if _, exists := cfg.Auth.GitHub.Profiles[profile]; exists {
-				delete(cfg.Auth.GitHub.Profiles, profile)
-				if cfg.Auth.GitHub.ActiveProfile == profile {
+			if deleteTypedProfileEntries(cfg.Auth.GitHub.Profiles, profile) {
+				if strings.EqualFold(cfg.Auth.GitHub.ActiveProfile, profile) {
 					cfg.Auth.GitHub.ActiveProfile = ""
 				}
 				found = true
@@ -237,16 +321,48 @@ func DeleteProfile(cfg *config.Config, handlerName, profile string) (bool, error
 		}
 	case "gcp":
 		if cfg.Auth.GCP != nil {
-			if _, exists := cfg.Auth.GCP.Profiles[profile]; exists {
-				delete(cfg.Auth.GCP.Profiles, profile)
-				if cfg.Auth.GCP.ActiveProfile == profile {
+			if deleteTypedProfileEntries(cfg.Auth.GCP.Profiles, profile) {
+				if strings.EqualFold(cfg.Auth.GCP.ActiveProfile, profile) {
 					cfg.Auth.GCP.ActiveProfile = ""
 				}
 				found = true
 			}
 		}
 	default:
-		return false, fmt.Errorf("unknown handler: %s", handlerName)
+		if cfg.Auth.Handlers == nil {
+			return false, fmt.Errorf("unknown handler: %s", handlerName)
+		}
+		hc, ok := cfg.Auth.Handlers[handlerName]
+		if !ok {
+			return false, fmt.Errorf("unknown handler: %s", handlerName)
+		}
+		for k := range hc.Profiles {
+			if strings.EqualFold(k, profile) {
+				delete(hc.Profiles, k)
+				found = true
+			}
+		}
+		if rawProfiles, hasRaw := handlerSettingsProfilesMap(hc.Settings); hasRaw {
+			for k := range rawProfiles {
+				if strings.EqualFold(k, profile) {
+					delete(rawProfiles, k)
+					found = true
+				}
+			}
+		}
+		if found {
+			if strings.EqualFold(hc.ActiveProfile, profile) {
+				hc.ActiveProfile = ""
+			}
+			for k, v := range hc.Settings {
+				if strings.EqualFold(k, "activeProfile") {
+					if s, isStr := v.(string); isStr && strings.EqualFold(s, profile) {
+						delete(hc.Settings, k)
+					}
+				}
+			}
+			cfg.Auth.Handlers[handlerName] = hc
+		}
 	}
 
 	return found, nil
@@ -261,6 +377,7 @@ func ResolveEntraConfig(cfg *config.EntraAuthConfig, profile string) *config.Ent
 	if cfg == nil {
 		return nil
 	}
+	profile = NormalizeProfileName(profile)
 
 	// Copy top-level config (shallow copy is sufficient for string/slice fields).
 	resolved := *cfg
@@ -268,7 +385,7 @@ func ResolveEntraConfig(cfg *config.EntraAuthConfig, profile string) *config.Ent
 	resolved.Profiles = nil
 
 	if profile != "" {
-		if p, ok := cfg.Profiles[profile]; ok && p != nil {
+		if p, ok := lookupTypedProfileMap(cfg.Profiles, profile); ok && p != nil {
 			// Profile fields override top-level when non-empty.
 			if p.HTTPClient != nil {
 				resolved.HTTPClient = p.HTTPClient
@@ -338,6 +455,7 @@ func ResolveGitHubConfig(cfg *config.GitHubAuthConfig, profile string) *config.G
 	if cfg == nil {
 		return nil
 	}
+	profile = NormalizeProfileName(profile)
 
 	resolved := *cfg
 	resolved.ActiveProfile = ""
@@ -347,7 +465,7 @@ func ResolveGitHubConfig(cfg *config.GitHubAuthConfig, profile string) *config.G
 		return &resolved
 	}
 
-	p, ok := cfg.Profiles[profile]
+	p, ok := lookupTypedProfileMap(cfg.Profiles, profile)
 	if !ok || p == nil {
 		return &resolved
 	}
@@ -392,6 +510,7 @@ func ResolveGCPConfig(cfg *config.GCPAuthConfig, profile string) *config.GCPAuth
 	if cfg == nil {
 		return nil
 	}
+	profile = NormalizeProfileName(profile)
 
 	resolved := *cfg
 	resolved.ActiveProfile = ""
@@ -401,7 +520,7 @@ func ResolveGCPConfig(cfg *config.GCPAuthConfig, profile string) *config.GCPAuth
 		return &resolved
 	}
 
-	p, ok := cfg.Profiles[profile]
+	p, ok := lookupTypedProfileMap(cfg.Profiles, profile)
 	if !ok || p == nil {
 		return &resolved
 	}
@@ -434,12 +553,224 @@ func ResolveGCPConfig(cfg *config.GCPAuthConfig, profile string) *config.GCPAuth
 	return &resolved
 }
 
+// HasHandlerSettingsOrProfiles reports whether a generic auth.handlers.<name>
+// entry carries plugin settings or profile configuration (as opposed to only
+// host-consumed blocks such as hostname, plugin, or trustedVerificationDomains).
+func HasHandlerSettingsOrProfiles(hc config.HandlerConfig) bool {
+	if hc.ActiveProfile != "" || len(hc.Profiles) > 0 {
+		return true
+	}
+	for k := range hc.Settings {
+		if !isReservedHandlerMetaKey(k) {
+			return true
+		}
+		if strings.EqualFold(k, "profiles") || strings.EqualFold(k, "activeProfile") {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveHandlerSettings returns a fresh map of plugin settings for an
+// auth.handlers.<name> entry with the requested profile's overrides merged on
+// top of top-level settings. Host-consumed keys and profile metadata
+// ("activeProfile", "profiles") are stripped from the returned map.
+func ResolveHandlerSettings(hc config.HandlerConfig, profile string) map[string]any {
+	profile = NormalizeProfileName(profile)
+	resolved := make(map[string]any, len(hc.Settings))
+	for k, v := range hc.Settings {
+		if isReservedHandlerMetaKey(k) {
+			continue
+		}
+		resolved[k] = cloneAny(v)
+	}
+
+	if profile == "" {
+		return resolved
+	}
+
+	if len(hc.Profiles) > 0 {
+		if p, ok := lookupHandlerProfileMap(hc.Profiles, profile); ok {
+			mergeHandlerProfileMap(resolved, p)
+			return resolved
+		}
+	}
+
+	// Fallback when HandlerConfig was constructed directly in Go with "profiles"
+	// inside Settings rather than decoded through mapstructure.
+	if rawProfiles, ok := handlerSettingsProfilesMap(hc.Settings); ok {
+		if pMap, exists := lookupRawProfileMap(rawProfiles, profile); exists {
+			mergeHandlerProfileMap(resolved, pMap)
+		}
+	}
+
+	return resolved
+}
+
+func mergeHandlerProfileMap(dst, src map[string]any) {
+	for k, v := range src {
+		if isReservedHandlerMetaKey(k) || v == nil {
+			continue
+		}
+		for ek := range dst {
+			if ek != k && strings.EqualFold(ek, k) {
+				delete(dst, ek)
+			}
+		}
+		dst[k] = cloneAny(v)
+	}
+}
+
+func isReservedHandlerMetaKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "hostname", "plugin", "trustedverificationdomains", "activeprofile", "profiles":
+		return true
+	default:
+		return false
+	}
+}
+
+func lookupTypedProfileMap[T any](profiles map[string]*T, profile string) (*T, bool) {
+	if p, ok := profiles[profile]; ok {
+		return p, true
+	}
+	for k, p := range profiles {
+		if strings.EqualFold(k, profile) {
+			return p, true
+		}
+	}
+	return nil, false
+}
+
+func deleteTypedProfileEntries[T any](profiles map[string]*T, profile string) bool {
+	var found bool
+	for k := range profiles {
+		if strings.EqualFold(k, profile) {
+			delete(profiles, k)
+			found = true
+		}
+	}
+	return found
+}
+
+func lookupHandlerProfileMap(profiles map[string]map[string]any, profile string) (map[string]any, bool) {
+	if p, ok := profiles[profile]; ok {
+		return p, true
+	}
+	for k, p := range profiles {
+		if strings.EqualFold(k, profile) {
+			return p, true
+		}
+	}
+	return nil, false
+}
+
+func lookupRawProfileMap(rawProfiles map[string]any, profile string) (map[string]any, bool) {
+	if entry, ok := rawProfiles[profile]; ok {
+		if m, ok := entry.(map[string]any); ok {
+			return m, true
+		}
+	}
+	for k, entry := range rawProfiles {
+		if strings.EqualFold(k, profile) {
+			if m, ok := entry.(map[string]any); ok {
+				return m, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func handlerSettingsActiveProfile(settings map[string]any) string {
+	for k, v := range settings {
+		if strings.EqualFold(k, "activeProfile") {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func handlerSettingsProfilesMap(settings map[string]any) (map[string]any, bool) {
+	for k, v := range settings {
+		if strings.EqualFold(k, "profiles") {
+			if m, ok := v.(map[string]any); ok {
+				return m, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func handlerProfileKeys(hc config.HandlerConfig) []string {
+	seen := make(map[string]struct{}, len(hc.Profiles))
+	for k := range hc.Profiles {
+		norm := NormalizeProfileName(k)
+		if norm != "" && ValidateProfileName(norm) == nil {
+			seen[norm] = struct{}{}
+		}
+	}
+	if rawProfiles, ok := handlerSettingsProfilesMap(hc.Settings); ok {
+		for k := range rawProfiles {
+			norm := NormalizeProfileName(k)
+			if norm != "" && ValidateProfileName(norm) == nil {
+				seen[norm] = struct{}{}
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func cloneAny(v any) any {
+	switch typed := v.(type) {
+	case map[string]any:
+		cp := make(map[string]any, len(typed))
+		for k, elem := range typed {
+			cp[k] = cloneAny(elem)
+		}
+		return cp
+	case []any:
+		cp := make([]any, len(typed))
+		for i, elem := range typed {
+			cp[i] = cloneAny(elem)
+		}
+		return cp
+	case []string:
+		cp := make([]string, len(typed))
+		copy(cp, typed)
+		return cp
+	case map[string]string:
+		return maps.Clone(typed)
+	default:
+		return v
+	}
+}
+
 func mapKeys[T any](m map[string]*T) []string {
 	if len(m) == 0 {
 		return nil
 	}
-	keys := make([]string, 0, len(m))
+	seen := make(map[string]struct{}, len(m))
 	for k := range m {
+		norm := NormalizeProfileName(k)
+		if norm != "" && ValidateProfileName(norm) == nil {
+			seen[norm] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)

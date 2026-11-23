@@ -12,9 +12,13 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func TestHandleAuthStatus(t *testing.T) {
@@ -719,5 +723,203 @@ func TestHandleSetProfile(t *testing.T) {
 
 		text := result.Content[0].(mcp.TextContent).Text
 		assert.Contains(t, text, "invalid profile")
+	})
+}
+
+type mcpRecordingAuthPlugin struct {
+	configuredProfile  string
+	configuredClientID string
+	lastProfile        string
+	lastClientID       string
+}
+
+func (m *mcpRecordingAuthPlugin) GetAuthHandlers(_ context.Context) ([]plugin.AuthHandlerInfo, error) {
+	return []plugin.AuthHandlerInfo{{Name: "entra", DisplayName: "Microsoft Entra ID"}}, nil
+}
+
+func (m *mcpRecordingAuthPlugin) ConfigureAuthHandler(_ context.Context, _ string, cfg plugin.ProviderConfig) error {
+	m.configuredProfile = cfg.Profile
+	m.configuredClientID = ""
+	if raw, ok := cfg.Settings["entra"]; ok && len(raw) > 0 {
+		var parsed struct {
+			ClientID string `json:"clientId"`
+		}
+		_ = json.Unmarshal(raw, &parsed)
+		m.configuredClientID = parsed.ClientID
+	}
+	return nil
+}
+
+func (m *mcpRecordingAuthPlugin) Login(_ context.Context, _ string, _ plugin.LoginRequest, _ func(plugin.DeviceCodePrompt)) (*plugin.LoginResponse, error) {
+	return nil, nil
+}
+
+func (m *mcpRecordingAuthPlugin) Logout(_ context.Context, _ string, _ plugin.LogoutRequest) error {
+	return nil
+}
+
+func (m *mcpRecordingAuthPlugin) GetStatus(ctx context.Context, _ string, req plugin.StatusRequest) (*auth.Status, error) {
+	m.lastProfile = auth.ProfileFromContext(ctx)
+	m.lastClientID = ""
+	if raw, ok := req.Settings["clientId"]; ok {
+		_ = json.Unmarshal(raw, &m.lastClientID)
+	}
+	return &auth.Status{
+		Authenticated: true,
+		ClientID:      m.lastClientID,
+		Claims:        &auth.Claims{Email: m.lastClientID + "@example.com"},
+	}, nil
+}
+
+func (m *mcpRecordingAuthPlugin) GetToken(_ context.Context, _ string, _ plugin.TokenRequest) (*plugin.TokenResponse, error) {
+	return nil, nil
+}
+
+func (m *mcpRecordingAuthPlugin) ListCachedTokens(ctx context.Context, handlerName string) ([]*auth.CachedTokenInfo, error) {
+	// Over real gRPC, ListCachedTokens carries Profile (not per-RPC Settings) and
+	// relies on ConfigureAuthHandler for stateful profile settings.
+	m.lastProfile = auth.ProfileFromContext(ctx)
+	m.lastClientID = m.configuredClientID
+	return []*auth.CachedTokenInfo{
+		{
+			Handler:   handlerName,
+			TokenKind: "access",
+			Scope:     "profile:" + auth.DisplayProfileName(m.lastProfile),
+		},
+	}, nil
+}
+
+func (m *mcpRecordingAuthPlugin) PurgeExpiredTokens(ctx context.Context, _ string) (int, error) {
+	m.lastProfile = auth.ProfileFromContext(ctx)
+	return 1, nil
+}
+
+func (m *mcpRecordingAuthPlugin) DetectAvailableFlows(_ context.Context, _ string) ([]plugin.FlowAvailability, error) {
+	return nil, nil
+}
+
+func (m *mcpRecordingAuthPlugin) StopAuthHandler(_ context.Context, _ string) error {
+	return nil
+}
+
+type mcpInProcAuthServiceClient struct {
+	proto.AuthHandlerServiceClient
+	server *plugin.AuthHandlerGRPCServer
+}
+
+func (c *mcpInProcAuthServiceClient) ConfigureAuthHandler(ctx context.Context, req *proto.ConfigureAuthHandlerRequest, _ ...grpc.CallOption) (*proto.ConfigureAuthHandlerResponse, error) {
+	return c.server.ConfigureAuthHandler(ctx, req)
+}
+
+func (c *mcpInProcAuthServiceClient) GetStatus(ctx context.Context, req *proto.GetStatusRequest, _ ...grpc.CallOption) (*proto.GetStatusResponse, error) {
+	return c.server.GetStatus(ctx, req)
+}
+
+func (c *mcpInProcAuthServiceClient) ListCachedTokens(ctx context.Context, req *proto.ListCachedTokensRequest, _ ...grpc.CallOption) (*proto.ListCachedTokensResponse, error) {
+	return c.server.ListCachedTokens(ctx, req)
+}
+
+func (c *mcpInProcAuthServiceClient) PurgeExpiredTokens(ctx context.Context, req *proto.PurgeExpiredTokensRequest, _ ...grpc.CallOption) (*proto.PurgeExpiredTokensResponse, error) {
+	return c.server.PurgeExpiredTokens(ctx, req)
+}
+
+func TestMCPAuthTools_PluginProfileResolution(t *testing.T) {
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ActiveProfile: "work",
+				ClientID:      "default-client",
+				TenantID:      "default-tenant",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {
+						ClientID: "work-client",
+						TenantID: "work-tenant",
+					},
+					"staging": {
+						ClientID: "staging-client",
+						TenantID: "staging-tenant",
+					},
+				},
+			},
+		},
+	}
+
+	fake := &mcpRecordingAuthPlugin{}
+	grpcServer := &plugin.AuthHandlerGRPCServer{Impl: fake}
+	grpcClient := plugin.NewAuthHandlerGRPCClient(&mcpInProcAuthServiceClient{server: grpcServer})
+	wrapper := plugin.NewAuthHandlerWrapper(
+		plugin.NewAuthHandlerClientFromPlugin(grpcClient),
+		plugin.AuthHandlerInfo{Name: "entra", DisplayName: "Microsoft Entra ID"},
+	)
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(wrapper))
+
+	baseCtx := config.WithConfig(context.Background(), appCfg)
+	srv, err := NewServer(
+		WithServerVersion("test"),
+		WithServerContext(baseCtx),
+		WithServerAuthRegistry(reg),
+	)
+	require.NoError(t, err)
+	srv.cfgReloader = nil
+
+	t.Run("auth_status with profile=staging resolves staging settings", func(t *testing.T) {
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "auth_status"
+		req.Params.Arguments = map[string]any{"profile": "staging"}
+
+		res, err := srv.handleAuthStatus(srv.freshConfigContext(baseCtx), req)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		assert.Equal(t, "staging", fake.lastProfile)
+		assert.Equal(t, "staging-client", fake.lastClientID)
+	})
+
+	t.Run("auth_status with profile=default overrides both config activeProfile and auth_set_profile", func(t *testing.T) {
+		override := "work"
+		srv.profileOverride.Store(&override)
+		t.Cleanup(func() { srv.profileOverride.Store((*string)(nil)) })
+
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "auth_status"
+		req.Params.Arguments = map[string]any{"profile": "default"}
+
+		res, err := srv.handleAuthStatus(srv.freshConfigContext(baseCtx), req)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		assert.Empty(t, fake.lastProfile, "explicit profile=default must target empty default profile, not work")
+		assert.Equal(t, "default-client", fake.lastClientID)
+	})
+
+	t.Run("auth_list_tokens and auth_purge_expired honor profile=work and profile=default", func(t *testing.T) {
+		override := "work"
+		srv.profileOverride.Store(&override)
+		t.Cleanup(func() { srv.profileOverride.Store((*string)(nil)) })
+
+		listWork := mcp.CallToolRequest{}
+		listWork.Params.Name = "auth_list_tokens"
+		listWork.Params.Arguments = map[string]any{"handler": "entra", "profile": "work"}
+		res, err := srv.handleListCachedTokens(srv.freshConfigContext(baseCtx), listWork)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		assert.Equal(t, "work", fake.lastProfile)
+		assert.Equal(t, "work-client", fake.lastClientID)
+
+		listDefault := mcp.CallToolRequest{}
+		listDefault.Params.Name = "auth_list_tokens"
+		listDefault.Params.Arguments = map[string]any{"handler": "entra", "profile": "default"}
+		res, err = srv.handleListCachedTokens(srv.freshConfigContext(baseCtx), listDefault)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		assert.Empty(t, fake.lastProfile)
+		assert.Equal(t, "default-client", fake.lastClientID)
+
+		purgeDefault := mcp.CallToolRequest{}
+		purgeDefault.Params.Name = "auth_purge_expired"
+		purgeDefault.Params.Arguments = map[string]any{"handler": "entra", "profile": "default"}
+		res, err = srv.handlePurgeExpiredTokens(srv.freshConfigContext(baseCtx), purgeDefault)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		assert.Empty(t, fake.lastProfile)
 	})
 }

@@ -13,6 +13,8 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
@@ -431,6 +433,63 @@ func TestHandleRunProvider(t *testing.T) {
 		result, err := srv.handleRunProvider(context.Background(), request)
 		require.NoError(t, err)
 		assert.False(t, result.IsError)
+	})
+
+	t.Run("profile=default marks profile resolved and overrides activeProfile and auth_set_profile", func(t *testing.T) {
+		var capturedProfile string
+		var capturedResolved bool
+		probeProv := &profileProbeProvider{
+			desc: &provider.Descriptor{
+				Name:        "profile-probe",
+				APIVersion:  "scafctl.io/v1",
+				Version:     semver.MustParse("1.0.0"),
+				Description: "Probes auth profile resolution in context",
+				Capabilities: []provider.Capability{
+					provider.CapabilityFrom,
+				},
+				Schema: &jsonschema.Schema{Type: "object"},
+				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+					provider.CapabilityFrom: {Type: "object"},
+				},
+			},
+			execFn: func(ctx context.Context, _ any) (*provider.Output, error) {
+				capturedProfile = auth.ResolveActiveProfile(ctx, "entra")
+				capturedResolved = auth.IsProfileResolved(ctx)
+				return &provider.Output{Data: map[string]any{"profile": capturedProfile}}, nil
+			},
+		}
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(probeProv))
+
+		appCfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{ActiveProfile: "work"},
+			},
+		}
+		baseCtx := config.WithConfig(context.Background(), appCfg)
+		srv, err := NewServer(
+			WithServerRegistry(reg),
+			WithServerContext(baseCtx),
+			WithServerVersion("test"),
+		)
+		require.NoError(t, err)
+		srv.cfgReloader = nil
+		override := "work"
+		srv.profileOverride.Store(&override)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_provider"
+		request.Params.Arguments = map[string]any{
+			"provider": "profile-probe",
+			"inputs":   map[string]any{},
+			"profile":  "default",
+		}
+
+		result, err := srv.handleRunProvider(srv.freshConfigContext(baseCtx), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+		assert.Empty(t, capturedProfile, "profile=default must resolve to empty built-in profile")
+		assert.True(t, capturedResolved, "profile=default must mark context profile-resolved")
 	})
 
 	t.Run("returns error when registry nil", func(t *testing.T) {
@@ -1231,6 +1290,16 @@ func TestNewServer_DefaultOfficialRegistry(t *testing.T) {
 		"expected official registry to be auto-injected")
 	assert.Contains(t, err.Error(), "plugin pool not configured",
 		"expected failure because no pool was provided")
+}
+
+type profileProbeProvider struct {
+	desc   *provider.Descriptor
+	execFn func(ctx context.Context, input any) (*provider.Output, error)
+}
+
+func (p *profileProbeProvider) Descriptor() *provider.Descriptor { return p.desc }
+func (p *profileProbeProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	return p.execFn(ctx, input)
 }
 
 // versionMismatchProvider is a minimal Provider implementation for testing

@@ -68,9 +68,10 @@ List of registered catalogs (filesystem, http, oci).
 
 ### `auth.handlers`
 Per-handler configuration namespaces keyed by handler name (e.g. `openshift`).
-The reserved `hostname` block (aliases + dynamic resolver) is consumed by the
-host to resolve `--hostname` selectors at login; every other key is forwarded
-opaquely to the handler plugin. See
+The reserved `hostname`, `plugin`, `trustedVerificationDomains`, `activeProfile`,
+and `profiles` keys are consumed by the host; every other key is forwarded
+opaquely to the handler plugin (with `profiles.<profile>` overrides merged on
+top of top-level settings). See
 [Host-Aware Login](../auth/hostname-resolution.md) for the full walkthrough.
 
 ```yaml

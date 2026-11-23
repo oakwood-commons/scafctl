@@ -5,6 +5,7 @@ package hostname
 
 import (
 	"context"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 )
@@ -14,6 +15,17 @@ import (
 // login: if no valid cached token exists, the underlying provider returns an
 // error which the caller maps to ErrNoCredentials.
 func defaultToken(ctx context.Context, provider, scope string) (string, error) {
+	if strings.Contains(provider, auth.ProfileSeparator) {
+		_, profile := auth.ParseProfileKey(provider)
+		if profile != "" {
+			if err := auth.ValidateProfileName(profile); err != nil {
+				return "", err
+			}
+		}
+		ctx = auth.WithProfileResolved(auth.WithProfile(ctx, profile))
+	} else {
+		ctx = auth.ResetProfileResolution(ctx)
+	}
 	handler, err := auth.GetHandler(ctx, provider)
 	if err != nil {
 		return "", err

@@ -26,8 +26,228 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+// authProfileMetadataKey carries the execution auth profile (including an
+// explicit "default" marker) across HostService RPCs whose proto message lacks
+// a dedicated profile field (such as GetAuthIdentityRequest in SDK v0.19.0).
+const authProfileMetadataKey = "x-plugin-auth-profile"
+
+// authLineageMetadataKey carries active AuthHandlerWrapper call-lineage tokens
+// across AuthHandlerService and HostService gRPC hops so reentrant callbacks
+// can share compatible active slots despite queued writers and fail fast on
+// incompatible reconfigurations.
+const authLineageMetadataKey = "x-plugin-auth-lineage"
+
+const (
+	// maxCallbackLineageDepth bounds the number of nested callback-lineage IDs
+	// accepted or forwarded across gRPC metadata.
+	maxCallbackLineageDepth = 64
+	// maxCallbackLineageIDLen bounds the byte length of each callback-lineage ID.
+	maxCallbackLineageIDLen = 64
+)
+
+type callbackLineageCtxKey struct{}
+
+func sanitizeLineageSlice(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	var out []string
+	const maxScan = maxCallbackLineageDepth * 2
+	for i := 0; i < len(in) && i < maxScan && len(out) < maxCallbackLineageDepth; i++ {
+		v := in[i]
+		if v == "" || len(v) > maxCallbackLineageIDLen {
+			continue
+		}
+		if out == nil {
+			out = make([]string, 0, maxCallbackLineageDepth)
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+func lineageFromContext(ctx context.Context) []string {
+	ids, _ := ctx.Value(callbackLineageCtxKey{}).([]string)
+	return ids
+}
+
+func withCallbackLineage(ctx context.Context, ids ...string) context.Context {
+	existing := sanitizeLineageSlice(lineageFromContext(ctx))
+	incoming := sanitizeLineageSlice(ids)
+	if len(existing) == 0 && len(incoming) == 0 {
+		return ctx
+	}
+	merged := make([]string, 0, maxCallbackLineageDepth)
+	seen := make(map[string]struct{}, maxCallbackLineageDepth)
+	for _, id := range existing {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			merged = append(merged, id)
+		}
+	}
+	for _, id := range incoming {
+		if len(merged) >= maxCallbackLineageDepth {
+			break
+		}
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			merged = append(merged, id)
+		}
+	}
+	if len(merged) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, callbackLineageCtxKey{}, merged)
+}
+
+func withoutCallbackLineage(ctx context.Context) context.Context {
+	if len(lineageFromContext(ctx)) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, callbackLineageCtxKey{}, ([]string)(nil))
+}
+
+func appendOutgoingLineageMetadata(ctx context.Context) context.Context {
+	ids := sanitizeLineageSlice(lineageFromContext(ctx))
+	if len(ids) == 0 {
+		ids = incomingMetadataLineage(ctx)
+	}
+	if len(ids) == 0 {
+		return ctx
+	}
+	pairs := make([]string, 0, maxCallbackLineageDepth*2)
+	for _, id := range ids {
+		pairs = append(pairs, authLineageMetadataKey, id)
+	}
+	return metadata.AppendToOutgoingContext(ctx, pairs...)
+}
+
+func incomingMetadataLineage(ctx context.Context) []string {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if vals := sanitizeLineageSlice(md.Get(authLineageMetadataKey)); len(vals) > 0 {
+			return vals
+		}
+	}
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		if vals := sanitizeLineageSlice(md.Get(authLineageMetadataKey)); len(vals) > 0 {
+			return vals
+		}
+	}
+	return nil
+}
+
+func extractIncomingLineageToContext(ctx context.Context) context.Context {
+	if vals := incomingMetadataLineage(ctx); len(vals) > 0 {
+		return withCallbackLineage(ctx, vals...)
+	}
+	return ctx
+}
+
+type authCallbackFrame struct {
+	handler    string
+	profile    string
+	hasProfile bool
+	ids        []string
+}
+
+// authCallbackLineage tracks in-flight AuthHandlerWrapper call stacks per
+// AuthHandlerClient so HostService callbacks from SDK plugin binaries that do
+// not echo custom gRPC metadata still carry ancestor call lineage and the
+// active handler profile.
+type authCallbackLineage struct {
+	mu     sync.Mutex
+	nextID uint64
+	stacks map[uint64]authCallbackFrame
+}
+
+func newAuthCallbackLineage() *authCallbackLineage {
+	return &authCallbackLineage{stacks: make(map[uint64]authCallbackFrame)}
+}
+
+func (l *authCallbackLineage) push(handler, profile string, hasProfile bool, ids []string) func() {
+	if l == nil || len(ids) == 0 {
+		return func() {}
+	}
+	cp := append([]string(nil), ids...)
+	l.mu.Lock()
+	l.nextID++
+	id := l.nextID
+	if l.stacks == nil {
+		l.stacks = make(map[uint64]authCallbackFrame)
+	}
+	l.stacks[id] = authCallbackFrame{
+		handler:    handler,
+		profile:    profile,
+		hasProfile: hasProfile,
+		ids:        cp,
+	}
+	l.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			l.mu.Lock()
+			delete(l.stacks, id)
+			l.mu.Unlock()
+		})
+	}
+}
+
+func (l *authCallbackLineage) snapshot() []string {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.stacks) == 0 {
+		return nil
+	}
+	var out []string
+	seen := make(map[string]struct{})
+	for _, frame := range l.stacks {
+		for _, id := range frame.ids {
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
+func (l *authCallbackLineage) activeProfile(handlerName string) (string, bool) {
+	if l == nil || handlerName == "" {
+		return "", false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var (
+		matched string
+		found   bool
+	)
+	for _, frame := range l.stacks {
+		if frame.handler != handlerName || !frame.hasProfile {
+			continue
+		}
+		encoded := frame.profile
+		if encoded == "" {
+			encoded = auth.DefaultProfileName
+		}
+		if !found {
+			matched = encoded
+			found = true
+			continue
+		}
+		if matched != encoded {
+			return "", false
+		}
+	}
+	return matched, found
+}
 
 // secretNameMaxLen is the maximum allowed length for a secret name.
 const secretNameMaxLen = 256
@@ -113,19 +333,49 @@ type HostServiceDeps struct {
 	// trackerSlot associates incoming HostService GetSecret and GetAuthToken
 	// callbacks with the active execution's redaction tracker per plugin client.
 	trackerSlot *brokerTrackerSlot
+	// callbackLineage associates incoming HostService callbacks on an
+	// AuthHandlerClient with its active AuthHandlerWrapper call frames.
+	callbackLineage *authCallbackLineage
 }
 
 type brokerTrackerSlot struct {
-	mu                sync.Mutex
-	activeRoot        *redact.Tracker
-	activePlaceholder bool
-	activeList        []*redact.Tracker
-	activeCount       int
-	waitCh            chan struct{}
+	mu                   sync.Mutex
+	activeRoot           *redact.Tracker
+	activePlaceholder    bool
+	activeAuthProfile    string
+	activeHasAuthProfile bool
+	activeLineage        []string
+	activeList           []*redact.Tracker
+	activeCount          int
+	waitCh               chan struct{}
 }
 
 func newBrokerTrackerSlot() *brokerTrackerSlot {
 	return &brokerTrackerSlot{}
+}
+
+func encodeContextAuthProfile(ctx context.Context) (string, bool) {
+	if p := auth.ProfileFromContext(ctx); p != "" {
+		return p, true
+	}
+	if auth.IsProfileResolved(ctx) {
+		return auth.DefaultProfileName, true
+	}
+	return "", false
+}
+
+func incomingMetadataAuthProfile(ctx context.Context) (string, bool) {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if vals := md.Get(authProfileMetadataKey); len(vals) > 0 && vals[0] != "" {
+			return vals[0], true
+		}
+	}
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		if vals := md.Get(authProfileMetadataKey); len(vals) > 0 && vals[0] != "" {
+			return vals[0], true
+		}
+	}
+	return "", false
 }
 
 func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker) (func(), error) {
@@ -133,8 +383,10 @@ func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker
 		return func() {}, nil
 	}
 	placeholder := spec.IsPlaceholderCredentialResolver(ctx)
+	execProfile, hasExecProfile := encodeContextAuthProfile(ctx)
+	execLineage := lineageFromContext(ctx)
 	if tracker == nil {
-		if !placeholder {
+		if !placeholder && !hasExecProfile && len(execLineage) == 0 {
 			return func() {}, nil
 		}
 		tracker = redact.NewTracker()
@@ -142,9 +394,12 @@ func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker
 	root := tracker.Root()
 	for {
 		s.mu.Lock()
-		if s.activeCount == 0 || (s.activeRoot == root && s.activePlaceholder == placeholder) {
+		if s.activeCount == 0 || (s.activeRoot == root && s.activePlaceholder == placeholder && s.activeAuthProfile == execProfile && s.activeHasAuthProfile == hasExecProfile && stringSlicesEqual(s.activeLineage, execLineage)) {
 			s.activeRoot = root
 			s.activePlaceholder = placeholder
+			s.activeAuthProfile = execProfile
+			s.activeHasAuthProfile = hasExecProfile
+			s.activeLineage = append([]string(nil), execLineage...)
 			s.activeCount++
 			s.activeList = append(s.activeList, tracker)
 			if s.waitCh == nil {
@@ -166,6 +421,9 @@ func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker
 					if s.activeCount == 0 {
 						s.activeRoot = nil
 						s.activePlaceholder = false
+						s.activeAuthProfile = ""
+						s.activeHasAuthProfile = false
+						s.activeLineage = nil
 						if s.waitCh != nil {
 							close(s.waitCh)
 							s.waitCh = nil
@@ -195,8 +453,68 @@ func (s *brokerTrackerSlot) isPlaceholder() bool {
 	return s.activeCount > 0 && s.activePlaceholder
 }
 
+func (s *brokerTrackerSlot) activeProfile() (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeCount == 0 || !s.activeHasAuthProfile {
+		return "", false
+	}
+	return s.activeAuthProfile, true
+}
+
 func (d *HostServiceDeps) isPlaceholderMode() bool {
 	return d != nil && d.trackerSlot.isPlaceholder()
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *brokerTrackerSlot) activeLineageSnapshot() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeCount == 0 || len(s.activeLineage) == 0 {
+		return nil
+	}
+	return append([]string(nil), s.activeLineage...)
+}
+
+func (d *HostServiceDeps) activeExecutionProfile() (string, bool) {
+	if d == nil {
+		return "", false
+	}
+	return d.trackerSlot.activeProfile()
+}
+
+func (d *HostServiceDeps) activeCallbackLineage() []string {
+	if d == nil {
+		return nil
+	}
+	if ids := d.callbackLineage.snapshot(); len(ids) > 0 {
+		return ids
+	}
+	return d.trackerSlot.activeLineageSnapshot()
+}
+
+func (d *HostServiceDeps) activeCallbackProfile(handlerName string) (string, bool) {
+	if d == nil {
+		return "", false
+	}
+	return d.callbackLineage.activeProfile(handlerName)
 }
 
 func (s *brokerTrackerSlot) track(secret string) {
@@ -447,6 +765,80 @@ func (h *HostServiceServer) ListSecrets(ctx context.Context, req *proto.ListSecr
 	}, nil
 }
 
+func (h *HostServiceServer) restoreCallbackLineage(ctx context.Context) context.Context {
+	if mdIDs := incomingMetadataLineage(ctx); len(mdIDs) > 0 {
+		return withCallbackLineage(ctx, mdIDs...)
+	}
+	if brokerIDs := h.Deps.activeCallbackLineage(); len(brokerIDs) > 0 {
+		return withCallbackLineage(ctx, brokerIDs...)
+	}
+	return ctx
+}
+
+// resolveHostAuthCallback selects the default handler when requestedHandler is
+// empty (via AuthHandlersFunc) before resolving the effective auth profile.
+// Profile precedence:
+//  1. Explicit request field (including "default" / "built-in" markers)
+//  2. Incoming gRPC metadata (for RPCs without a proto profile field)
+//  3. Active provider execution profile captured on trackerSlot
+//  4. Active auth handler callback profile on callbackLineage
+//  5. Host ProfileResolverFunc(effectiveHandler)
+func (h *HostServiceServer) resolveHostAuthCallback(
+	ctx context.Context,
+	requestedHandler string,
+	explicitProfile string,
+) (context.Context, string, error) {
+	ctx = h.restoreCallbackLineage(ctx)
+	effectiveHandler := requestedHandler
+	if effectiveHandler == "" && h.Deps.AuthHandlersFunc != nil {
+		if _, defaultHandler, err := h.Deps.AuthHandlersFunc(ctx); err == nil && defaultHandler != "" {
+			effectiveHandler = defaultHandler
+		}
+	}
+
+	var (
+		rawProfile string
+		resolved   bool
+	)
+	switch {
+	case explicitProfile != "":
+		rawProfile = explicitProfile
+		resolved = true
+	default:
+		if mdProfile, ok := incomingMetadataAuthProfile(ctx); ok {
+			rawProfile = mdProfile
+			resolved = true
+		} else if execProfile, ok := h.Deps.activeExecutionProfile(); ok {
+			rawProfile = execProfile
+			resolved = true
+		} else if cbProfile, ok := h.Deps.activeCallbackProfile(effectiveHandler); ok {
+			rawProfile = cbProfile
+			resolved = true
+		} else if h.Deps.ProfileResolverFunc != nil {
+			rawProfile = h.Deps.ProfileResolverFunc(effectiveHandler)
+			resolved = effectiveHandler != "" || rawProfile != ""
+		}
+	}
+
+	if resolved {
+		profile := auth.NormalizeProfileName(rawProfile)
+		if profile != "" {
+			if err := auth.ValidateProfileName(profile); err != nil {
+				return ctx, effectiveHandler, err
+			}
+		}
+		// Mark profile as resolved even when normalized to "" (built-in/default)
+		// so downstream handlers do not fall back to HostConfig activeProfile.
+		ctx = auth.WithProfile(ctx, profile)
+		ctx = auth.WithProfileResolved(ctx)
+	}
+
+	if h.Deps.HostConfig != nil && config.FromContext(ctx) == nil {
+		ctx = config.WithConfig(ctx, h.Deps.HostConfig)
+	}
+	return ctx, effectiveHandler, nil
+}
+
 // GetAuthIdentity implements HostService.GetAuthIdentity
 func (h *HostServiceServer) GetAuthIdentity(ctx context.Context, req *proto.GetAuthIdentityRequest) (*proto.GetAuthIdentityResponse, error) {
 	if h.Deps.AuthIdentityFunc == nil {
@@ -461,7 +853,14 @@ func (h *HostServiceServer) GetAuthIdentity(ctx context.Context, req *proto.GetA
 		}, nil
 	}
 
-	claims, err := h.Deps.AuthIdentityFunc(ctx, req.HandlerName, req.Scope)
+	ctx, handlerName, err := h.resolveHostAuthCallback(ctx, req.HandlerName, "")
+	if err != nil {
+		return &proto.GetAuthIdentityResponse{
+			Error: fmt.Sprintf("invalid profile: %v", err),
+		}, nil
+	}
+
+	claims, err := h.Deps.AuthIdentityFunc(ctx, handlerName, req.Scope)
 	if err != nil {
 		return &proto.GetAuthIdentityResponse{
 			Error: fmt.Sprintf("get auth identity: %v", err),
@@ -531,26 +930,11 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 		}, nil
 	}
 
-	// Inject profile into context so downstream token acquisition uses the
-	// correct profile-scoped credentials.
-	profile := req.Profile
-	if profile == "" && h.Deps.ProfileResolverFunc != nil {
-		profile = h.Deps.ProfileResolverFunc(req.HandlerName)
-	}
-	if profile != "" {
-		profile = auth.NormalizeProfileName(profile)
-		if profile != "" {
-			if err := auth.ValidateProfileName(profile); err != nil {
-				return &proto.GetAuthTokenResponse{
-					Error: fmt.Sprintf("invalid profile from plugin: %v", err),
-				}, nil
-			}
-			ctx = auth.WithProfile(ctx, profile)
-		}
-		// Mark profile as resolved even when normalized to "" (built-in/default).
-		// This prevents downstream GetToken from re-resolving the active profile
-		// from config, which would override an explicit built-in selection.
-		ctx = auth.WithProfileResolved(ctx)
+	ctx, handlerName, profileErr := h.resolveHostAuthCallback(ctx, req.HandlerName, req.Profile)
+	if profileErr != nil {
+		return &proto.GetAuthTokenResponse{
+			Error: fmt.Sprintf("invalid profile from plugin: %v", profileErr),
+		}, nil
 	}
 
 	if placeholder {
@@ -564,23 +948,19 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 		}, nil
 	}
 
-	if h.Deps.HostConfig != nil && config.FromContext(ctx) == nil {
-		ctx = config.WithConfig(ctx, h.Deps.HostConfig)
-	}
-
 	var (
 		resp *proto.GetAuthTokenResponse
 		err  error
 	)
 	switch {
 	case h.Deps.AuthTokenWithHostnameFunc != nil:
-		resp, err = h.Deps.AuthTokenWithHostnameFunc(ctx, req.HandlerName, req.Scope, req.Hostname, req.MinValidForSeconds, req.ForceRefresh)
+		resp, err = h.Deps.AuthTokenWithHostnameFunc(ctx, handlerName, req.Scope, req.Hostname, req.MinValidForSeconds, req.ForceRefresh)
 	case req.Hostname != "":
 		return &proto.GetAuthTokenResponse{
 			Error: "auth token service does not support hostname selection",
 		}, nil
 	default:
-		resp, err = h.Deps.AuthTokenFunc(ctx, req.HandlerName, req.Scope, req.MinValidForSeconds, req.ForceRefresh)
+		resp, err = h.Deps.AuthTokenFunc(ctx, handlerName, req.Scope, req.MinValidForSeconds, req.ForceRefresh)
 	}
 	if err != nil {
 		return &proto.GetAuthTokenResponse{
@@ -608,7 +988,14 @@ func (h *HostServiceServer) GetAuthGroups(ctx context.Context, req *proto.GetAut
 		}, nil
 	}
 
-	groups, err := h.Deps.AuthGroupsFunc(ctx, req.HandlerName)
+	ctx, handlerName, profileErr := h.resolveHostAuthCallback(ctx, req.HandlerName, req.Profile)
+	if profileErr != nil {
+		return &proto.GetAuthGroupsResponse{
+			Error: fmt.Sprintf("invalid profile: %v", profileErr),
+		}, nil
+	}
+
+	groups, err := h.Deps.AuthGroupsFunc(ctx, handlerName)
 	if err != nil {
 		return &proto.GetAuthGroupsResponse{
 			Error: fmt.Sprintf("get auth groups: %v", err),
@@ -860,8 +1247,14 @@ func (c *HostServiceClient) ListSecrets(ctx context.Context, pattern string) ([]
 	return resp.Names, nil
 }
 
-// GetAuthIdentity retrieves identity claims from the host's auth registry.
+// GetAuthIdentity retrieves identity claims from the host's auth registry,
+// forwarding the execution auth profile (including explicit default selection)
+// via gRPC metadata.
 func (c *HostServiceClient) GetAuthIdentity(ctx context.Context, handler, scope string) (*proto.Claims, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
+	if encoded, ok := encodeContextAuthProfile(ctx); ok {
+		ctx = metadata.AppendToOutgoingContext(ctx, authProfileMetadataKey, encoded)
+	}
 	resp, err := c.client.GetAuthIdentity(ctx, &proto.GetAuthIdentityRequest{
 		HandlerName: handler,
 		Scope:       scope,
@@ -906,11 +1299,14 @@ func (c *HostServiceClient) GetAuthToken(ctx context.Context, handler, scope str
 
 // GetAuthTokenWithOptions retrieves a valid access token from the host's auth
 // registry using structured options, including optional per-instance Hostname
-// and Profile override (falling back to auth.ProfileFromContext(ctx)).
+// and Profile override (falling back to the context auth profile).
 func (c *HostServiceClient) GetAuthTokenWithOptions(ctx context.Context, opts AuthTokenRequest) (*proto.GetAuthTokenResponse, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	profile := opts.Profile
 	if profile == "" {
-		profile = auth.ProfileFromContext(ctx)
+		if encoded, ok := encodeContextAuthProfile(ctx); ok {
+			profile = encoded
+		}
 	}
 	resp, err := c.client.GetAuthToken(ctx, &proto.GetAuthTokenRequest{
 		HandlerName:        opts.Handler,
@@ -930,10 +1326,13 @@ func (c *HostServiceClient) GetAuthTokenWithOptions(ctx context.Context, opts Au
 }
 
 // GetAuthGroups retrieves group memberships for the authenticated user from
-// the host's auth registry.
+// the host's auth registry, forwarding the context auth profile.
 func (c *HostServiceClient) GetAuthGroups(ctx context.Context, handler string) ([]string, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
+	profile, _ := encodeContextAuthProfile(ctx)
 	resp, err := c.client.GetAuthGroups(ctx, &proto.GetAuthGroupsRequest{
 		HandlerName: handler,
+		Profile:     profile,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("host GetAuthGroups: %w", err)
@@ -969,6 +1368,13 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 		if err != nil {
 			return &proto.GetAuthTokenResponse{
 				Error: fmt.Sprintf("auth handler %q: %v", handler, err),
+			}
+		}
+		if rc, ok := h.(reentrantInitChecker); ok {
+			if err := rc.checkReentrantInit(ctx); err != nil {
+				return &proto.GetAuthTokenResponse{
+					Error: fmt.Sprintf("get token from %q: %v", handler, err),
+				}
 			}
 		}
 		var resolvedHostname string
@@ -1019,7 +1425,8 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 		// One broker per deps: the login wrapper and the HostServiceServer
 		// for the same plugin client share this instance (the pointer
 		// survives the struct copies WithSecretScope makes).
-		PromptBroker: &AuthPromptBroker{},
+		PromptBroker:    &AuthPromptBroker{},
+		callbackLineage: newAuthCallbackLineage(),
 		AuthTokenFunc: func(ctx context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) {
 			return tokenWithHostname(ctx, handler, scope, "", minValidFor, forceRefresh), nil
 		},
@@ -1182,6 +1589,7 @@ func providerPluginHostDeps(src *HostServiceDeps) *HostServiceDeps {
 	}
 	cp := *src
 	cp.ReadOnlySecrets = true
+	cp.callbackLineage = nil
 
 	denied := make([]string, 0, len(src.DeniedSecretPrefixes)+len(src.providerDeniedPrefixes)+2)
 	add := func(p string) {

@@ -16,7 +16,7 @@ Auth handlers can be delivered in two ways:
 | **Credential storage** | Uses `pkg/secrets` (OS keychain) | Plugin manages its own credential storage |
 | **Crash isolation** | Shares process with scafctl | Isolated process — plugin crash doesn't take down CLI |
 | **Distribution** | Ships with scafctl releases | OCI catalog artifact (`kind: auth-handler`) or standalone binary |
-| **Interface** | `auth.Handler` (8 methods) | `plugin.AuthHandlerPlugin` (9 methods) |
+| **Interface** | `auth.Handler` (8 methods) | `plugin.AuthHandlerPlugin` (10 methods) |
 
 > [!WARNING]
 > **Prerequisite**: Read the [Extension Concepts](extension-concepts.md) page for terminology (provider vs auth handler vs plugin).
@@ -659,7 +659,8 @@ type AuthHandlerPlugin interface {
     GetAuthHandlers(ctx context.Context) ([]AuthHandlerInfo, error)
 
     // ConfigureAuthHandler sends host-side configuration to a named handler
-    // once after plugin load. Receives quiet/noColor/binaryName/settings,
+    // after plugin load and whenever the target profile or runtime overrides
+    // change. Receives quiet/noColor/binaryName/profile/settings,
     // the HostService broker ID, protocol version, host capabilities, and
     // pre-rendered browser OAuth callback pages (cfg.AuthCallbackPages).
     ConfigureAuthHandler(ctx context.Context, handlerName string, cfg ProviderConfig) error
@@ -669,10 +670,10 @@ type AuthHandlerPlugin interface {
           deviceCodeCb func(DeviceCodePrompt)) (*LoginResponse, error)
 
     // Logout clears stored credentials.
-    Logout(ctx context.Context, handlerName string) error
+    Logout(ctx context.Context, handlerName string, req LogoutRequest) error
 
     // GetStatus returns current authentication status.
-    GetStatus(ctx context.Context, handlerName string) (*auth.Status, error)
+    GetStatus(ctx context.Context, handlerName string, req StatusRequest) (*auth.Status, error)
 
     // GetToken returns a valid access token.
     GetToken(ctx context.Context, handlerName string, req TokenRequest) (*TokenResponse, error)
@@ -683,11 +684,17 @@ type AuthHandlerPlugin interface {
     // PurgeExpiredTokens removes expired tokens. Returns count removed.
     PurgeExpiredTokens(ctx context.Context, handlerName string) (int, error)
 
+    // DetectAvailableFlows probes available flows for the active profile.
+    DetectAvailableFlows(ctx context.Context, handlerName string) ([]FlowAvailability, error)
+
     // StopAuthHandler requests graceful shutdown of a named handler.
     // Return nil if not implemented.
     StopAuthHandler(ctx context.Context, handlerName string) error
 }
 ```
+
+> [!TIP]
+> **Multi-profile settings (`scafctl-plugin-sdk v0.19.0+`)**: On every `Login`, `GetStatus`, `GetToken`, and `DetectAvailableFlows` RPC, the host injects the target profile (`auth.ProfileFromContext(ctx)`) and the resolved per-profile handler settings (`plugin.RequestSettingsFromContext(ctx)`, also exposed as `req.Settings` on `Login`, `GetStatus`, and `GetToken`). Prefer reading `RequestSettingsFromContext(ctx)` per request so concurrent multi-profile token and status calls remain stateless; the host also re-sends `ConfigureAuthHandler` when the target profile changes for backward compatibility with stateful plugins.
 
 ### Quick Start
 
@@ -744,12 +751,12 @@ func (p *OktaPlugin) Login(ctx context.Context, name string, req plugin.LoginReq
     }, nil
 }
 
-func (p *OktaPlugin) Logout(ctx context.Context, name string) error {
+func (p *OktaPlugin) Logout(ctx context.Context, name string, req plugin.LogoutRequest) error {
     // Clear stored credentials for the handler
     return nil
 }
 
-func (p *OktaPlugin) GetStatus(ctx context.Context, name string) (*auth.Status, error) {
+func (p *OktaPlugin) GetStatus(ctx context.Context, name string, req plugin.StatusRequest) (*auth.Status, error) {
     return &auth.Status{Authenticated: false}, nil
 }
 
@@ -764,6 +771,10 @@ func (p *OktaPlugin) ListCachedTokens(ctx context.Context, name string) ([]*auth
 
 func (p *OktaPlugin) PurgeExpiredTokens(ctx context.Context, name string) (int, error) {
     return 0, nil
+}
+
+func (p *OktaPlugin) DetectAvailableFlows(ctx context.Context, name string) ([]plugin.FlowAvailability, error) {
+    return nil, nil
 }
 
 func (p *OktaPlugin) ConfigureAuthHandler(ctx context.Context, name string, cfg plugin.ProviderConfig) error {
@@ -914,7 +925,7 @@ Types preserved over the gRPC round-trip:
 | Type | Transmitted |
 | ------ | :----------: |
 | `AuthHandlerInfo` (name, display_name, flows, capabilities) | ✅ |
-| `LoginRequest` (tenant_id, hostname, scopes, flow, timeout, callback_port, browser) | ✅ |
+| `LoginRequest` (tenant_id, hostname, scopes, flow, timeout, callback_port, browser, settings) | ✅ |
 | `LoginResponse` (claims, expires_at) | ✅ |
 | `Status` (all fields including claims) | ✅ |
 | `TokenResponse` (access_token, token_type, expires_at, scope, cached_at, flow, session_id) | ✅ |

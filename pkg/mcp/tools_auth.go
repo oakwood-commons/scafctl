@@ -17,18 +17,40 @@ import (
 // from an MCP tool request. Returns the normalized profile name and any
 // validation error. Returns ("", nil) when no profile is specified.
 func profileFromRequest(args map[string]any) (string, error) {
+	normalized, _, err := profileSelectionFromRequest(args)
+	return normalized, err
+}
+
+// profileSelectionFromRequest extracts and validates an optional "profile"
+// parameter, also reporting whether a non-empty profile argument was explicitly
+// supplied (including "default" or "built-in", which normalize to "").
+func profileSelectionFromRequest(args map[string]any) (profile string, explicit bool, err error) {
 	profileVal, ok := args["profile"].(string)
 	if !ok || profileVal == "" {
-		return "", nil
+		return "", false, nil
 	}
 	normalized := auth.NormalizeProfileName(profileVal)
-	if normalized == "" {
-		return "", nil
+	if normalized != "" {
+		if err := auth.ValidateProfileName(normalized); err != nil {
+			return "", true, fmt.Errorf("invalid profile: %w", err)
+		}
 	}
-	if err := auth.ValidateProfileName(normalized); err != nil {
-		return "", fmt.Errorf("invalid profile: %w", err)
+	return normalized, true, nil
+}
+
+// applyProfileFromRequest applies an explicit MCP "profile" argument onto ctx
+// and marks the profile as resolved so explicit "default" / "built-in" values
+// override session-level profileOverride and config-level activeProfile.
+func applyProfileFromRequest(ctx context.Context, args map[string]any) (context.Context, error) {
+	profile, explicit, err := profileSelectionFromRequest(args)
+	if err != nil {
+		return ctx, err
 	}
-	return normalized, nil
+	if explicit {
+		ctx = auth.WithProfile(ctx, profile)
+		ctx = auth.WithProfileResolved(ctx)
+	}
+	return ctx, nil
 }
 
 // registerAuthTools registers all auth-related MCP tools.
@@ -133,12 +155,9 @@ func (s *Server) handleAuthStatus(ctx context.Context, req mcp.CallToolRequest) 
 		})
 	}
 
-	profile, err := profileFromRequest(req.GetArguments())
+	ctx, err := applyProfileFromRequest(ctx, req.GetArguments())
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
-	}
-	if profile != "" {
-		ctx = auth.WithProfile(ctx, profile)
 	}
 
 	handlers := s.authReg.All()
@@ -268,12 +287,9 @@ func (s *Server) handleListCachedTokens(ctx context.Context, req mcp.CallToolReq
 	args := req.GetArguments()
 	handlerFilter, _ := args["handler"].(string)
 
-	profile, err := profileFromRequest(args)
+	ctx, err := applyProfileFromRequest(ctx, args)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
-	}
-	if profile != "" {
-		ctx = auth.WithProfile(ctx, profile)
 	}
 
 	names := s.authReg.List()
@@ -371,12 +387,9 @@ func (s *Server) handlePurgeExpiredTokens(ctx context.Context, req mcp.CallToolR
 	args := req.GetArguments()
 	handlerFilter, _ := args["handler"].(string)
 
-	profile, err := profileFromRequest(args)
+	ctx, err := applyProfileFromRequest(ctx, args)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
-	}
-	if profile != "" {
-		ctx = auth.WithProfile(ctx, profile)
 	}
 
 	names := s.authReg.List()

@@ -119,6 +119,10 @@ func TestSanitizeConfig(t *testing.T) {
 						Hostname: &HostnameConfig{
 							Aliases: map[string]string{"saas": "https://api.github.com/"},
 						},
+						ActiveProfile: "work",
+						Profiles: map[string]map[string]any{
+							"work": {"clientSecret": "profile-secret-must-not-appear"},
+						},
 						Settings: map[string]any{"opaque": "should-not-appear"},
 					},
 				},
@@ -127,6 +131,7 @@ func TestSanitizeConfig(t *testing.T) {
 		sanitized := SanitizeConfig(cfg)
 		gh, ok := sanitized.Auth.Handlers["gh"]
 		require.True(t, ok, "handler must be present")
+		assert.Equal(t, "work", gh.ActiveProfile, "activeProfile must be preserved")
 		require.NotNil(t, gh.Hostname)
 		assert.Equal(t, "https://api.github.com/", gh.Hostname.Aliases["saas"],
 			"user-visible aliases must survive")

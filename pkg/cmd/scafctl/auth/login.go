@@ -236,22 +236,14 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				}
 			}
 
-			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile
-			// Track whether profile was explicitly set (even if normalized to empty/default).
-			profileExplicit := cmd.Flags().Changed("profile")
-			effectiveProfile := auth.NormalizeProfileName(profile)
-			if effectiveProfile == "" && !profileExplicit {
-				effectiveProfile = auth.NormalizeProfileName(auth.GlobalProfileFromContext(ctx))
+			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile.
+			ctx, effectiveProfile, profileExplicit, err := resolveCommandProfile(ctx, cmd, profile)
+			if err != nil {
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
-			if effectiveProfile == "" && !profileExplicit {
-				effectiveProfile = auth.ResolveActiveProfile(ctx, handlerName)
-			}
-			if effectiveProfile != "" {
-				if err := auth.ValidateProfileName(effectiveProfile); err != nil {
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.InvalidInput)
-				}
-				ctx = auth.WithProfile(ctx, effectiveProfile)
+			if !profileExplicit {
+				ctx, effectiveProfile = withHandlerActiveProfile(ctx, handlerName)
 			}
 			if profileExplicit {
 				ctx = auth.WithProfileResolved(ctx)
@@ -427,6 +419,14 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				mgr := config.NewManager(configPathOpt)
 				cfg, loadErr := mgr.Load()
 				if loadErr == nil {
+					if handlerName != "entra" && handlerName != "github" && handlerName != "gcp" {
+						if cfg.Auth.Handlers == nil {
+							cfg.Auth.Handlers = make(map[string]config.HandlerConfig)
+						}
+						if _, exists := cfg.Auth.Handlers[handlerName]; !exists {
+							cfg.Auth.Handlers[handlerName] = config.HandlerConfig{}
+						}
+					}
 					auth.EnsureProfileRegistered(cfg, handlerName, effectiveProfile)
 					if saveErr := mgr.Save(); saveErr != nil {
 						w.Warningf("Profile registered but failed to save config: %v", saveErr)

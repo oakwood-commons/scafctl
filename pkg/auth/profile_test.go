@@ -32,6 +32,7 @@ func TestParseProfileKey(t *testing.T) {
 		{name: "handler@Default case insensitive", key: "github@Default", wantHandler: "github", wantProfile: ""},
 		{name: "handler@built-in normalizes to empty", key: "github@built-in", wantHandler: "github", wantProfile: ""},
 		{name: "handler@Built-In case insensitive", key: "github@Built-In", wantHandler: "github", wantProfile: ""},
+		{name: "handler@myWork canonicalizes to lowercase", key: "github@myWork", wantHandler: "github", wantProfile: "mywork"},
 	}
 
 	for _, tt := range tests {
@@ -151,6 +152,7 @@ func TestNormalizeProfileName(t *testing.T) {
 		{name: "built-in lowercase", in: "built-in", want: ""},
 		{name: "built-in mixed case", in: "Built-In", want: ""},
 		{name: "named profile", in: "work", want: "work"},
+		{name: "mixed-case named profile canonicalizes to lowercase", in: "myWork", want: "mywork"},
 		{name: "empty stays empty", in: "", want: ""},
 	}
 

@@ -1719,8 +1719,19 @@ func TestAuthHandlerGRPCClient_ActivateServerMode_Unimplemented(t *testing.T) {
 	}
 	client := &AuthHandlerGRPCClient{client: mock}
 
+	// Nil, empty, and "null" settings are CLI-mode no-ops and remain tolerated on older plugins.
+	require.NoError(t, client.ActivateServerMode(context.Background(), nil))
+	require.NoError(t, client.ActivateServerMode(context.Background(), json.RawMessage{}))
+	require.NoError(t, client.ActivateServerMode(context.Background(), json.RawMessage("null")))
+
+	// Non-empty, non-null server settings must fail when the plugin does not implement ActivateServerMode.
 	err := client.ActivateServerMode(context.Background(), json.RawMessage(`{}`))
-	require.NoError(t, err, "Unimplemented should be treated as a no-op")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plugin does not support server mode")
+
+	err = client.ActivateServerMode(context.Background(), json.RawMessage(`{"tenant_id":"abc"}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plugin does not support server mode")
 }
 
 func TestAuthHandlerGRPCClient_ActivateServerMode_GRPCError(t *testing.T) {
@@ -1749,4 +1760,223 @@ func TestAuthHandlerGRPCClient_ActivateServerMode_ResponseError(t *testing.T) {
 	err := client.ActivateServerMode(context.Background(), json.RawMessage(`{}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "activate server mode failed: invalid tenant_id")
+}
+
+// ── Per-RPC Settings & Profile transport tests ───────────────────────────────
+
+func TestAuthHandlerGRPC_PerRPCSettingsAndProfileRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Login encodes and decodes Settings, Profile, and Browser", func(t *testing.T) {
+		t.Parallel()
+		var gotWireReq *proto.LoginRequest
+		var gotCtxProfile string
+		var gotCtxSettings map[string]json.RawMessage
+		var gotLoginReq LoginRequest
+
+		pluginImpl := &MockAuthHandlerPlugin{
+			loginFunc: func(ctx context.Context, _ string, req LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+				gotCtxProfile = auth.ProfileFromContext(ctx)
+				gotCtxSettings, _ = RequestSettingsFromContext(ctx)
+				gotLoginReq = req
+				return &LoginResponse{
+					Claims:    &auth.Claims{Email: "work@example.com"},
+					ExpiresAt: time.Now().Add(time.Hour),
+				}, nil
+			},
+		}
+		server := &AuthHandlerGRPCServer{Impl: pluginImpl}
+
+		mockSvc := &mockAuthHandlerServiceClient{
+			loginFunc: func(ctx context.Context, req *proto.LoginRequest) (grpc.ServerStreamingClient[proto.LoginStreamMessage], error) {
+				gotWireReq = req
+				rec := &recordingLoginStreamServer{ctx: ctx}
+				require.NoError(t, server.Login(req, rec))
+				return &mockLoginStreamClient{messages: rec.messages}, nil
+			},
+		}
+		client := NewAuthHandlerGRPCClient(mockSvc)
+
+		ctx := auth.WithProfile(context.Background(), "work")
+		resp, err := client.Login(ctx, "entra", LoginRequest{
+			Flow:    auth.FlowInteractive,
+			Browser: "firefox",
+			Settings: map[string]json.RawMessage{
+				"clientId": json.RawMessage(`"work-client"`),
+				"tenantId": json.RawMessage(`"work-tenant"`),
+			},
+		}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "work@example.com", resp.Claims.Email)
+		require.NotNil(t, gotWireReq)
+		assert.Equal(t, "work", gotWireReq.Profile)
+		assert.Equal(t, "firefox", gotWireReq.Browser)
+		assert.JSONEq(t, `{"clientId":"work-client","tenantId":"work-tenant"}`, string(gotWireReq.Settings))
+		assert.Equal(t, "work", gotCtxProfile)
+		assert.Equal(t, "firefox", gotLoginReq.Browser)
+		assert.Equal(t, `"work-client"`, string(gotCtxSettings["clientId"]))
+		assert.Equal(t, `"work-tenant"`, string(gotLoginReq.Settings["tenantId"]))
+	})
+
+	t.Run("GetStatus encodes and decodes Settings and empty-default marker", func(t *testing.T) {
+		t.Parallel()
+		var gotWireReq *proto.GetStatusRequest
+		var gotCtxSettings map[string]json.RawMessage
+		var gotHasSettings bool
+
+		pluginImpl := &MockAuthHandlerPlugin{
+			statusFunc: func(ctx context.Context, _ string, _ StatusRequest) (*auth.Status, error) {
+				gotCtxSettings, gotHasSettings = RequestSettingsFromContext(ctx)
+				return &auth.Status{Authenticated: true, ClientID: "default-id"}, nil
+			},
+		}
+		server := &AuthHandlerGRPCServer{Impl: pluginImpl}
+		mockSvc := &forwardingServiceClient{server: server, onStatus: func(req *proto.GetStatusRequest) {
+			gotWireReq = req
+		}}
+		client := NewAuthHandlerGRPCClient(mockSvc)
+
+		// Non-nil empty map encodes as "{}" so stateless plugins use default config
+		// instead of falling back to ConfigureAuthHandler's activeProfile config.
+		st, err := client.GetStatus(context.Background(), "entra", StatusRequest{
+			Settings: map[string]json.RawMessage{},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "default-id", st.ClientID)
+		require.NotNil(t, gotWireReq)
+		assert.Equal(t, "{}", string(gotWireReq.Settings))
+		assert.True(t, gotHasSettings)
+		assert.NotNil(t, gotCtxSettings)
+		assert.Empty(t, gotCtxSettings)
+	})
+
+	t.Run("GetToken and DetectAvailableFlows forward Profile and Settings", func(t *testing.T) {
+		t.Parallel()
+		var gotDetectReq *proto.DetectAvailableFlowsRequest
+		var gotDetectProfile string
+		var gotDetectSettings map[string]json.RawMessage
+		var gotTokenProfile string
+		var gotTokenSettings map[string]json.RawMessage
+
+		pluginImpl := &MockAuthHandlerPlugin{
+			detectFlowsFunc: func(ctx context.Context, _ string) ([]FlowAvailability, error) {
+				gotDetectProfile = auth.ProfileFromContext(ctx)
+				gotDetectSettings, _ = RequestSettingsFromContext(ctx)
+				return []FlowAvailability{{Flow: auth.FlowWorkloadIdentity, Available: true}}, nil
+			},
+			tokenFunc: func(ctx context.Context, _ string, req TokenRequest) (*TokenResponse, error) {
+				gotTokenProfile = auth.ProfileFromContext(ctx)
+				gotTokenSettings = req.Settings
+				return &TokenResponse{AccessToken: "wif-token", TokenType: "Bearer"}, nil
+			},
+		}
+		server := &AuthHandlerGRPCServer{Impl: pluginImpl}
+		mockSvc := &forwardingServiceClient{server: server, onDetect: func(req *proto.DetectAvailableFlowsRequest) {
+			gotDetectReq = req
+		}}
+		client := NewAuthHandlerGRPCClient(mockSvc)
+
+		settings := map[string]json.RawMessage{
+			"clientId":           json.RawMessage(`"wif-client"`),
+			"federatedTokenFile": json.RawMessage(`"/var/run/secrets/token"`),
+		}
+		ctx := auth.WithProfile(context.Background(), "wif")
+		ctx = WithRequestSettings(ctx, settings)
+
+		flows, err := client.DetectAvailableFlows(ctx, "entra")
+		require.NoError(t, err)
+		require.Len(t, flows, 1)
+		assert.Equal(t, auth.FlowWorkloadIdentity, flows[0].Flow)
+		require.NotNil(t, gotDetectReq)
+		assert.Equal(t, "wif", gotDetectReq.Profile)
+		assert.Equal(t, "wif", gotDetectProfile)
+		assert.Equal(t, `"wif-client"`, string(gotDetectSettings["clientId"]))
+
+		tok, err := client.GetToken(ctx, "entra", TokenRequest{Scope: "https://graph.microsoft.com/.default"})
+		require.NoError(t, err)
+		assert.Equal(t, "wif-token", tok.AccessToken)
+		assert.Equal(t, "wif", gotTokenProfile)
+		assert.Equal(t, `"/var/run/secrets/token"`, string(gotTokenSettings["federatedTokenFile"]))
+	})
+
+	t.Run("Server rejects malformed Settings JSON and invalid DetectAvailableFlows profile", func(t *testing.T) {
+		t.Parallel()
+		server := &AuthHandlerGRPCServer{Impl: &MockAuthHandlerPlugin{}}
+
+		_, err := server.GetStatus(context.Background(), &proto.GetStatusRequest{
+			HandlerName: "entra",
+			Settings:    []byte("{not-json"),
+		})
+		require.Error(t, err)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+
+		_, err = server.GetToken(context.Background(), &proto.GetTokenRequest{
+			HandlerName: "entra",
+			Settings:    []byte("{not-json"),
+		})
+		require.Error(t, err)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+
+		detectResp, err := server.DetectAvailableFlows(context.Background(), &proto.DetectAvailableFlowsRequest{
+			HandlerName: "entra",
+			Profile:     "bad profile",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, detectResp.Error, "invalid profile")
+
+		detectBadJSON, err := server.DetectAvailableFlows(context.Background(), &proto.DetectAvailableFlowsRequest{
+			HandlerName: "entra",
+			Settings:    []byte("{not-json"),
+		})
+		require.NoError(t, err)
+		assert.Contains(t, detectBadJSON.Error, "failed to decode request settings")
+
+		rec := &recordingLoginStreamServer{ctx: context.Background()}
+		require.NoError(t, server.Login(&proto.LoginRequest{
+			HandlerName: "entra",
+			Settings:    []byte("{not-json"),
+		}, rec))
+		require.Len(t, rec.messages, 1)
+		assert.Contains(t, rec.messages[0].GetError(), "failed to decode request settings")
+	})
+}
+
+type recordingLoginStreamServer struct {
+	grpc.ServerStream
+	ctx      context.Context
+	messages []*proto.LoginStreamMessage
+}
+
+func (r *recordingLoginStreamServer) Context() context.Context {
+	return r.ctx
+}
+
+func (r *recordingLoginStreamServer) Send(msg *proto.LoginStreamMessage) error {
+	r.messages = append(r.messages, msg)
+	return nil
+}
+
+type forwardingServiceClient struct {
+	proto.AuthHandlerServiceClient
+	server   *AuthHandlerGRPCServer
+	onStatus func(*proto.GetStatusRequest)
+	onDetect func(*proto.DetectAvailableFlowsRequest)
+}
+
+func (f *forwardingServiceClient) GetStatus(ctx context.Context, req *proto.GetStatusRequest, _ ...grpc.CallOption) (*proto.GetStatusResponse, error) {
+	if f.onStatus != nil {
+		f.onStatus(req)
+	}
+	return f.server.GetStatus(ctx, req)
+}
+
+func (f *forwardingServiceClient) GetToken(ctx context.Context, req *proto.GetTokenRequest, _ ...grpc.CallOption) (*proto.GetTokenResponse, error) {
+	return f.server.GetToken(ctx, req)
+}
+
+func (f *forwardingServiceClient) DetectAvailableFlows(ctx context.Context, req *proto.DetectAvailableFlowsRequest, _ ...grpc.CallOption) (*proto.DetectAvailableFlowsResponse, error) {
+	if f.onDetect != nil {
+		f.onDetect(req)
+	}
+	return f.server.DetectAvailableFlows(ctx, req)
 }

@@ -81,9 +81,11 @@ scafctl auth login gcp --profile deploy --scope https://www.googleapis.com/auth/
 {{% /tab %}}
 {{< /tabs >}}
 
-Profile names must be ASCII alphanumeric, hyphens, or underscores, and must start with an alphanumeric character. Examples: `work`, `personal`, `staging-eu`, `ci_deploy`.
+Profile names must be ASCII alphanumeric, hyphens, or underscores, and must start with an alphanumeric character. Named profiles are canonicalized to lowercase (`--profile myWork` and `--profile mywork` resolve to the same `mywork` profile across `config.yaml`, plugin RPCs, and credential storage). Examples: `work`, `personal`, `staging-eu`, `ci_deploy`.
 
 > **Note:** Logging in without `--profile` uses the default (unnamed) profile. The default profile and named profiles are independent -- they don't share credentials.
+
+> **Upgrade Note (Mixed-Case Profile Names):** Named profile keys in `config.yaml`, built-in OAuth2 credential entries (`<binary>.auth.oauth2.<handler>.<profile>.*`), OAuth2 token caches (`<binary>.auth.oauth2.<handler>.<profile>.token.*`), and plugin auth entries (`<binary>.auth.<handler>.*`) now always use lowercase profile names. If you previously authenticated under a mixed-case profile name (such as `--profile myWork`), re-authenticate with `scafctl auth login <handler> --profile mywork` and remove any orphaned mixed-case internal secret or cached-token entries using `scafctl secrets list --all` and `scafctl secrets delete --all <name>`.
 
 ---
 
@@ -339,9 +341,19 @@ auth:
       deploy:
         project: "my-prod-project"
         impersonateServiceAccount: "deployer@my-prod-project.iam.gserviceaccount.com"
+
+  handlers:
+    openshift:
+      activeProfile: work
+      caBundlePath: /etc/ssl/default.pem
+      profiles:
+        work:
+          caBundlePath: /etc/ssl/work.pem
 ```
 
-Profile configs inherit from the top-level handler config and override specific fields. In the example above, the `work` GitHub profile uses `clientId: Iv1.work-org-app-id` but would inherit any other top-level GitHub settings.
+Profile configs inherit from the top-level handler config and override specific fields. In the example above, the `work` GitHub profile uses `clientId: Iv1.work-org-app-id` but would inherit any other top-level GitHub settings. Custom plugin handlers configured under `auth.handlers.<name>` follow the same `activeProfile` and `profiles` inheritance model.
+
+When `activeProfile` is set in `config.yaml`, pass `--profile default` (or `--profile built-in`) to explicitly target the unnamed default profile for a single command without changing `activeProfile`.
 
 ---
 
