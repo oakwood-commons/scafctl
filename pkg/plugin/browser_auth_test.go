@@ -102,8 +102,10 @@ func TestAuthHandlerWrapper_Login_ForwardsBrowserAndWarnsOnlyOnInteractiveFlow(t
 	t.Run("empty flow consults DetectAvailableFlows and Entra defaultFlow before warning", func(t *testing.T) {
 		t.Parallel()
 
+		var sawDeadline bool
 		mock := &MockAuthHandlerPlugin{
-			detectFlowsFunc: func(_ context.Context, _ string) ([]FlowAvailability, error) {
+			detectFlowsFunc: func(dctx context.Context, _ string) ([]FlowAvailability, error) {
+				_, sawDeadline = dctx.Deadline()
 				return []FlowAvailability{
 					{Flow: auth.FlowDeviceCode, Available: true, Reason: "headless session"},
 				}, nil
@@ -134,7 +136,95 @@ func TestAuthHandlerWrapper_Login_ForwardsBrowserAndWarnsOnlyOnInteractiveFlow(t
 
 		_, err := wrapper.Login(ctx, auth.LoginOptions{})
 		require.NoError(t, err)
+		assert.True(t, sawDeadline, "preflight DetectAvailableFlows RPC must always carry a deadline")
 		assert.Empty(t, outBuf.String(), "empty flow auto-resolving to device_code must not emit browser warning")
+	})
+
+	t.Run("stalled DetectAvailableFlows preflight honors LoginOptions.Timeout and aborts before Login RPC", func(t *testing.T) {
+		t.Parallel()
+
+		loginCalled := false
+		mock := &MockAuthHandlerPlugin{
+			detectFlowsFunc: func(dctx context.Context, _ string) ([]FlowAvailability, error) {
+				<-dctx.Done()
+				return nil, dctx.Err()
+			},
+			loginFunc: func(_ context.Context, _ string, _ LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+				loginCalled = true
+				return &LoginResponse{}, nil
+			},
+		}
+
+		wrapper := &AuthHandlerWrapper{
+			client:      &AuthHandlerClient{plugin: mock, name: "test-plugin"},
+			handlerName: "entra",
+			info: AuthHandlerInfo{
+				Name:  "entra",
+				Flows: []auth.Flow{auth.FlowInteractive, auth.FlowDeviceCode},
+			},
+		}
+
+		var outBuf bytes.Buffer
+		ioStreams := terminal.NewIOStreams(nil, &outBuf, &outBuf, false)
+		w := writer.New(ioStreams, settings.NewCliParams())
+		ctx := writer.WithWriter(context.Background(), w)
+
+		_, err := wrapper.Login(ctx, auth.LoginOptions{
+			Browser: "nonexistent-browser-stalled-preflight",
+			Timeout: 40 * time.Millisecond,
+		})
+		require.Error(t, err)
+		require.ErrorIs(t, err, auth.ErrTimeout)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.False(t, loginCalled, "stalled preflight exceeding LoginOptions.Timeout must not proceed to Login RPC")
+		assert.Empty(t, outBuf.String(), "timed-out preflight must not emit browser warning")
+	})
+
+	t.Run("caller context cancellation during DetectAvailableFlows preflight aborts before Login RPC", func(t *testing.T) {
+		t.Parallel()
+
+		started := make(chan struct{}, 1)
+		loginCalled := false
+		mock := &MockAuthHandlerPlugin{
+			detectFlowsFunc: func(dctx context.Context, _ string) ([]FlowAvailability, error) {
+				started <- struct{}{}
+				<-dctx.Done()
+				// Simulate a plugin that swallows the cancellation error and returns a flow anyway.
+				return []FlowAvailability{
+					{Flow: auth.FlowInteractive, Available: true},
+				}, nil
+			},
+			loginFunc: func(_ context.Context, _ string, _ LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+				loginCalled = true
+				return &LoginResponse{}, nil
+			},
+		}
+
+		wrapper := &AuthHandlerWrapper{
+			client:      &AuthHandlerClient{plugin: mock, name: "test-plugin"},
+			handlerName: "entra",
+			info: AuthHandlerInfo{
+				Name:  "entra",
+				Flows: []auth.Flow{auth.FlowInteractive, auth.FlowDeviceCode},
+			},
+		}
+
+		var outBuf bytes.Buffer
+		ioStreams := terminal.NewIOStreams(nil, &outBuf, &outBuf, false)
+		w := writer.New(ioStreams, settings.NewCliParams())
+		ctx, cancel := context.WithCancel(writer.WithWriter(context.Background(), w))
+		go func() {
+			<-started
+			cancel()
+		}()
+
+		_, err := wrapper.Login(ctx, auth.LoginOptions{
+			Browser: "nonexistent-browser-cancelled-preflight",
+		})
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.False(t, loginCalled, "cancelled preflight must not proceed to Login RPC")
+		assert.Empty(t, outBuf.String(), "cancelled preflight must not emit browser warning")
 	})
 
 	t.Run("invalid browser preference fails closed before normalization or plugin RPC", func(t *testing.T) {
