@@ -195,10 +195,18 @@ func (s *Server) handleCatalogListPlugins(ctx context.Context, request mcp.CallT
 			catalogs = append(catalogs, localCat)
 		}
 	}
+	var configuredExcluded bool
 	if !strings.EqualFold(catalogFilter, "local") {
-		for _, rc := range s.buildRemoteCatalogs(catalogFilter) {
-			catalogs = append(catalogs, rc)
-		}
+		var remoteCats []catalog.Catalog
+		remoteCats, configuredExcluded = s.buildPluginRemoteCatalogs(catalogFilter)
+		catalogs = append(catalogs, remoteCats...)
+	}
+
+	if len(catalogs) == 0 && configuredExcluded {
+		return mcp.NewToolResultJSON(map[string]any{
+			"plugins": []pluginCatalogEntry{},
+			"count":   0,
+		})
 	}
 
 	// No catalog resolved to query at all. Returning an empty result here would

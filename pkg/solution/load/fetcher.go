@@ -100,7 +100,8 @@ func newSolutionFetcher(ctx context.Context, lgr logr.Logger, localDir string, c
 }
 
 // defaultRemoteID returns the canonical origin of the configured default
-// catalog, or "" when it is unset, local, or not a remote catalog.
+// catalog when it serves solution artifacts, or "" when it is unset, local,
+// not a remote catalog, or restricted to non-solution artifact kinds.
 func defaultRemoteID(ctx context.Context) string {
 	cfg := config.FromContext(ctx)
 	if cfg == nil {
@@ -108,6 +109,9 @@ func defaultRemoteID(ctx context.Context) string {
 	}
 	alias := cfg.Settings.DefaultCatalog
 	if alias == "" || alias == config.CatalogNameLocal {
+		return ""
+	}
+	if defCat, ok := cfg.GetCatalog(alias); ok && !defCat.ServesArtifactKind(config.CatalogArtifactKindSolution) {
 		return ""
 	}
 	id, _ := catalogindex.FromContext(ctx).RegistryForAlias(alias)

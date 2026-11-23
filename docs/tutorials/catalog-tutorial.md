@@ -998,9 +998,13 @@ catalogs:
     url: oci://us-docker.pkg.dev/my-project/scafctl
     authProvider: gcp
     authScope: https://www.googleapis.com/auth/cloud-platform
+    # Optional: limit which artifact kinds this catalog serves
+    # (solution, provider, auth-handler; omit for all kinds)
+    artifactKinds:
+      - solution
 ```
 
-With this config, `scafctl catalog pull` and `scafctl catalog push` automatically use your GitHub auth session -- no `catalog login` needed.
+With this config, `scafctl catalog pull` and `scafctl catalog push` automatically use your GitHub auth session -- no `catalog login` needed. Setting `artifactKinds: [solution]` on a solution-only private catalog also skips that catalog during plugin auto-resolution, avoiding unnecessary network requests or auth prompts when fetching official plugins.
 
 **Docker/Podman interop:**
 

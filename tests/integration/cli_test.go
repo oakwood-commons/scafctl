@@ -8754,6 +8754,50 @@ func TestIntegration_CatalogRemoteSetDefaultDeprecatedNotice(t *testing.T) {
 	assert.Contains(t, stdout, "mycat")
 }
 
+func TestIntegration_CatalogRemoteAddAndList_ArtifactKinds(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_CONFIG_HOME": tmpDir,
+	}
+
+	// Add a solution-only OCI catalog via --artifact-kind.
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env,
+		"catalog", "remote", "add", "solutions-only",
+		"--type", "oci",
+		"--url", "oci://registry.example.com/solutions",
+		"--artifact-kind", "solution",
+	)
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	// Verify list -o json surfaces artifactKinds.
+	listOut, listErr, listExit := runScafctlWithEnv(t, env, "catalog", "remote", "list", "-o", "json")
+	require.Equal(t, 0, listExit, "stderr: %s", listErr)
+
+	var items []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(listOut), &items))
+
+	byName := make(map[string]map[string]any, len(items))
+	for _, it := range items {
+		if n, ok := it["name"].(string); ok {
+			byName[n] = it
+		}
+	}
+	solCat, ok := byName["solutions-only"]
+	require.True(t, ok, "solutions-only catalog must appear in remote list")
+	assert.Equal(t, []any{"solution"}, solCat["artifactKinds"])
+
+	// Invalid --artifact-kind fails with InvalidInput exit code.
+	_, badStderr, badExit := runScafctlWithEnv(t, env,
+		"catalog", "remote", "add", "bad-cat",
+		"--type", "oci",
+		"--url", "oci://registry.example.com/bad",
+		"--artifact-kind", "not-a-kind",
+	)
+	assert.Equal(t, exitcode.InvalidInput, badExit)
+	assert.Contains(t, badStderr, `invalid artifact kind "not-a-kind"`)
+}
+
 // =============================================================================
 // Cache Command Tests
 // =============================================================================
@@ -9925,6 +9969,245 @@ settings:
 	assert.Contains(t, lockStr, linuxDigest)
 	assert.Contains(t, lockStr, darwinDigest)
 	assert.DirExists(t, filepath.Join(xdgRoot, "data", "mycli", "catalog"))
+}
+
+// TestIntegration_PluginChainFallback_PrivateCatalogUnauthenticatedOrSolutionOnly
+// verifies plugin catalog chain fallback end-to-end across scafctl and an embedder binary (mycli):
+//   - Unpinned plugin lookup warns on stderr and falls through past an
+//     unreachable/unauthenticated private catalog to a subsequent catalog,
+//     keeping -o json stdout valid.
+//   - --strict fails closed when the higher-priority catalog fails.
+//   - artifactKinds: [solution] skips the private catalog with zero HTTP
+//     requests and zero fallback warnings.
+func TestIntegration_PluginChainFallback_PrivateCatalogUnauthenticatedOrSolutionOnly(t *testing.T) {
+	t.Parallel()
+	if (runtime.GOOS != "linux" || runtime.GOARCH != "amd64") && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
+		t.Skip("fixture publishes linux/amd64 and darwin/arm64")
+	}
+
+	fallbackHost, linuxDigest, _ := startShortNamePluginOCIRegistry(t)
+
+	// Plain HTTP server on 127.0.0.1 fails HTTPS handshake immediately (<1ms) as UnreachableError.
+	brokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(brokenSrv.Close)
+	brokenHost := strings.TrimPrefix(brokenSrv.URL, "http://")
+
+	solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fallback-plugin-demo
+  version: 0.1.0
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: ^0.1.0
+spec:
+  resolvers:
+    files:
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              path: "."
+`
+
+	t.Run("unpinned best-effort warns on stderr and resolves from fallback catalog", func(t *testing.T) {
+		t.Parallel()
+		solDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(solDir, "solution.yaml"), []byte(solYAML), 0o600))
+
+		xdgRoot := t.TempDir()
+		cfgDir := filepath.Join(xdgRoot, "config", "scafctl")
+		require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+		cfgYAML := fmt.Sprintf(`catalogs:
+  - name: local
+    type: filesystem
+  - name: broken-private
+    type: oci
+    url: oci://%s/private
+    insecure: true
+  - name: fallback-remote
+    type: oci
+    url: oci://%s/scafctl
+    insecure: true
+settings:
+  disableOfficialCatalog: true
+`, brokenHost, fallbackHost)
+		require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfgYAML), 0o600))
+
+		env := map[string]string{
+			"XDG_CONFIG_HOME": filepath.Join(xdgRoot, "config"),
+			"XDG_DATA_HOME":   filepath.Join(xdgRoot, "data"),
+			"XDG_CACHE_HOME":  filepath.Join(xdgRoot, "cache"),
+		}
+
+		stdout, stderr, exitCode := runScafctlWithEnvInDir(t, solDir, env,
+			"package", "solution", "-f", "solution.yaml", "--version", "0.1.0", "--skip-tests", "-o", "json")
+		require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+		assert.Contains(t, stderr, `catalog "broken-private" unavailable, trying next catalog...`)
+
+		var report map[string]any
+		require.NoError(t, json.Unmarshal([]byte(stdout), &report), "stdout JSON must stay clean of warnings")
+
+		lockBytes, err := os.ReadFile(filepath.Join(solDir, "solution.lock"))
+		require.NoError(t, err)
+		assert.Contains(t, string(lockBytes), "resolvedFrom: fallback-remote")
+		assert.Contains(t, string(lockBytes), linuxDigest)
+	})
+
+	t.Run("strict mode fails closed on unreachable higher-priority catalog", func(t *testing.T) {
+		t.Parallel()
+		solDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(solDir, "solution.yaml"), []byte(solYAML), 0o600))
+
+		xdgRoot := t.TempDir()
+		cfgDir := filepath.Join(xdgRoot, "config", "scafctl")
+		require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+		cfgYAML := fmt.Sprintf(`catalogs:
+  - name: local
+    type: filesystem
+  - name: broken-private
+    type: oci
+    url: oci://%s/private
+    insecure: true
+  - name: fallback-remote
+    type: oci
+    url: oci://%s/scafctl
+    insecure: true
+settings:
+  disableOfficialCatalog: true
+`, brokenHost, fallbackHost)
+		require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfgYAML), 0o600))
+
+		env := map[string]string{
+			"XDG_CONFIG_HOME": filepath.Join(xdgRoot, "config"),
+			"XDG_DATA_HOME":   filepath.Join(xdgRoot, "data"),
+			"XDG_CACHE_HOME":  filepath.Join(xdgRoot, "cache"),
+		}
+
+		_, stderr, exitCode := runScafctlWithEnvInDir(t, solDir, env,
+			"package", "solution", "-f", "solution.yaml", "--version", "0.1.0", "--skip-tests", "--strict")
+		assert.NotEqual(t, 0, exitCode, "strict mode must fail closed when broken-private is unreachable")
+		assert.Contains(t, stderr, "broken-private")
+	})
+
+	t.Run("artifactKinds solution skips private catalog with zero HTTP requests", func(t *testing.T) {
+		t.Parallel()
+
+		// TLS server counts actual HTTP requests after TLS handshake (verifying zero requests when skipped).
+		var privateHits int
+		var hitsMu sync.Mutex
+		privateSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hitsMu.Lock()
+			privateHits++
+			hitsMu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}`))
+		}))
+		t.Cleanup(privateSrv.Close)
+		privateHost := strings.TrimPrefix(privateSrv.URL, "https://")
+
+		solDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(solDir, "solution.yaml"), []byte(solYAML), 0o600))
+
+		xdgRoot := t.TempDir()
+		cfgDir := filepath.Join(xdgRoot, "config", "scafctl")
+		require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+		cfgYAML := fmt.Sprintf(`catalogs:
+  - name: local
+    type: filesystem
+  - name: private-solutions
+    type: oci
+    url: oci://%s/solutions
+    insecure: true
+    artifactKinds:
+      - solution
+  - name: fallback-remote
+    type: oci
+    url: oci://%s/scafctl
+    insecure: true
+settings:
+  disableOfficialCatalog: true
+`, privateHost, fallbackHost)
+		require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfgYAML), 0o600))
+
+		env := map[string]string{
+			"XDG_CONFIG_HOME": filepath.Join(xdgRoot, "config"),
+			"XDG_DATA_HOME":   filepath.Join(xdgRoot, "data"),
+			"XDG_CACHE_HOME":  filepath.Join(xdgRoot, "cache"),
+		}
+
+		stdout, stderr, exitCode := runScafctlWithEnvInDir(t, solDir, env,
+			"package", "solution", "-f", "solution.yaml", "--version", "0.1.0", "--skip-tests")
+		require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+		assert.NotContains(t, stderr, "private-solutions", "solution-only catalog must emit zero fallback warnings")
+
+		hitsMu.Lock()
+		gotHits := privateHits
+		hitsMu.Unlock()
+		assert.Zero(t, gotHits, "solution-only catalog must receive zero HTTP requests during plugin resolution")
+	})
+
+	t.Run("mycli embedder binary honors fallback and binary name in remote add help", func(t *testing.T) {
+		t.Parallel()
+		solDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(solDir, "solution.yaml"), []byte(solYAML), 0o600))
+
+		xdgRoot := t.TempDir()
+		cfgDir := filepath.Join(xdgRoot, "config", "mycli")
+		require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+		cfgYAML := fmt.Sprintf(`catalogs:
+  - name: local
+    type: filesystem
+  - name: broken-private
+    type: oci
+    url: oci://%s/private
+    insecure: true
+  - name: embedder-fallback
+    type: oci
+    url: oci://%s/scafctl
+    insecure: true
+settings:
+  disableOfficialCatalog: true
+`, brokenHost, fallbackHost)
+		require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfgYAML), 0o600))
+
+		testBin, err := os.Executable()
+		require.NoError(t, err)
+
+		baseEnv := append(os.Environ(),
+			"SCAFCTL_TEST_EMBEDDER_HELPER=1",
+			"XDG_CONFIG_HOME="+filepath.Join(xdgRoot, "config"),
+			"XDG_DATA_HOME="+filepath.Join(xdgRoot, "data"),
+			"XDG_CACHE_HOME="+filepath.Join(xdgRoot, "cache"),
+		)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		pkgCmd := exec.CommandContext(ctx, testBin,
+			"--", "package", "solution", "-f", "solution.yaml", "--version", "0.1.0", "--skip-tests")
+		pkgCmd.Dir = solDir
+		pkgCmd.Env = baseEnv
+		out, err := pkgCmd.CombinedOutput()
+		require.NoError(t, err, "mycli package solution failed: %s", string(out))
+		assert.Contains(t, string(out), `catalog "broken-private" unavailable, trying next catalog...`)
+
+		lockBytes, err := os.ReadFile(filepath.Join(solDir, "solution.lock"))
+		require.NoError(t, err)
+		assert.Contains(t, string(lockBytes), "resolvedFrom: embedder-fallback")
+
+		helpCmd := exec.CommandContext(ctx, testBin, "--", "catalog", "remote", "add", "--help")
+		helpCmd.Env = baseEnv
+		helpOut, err := helpCmd.CombinedOutput()
+		require.NoError(t, err)
+		assert.Contains(t, string(helpOut), "mycli catalog remote add")
+		assert.Contains(t, string(helpOut), "--artifact-kind")
+		assert.NotContains(t, string(helpOut), "scafctl catalog remote")
+	})
 }
 
 func TestIntegration_BundleExtract_AfterBuild(t *testing.T) {

@@ -4,9 +4,13 @@
 package builder
 
 import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -15,10 +19,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
 const (
@@ -712,6 +720,46 @@ func TestLockDigest(t *testing.T) {
 	t.Parallel()
 	assert.Empty(t, lockDigest(nil))
 	assert.Equal(t, "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae", lockDigest([]byte("foo")))
+}
+
+func TestPackager_ResolvePlugins_FallbackWarningAndStrictMode(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	unreachSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(unreachSrv.Close)
+	host := strings.TrimPrefix(unreachSrv.URL, "http://")
+
+	appCfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true},
+		Catalogs: []config.CatalogConfig{
+			{Name: "broken-corp", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/corp", Insecure: true},
+			{Name: "second", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/second", Insecure: true},
+		},
+	}
+
+	solWithPlugin := sourceDoc + "bundle:\n  plugins:\n    - name: exec\n      kind: provider\n      version: ^1.0.0\n"
+	f := newPipelineFixture(t, map[string]string{"solution.yaml": solWithPlugin})
+
+	var stdout, stderr bytes.Buffer
+	ios := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	w := writer.New(ios, settings.NewCliParams())
+	ctx := config.WithConfig(writer.WithWriter(t.Context(), w), appCfg)
+
+	// Default (best-effort) emits fallback warning to stderr.
+	p := f.packager(t)
+	_, err := p.resolvePlugins(ctx, &pipelineState{})
+	require.Error(t, err)
+	assert.Empty(t, stdout.String(), "fallback warning must not write to stdout")
+	assert.Contains(t, stderr.String(), `catalog "broken-corp" unavailable, trying next catalog...`)
+
+	// Strict verify mode halts immediately without fallback warning.
+	stderr.Reset()
+	strictP := f.packager(t).Verify(VerifyOptions{Strict: true})
+	_, err = strictP.resolvePlugins(ctx, &pipelineState{})
+	require.Error(t, err)
+	assert.Empty(t, stderr.String(), "strict verify mode must halt without fallback warnings")
 }
 
 func BenchmarkPackager_Do_DryRun(b *testing.B) {

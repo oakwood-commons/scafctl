@@ -275,8 +275,15 @@ func resolveLockMode(deps []providerDependency, lock *bundler.LockFile, mode Loc
 	return deps, nil
 }
 
+func depKindLabel(dep solution.PluginDependency) string {
+	if dep.Kind == solution.PluginKindAuthHandler {
+		return "auth handler"
+	}
+	return "provider"
+}
+
 // resolveDepByMode applies the lock-mode resolution strategy to a single
-// provider dependency, returning the resolved dep or an error.
+// plugin dependency, returning the resolved dep or an error.
 func resolveByLockModeInternal(dep solution.PluginDependency, lock *bundler.LockFile, mode LockMode, resolver RegistryAliasResolver) (solution.PluginDependency, error) {
 	switch mode.OrDefault() {
 	case LockModeStrict:
@@ -286,7 +293,7 @@ func resolveByLockModeInternal(dep solution.PluginDependency, lock *bundler.Lock
 	case LockModeBestEffort:
 		return resolveBestEffort(dep, lock, resolver)
 	default:
-		return solution.PluginDependency{}, fmt.Errorf("provider %q: unknown lock mode %d", dep.ArtifactName(), mode)
+		return solution.PluginDependency{}, fmt.Errorf("%s %q: unknown lock mode %d", depKindLabel(dep), dep.ArtifactName(), mode)
 	}
 }
 
@@ -296,39 +303,41 @@ func resolveByLockModeInternal(dep solution.PluginDependency, lock *bundler.Lock
 // require a catalog: the caller derives the catalog from the entry's
 // ResolvedCanonical after this returns.
 func findLockEntry(dep solution.PluginDependency, lock *bundler.LockFile, mode LockMode) (*bundler.LockPlugin, error) {
+	label := depKindLabel(dep)
 	if lock == nil {
 		return nil, fmt.Errorf(
-			"provider %q: %s mode requires a lock file but none was provided: %w",
-			dep.ArtifactName(), mode, ErrMissingLockFile,
+			"%s %q: %s mode requires a lock file but none was provided: %w",
+			label, dep.ArtifactName(), mode, ErrMissingLockFile,
 		)
 	}
 	lp := lock.FindPluginByVersionConstraint(dep)
 	if lp == nil {
 		return nil, fmt.Errorf(
-			"provider %q: no lock entry matches constraint %q; "+
+			"%s %q: no lock entry matches constraint %q; "+
 				"the solution lock is out of sync with bundle.plugins",
-			dep.ArtifactName(), dep.Version,
+			label, dep.ArtifactName(), dep.Version,
 		)
 	}
 	return lp, nil
 }
 
 func resolveStrict(dep solution.PluginDependency, lock *bundler.LockFile, resolver RegistryAliasResolver) (solution.PluginDependency, error) {
+	label := depKindLabel(dep)
 	lp, err := findLockEntry(dep, lock, LockModeStrict)
 	if err != nil {
 		return solution.PluginDependency{}, err
 	}
 	if lp.Version == "" {
 		return solution.PluginDependency{}, fmt.Errorf(
-			"provider %q: lock entry has no resolved version; "+
-				"cannot pin in strict mode", dep.ArtifactName(),
+			"%s %q: lock entry has no resolved version; "+
+				"cannot pin in strict mode", label, dep.ArtifactName(),
 		)
 	}
 	catalog, ok := lockEntryCatalog(lp, resolver)
 	if !ok {
 		return solution.PluginDependency{}, fmt.Errorf(
-			"provider %q: lock entry resolved to registry %q, which is not a configured catalog",
-			dep.ArtifactName(), lp.ResolvedCanonical,
+			"%s %q: lock entry resolved to registry %q, which is not a configured catalog",
+			label, dep.ArtifactName(), lp.ResolvedCanonical,
 		)
 	}
 	dep.Catalog = catalog
@@ -337,6 +346,7 @@ func resolveStrict(dep solution.PluginDependency, lock *bundler.LockFile, resolv
 }
 
 func resolveConstrained(dep solution.PluginDependency, lock *bundler.LockFile, resolver RegistryAliasResolver) (solution.PluginDependency, error) {
+	label := depKindLabel(dep)
 	lp, err := findLockEntry(dep, lock, LockModeConstrained)
 	if err != nil {
 		return solution.PluginDependency{}, err
@@ -347,15 +357,15 @@ func resolveConstrained(dep solution.PluginDependency, lock *bundler.LockFile, r
 	}
 	if version == "" {
 		return solution.PluginDependency{}, fmt.Errorf(
-			"provider %q: no version constraint in bundle.plugins or lock entry; "+
-				"cannot resolve in constrained mode", dep.ArtifactName(),
+			"%s %q: no version constraint in bundle.plugins or lock entry; "+
+				"cannot resolve in constrained mode", label, dep.ArtifactName(),
 		)
 	}
 	catalog, ok := lockEntryCatalog(lp, resolver)
 	if !ok {
 		return solution.PluginDependency{}, fmt.Errorf(
-			"provider %q: lock entry resolved to registry %q, which is not a configured catalog",
-			dep.ArtifactName(), lp.ResolvedCanonical,
+			"%s %q: lock entry resolved to registry %q, which is not a configured catalog",
+			label, dep.ArtifactName(), lp.ResolvedCanonical,
 		)
 	}
 	dep.Version = version

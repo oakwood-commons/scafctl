@@ -47,6 +47,14 @@ func CommandRemote(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 	return cmd
 }
 
+// remoteBinaryName resolves the effective binary name for help text and kvx app names.
+func remoteBinaryName(cliParams *settings.Run) string {
+	if cliParams != nil && cliParams.BinaryName != "" {
+		return cliParams.BinaryName
+	}
+	return settings.CliBinaryName
+}
+
 // --- remote add ---
 
 // RemoteAddOptions holds options for the remote add command.
@@ -55,14 +63,15 @@ type RemoteAddOptions struct {
 	CliParams  *settings.Run
 	ConfigPath string
 
-	Name         string
-	Type         string
-	Path         string
-	URL          string
-	SetDefault   bool
-	Force        bool
-	AuthProvider string
-	AuthScope    string
+	Name          string
+	Type          string
+	Path          string
+	URL           string
+	SetDefault    bool
+	Force         bool
+	AuthProvider  string
+	AuthScope     string
+	ArtifactKinds []string
 }
 
 func commandRemoteAdd(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
@@ -70,6 +79,8 @@ func commandRemoteAdd(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ 
 		IOStreams: ioStreams,
 		CliParams: cliParams,
 	}
+
+	binName := remoteBinaryName(cliParams)
 
 	cmd := &cobra.Command{
 		Use:   "add <name>",
@@ -94,7 +105,10 @@ func commandRemoteAdd(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ 
 
 			  # Add OCI catalog with auth provider (no separate catalog login needed)
 			  %[2]s catalog remote add registry --type oci --url oci://ghcr.io/myorg --auth-provider github
-		`, strings.Join(appconfig.ValidCatalogTypes(), ", "), settings.CliBinaryName),
+
+			  # Add a solution-only OCI catalog (skipped during plugin lookups)
+			  %[2]s catalog remote add solutions --type oci --url oci://ghcr.io/myorg/solutions --artifact-kind solution
+		`, strings.Join(appconfig.ValidCatalogTypes(), ", "), binName),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Name = args[0]
@@ -116,6 +130,9 @@ func commandRemoteAdd(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ 
 	cmd.Flags().BoolVarP(&opts.Force, "force", "f", false, "Overwrite if catalog already exists")
 	cmd.Flags().StringVar(&opts.AuthProvider, "auth-provider", "", "Auth handler for automatic token injection (e.g. github, gcp, entra)")
 	cmd.Flags().StringVar(&opts.AuthScope, "auth-scope", "", "OAuth scope for auth provider token requests")
+	cmd.Flags().StringSliceVar(&opts.ArtifactKinds, "artifact-kind", nil,
+		fmt.Sprintf("Artifact kinds served by this catalog (%s); omit for all kinds",
+			strings.Join(appconfig.ValidCatalogArtifactKinds(), ", ")))
 
 	return cmd
 }
@@ -144,6 +161,12 @@ func runRemoteAdd(ctx context.Context, opts *RemoteAddOptions) error {
 		}
 	}
 
+	artifactKinds, err := appconfig.NormalizeCatalogArtifactKinds(opts.ArtifactKinds)
+	if err != nil {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
 	mgr := appconfig.NewManager(opts.ConfigPath, appconfig.ManagerOptionsFromContext(ctx)...)
 	cfg, err := mgr.Load()
 	if err != nil {
@@ -152,12 +175,13 @@ func runRemoteAdd(ctx context.Context, opts *RemoteAddOptions) error {
 	}
 
 	cat := appconfig.CatalogConfig{
-		Name:         opts.Name,
-		Type:         opts.Type,
-		Path:         opts.Path,
-		URL:          opts.URL,
-		AuthProvider: opts.AuthProvider,
-		AuthScope:    opts.AuthScope,
+		Name:          opts.Name,
+		Type:          opts.Type,
+		Path:          opts.Path,
+		URL:           opts.URL,
+		AuthProvider:  opts.AuthProvider,
+		AuthScope:     opts.AuthScope,
+		ArtifactKinds: artifactKinds,
 	}
 
 	if err := cfg.AddCatalog(cat); err != nil {
@@ -209,6 +233,8 @@ func commandRemoteRemove(cliParams *settings.Run, ioStreams *terminal.IOStreams,
 		CliParams: cliParams,
 	}
 
+	binName := remoteBinaryName(cliParams)
+
 	cmd := &cobra.Command{
 		Use:     "remove <name>",
 		Aliases: []string{"rm"},
@@ -220,7 +246,7 @@ func commandRemoteRemove(cliParams *settings.Run, ioStreams *terminal.IOStreams,
 
 			Examples:
 			  %s catalog remote remove old-registry
-		`, settings.CliBinaryName),
+		`, binName),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Name = args[0]
@@ -289,10 +315,7 @@ func commandRemoteDefault(cliParams *settings.Run, ioStreams *terminal.IOStreams
 		CliParams: cliParams,
 	}
 
-	name := cliParams.BinaryName
-	if name == "" {
-		name = settings.CliBinaryName
-	}
+	name := remoteBinaryName(cliParams)
 
 	cmd := &cobra.Command{
 		Use:   "default <name>",
@@ -333,10 +356,7 @@ func commandRemoteSetDefaultDeprecated(cliParams *settings.Run, ioStreams *termi
 		CliParams: cliParams,
 	}
 
-	name := cliParams.BinaryName
-	if name == "" {
-		name = settings.CliBinaryName
-	}
+	name := remoteBinaryName(cliParams)
 
 	cmd := &cobra.Command{
 		Use:    "set-default <name>",
@@ -409,13 +429,14 @@ func runRemoteSetDefault(ctx context.Context, opts *RemoteSetDefaultOptions) err
 // JSON fields must not use omitempty for fields in the table schema -- kvx
 // requires consistent keys across all array items for column rendering.
 type RemoteListItem struct {
-	Name         string `json:"name" yaml:"name"`
-	Type         string `json:"type" yaml:"type"`
-	URL          string `json:"url" yaml:"url"`
-	Path         string `json:"path" yaml:"path,omitempty"`
-	AuthProvider string `json:"authProvider" yaml:"authProvider"`
-	AuthScope    string `json:"authScope" yaml:"authScope,omitempty"`
-	Default      bool   `json:"default" yaml:"default"`
+	Name          string   `json:"name" yaml:"name"`
+	Type          string   `json:"type" yaml:"type"`
+	URL           string   `json:"url" yaml:"url"`
+	Path          string   `json:"path" yaml:"path,omitempty"`
+	AuthProvider  string   `json:"authProvider" yaml:"authProvider"`
+	AuthScope     string   `json:"authScope" yaml:"authScope,omitempty"`
+	ArtifactKinds []string `json:"artifactKinds" yaml:"artifactKinds"`
+	Default       bool     `json:"default" yaml:"default"`
 }
 
 //go:embed remote_list_schema.json
@@ -423,17 +444,19 @@ var remoteListSchemaJSON []byte
 
 // remoteListColumnHints controls table column display for catalog remote list.
 var remoteListColumnHints = map[string]tui.ColumnHint{
-	"name":         {MaxWidth: 25, Priority: 10, DisplayName: "Name"},
-	"type":         {MaxWidth: 12, Priority: 8, DisplayName: "Type"},
-	"url":          {MaxWidth: 50, Priority: 9, DisplayName: "URL"},
-	"authProvider": {MaxWidth: 15, Priority: 6, DisplayName: "Auth"},
-	"default":      {Priority: 7, DisplayName: "Default"},
-	"path":         {Hidden: true},
-	"authScope":    {Hidden: true},
+	"name":          {MaxWidth: 18, Priority: 10, DisplayName: "Name"},
+	"type":          {MaxWidth: 10, Priority: 8, DisplayName: "Type"},
+	"url":           {MaxWidth: 24, Flex: true, Priority: 9, DisplayName: "URL"},
+	"authProvider":  {MaxWidth: 10, Priority: 6, DisplayName: "Auth"},
+	"artifactKinds": {MaxWidth: 16, Priority: 5, DisplayName: "Kinds"},
+	"default":       {MaxWidth: 7, Priority: 7, DisplayName: "Default"},
+	"path":          {Hidden: true},
+	"authScope":     {Hidden: true},
 }
 
 func commandRemoteList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var kvxFlags flags.KvxOutputFlags
+	binName := remoteBinaryName(cliParams)
 
 	cmd := &cobra.Command{
 		Use:     "list",
@@ -445,12 +468,12 @@ func commandRemoteList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _
 			Examples:
 			  %[1]s catalog remote list
 			  %[1]s catalog remote list -o json
-		`, cliParams.BinaryName),
+		`, binName),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			kvxFlags.AppName = cliParams.BinaryName
+			kvxFlags.AppName = binName
 			outputOpts := flags.ToKvxOutputOptions(&kvxFlags,
 				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputColumnOrder([]string{"name", "type", "url", "authProvider", "default"}),
+				kvx.WithOutputColumnOrder([]string{"name", "type", "url", "authProvider", "artifactKinds", "default"}),
 				kvx.WithOutputDisplaySchemaJSON(remoteListSchemaJSON),
 				kvx.WithOutputColumnHints(remoteListColumnHints),
 			)
@@ -481,14 +504,19 @@ func runRemoteList(ctx context.Context, configPath string, outputOpts *kvx.Outpu
 	}
 	items := make([]RemoteListItem, 0, len(cfg.Catalogs))
 	for _, c := range cfg.Catalogs {
+		kinds := c.ArtifactKinds
+		if kinds == nil {
+			kinds = []string{}
+		}
 		items = append(items, RemoteListItem{
-			Name:         c.Name,
-			Type:         c.Type,
-			URL:          c.URL,
-			Path:         c.Path,
-			AuthProvider: c.AuthProvider,
-			AuthScope:    c.AuthScope,
-			Default:      c.Name == cfg.Settings.DefaultCatalog,
+			Name:          c.Name,
+			Type:          c.Type,
+			URL:           c.URL,
+			Path:          c.Path,
+			AuthProvider:  c.AuthProvider,
+			AuthScope:     c.AuthScope,
+			ArtifactKinds: kinds,
+			Default:       c.Name == cfg.Settings.DefaultCatalog,
 		})
 	}
 	return outputOpts.Write(items)

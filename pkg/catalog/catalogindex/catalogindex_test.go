@@ -300,19 +300,32 @@ func TestFromChain_Nil(t *testing.T) {
 }
 
 func TestFromCatalogs(t *testing.T) {
+	nested := catalog.NewAllowlistCatalog(
+		catalog.NewKindFilterCatalog(
+			fakeRemoteCatalog{name: "filtered", registry: "registry.example.com", repository: "plugins"},
+			[]catalog.ArtifactKind{catalog.ArtifactKindProvider},
+		),
+		[]string{"exec"},
+	)
+
 	idx := FromCatalogs([]catalog.Catalog{
 		fakeRemoteCatalog{name: "prod", registry: "ghcr.io", repository: "acme"},
+		nested,
 		nil,
 		fakeLocalCatalog{name: "local", path: "/catalog"},
 	})
 
 	got := idx.All()
-	require.Len(t, got, 2, "nil catalogs are skipped")
-	assert.Equal(t, []string{"prod", "local"}, []string{got[0].Alias, got[1].Alias})
+	require.Len(t, got, 3, "nil catalogs are skipped and decorators unwrap cleanly")
+	assert.Equal(t, []string{"prod", "filtered", "local"}, []string{got[0].Alias, got[1].Alias, got[2].Alias})
 
 	alias, ok := idx.AliasForRegistry("ghcr.io/acme")
 	assert.True(t, ok)
 	assert.Equal(t, "prod", alias)
+
+	filteredAlias, ok := idx.AliasForRegistry("registry.example.com/plugins")
+	assert.True(t, ok, "KindFilterCatalog.Inner() must unwrap cleanly in FromCatalogs")
+	assert.Equal(t, "filtered", filteredAlias)
 }
 
 func TestFromCatalogs_Empty(t *testing.T) {

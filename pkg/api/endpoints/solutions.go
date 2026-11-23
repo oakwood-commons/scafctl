@@ -442,8 +442,12 @@ func loadAndPrepareSolution(
 		return ctx, nil, nil, nil, handleStageError(ctx, err, operation)
 	}
 
+	catIndex := hctx.CatalogIndex
+	if hctx.PluginFetcher != nil && hctx.PluginFetcher.CatalogIndex() != nil {
+		catIndex = hctx.PluginFetcher.CatalogIndex()
+	}
 	executionRegistry, releasePlugins, err := ensureProviderDependencies(
-		ctx, staged.Solution, hctx.CompositeRegistry, hctx.CatalogIndex,
+		ctx, staged.Solution, hctx.CompositeRegistry, catIndex,
 		hctx.PluginFetcher, hctx.PluginPool, staged.Lock, lockMode,
 	)
 	release := func() {

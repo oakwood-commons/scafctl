@@ -20,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -185,7 +186,14 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 		chainLogger = logr.Discard()
 	}
 
-	remoteFetcher, err := catalog.BuildRemotePluginFetcher(appCfg, auth.RegistryFromContext(ctx), chainLogger)
+	remoteFetcher, err := catalog.BuildRemotePluginFetcher(
+		appCfg,
+		auth.RegistryFromContext(ctx),
+		chainLogger,
+		catalog.WithPluginWarningHandler(func(msg string) {
+			w.WarnStderrf("%s", msg)
+		}),
+	)
 	if err != nil {
 		// Remote catalogs may not be configured (e.g. offline, no config).
 		// Proceed without a catalog — pinned versions and empty caches still
@@ -286,13 +294,20 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 	// Perform the updates by fetching new versions.
 	w.PlainStderrf("Updating %d plugin(s)...", len(plan.Updates))
 
+	sigPolicy, sigErr := prepare.ResolveSignaturePolicy(ctx, appCfg, nil, chainLogger)
+	if sigErr != nil {
+		w.Errorf("%v", sigErr)
+		return exitcode.WithCode(sigErr, exitcode.ConfigError)
+	}
+
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		CatalogFetcher: catalogFetcher,
-		Cache:          cache,
-		Platform:       opts.Platform,
-		NoCache:        opts.NoCache,
-		BinaryName:     settings.BinaryNameFromContext(ctx),
-		Logger:         chainLogger,
+		CatalogFetcher:  catalogFetcher,
+		Cache:           cache,
+		Platform:        opts.Platform,
+		NoCache:         opts.NoCache,
+		BinaryName:      settings.BinaryNameFromContext(ctx),
+		Logger:          chainLogger,
+		SignaturePolicy: sigPolicy,
 	})
 
 	var deps []solution.PluginDependency

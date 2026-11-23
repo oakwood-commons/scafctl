@@ -54,13 +54,38 @@ func CheckPluginPolicy(policies map[string]PluginPolicy, catalogName, pluginName
 }
 
 type ChainCatalogOptions struct {
-	allowedCatalogs     map[string]bool
-	perCatalogArtifacts map[string]PluginPolicy
-	withoutLocalBuilds  bool
-	localCatalog        *LocalCatalog
+	allowedCatalogs      map[string]bool
+	perCatalogArtifacts  map[string]PluginPolicy
+	withoutLocalBuilds   bool
+	localCatalog         *LocalCatalog
+	pluginChainMode      ChainMode
+	hasPluginChainMode   bool
+	pluginWarningHandler PluginChainWarningFunc
 }
 
 type ChainCatalogOption func(*ChainCatalogOptions)
+
+// WithPluginChainMode sets the ChainMode used by BuildPluginFetcher and
+// BuildRemotePluginFetcher when walking unpinned plugin sources. When unset,
+// BuildPluginFetcher and BuildRemotePluginFetcher default to
+// ChainModeBestEffort so an unreachable or unauthenticated higher-priority
+// catalog warns and falls through to subsequent catalogs (such as official).
+// Pass ChainModeStrict for fail-closed paths (--strict, API server).
+func WithPluginChainMode(mode ChainMode) ChainCatalogOption {
+	return func(opt *ChainCatalogOptions) {
+		opt.pluginChainMode = mode
+		opt.hasPluginChainMode = true
+	}
+}
+
+// WithPluginWarningHandler registers a callback invoked at most once per
+// failing remote catalog when a best-effort plugin chain falls through past a
+// non-404 error.
+func WithPluginWarningHandler(fn PluginChainWarningFunc) ChainCatalogOption {
+	return func(opt *ChainCatalogOptions) {
+		opt.pluginWarningHandler = fn
+	}
+}
 
 // WithLocalCatalog supplies an already-open LocalCatalog instance instead of
 // opening the default XDG local catalog on disk. Callers that already hold a
@@ -152,12 +177,16 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 	}
 
 	// 2-3. Embedder/user catalogs from config, then the official catalog.
-	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, options.allowedCatalogs, true)
+	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, options.allowedCatalogs, true, nil)
 	if err != nil {
 		return nil, err
 	}
 	for _, remote := range remotes {
-		catalogs = append(catalogs, remote)
+		var cat Catalog = remote.catalog
+		if len(remote.config.ArtifactKinds) > 0 {
+			cat = NewKindFilterCatalog(cat, ParseConfiguredArtifactKinds(remote.config.ArtifactKinds))
+		}
+		catalogs = append(catalogs, cat)
 	}
 
 	if len(catalogs) == 0 {
@@ -177,10 +206,12 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 // BuildPluginFetcher creates a PluginFetcher from the application
 // configuration. Source order matches BuildCatalogChain: local built
 // artifacts first (when the local catalog is allowed), then embedder/user
-// catalogs, then the official catalog. Each remote is backed by the local
-// catalog as a pull-through cache, so pulled copies are attributed to the
-// remote that served them and remain usable when it is unreachable. The local
-// catalog serves as that cache even when it is not an allowed source itself.
+// catalogs, then the official catalog. Catalogs configured with artifactKinds
+// that include neither provider nor auth-handler are skipped entirely. Each
+// remote is backed by the local catalog as a pull-through cache, so pulled
+// copies are attributed to the remote that served them and remain usable when
+// it is unreachable. The local catalog serves as that cache even when it is
+// not an allowed source itself.
 func BuildPluginFetcher(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger, opts ...ChainCatalogOption) (*PluginFetcher, error) {
 	options := applyChainCatalogOptions(opts)
 
@@ -189,22 +220,27 @@ func BuildPluginFetcher(cfg *config.Config, authRegistry *auth.Registry, logger 
 		return nil, err
 	}
 
-	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, options.allowedCatalogs, true)
+	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, options.allowedCatalogs, true, func(catCfg config.CatalogConfig) bool {
+		return catCfg.ServesPluginKinds()
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	sources := make([]PluginSource, 0, len(remotes))
 	for _, remote := range remotes {
-		var src PluginSource = remote
+		var src PluginSource = remote.catalog
 		if localCat != nil {
-			cached, cachedErr := NewCachedRemoteCatalog(localCat, remote)
+			cached, cachedErr := NewCachedRemoteCatalog(localCat, remote.catalog)
 			if cachedErr != nil {
-				return nil, &CatalogBuildError{Catalog: remote.Name(), Err: cachedErr}
+				return nil, &CatalogBuildError{Catalog: remote.catalog.Name(), Err: cachedErr}
 			}
 			src = cached
 		}
-		if allowed, restrict := artifactAllowlist(remote.Name(), options.perCatalogArtifacts); restrict {
+		if !servesAllPluginKinds(remote.config) {
+			src = newKindFilterPluginSource(src, ParseConfiguredArtifactKinds(remote.config.ArtifactKinds))
+		}
+		if allowed, restrict := artifactAllowlist(remote.catalog.Name(), options.perCatalogArtifacts); restrict {
 			src = newAllowlistPluginSource(src, allowed)
 		}
 		sources = append(sources, src)
@@ -225,18 +261,23 @@ func BuildPluginFetcher(cfg *config.Config, authRegistry *auth.Registry, logger 
 		return nil, fmt.Errorf("no catalogs available for plugin resolution")
 	}
 
-	return NewPluginFetcher(logger, local, sources...)
+	return NewPluginFetcherWithOptions(logger, local, options.fetcherOptions(), sources...)
 }
 
 // BuildRemotePluginFetcher creates a PluginFetcher over remote catalogs only
 // (user/embedder catalogs and the official catalog), with no local source and
-// no local cache fallback. Catalogs that fail to build are skipped.
+// no local cache fallback. Catalogs that fail to build or serve no plugin
+// artifact kinds are skipped.
 //
 // This is used by operations that must observe the live state of remote
 // registries (e.g. plugin update checks): a cache fallback would report a
 // stale version as current when a registry is unreachable.
-func BuildRemotePluginFetcher(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger) (*PluginFetcher, error) {
-	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, nil, false)
+func BuildRemotePluginFetcher(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger, opts ...ChainCatalogOption) (*PluginFetcher, error) {
+	options := applyChainCatalogOptions(opts)
+
+	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, options.allowedCatalogs, false, func(catCfg config.CatalogConfig) bool {
+		return catCfg.ServesPluginKinds()
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -245,9 +286,75 @@ func BuildRemotePluginFetcher(cfg *config.Config, authRegistry *auth.Registry, l
 	}
 	sources := make([]PluginSource, 0, len(remotes))
 	for _, remote := range remotes {
-		sources = append(sources, remote)
+		var src PluginSource = remote.catalog
+		if !servesAllPluginKinds(remote.config) {
+			src = newKindFilterPluginSource(src, ParseConfiguredArtifactKinds(remote.config.ArtifactKinds))
+		}
+		if allowed, restrict := artifactAllowlist(remote.catalog.Name(), options.perCatalogArtifacts); restrict {
+			src = newAllowlistPluginSource(src, allowed)
+		}
+		sources = append(sources, src)
 	}
-	return NewPluginFetcher(logger, nil, sources...)
+	return NewPluginFetcherWithOptions(logger, nil, options.fetcherOptions(), sources...)
+}
+
+func (o ChainCatalogOptions) fetcherOptions() []PluginFetcherOption {
+	mode := ChainModeBestEffort
+	if o.hasPluginChainMode {
+		mode = o.pluginChainMode
+	}
+	fetcherOpts := []PluginFetcherOption{WithFetcherChainMode(mode)}
+	if o.pluginWarningHandler != nil {
+		fetcherOpts = append(fetcherOpts, WithFetcherWarningHandler(o.pluginWarningHandler))
+	}
+	return fetcherOpts
+}
+
+// ParseConfiguredArtifactKinds parses raw config artifact kind strings into
+// typed ArtifactKind values. A nil/empty input returns nil ("all kinds"); a
+// non-empty input returns a non-nil slice (which may be empty when no entries
+// are valid, causing callers such as NewKindFilterCatalog to fail closed).
+func ParseConfiguredArtifactKinds(raw []string) []ArtifactKind {
+	if len(raw) == 0 {
+		return nil
+	}
+	kinds := make([]ArtifactKind, 0, len(raw))
+	for _, s := range raw {
+		if k, ok := ParseArtifactKind(s); ok {
+			kinds = append(kinds, k)
+		}
+	}
+	return kinds
+}
+
+// FilterCatalogKinds intersects requested artifact kinds against catCfg's
+// configured ArtifactKinds. It returns (effectiveKinds, true) when the catalog
+// can serve at least one requested kind, or (nil, false) when the catalog
+// should be skipped without contacting it. When requested is empty ("all
+// kinds"), effectiveKinds remains nil so callers enumerate once and filter via
+// NewKindFilterCatalog.
+func FilterCatalogKinds(catCfg config.CatalogConfig, requested []ArtifactKind) ([]ArtifactKind, bool) {
+	if len(catCfg.ArtifactKinds) > 0 && len(ParseConfiguredArtifactKinds(catCfg.ArtifactKinds)) == 0 {
+		return nil, false
+	}
+	if len(requested) == 0 {
+		return nil, true
+	}
+	filtered := make([]ArtifactKind, 0, len(requested))
+	for _, k := range requested {
+		if k == "" || catCfg.ServesArtifactKind(string(k)) {
+			filtered = append(filtered, k)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, false
+	}
+	return filtered, true
+}
+
+func servesAllPluginKinds(catCfg config.CatalogConfig) bool {
+	return catCfg.ServesArtifactKind(config.CatalogArtifactKindProvider) &&
+		catCfg.ServesArtifactKind(config.CatalogArtifactKindAuthHandler)
 }
 
 func applyChainCatalogOptions(opts []ChainCatalogOption) ChainCatalogOptions {
@@ -291,12 +398,24 @@ func buildLocalCatalog(logger logr.Logger, allowedCatalogs map[string]bool) (*Lo
 	return localCat, allowed, nil
 }
 
+type configuredRemoteCatalog struct {
+	catalog *RemoteCatalog
+	config  config.CatalogConfig
+}
+
 // buildConfiguredRemoteCatalogs builds the remote catalogs from cfg in chain
 // order: embedder/user OCI catalogs (config order, reserved names excluded),
 // then the official catalog unless disabled. Catalogs outside allowedCatalogs
-// are skipped. When strict is true a catalog that fails to build is a
-// CatalogBuildError; otherwise it is skipped.
-func buildConfiguredRemoteCatalogs(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger, allowedCatalogs map[string]bool, strict bool) ([]*RemoteCatalog, error) {
+// or rejected by filter are skipped. When strict is true a catalog that fails
+// to build is a CatalogBuildError; otherwise it is skipped.
+func buildConfiguredRemoteCatalogs(
+	cfg *config.Config,
+	authRegistry *auth.Registry,
+	logger logr.Logger,
+	allowedCatalogs map[string]bool,
+	strict bool,
+	filter func(config.CatalogConfig) bool,
+) ([]configuredRemoteCatalog, error) {
 	if cfg == nil {
 		return nil, nil
 	}
@@ -309,8 +428,12 @@ func buildConfiguredRemoteCatalogs(cfg *config.Config, authRegistry *auth.Regist
 		credStore = cs
 	}
 
-	var remotes []*RemoteCatalog
+	var remotes []configuredRemoteCatalog
 	add := func(catCfg config.CatalogConfig) error {
+		if filter != nil && !filter(catCfg) {
+			logger.V(1).Info("catalog excluded by artifact kind filter, skipping", "catalog", catCfg.Name, "artifactKinds", catCfg.ArtifactKinds)
+			return nil
+		}
 		remoteCat, err := buildRemoteCatalog(catCfg, credStore, authRegistry, logger)
 		if err != nil {
 			if strict {
@@ -318,7 +441,7 @@ func buildConfiguredRemoteCatalogs(cfg *config.Config, authRegistry *auth.Regist
 			}
 			return nil
 		}
-		remotes = append(remotes, remoteCat)
+		remotes = append(remotes, configuredRemoteCatalog{catalog: remoteCat, config: catCfg})
 		return nil
 	}
 
@@ -382,7 +505,7 @@ func artifactAllowlist(catalogName string, perCatalog map[string]PluginPolicy) (
 // versions without being shadowed by locally cached artifacts (e.g. plugin
 // update checks).
 func BuildRemoteCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger) (*ChainCatalog, error) {
-	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, nil, false)
+	remotes, err := buildConfiguredRemoteCatalogs(cfg, authRegistry, logger, nil, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -391,7 +514,11 @@ func BuildRemoteCatalogChain(cfg *config.Config, authRegistry *auth.Registry, lo
 	}
 	catalogs := make([]Catalog, 0, len(remotes))
 	for _, remote := range remotes {
-		catalogs = append(catalogs, remote)
+		var cat Catalog = remote.catalog
+		if len(remote.config.ArtifactKinds) > 0 {
+			cat = NewKindFilterCatalog(cat, ParseConfiguredArtifactKinds(remote.config.ArtifactKinds))
+		}
+		catalogs = append(catalogs, cat)
 	}
 	return NewChainCatalog(logger, catalogs...)
 }

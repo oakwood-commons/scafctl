@@ -13,10 +13,11 @@ import (
 
 // CatalogInfo describes a registered catalog for discovery purposes.
 type CatalogInfo struct {
-	Name     string `json:"name"               yaml:"name"               doc:"Catalog identifier" example:"official"`
-	Type     string `json:"type"               yaml:"type"               doc:"Catalog type (oci, filesystem)" example:"oci"`
-	Registry string `json:"registry,omitempty"  yaml:"registry,omitempty" doc:"OCI registry host" example:"ghcr.io"`
-	Default  bool   `json:"default,omitempty"   yaml:"default,omitempty"  doc:"Whether this is the default catalog"`
+	Name          string   `json:"name"                    yaml:"name"                    doc:"Catalog identifier" example:"official"`
+	Type          string   `json:"type"                    yaml:"type"                    doc:"Catalog type (oci, filesystem)" example:"oci"`
+	Registry      string   `json:"registry,omitempty"      yaml:"registry,omitempty"      doc:"OCI registry host" example:"ghcr.io"`
+	ArtifactKinds []string `json:"artifactKinds,omitempty" yaml:"artifactKinds,omitempty" doc:"Artifact kinds served by this catalog (empty means all kinds)" maxItems:"3"`
+	Default       bool     `json:"default,omitempty"       yaml:"default,omitempty"       doc:"Whether this is the default catalog"`
 }
 
 // RemoteIndex fetches the catalog index from a remote catalog and returns

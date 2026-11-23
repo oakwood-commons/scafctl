@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
 // readLock reads the solution.lock loaded with the source, so pinned
@@ -31,11 +32,22 @@ func (p *Packager) readLock(_ context.Context, st *pipelineState) (bool, error) 
 // resolvePlugins pins bundle.plugins to exact versions and digests.
 func (p *Packager) resolvePlugins(ctx context.Context, st *pipelineState) (bool, error) {
 	lgr := *logger.FromContext(ctx)
+	chainOpts := []catalog.ChainCatalogOption{
+		catalog.WithLocalCatalog(p.catalog),
+	}
+	if p.verify.Strict {
+		chainOpts = append(chainOpts, catalog.WithPluginChainMode(catalog.ChainModeStrict))
+	}
+	if w := writer.FromContext(ctx); w != nil {
+		chainOpts = append(chainOpts, catalog.WithPluginWarningHandler(func(msg string) {
+			w.WarnStderrf("%s", msg)
+		}))
+	}
 	pluginFetcher, err := catalog.BuildPluginFetcher(
 		config.FromContext(ctx),
 		auth.RegistryFromContext(ctx),
 		lgr,
-		catalog.WithLocalCatalog(p.catalog),
+		chainOpts...,
 	)
 	if err != nil {
 		return false, fmt.Errorf("failed to build plugin catalog chain: %w", err)

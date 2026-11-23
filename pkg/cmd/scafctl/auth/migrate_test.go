@@ -243,6 +243,21 @@ func TestBuildPluginFetchFunc_NilLoggerFallback(t *testing.T) {
 	}
 }
 
+func TestBuildPluginFetchFunc_FallbackWarningToStderr(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	var outBuf, errBuf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &outBuf, &errBuf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(context.Background(), w)
+
+	fn := buildPluginFetchFunc("mycli")
+	_, _ = fn(ctx, []solution.PluginDependency{
+		{Name: "nonexistent-auth-plugin", Kind: solution.PluginKindAuthHandler},
+	})
+	assert.Empty(t, outBuf.String(), "fallback path must not write to stdout")
+}
+
 func BenchmarkRunMigrate(b *testing.B) {
 	b.ReportAllocs()
 

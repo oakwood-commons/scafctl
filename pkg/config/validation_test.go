@@ -441,6 +441,94 @@ func TestConfig_Validate_ValidDiscoveryStrategy(t *testing.T) {
 	}
 }
 
+func TestValidCatalogArtifactKinds(t *testing.T) {
+	t.Parallel()
+
+	kinds := ValidCatalogArtifactKinds()
+	assert.Equal(t, []string{"solution", "provider", "auth-handler"}, kinds)
+	assert.True(t, IsValidCatalogArtifactKind("solution"))
+	assert.True(t, IsValidCatalogArtifactKind("provider"))
+	assert.True(t, IsValidCatalogArtifactKind("auth-handler"))
+	assert.False(t, IsValidCatalogArtifactKind(""))
+	assert.False(t, IsValidCatalogArtifactKind("plugin"))
+	assert.False(t, IsValidCatalogArtifactKind("SOLUTION"))
+}
+
+func TestCatalogConfig_Validate_ArtifactKinds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		kinds   []string
+		wantErr string
+	}{
+		{name: "nil means all kinds", kinds: nil},
+		{name: "empty slice means all kinds", kinds: []string{}},
+		{name: "solution only", kinds: []string{"solution"}},
+		{name: "all three valid kinds", kinds: []string{"solution", "provider", "auth-handler"}},
+		{name: "invalid kind rejected", kinds: []string{"solution", "bogus"}, wantErr: `artifactKinds[1]: invalid value "bogus"`},
+		{name: "empty string entry rejected", kinds: []string{""}, wantErr: `artifactKinds[0]: invalid value ""`},
+		{name: "duplicate kind rejected", kinds: []string{"solution", "solution"}, wantErr: `artifactKinds[1]: duplicate value "solution"`},
+		{
+			name:    "more than maxItems rejected",
+			kinds:   []string{"solution", "provider", "auth-handler", "solution"},
+			wantErr: "artifactKinds: 4 entries exceed the maximum of 3",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{
+				Catalogs: []CatalogConfig{
+					{
+						Name:          "corp",
+						Type:          CatalogTypeOCI,
+						URL:           "oci://registry.example.com/catalog",
+						ArtifactKinds: tc.kinds,
+					},
+				},
+			}
+			err := cfg.Validate()
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "catalogs[0]")
+				assert.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestCatalogConfig_ServesArtifactKind(t *testing.T) {
+	t.Parallel()
+
+	allKinds := CatalogConfig{Name: "all"}
+	assert.True(t, allKinds.ServesArtifactKind(CatalogArtifactKindSolution))
+	assert.True(t, allKinds.ServesArtifactKind(CatalogArtifactKindProvider))
+	assert.True(t, allKinds.ServesArtifactKind(CatalogArtifactKindAuthHandler))
+	assert.True(t, allKinds.ServesPluginKinds())
+
+	solutionsOnly := CatalogConfig{Name: "sols", ArtifactKinds: []string{CatalogArtifactKindSolution}}
+	assert.True(t, solutionsOnly.ServesArtifactKind(CatalogArtifactKindSolution))
+	assert.False(t, solutionsOnly.ServesArtifactKind(CatalogArtifactKindProvider))
+	assert.False(t, solutionsOnly.ServesArtifactKind(CatalogArtifactKindAuthHandler))
+	assert.False(t, solutionsOnly.ServesPluginKinds())
+
+	providersOnly := CatalogConfig{Name: "provs", ArtifactKinds: []string{CatalogArtifactKindProvider}}
+	assert.False(t, providersOnly.ServesArtifactKind(CatalogArtifactKindSolution))
+	assert.True(t, providersOnly.ServesArtifactKind(CatalogArtifactKindProvider))
+	assert.False(t, providersOnly.ServesArtifactKind(CatalogArtifactKindAuthHandler))
+	assert.True(t, providersOnly.ServesPluginKinds())
+
+	authOnly := CatalogConfig{Name: "auth", ArtifactKinds: []string{CatalogArtifactKindAuthHandler}}
+	assert.False(t, authOnly.ServesArtifactKind(CatalogArtifactKindSolution))
+	assert.False(t, authOnly.ServesArtifactKind(CatalogArtifactKindProvider))
+	assert.True(t, authOnly.ServesArtifactKind(CatalogArtifactKindAuthHandler))
+	assert.True(t, authOnly.ServesPluginKinds())
+}
+
 func TestLoggingConfig_Validate(t *testing.T) {
 	t.Parallel()
 

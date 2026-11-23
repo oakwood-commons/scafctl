@@ -70,7 +70,7 @@ func (s *Server) registerCatalogSearchTools() {
 	s.addTool(catalogListSolutionsTool, s.handleCatalogListSolutions)
 
 	catalogListRegisteredTool := mcp.NewTool("catalog_list_registered",
-		mcp.WithDescription("List all registered catalogs with their type, registry, and default status. Use this to discover which catalogs are available for search and listing."),
+		mcp.WithDescription("List all registered catalogs with their type, registry, artifactKinds, and default status. Use this to discover which catalogs are available for search and listing."),
 		mcp.WithTitleAnnotation("List Registered Catalogs"),
 		mcp.WithToolIcons(toolIcons["catalog"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -233,10 +233,8 @@ func (s *Server) listRemoteCatalogs(catalogFilter string) []search.SolutionEntry
 	return allEntries
 }
 
-// buildRemoteCatalogs creates RemoteCatalog instances for the requested scope.
-// catalogFilter: "" = default catalog (or official fallback), "all" = every
-// registered OCI catalog, specific name = that catalog only.
-// "local" should not reach here.
+// buildRemoteCatalogs creates RemoteCatalog instances for solution search and
+// solution listing. Catalogs restricted to non-solution artifactKinds are skipped.
 func (s *Server) buildRemoteCatalogs(catalogFilter string) []*catalog.RemoteCatalog {
 	cfg := s.resolveConfig()
 	if cfg == nil {
@@ -248,25 +246,26 @@ func (s *Server) buildRemoteCatalogs(catalogFilter string) []*catalog.RemoteCata
 		s.logger.V(1).Info("credential store not available for remote search", "error", err)
 	}
 
+	servesSolutions := func(catCfg config.CatalogConfig) bool {
+		return catCfg.ServesArtifactKind(config.CatalogArtifactKindSolution)
+	}
+
 	var targets []config.CatalogConfig
 
 	switch {
 	case catalogFilter == "":
-		// Default: search only the default catalog (or official if no default is set).
-		if catCfg, ok := cfg.GetDefaultCatalog(); ok && catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
+		// Default: search the default catalog when it serves solutions, otherwise
+		// fall back to the official catalog.
+		if catCfg, ok := cfg.GetDefaultCatalog(); ok && catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" && servesSolutions(*catCfg) {
 			targets = append(targets, *catCfg)
-		} else {
-			// Fall back to the official catalog when no explicit default is configured.
-			if catCfg, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok &&
-				catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" &&
-				!cfg.Settings.DisableOfficialCatalog {
-				targets = append(targets, *catCfg)
-			}
+		} else if catCfg, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok &&
+			catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" &&
+			!cfg.Settings.DisableOfficialCatalog && servesSolutions(*catCfg) {
+			targets = append(targets, *catCfg)
 		}
 	case strings.EqualFold(catalogFilter, "all"):
-		// Explicit "all": search every registered OCI catalog.
 		for _, catCfg := range cfg.Catalogs {
-			if catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
+			if catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" && servesSolutions(catCfg) {
 				if catCfg.Name == config.CatalogNameLocal {
 					continue
 				}
@@ -277,8 +276,7 @@ func (s *Server) buildRemoteCatalogs(catalogFilter string) []*catalog.RemoteCata
 			}
 		}
 	default:
-		// Specific catalog by name.
-		if catCfg, ok := cfg.GetCatalog(catalogFilter); ok && catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
+		if catCfg, ok := cfg.GetCatalog(catalogFilter); ok && catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" && servesSolutions(*catCfg) {
 			targets = append(targets, *catCfg)
 		}
 	}
@@ -294,6 +292,70 @@ func (s *Server) buildRemoteCatalogs(catalogFilter string) []*catalog.RemoteCata
 		result = append(result, rc)
 	}
 	return result
+}
+
+// buildPluginRemoteCatalogs creates Catalog instances for plugin listing,
+// skipping catalogs that serve neither provider nor auth-handler and wrapping
+// single-kind catalogs in KindFilterCatalog. When catalogFilter names a
+// configured catalog that is excluded by artifactKinds, configuredExcluded is
+// true so callers return an empty plugin list rather than an unknown-catalog error.
+func (s *Server) buildPluginRemoteCatalogs(catalogFilter string) ([]catalog.Catalog, bool) {
+	cfg := s.resolveConfig()
+	if cfg == nil {
+		return nil, false
+	}
+
+	credStore, err := catalog.NewCredentialStore(s.logger)
+	if err != nil {
+		s.logger.V(1).Info("credential store not available for remote plugin listing", "error", err)
+	}
+
+	var targets []config.CatalogConfig
+	var configuredExcluded bool
+
+	switch {
+	case catalogFilter == "":
+		for _, catCfg := range catalog.DefaultListCatalogs(cfg) {
+			if catCfg.URL != "" && catCfg.ServesPluginKinds() {
+				targets = append(targets, catCfg)
+			}
+		}
+	case strings.EqualFold(catalogFilter, "all"):
+		for _, catCfg := range cfg.Catalogs {
+			if catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" && catCfg.ServesPluginKinds() {
+				if catCfg.Name == config.CatalogNameLocal {
+					continue
+				}
+				if catCfg.Name == config.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog {
+					continue
+				}
+				targets = append(targets, catCfg)
+			}
+		}
+	default:
+		if catCfg, ok := cfg.GetCatalog(catalogFilter); ok && catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
+			if !catCfg.ServesPluginKinds() {
+				return nil, true
+			}
+			targets = append(targets, *catCfg)
+		}
+	}
+
+	var result []catalog.Catalog
+	for _, catCfg := range targets {
+		rc, buildErr := catalog.BuildRemoteCatalogFromConfig(catCfg, credStore, s.authReg, s.logger)
+		if buildErr != nil {
+			s.logger.V(1).Info("failed to build remote catalog, skipping",
+				"catalog", catCfg.Name, "error", buildErr)
+			continue
+		}
+		var cat catalog.Catalog = rc
+		if len(catCfg.ArtifactKinds) > 0 {
+			cat = catalog.NewKindFilterCatalog(cat, catalog.ParseConfiguredArtifactKinds(catCfg.ArtifactKinds))
+		}
+		result = append(result, cat)
+	}
+	return result, configuredExcluded
 }
 
 // listRegisteredCatalogs returns info about all configured catalogs.
@@ -321,10 +383,16 @@ func (s *Server) listRegisteredCatalogs() []search.CatalogInfo {
 			continue
 		}
 
+		var kinds []string
+		if len(catCfg.ArtifactKinds) > 0 {
+			kinds = make([]string, len(catCfg.ArtifactKinds))
+			copy(kinds, catCfg.ArtifactKinds)
+		}
 		info := search.CatalogInfo{
-			Name:    catCfg.Name,
-			Type:    catCfg.Type,
-			Default: catCfg.Name == defaultCatalog,
+			Name:          catCfg.Name,
+			Type:          catCfg.Type,
+			ArtifactKinds: kinds,
+			Default:       catCfg.Name == defaultCatalog,
 		}
 		if catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
 			registry, _ := catalog.ParseCatalogURL(catCfg.URL)

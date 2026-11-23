@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/kvx/pkg/core"
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -159,6 +160,70 @@ func TestRunRemoteAdd_WithAuthProvider(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "github", cat.AuthProvider)
 	assert.Equal(t, "repo", cat.AuthScope)
+}
+
+func TestRunRemoteAdd_WithArtifactKinds(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid artifact kinds persisted and deduplicated", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+		require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+		cliParams := settings.NewCliParams()
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		cmd := commandRemoteAdd(cliParams, ioStreams, "")
+		root := &cobra.Command{Use: "scafctl"}
+		root.PersistentFlags().String("config", configPath, "")
+		root.AddCommand(cmd)
+		root.SetArgs([]string{
+			"add", "solutions-reg",
+			"--type", "oci",
+			"--url", "oci://registry.example.com/solutions",
+			"--artifact-kind", "solution,provider",
+			"--artifact-kind", "solution",
+		})
+		root.SetContext(ctx)
+		require.NoError(t, root.Execute())
+
+		mgr := appconfig.NewManager(configPath)
+		cfg, err := mgr.Load()
+		require.NoError(t, err)
+
+		cat, ok := cfg.GetCatalog("solutions-reg")
+		require.True(t, ok)
+		assert.Equal(t, []string{"solution", "provider"}, cat.ArtifactKinds)
+	})
+
+	t.Run("invalid artifact kind rejected", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+		require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+		cliParams := settings.NewCliParams()
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		err := runRemoteAdd(ctx, &RemoteAddOptions{
+			IOStreams:     ioStreams,
+			CliParams:     cliParams,
+			ConfigPath:    configPath,
+			Name:          "bad-reg",
+			Type:          "oci",
+			URL:           "oci://registry.example.com/bad",
+			ArtifactKinds: []string{"bogus"},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `invalid artifact kind "bogus"`)
+	})
 }
 
 func TestRunRemoteAdd_InvalidType(t *testing.T) {
@@ -456,32 +521,18 @@ func TestCommandRemote_EmbedderBinaryName(t *testing.T) {
 	assert.Equal(t, "remote", cmd.Use)
 	assert.NotEmpty(t, cmd.Commands(), "subcommands should be registered for embedder binary")
 
-	// Both the canonical 'default' command and the hidden deprecated
-	// 'set-default' twin must render their help examples with the embedder
-	// binary name, never a hardcoded "scafctl".
-	var defaultCmd, setDefaultCmd *cobra.Command
+	// Every 'catalog remote' subcommand must render its help examples with the
+	// embedder binary name, never a hardcoded "scafctl".
 	for _, sub := range cmd.Commands() {
-		switch sub.Name() {
-		case "default":
-			defaultCmd = sub
-		case "set-default":
-			setDefaultCmd = sub
+		assert.Contains(t, sub.Long, "mycli catalog remote",
+			"%s Long examples must use the embedder binary name", sub.Name())
+		assert.NotContains(t, sub.Long, "scafctl catalog remote",
+			"%s Long must not hardcode scafctl", sub.Name())
+		if sub.Name() == "set-default" {
+			assert.Contains(t, sub.Deprecated, "mycli catalog remote default",
+				"deprecation message must point at the embedder binary")
 		}
 	}
-	require.NotNil(t, defaultCmd, "canonical 'default' command must be registered")
-	require.NotNil(t, setDefaultCmd, "deprecated 'set-default' twin must be registered")
-
-	assert.Contains(t, defaultCmd.Long, "mycli catalog remote default",
-		"canonical Long examples must use the embedder binary name")
-	assert.NotContains(t, defaultCmd.Long, "scafctl catalog remote",
-		"canonical Long must not hardcode scafctl")
-
-	assert.Contains(t, setDefaultCmd.Long, "mycli catalog remote set-default",
-		"deprecated twin Long examples must use the embedder binary name")
-	assert.NotContains(t, setDefaultCmd.Long, "scafctl catalog remote",
-		"deprecated twin Long must not hardcode scafctl")
-	assert.Contains(t, setDefaultCmd.Deprecated, "mycli catalog remote default",
-		"deprecation message must point at the embedder binary")
 }
 
 func TestRunRemoteList_Empty(t *testing.T) {
@@ -490,9 +541,10 @@ func TestRunRemoteList_Empty(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
-	err := os.WriteFile(configPath, []byte(""), 0o600)
+	err := os.WriteFile(configPath, []byte("settings:\n  disableOfficialCatalog: true\n"), 0o600)
 	require.NoError(t, err)
 
+	// Structured JSON format emits parseable empty array [] on stdout when no catalogs exist.
 	var stdout, stderr bytes.Buffer
 	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
 	cliParams := settings.NewCliParams()
@@ -504,6 +556,11 @@ func TestRunRemoteList_Empty(t *testing.T) {
 
 	err = runRemoteList(ctx, configPath, outputOpts)
 	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "local")
+
+	// Empty BinaryName falls back to settings.CliBinaryName cleanly.
+	assert.Equal(t, settings.CliBinaryName, remoteBinaryName(nil))
+	assert.Equal(t, settings.CliBinaryName, remoteBinaryName(&settings.Run{}))
 }
 
 // TestRunRemoteList_EmbedderConfigDefaults verifies that catalogs injected
@@ -563,7 +620,7 @@ func TestRemoteListSchema_ValidJSON(t *testing.T) {
 	require.True(t, ok, "items must have properties")
 
 	// Verify all RemoteListItem fields are in the schema.
-	expectedFields := []string{"name", "type", "url", "path", "authProvider", "authScope", "default"}
+	expectedFields := []string{"name", "type", "url", "path", "authProvider", "authScope", "artifactKinds", "default"}
 	for _, field := range expectedFields {
 		_, exists := props[field]
 		assert.True(t, exists, "schema missing field %q", field)
@@ -647,6 +704,8 @@ catalogs:
     type: oci
     url: oci://ghcr.io/myorg/catalog
     authProvider: gh-token
+    artifactKinds:
+      - solution
   - name: local
     type: filesystem
     path: ./catalogs
@@ -690,11 +749,13 @@ settings:
 	assert.Equal(t, "oci", prod.Type)
 	assert.Equal(t, "oci://ghcr.io/myorg/catalog", prod.URL)
 	assert.Equal(t, "gh-token", prod.AuthProvider)
+	assert.Equal(t, []string{"solution"}, prod.ArtifactKinds)
 	assert.True(t, prod.Default, "prod should be the default catalog")
 
 	local, ok := byName["local"]
 	require.True(t, ok, "local catalog must appear in output")
 	assert.Equal(t, "filesystem", local.Type)
+	assert.Equal(t, []string{}, local.ArtifactKinds, "unset artifactKinds must serialize as [] not null")
 	assert.False(t, local.Default)
 }
 
@@ -703,16 +764,18 @@ func TestCommandRemoteList_TUISnapshot(t *testing.T) {
 
 	items := []RemoteListItem{
 		{
-			Name:         "prod",
-			Type:         "oci",
-			URL:          "oci://ghcr.io/myorg/catalog",
-			AuthProvider: "gh-token",
-			Default:      true,
+			Name:          "prod",
+			Type:          "oci",
+			URL:           "oci://ghcr.io/myorg/catalog",
+			AuthProvider:  "gh-token",
+			ArtifactKinds: []string{"solution"},
+			Default:       true,
 		},
 		{
-			Name: "local",
-			Type: "filesystem",
-			Path: "./catalogs",
+			Name:          "local",
+			Type:          "filesystem",
+			Path:          "./catalogs",
+			ArtifactKinds: []string{},
 		},
 	}
 
@@ -721,13 +784,55 @@ func TestCommandRemoteList_TUISnapshot(t *testing.T) {
 		kvx.WithColumnHints(remoteListColumnHints),
 		kvx.WithDimensions(120, 30),
 		kvx.WithNoColor(true),
-		kvx.WithAppName("scafctl catalog remote list"),
+		kvx.WithAppName("mycli catalog remote list"),
 	)
 	require.NoError(t, err)
 
-	// Card list should render both items with name as title and url/path as subtitle.
+	// Card list should render both items with name as title and url as subtitle.
+	assert.Contains(t, out, "Remote Catalogs", "snapshot header must show schema collectionTitle")
 	assert.Contains(t, out, "prod", "snapshot must contain the OCI catalog name")
+	assert.Contains(t, out, "oci://ghcr.io/myorg/catalog", "snapshot must show OCI catalog URL subtitle")
 	assert.Contains(t, out, "local", "snapshot must contain the filesystem catalog name")
 	assert.Contains(t, out, "oci", "snapshot must show the OCI type badge")
 	assert.Contains(t, out, "filesystem", "snapshot must show the filesystem type badge")
+}
+
+func TestCommandRemoteList_TableWidths(t *testing.T) {
+	t.Parallel()
+
+	items := []RemoteListItem{
+		{
+			Name:          "company-solutions",
+			Type:          "oci",
+			URL:           "oci://us-central1-docker.pkg.dev/my-project/solutions",
+			AuthProvider:  "gcp",
+			ArtifactKinds: []string{"solution", "provider"},
+			Default:       true,
+		},
+		{
+			Name:          "official",
+			Type:          "oci",
+			URL:           "oci://ghcr.io/oakwood-commons",
+			AuthProvider:  "github",
+			ArtifactKinds: []string{},
+			Default:       false,
+		},
+	}
+
+	root, err := core.LoadObject(items)
+	require.NoError(t, err)
+
+	for _, width := range []int{90, 100, 120} {
+		rendered := tui.RenderTable(root, tui.TableOptions{
+			Bordered:      true,
+			Width:         width,
+			NoColor:       true,
+			ColumnOrder:   []string{"name", "type", "url", "authProvider", "artifactKinds", "default"},
+			ColumnHints:   remoteListColumnHints,
+			HiddenColumns: []string{"path", "authScope"},
+		})
+		assert.Contains(t, rendered, "Name", "width %d must render bordered table header (not flat KV fallback)", width)
+		assert.Contains(t, rendered, "Kinds", "width %d must render Kinds column header", width)
+		assert.Contains(t, rendered, "official", "width %d must render official row", width)
+	}
 }

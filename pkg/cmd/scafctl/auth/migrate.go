@@ -9,17 +9,14 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
-	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authmigrate "github.com/oakwood-commons/scafctl/pkg/auth/migrate"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
-	"github.com/oakwood-commons/scafctl/pkg/catalog"
-	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -29,26 +26,12 @@ import (
 // fetches plugins. This is the production wiring; tests can supply their own.
 func buildPluginFetchFunc(binaryName string) authmigrate.FetchFunc {
 	return func(ctx context.Context, deps []solution.PluginDependency) ([]plugin.FetchResult, error) {
-		appCfg := config.FromContext(ctx)
-		var chainLogger logr.Logger
-		lgr := logger.FromContext(ctx)
-		if lgr != nil {
-			chainLogger = *lgr
-		} else {
-			chainLogger = logr.Discard()
-		}
-
-		catalogFetcher, err := catalog.BuildPluginFetcher(appCfg, auth.RegistryFromContext(ctx), chainLogger)
+		fetcher, err := prepare.BuildPluginFetcherWithConfig(ctx, prepare.PluginFetcherOverrides{
+			BinaryName: binaryName,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("building plugin catalog fetcher: %w", err)
 		}
-
-		fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-			CatalogFetcher: catalogFetcher,
-			BinaryName:     binaryName,
-			Logger:         chainLogger,
-		})
-
 		return fetcher.FetchPlugins(ctx, deps, nil)
 	}
 }

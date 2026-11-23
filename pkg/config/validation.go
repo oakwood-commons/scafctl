@@ -222,6 +222,23 @@ func (c *CatalogConfig) Validate() error {
 		return fmt.Errorf("discoveryStrategy: invalid value %q, must be one of: %v", c.DiscoveryStrategy, ValidDiscoveryStrategies())
 	}
 
+	// Validate artifactKinds if specified (enforce maxItems and allowed values at load time)
+	if len(c.ArtifactKinds) > MaxCatalogArtifactKinds {
+		return fmt.Errorf("artifactKinds: %d entries exceed the maximum of %d", len(c.ArtifactKinds), MaxCatalogArtifactKinds)
+	}
+	if len(c.ArtifactKinds) > 0 {
+		seen := make(map[string]bool, len(c.ArtifactKinds))
+		for i, kind := range c.ArtifactKinds {
+			if !IsValidCatalogArtifactKind(kind) {
+				return fmt.Errorf("artifactKinds[%d]: invalid value %q, must be one of: %v", i, kind, ValidCatalogArtifactKinds())
+			}
+			if seen[kind] {
+				return fmt.Errorf("artifactKinds[%d]: duplicate value %q", i, kind)
+			}
+			seen[kind] = true
+		}
+	}
+
 	// Validate per-catalog HTTP client config if present
 	if c.HTTPClient != nil {
 		if err := c.HTTPClient.Validate(); err != nil {

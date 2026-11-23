@@ -189,15 +189,10 @@ func runServe(ctx context.Context, opts *Options) error {
 			pluginCache = mc
 		}
 	}
-	if fetcher, fetchErr := prepare.BuildPluginFetcherWithConfig(ctx, prepare.PluginFetcherOverrides{
-		AllowedCatalogs:      catalogNames,
-		ChainAllowedCatalogs: catalogNames,
-		PerCatalogArtifacts:  perCatalog,
-		Cache:                pluginCache,
-		NoCache:              cfg.APIServer.Plugins.DisableDiskCache,
-		// The server only runs published plugins, never ones built on its host.
-		DisallowLocalBuilds: true,
-	}); fetchErr == nil {
+	if fetcher, fetchErr := prepare.BuildPluginFetcherWithConfig(
+		ctx,
+		buildServerPluginFetcherOverrides(catalogNames, perCatalog, pluginCache, cfg.APIServer.Plugins.DisableDiskCache),
+	); fetchErr == nil {
 		pluginFetcher = fetcher
 	} else if errors.As(fetchErr, new(*catalog.CatalogBuildError)) {
 		return fmt.Errorf("building plugin fetcher: %w", fetchErr)
@@ -265,6 +260,26 @@ func runServe(ctx context.Context, opts *Options) error {
 
 	// Start server (blocks until SIGINT/SIGTERM)
 	return srv.Start()
+}
+
+func buildServerPluginFetcherOverrides(
+	catalogNames []string,
+	perCatalog map[string]catalog.PluginPolicy,
+	pluginCache *plugin.Cache,
+	disableDiskCache bool,
+) prepare.PluginFetcherOverrides {
+	strictChain := catalog.ChainModeStrict
+	return prepare.PluginFetcherOverrides{
+		AllowedCatalogs:      catalogNames,
+		ChainAllowedCatalogs: catalogNames,
+		PerCatalogArtifacts:  perCatalog,
+		Cache:                pluginCache,
+		NoCache:              disableDiskCache,
+		// The server only runs published plugins, never ones built on its host,
+		// and never falls through past an unavailable/unauthenticated catalog.
+		DisallowLocalBuilds: true,
+		ChainMode:           &strictChain,
+	}
 }
 
 // emitStartupWarnings writes each startup warning to stderr via w.

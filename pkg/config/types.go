@@ -7,6 +7,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -79,8 +80,83 @@ type CatalogConfig struct {
 	AuthProvider      string            `json:"authProvider,omitempty" yaml:"authProvider,omitempty" mapstructure:"authProvider" doc:"Auth handler name for automatic token injection (e.g. github, gcp, entra)" maxLength:"64" example:"github"`
 	AuthScope         string            `json:"authScope,omitempty" yaml:"authScope,omitempty" mapstructure:"authScope" doc:"OAuth scope for auth provider token requests" maxLength:"1024" example:"https://management.azure.com/.default"`
 	DiscoveryStrategy DiscoveryStrategy `json:"discoveryStrategy,omitempty" yaml:"discoveryStrategy,omitempty" mapstructure:"discoveryStrategy" doc:"How artifacts are discovered: auto (API then index fallback), index (index only), api (API only)" example:"auto" maxLength:"10"`
+	ArtifactKinds     []string          `json:"artifactKinds,omitempty" yaml:"artifactKinds,omitempty" mapstructure:"artifactKinds" doc:"Artifact kinds served by this catalog (solution, provider, auth-handler); empty means all kinds" maxItems:"3"`
 	Metadata          map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty" mapstructure:"metadata" doc:"Additional metadata"`
 	HTTPClient        *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"Per-catalog HTTP client overrides (inherits from global)"`
+}
+
+// CatalogArtifactKind constants define the artifact kinds a catalog can serve.
+// Kept in sync with catalog.ArtifactKind values without introducing an import cycle.
+const (
+	CatalogArtifactKindSolution    = "solution"
+	CatalogArtifactKindProvider    = "provider"
+	CatalogArtifactKindAuthHandler = "auth-handler"
+
+	// MaxCatalogArtifactKinds is the maximum number of artifactKinds entries per catalog.
+	MaxCatalogArtifactKinds = 3
+)
+
+// ValidCatalogArtifactKinds returns the list of valid catalog artifact kinds.
+func ValidCatalogArtifactKinds() []string {
+	return []string{
+		CatalogArtifactKindSolution,
+		CatalogArtifactKindProvider,
+		CatalogArtifactKindAuthHandler,
+	}
+}
+
+// IsValidCatalogArtifactKind returns true if the given artifact kind is valid.
+func IsValidCatalogArtifactKind(k string) bool {
+	for _, valid := range ValidCatalogArtifactKinds() {
+		if k == valid {
+			return true
+		}
+	}
+	return false
+}
+
+// ServesArtifactKind reports whether the catalog serves the given artifact kind.
+// An empty ArtifactKinds list means all kinds are served.
+func (c CatalogConfig) ServesArtifactKind(kind string) bool {
+	if len(c.ArtifactKinds) == 0 {
+		return true
+	}
+	for _, k := range c.ArtifactKinds {
+		if k == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// ServesPluginKinds reports whether the catalog serves at least one plugin
+// artifact kind (provider or auth-handler).
+func (c CatalogConfig) ServesPluginKinds() bool {
+	return c.ServesArtifactKind(CatalogArtifactKindProvider) ||
+		c.ServesArtifactKind(CatalogArtifactKindAuthHandler)
+}
+
+// NormalizeCatalogArtifactKinds trims whitespace, validates each entry against
+// ValidCatalogArtifactKinds, and deduplicates while preserving order. An empty
+// input returns nil, nil (meaning all artifact kinds).
+func NormalizeCatalogArtifactKinds(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		k := strings.TrimSpace(entry)
+		if !IsValidCatalogArtifactKind(k) {
+			return nil, fmt.Errorf("invalid artifact kind %q, must be one of: %s",
+				k, strings.Join(ValidCatalogArtifactKinds(), ", "))
+		}
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	return out, nil
 }
 
 // AuthConfig holds authentication settings for a catalog.

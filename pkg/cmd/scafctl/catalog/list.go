@@ -274,6 +274,12 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 		}
 
 		for _, catCfg := range remoteCatalogs {
+			catKinds, serves := catalog.FilterCatalogKinds(catCfg, kinds)
+			if !serves {
+				w.Verbosef("Skipping remote catalog %q (configured artifactKinds do not include requested kind).", catCfg.Name)
+				continue
+			}
+
 			w.Verbosef("Searching remote catalog %q...", catCfg.Name)
 			remoteOpts := &ListOptions{
 				Name:      opts.Name,
@@ -284,21 +290,21 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 				CliParams: opts.CliParams,
 				IOStreams: opts.IOStreams,
 			}
-			remoteArtifacts, remoteDegraded, remoteErr := listRemoteArtifacts(ctx, remoteOpts, kinds)
+			remoteArtifacts, remoteDegraded, remoteErr := listRemoteArtifacts(ctx, remoteOpts, catKinds)
 			if remoteErr != nil {
-				if catalog.IsEnumerationNotSupported(remoteErr) {
+				switch {
+				case catalog.IsEnumerationNotSupported(remoteErr):
 					w.Verbosef("Catalog %q does not support enumeration, skipping.", catCfg.Name)
-				} else {
+				case opts.Name != "" && catalog.IsNotFound(remoteErr):
+					w.Verbosef("Artifact %q not found in remote catalog %q.", opts.Name, catCfg.Name)
+				case opts.ShowAll:
 					// In multi-catalog mode (--all), demote errors to verbose.
-					// In single-default mode, show as warnings.
-					if opts.ShowAll {
-						w.Verbosef("Skipping catalog %q: %v", catCfg.Name, remoteErr)
-					} else {
-						w.WarnStderrf("failed to list from remote catalog %q: %v", catCfg.Name, remoteErr)
-						if catalogURL, resolveErr := catalog.ResolveCatalogURL(ctx, catCfg.Name); resolveErr == nil {
-							registry, _ := catalog.ParseCatalogURL(catalogURL)
-							hintOnAuthError(ctx, w, registry, remoteErr)
-						}
+					w.Verbosef("Skipping catalog %q: %v", catCfg.Name, remoteErr)
+				default:
+					w.WarnStderrf("failed to list from remote catalog %q: %v", catCfg.Name, remoteErr)
+					if catalogURL, resolveErr := catalog.ResolveCatalogURL(ctx, catCfg.Name); resolveErr == nil {
+						registry, _ := catalog.ParseCatalogURL(catalogURL)
+						hintOnAuthError(ctx, w, registry, remoteErr)
 					}
 				}
 				continue
@@ -547,7 +553,13 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kinds []catalog
 
 	// Scope credential-rejection tracking to this catalog's listing.
 	ctx = catalog.WithCredentialRejections(ctx)
-	result, listErr := catalog.ListAcrossKinds(ctx, remoteCatalog, kinds, opts.Name, *lgr)
+	var targetCatalog catalog.Catalog = remoteCatalog
+	if cfg := appconfig.FromContext(ctx); cfg != nil {
+		if catCfg, ok := cfg.GetCatalog(opts.Catalog); ok && len(catCfg.ArtifactKinds) > 0 {
+			targetCatalog = catalog.NewKindFilterCatalog(remoteCatalog, catalog.ParseConfiguredArtifactKinds(catCfg.ArtifactKinds))
+		}
+	}
+	result, listErr := catalog.ListAcrossKinds(ctx, targetCatalog, kinds, opts.Name, *lgr)
 
 	// If stored credentials were rejected the listing fell back to anonymous
 	// access, so it is degraded/incomplete rather than authoritative.

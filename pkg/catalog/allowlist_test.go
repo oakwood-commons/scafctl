@@ -272,3 +272,237 @@ func TestAllowlistPluginSource_NameAndUnwrap(t *testing.T) {
 	assert.Equal(t, "inner", src.Name())
 	assert.Same(t, inner, src.unwrapPluginSource())
 }
+
+type countingCatalogMock struct {
+	allowlistMock
+	calls int
+}
+
+func (m *countingCatalogMock) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
+	m.calls++
+	return m.allowlistMock.Fetch(ctx, ref)
+}
+
+func (m *countingCatalogMock) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+	m.calls++
+	return m.allowlistMock.FetchWithBundle(ctx, ref)
+}
+
+func (m *countingCatalogMock) FetchWithLayer(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+	m.calls++
+	return m.allowlistMock.FetchWithLayer(ctx, ref, mediaTypes...)
+}
+
+func (m *countingCatalogMock) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	m.calls++
+	return m.allowlistMock.Resolve(ctx, ref)
+}
+
+func (m *countingCatalogMock) List(_ context.Context, _ ArtifactKind, _ string) ([]ArtifactInfo, error) {
+	m.calls++
+	return []ArtifactInfo{
+		{Reference: Reference{Name: "sol-1", Kind: ArtifactKindSolution}},
+		{Reference: Reference{Name: "prov-1", Kind: ArtifactKindProvider}},
+	}, nil
+}
+
+func (m *countingCatalogMock) Exists(ctx context.Context, ref Reference) (bool, error) {
+	m.calls++
+	return m.allowlistMock.Exists(ctx, ref)
+}
+
+func (m *countingCatalogMock) FetchByPlatform(_ context.Context, ref Reference, _ string) ([]byte, ArtifactInfo, error) {
+	m.calls++
+	return []byte("bin"), ArtifactInfo{Reference: ref, Catalog: m.name}, nil
+}
+
+func (m *countingCatalogMock) ListPlatforms(_ context.Context, _ Reference) ([]string, error) {
+	m.calls++
+	return []string{"linux/amd64"}, nil
+}
+
+func (m *countingCatalogMock) ResolveContentDigest(_ context.Context, ref Reference, _, _ string) (ContentDigestInfo, error) {
+	m.calls++
+	return ContentDigestInfo{ArtifactInfo: ArtifactInfo{Reference: ref, Catalog: m.name}, ContentDigest: "sha256:abc"}, nil
+}
+
+func TestKindFilterCatalog(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("empty allowedKinds permits all kinds", func(t *testing.T) {
+		t.Parallel()
+		inner := &countingCatalogMock{allowlistMock: allowlistMock{name: "corp"}}
+		cat := NewKindFilterCatalog(inner, nil)
+
+		assert.Equal(t, "corp", cat.Name())
+		assert.Same(t, inner, cat.Inner())
+
+		for _, kind := range []ArtifactKind{ArtifactKindSolution, ArtifactKindProvider, ArtifactKindAuthHandler} {
+			ref := Reference{Name: "item", Kind: kind}
+			_, err := cat.Resolve(ctx, ref)
+			require.NoError(t, err)
+		}
+		assert.Equal(t, 3, inner.calls)
+	})
+
+	t.Run("solution-only catalog rejects plugin kinds with zero inner calls", func(t *testing.T) {
+		t.Parallel()
+		inner := &countingCatalogMock{allowlistMock: allowlistMock{name: "corp"}}
+		cat := NewKindFilterCatalog(inner, []ArtifactKind{ArtifactKindSolution})
+
+		provRef := Reference{Name: "exec", Kind: ArtifactKindProvider}
+		_, err := cat.Resolve(ctx, provRef)
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+
+		_, _, err = cat.Fetch(ctx, provRef)
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+
+		_, _, _, err = cat.FetchWithBundle(ctx, provRef) //nolint:dogsled // testing error path
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+
+		_, _, _, err = cat.FetchWithLayer(ctx, provRef, MediaTypeSolutionLock) //nolint:dogsled // testing error path
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+
+		_, _, err = cat.FetchByPlatform(ctx, provRef, "linux/amd64")
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+
+		_, err = cat.ListPlatforms(ctx, provRef)
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+
+		_, err = cat.ResolveContentDigest(ctx, provRef, "linux/amd64", MediaTypeProviderBinary)
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+
+		exists, err := cat.Exists(ctx, provRef)
+		require.NoError(t, err)
+		assert.False(t, exists)
+
+		listed, err := cat.List(ctx, ArtifactKindProvider, "")
+		require.NoError(t, err)
+		assert.Empty(t, listed)
+
+		assert.Zero(t, inner.calls, "unserved kind must never touch inner catalog")
+
+		// Served kind passes through.
+		solRef := Reference{Name: "starter", Kind: ArtifactKindSolution}
+		info, err := cat.Resolve(ctx, solRef)
+		require.NoError(t, err)
+		assert.Equal(t, "starter", info.Reference.Name)
+
+		// Unscoped List filters returned kinds.
+		allListed, err := cat.List(ctx, "", "")
+		require.NoError(t, err)
+		require.Len(t, allListed, 1)
+		assert.Equal(t, ArtifactKindSolution, allListed[0].Reference.Kind)
+
+		// Store and Delete pass through unrestricted.
+		_, err = cat.Store(ctx, provRef, []byte("x"), nil, nil, false)
+		require.NoError(t, err)
+		require.NoError(t, cat.Delete(ctx, provRef))
+
+		// Kindless Reference probes only allowed kinds (solution) and never unserved kinds.
+		kindlessRef := Reference{Name: "starter"}
+		resolvedKindless, err := cat.Resolve(ctx, kindlessRef)
+		require.NoError(t, err)
+		assert.Equal(t, "starter", resolvedKindless.Reference.Name)
+		_, fetchedKindless, err := cat.Fetch(ctx, kindlessRef)
+		require.NoError(t, err)
+		assert.Equal(t, "starter", fetchedKindless.Reference.Name)
+		_, _, bundledKindless, err := cat.FetchWithBundle(ctx, kindlessRef)
+		require.NoError(t, err)
+		assert.Equal(t, "starter", bundledKindless.Reference.Name)
+		_, _, layeredKindless, err := cat.FetchWithLayer(ctx, kindlessRef, MediaTypeSolutionLock)
+		require.NoError(t, err)
+		assert.Equal(t, "starter", layeredKindless.Reference.Name)
+		existsKindless, err := cat.Exists(ctx, kindlessRef)
+		require.NoError(t, err)
+		assert.True(t, existsKindless)
+
+		// Non-nil empty slice denies all kinds (fail-closed, matching NewAllowlistCatalog).
+		denyAll := NewKindFilterCatalog(inner, []ArtifactKind{})
+		_, err = denyAll.Resolve(ctx, solRef)
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+		_, err = denyAll.Resolve(ctx, kindlessRef)
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+		emptyListed, err := denyAll.List(ctx, "", "")
+		require.NoError(t, err)
+		assert.Empty(t, emptyListed)
+
+		// Served platform-aware methods pass through when kind is allowed.
+		provCat := NewKindFilterCatalog(inner, []ArtifactKind{ArtifactKindProvider})
+		_, _, err = provCat.FetchByPlatform(ctx, provRef, "linux/amd64")
+		require.NoError(t, err)
+		_, err = provCat.ListPlatforms(ctx, provRef)
+		require.NoError(t, err)
+		_, err = provCat.ResolveContentDigest(ctx, provRef, "linux/amd64", MediaTypeProviderBinary)
+		require.NoError(t, err)
+	})
+}
+
+func BenchmarkKindFilterPluginSource(b *testing.B) {
+	inner := okSource("providers-only")
+	src := newKindFilterPluginSource(inner, []ArtifactKind{ArtifactKindProvider})
+	ctx := b.Context()
+	query := ArtifactQuery{Name: "my-plugin", Kind: ArtifactKindAuthHandler}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = src.Find(ctx, query)
+	}
+}
+
+func TestKindFilterPluginSource(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	refWithKind := func(kind ArtifactKind) Reference {
+		r := testRef("my-plugin", "1.0.0")
+		r.Kind = kind
+		return r
+	}
+
+	ops := map[string]func(s PluginSource, kind ArtifactKind) (string, error){
+		"FetchByPlatform": func(s PluginSource, kind ArtifactKind) (string, error) {
+			_, info, err := s.FetchByPlatform(ctx, refWithKind(kind), "linux/amd64")
+			return info.Catalog, err
+		},
+		"ListPlatforms": func(s PluginSource, kind ArtifactKind) (string, error) {
+			platforms, err := s.ListPlatforms(ctx, refWithKind(kind))
+			if len(platforms) > 0 {
+				return platforms[0], err
+			}
+			return "", err
+		},
+		"ResolveContentDigest": func(s PluginSource, kind ArtifactKind) (string, error) {
+			info, err := s.ResolveContentDigest(ctx, refWithKind(kind), "linux/amd64", MediaTypeProviderBinary)
+			return info.Catalog, err
+		},
+		"Find": func(s PluginSource, kind ArtifactKind) (string, error) {
+			info, err := s.Find(ctx, ArtifactQuery{Name: "my-plugin", Kind: kind})
+			return info.Catalog, err
+		},
+	}
+
+	for opName, op := range ops {
+		t.Run(opName, func(t *testing.T) {
+			t.Parallel()
+
+			inner := okSource("providers-only")
+			src := newKindFilterPluginSource(inner, []ArtifactKind{ArtifactKindProvider})
+			assert.Equal(t, "providers-only", src.Name())
+			assert.Same(t, inner, src.unwrapPluginSource())
+
+			// Unserved kind returns ArtifactNotFoundError with zero inner calls.
+			_, err := op(src, ArtifactKindAuthHandler)
+			require.ErrorIs(t, err, ErrArtifactNotFound)
+			assert.Zero(t, inner.calls)
+
+			// Served kind reaches inner source.
+			got, err := op(src, ArtifactKindProvider)
+			require.NoError(t, err)
+			assert.Equal(t, "providers-only", got)
+			assert.Equal(t, 1, inner.calls)
+		})
+	}
+}

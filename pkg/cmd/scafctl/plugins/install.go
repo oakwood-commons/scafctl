@@ -11,11 +11,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
-	"github.com/go-logr/logr"
-	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
-	"github.com/oakwood-commons/scafctl/pkg/catalog"
-	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -24,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -114,7 +111,6 @@ func runInstall(ctx context.Context, opts *InstallOptions, args []string) error 
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
 	}
-	lgr := logger.FromContext(ctx)
 
 	// Determine plugins: from positional args (standalone) or solution file.
 	var plugins []solution.PluginDependency
@@ -159,30 +155,27 @@ func runInstall(ctx context.Context, opts *InstallOptions, args []string) error 
 		return nil
 	}
 
-	// Build catalog chain from config
-	appCfg := config.FromContext(ctx)
-	var chainLogger logr.Logger
-	if lgr != nil {
-		chainLogger = *lgr
-	} else {
-		chainLogger = logr.Discard()
+	// When installing from a solution with an adjacent solution.lock, pin
+	// matching entries to their exact locked version so lock digest and catalog
+	// provenance are enforced and never fall through to another catalog.
+	if len(lockPlugins) > 0 {
+		lf := &bundler.LockFile{Version: bundler.LockFileVersion, Plugins: lockPlugins}
+		for i, dep := range plugins {
+			if lp := lf.FindPluginByVersionConstraint(dep); lp != nil && lp.Version != "" {
+				plugins[i].Version = lp.Version
+			}
+		}
 	}
 
-	catalogFetcher, err := catalog.BuildPluginFetcher(appCfg, auth.RegistryFromContext(ctx), chainLogger)
+	fetcher, err := prepare.BuildPluginFetcherWithConfig(ctx, prepare.PluginFetcherOverrides{
+		Cache:    plugin.NewCache(opts.CacheDir),
+		Platform: opts.Platform,
+		NoCache:  opts.NoCache,
+	})
 	if err != nil {
 		w.Errorf("failed to build plugin catalog fetcher: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
-
-	// Create the fetcher
-	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		CatalogFetcher: catalogFetcher,
-		Cache:          plugin.NewCache(opts.CacheDir),
-		Platform:       opts.Platform,
-		NoCache:        opts.NoCache,
-		BinaryName:     settings.BinaryNameFromContext(ctx),
-		Logger:         chainLogger,
-	})
 
 	// Fetch all plugins
 	w.Infof("Installing %d plugin(s)...", len(plugins))

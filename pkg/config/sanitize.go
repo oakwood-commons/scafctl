@@ -3,6 +3,8 @@
 
 package config
 
+import "slices"
+
 // RedactedValue is the placeholder inserted for sensitive fields.
 const RedactedValue = "***REDACTED***"
 
@@ -32,13 +34,14 @@ type SanitizedConfig struct {
 
 // SanitizedCatalog redacts auth tokens from catalog config.
 type SanitizedCatalog struct {
-	Name     string            `json:"name" yaml:"name" doc:"Catalog name" maxLength:"256" example:"my-catalog"`
-	Type     string            `json:"type" yaml:"type" doc:"Catalog type" maxLength:"64" example:"git"`
-	Path     string            `json:"path,omitempty" yaml:"path,omitempty" doc:"Local filesystem path" maxLength:"1024" example:"/path/to/catalog"`
-	URL      string            `json:"url,omitempty" yaml:"url,omitempty" doc:"Remote URL" maxLength:"2048" example:"https://github.com/org/catalog"`
-	Insecure bool              `json:"insecure,omitempty" yaml:"insecure,omitempty" doc:"Allow insecure TLS/HTTP for local development and test registries"`
-	Auth     *SanitizedCatAuth `json:"auth,omitempty" yaml:"auth,omitempty" doc:"Authentication settings (redacted)"`
-	Metadata map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty" doc:"Additional metadata"`
+	Name          string            `json:"name" yaml:"name" doc:"Catalog name" maxLength:"256" example:"my-catalog"`
+	Type          string            `json:"type" yaml:"type" doc:"Catalog type" maxLength:"64" example:"git"`
+	Path          string            `json:"path,omitempty" yaml:"path,omitempty" doc:"Local filesystem path" maxLength:"1024" example:"/path/to/catalog"`
+	URL           string            `json:"url,omitempty" yaml:"url,omitempty" doc:"Remote URL" maxLength:"2048" example:"https://github.com/org/catalog"`
+	Insecure      bool              `json:"insecure,omitempty" yaml:"insecure,omitempty" doc:"Allow insecure TLS/HTTP for local development and test registries"`
+	Auth          *SanitizedCatAuth `json:"auth,omitempty" yaml:"auth,omitempty" doc:"Authentication settings (redacted)"`
+	ArtifactKinds []string          `json:"artifactKinds,omitempty" yaml:"artifactKinds,omitempty" doc:"Artifact kinds served by this catalog (solution, provider, auth-handler); empty means all kinds" maxItems:"3"`
+	Metadata      map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty" doc:"Additional metadata"`
 }
 
 // SanitizedCatAuth contains only non-sensitive catalog auth fields.
@@ -244,12 +247,13 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 	s.Catalogs = make([]SanitizedCatalog, 0, len(cfg.Catalogs))
 	for _, cat := range cfg.Catalogs {
 		sc := SanitizedCatalog{
-			Name:     cat.Name,
-			Type:     cat.Type,
-			Path:     cat.Path,
-			URL:      cat.URL,
-			Insecure: cat.Insecure,
-			Metadata: cat.Metadata,
+			Name:          cat.Name,
+			Type:          cat.Type,
+			Path:          cat.Path,
+			URL:           cat.URL,
+			Insecure:      cat.Insecure,
+			ArtifactKinds: slices.Clone(cat.ArtifactKinds),
+			Metadata:      cat.Metadata,
 		}
 		if cat.Auth != nil {
 			sc.Auth = &SanitizedCatAuth{
