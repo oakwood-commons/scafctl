@@ -908,7 +908,8 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 			cleanup()
 		},
 		Annotations: map[string]string{
-			"commandType": "main",
+			"commandType":    "main",
+			"configDefaults": string(opts.ConfigDefaults),
 		},
 	}
 

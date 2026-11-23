@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	cmdflags "github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	cmdlint "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/flags"
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
@@ -1081,10 +1082,8 @@ func setResolverHelpFunc(cmd *cobra.Command, cliParams *settings.Run) {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		if _, ok := settings.FromContext(ctx); !ok && cliParams != nil {
-			ctx = settings.IntoContext(ctx, cliParams)
-			c.SetContext(ctx)
-		}
+		ctx = helpDiscoveryContext(ctx, c, cliParams)
+		c.SetContext(ctx)
 
 		// Render the default help first
 		defaultHelp(c, args)
@@ -1107,6 +1106,35 @@ func setResolverHelpFunc(cmd *cobra.Command, cliParams *settings.Run) {
 			fmt.Fprint(c.OutOrStdout(), helpText)
 		}
 	})
+}
+
+// helpDiscoveryContext loads discovery.actionFiles for --help when PersistentPreRun is skipped.
+func helpDiscoveryContext(ctx context.Context, c *cobra.Command, cliParams *settings.Run) context.Context {
+	effective := *settings.NewCliParams()
+	if cliParams != nil {
+		effective = *cliParams
+	}
+	if existing, ok := settings.FromContext(ctx); ok && existing != nil {
+		effective = *existing
+	}
+	if len(effective.ActionDiscoveryFileNames) == 0 {
+		cfg := config.FromContext(ctx)
+		if cfg == nil {
+			opts := []config.ManagerOption{config.WithEnvPrefix(settings.SanitizeBinaryName(effective.BinaryName))}
+			if raw := c.Root().Annotations["configDefaults"]; raw != "" {
+				opts = append(opts, config.WithBaseConfig([]byte(raw)))
+			}
+			var cfgPath string
+			if f := c.Flag("config"); f != nil {
+				cfgPath = f.Value.String()
+			}
+			cfg, _ = config.NewManager(cfgPath, opts...).Load()
+		}
+		if cfg != nil {
+			effective.ActionDiscoveryFileNames = cfg.Discovery.ActionFiles
+		}
+	}
+	return settings.IntoContext(ctx, &effective)
 }
 
 // resolveActionResolverNames looks up the specified action(s) in the solution's

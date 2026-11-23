@@ -14,6 +14,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -25,6 +26,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2081,6 +2083,36 @@ spec:
 		require.NoError(t, cmd.Help())
 		assert.Contains(t, helpOut.String(), "env")
 		assert.Contains(t, helpOut.String(), "target deployment environment")
+
+		// Context-supplied config also populates ActionDiscoveryFileNames when unset,
+		// while existing settings in context take precedence over cliParams.
+		var helpOut2 bytes.Buffer
+		cmd2 := CommandValidateResolver(settings.NewCliParams(), streams, "")
+		cmd2.SetOut(&helpOut2)
+		ctxWithCfg := config.WithConfig(
+			settings.IntoContext(provider.WithWorkingDirectory(t.Context(), dir), settings.NewCliParams()),
+			&config.Config{Discovery: config.DiscoveryConfig{ActionFiles: []string{"deploy.yaml"}}},
+		)
+		cmd2.SetContext(ctxWithCfg)
+		require.NoError(t, cmd2.Help())
+		assert.Contains(t, helpOut2.String(), "env")
+		assert.Contains(t, helpOut2.String(), "target deployment environment")
+
+		// Root --config flag and configDefaults annotation load discovery.actionFiles when cfg is absent from context.
+		cfgPath := filepath.Join(t.TempDir(), "missing.yaml")
+		parent := &cobra.Command{
+			Use:         "mycli",
+			Annotations: map[string]string{"configDefaults": "discovery:\n  actionFiles:\n    - deploy.yaml\n"},
+		}
+		parent.PersistentFlags().String("config", cfgPath, "")
+		child := CommandResolver(settings.NewCliParams(), streams, "")
+		parent.AddCommand(child)
+		var helpOut3 bytes.Buffer
+		parent.SetOut(&helpOut3)
+		parent.SetArgs([]string{"resolver", "--help"})
+		require.NoError(t, parent.ExecuteContext(provider.WithWorkingDirectory(t.Context(), dir)))
+		assert.Contains(t, helpOut3.String(), "env")
+		assert.Contains(t, helpOut3.String(), "target deployment environment")
 	})
 
 	t.Run("extractSolutionPathWithArgs respects raw helpArgs for --action and -f", func(t *testing.T) {

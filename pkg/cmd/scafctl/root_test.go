@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/kube"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -641,4 +642,124 @@ func TestRoot_LoginConfigFileBrowserValidationAndNormalization(t *testing.T) {
 		require.Len(t, kubeHandler.loginCalls, 1)
 		assert.Equal(t, "firefox", kubeHandler.loginCalls[0].Browser)
 	})
+}
+
+// TestRoot_ResolverHelp_ConfigActionFiles verifies that `run resolver --help`
+// and `validate resolver --help` render the dynamic resolver parameter table
+// when custom action discovery filenames come from user configuration
+// (ConfigPath / --config) or RootOptions.ConfigDefaults, even though Cobra
+// skips PersistentPreRun on --help, while preserving explicit embedder
+// RootOptions.ActionDiscoveryFileNames overrides.
+func TestRoot_ResolverHelp_ConfigActionFiles(t *testing.T) {
+	t.Parallel()
+
+	const deploySolutionYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: config-help-deploy
+  version: 1.0.0
+spec:
+  resolvers:
+    targetEnv:
+      type: string
+      description: target environment from deploy.yaml
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: deployEnv
+`
+
+	const overrideSolutionYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: embedder-override
+  version: 1.0.0
+spec:
+  resolvers:
+    clusterName:
+      type: string
+      description: target cluster from override.yaml
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: clusterParam
+`
+
+	runHelp := func(t *testing.T, workDir string, opts *RootOptions, args ...string) string {
+		t.Helper()
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		rootOpts := *opts
+		rootOpts.IOStreams = ioStreams
+		cmd, cleanup := Root(&rootOpts)
+		defer cleanup()
+
+		var buf strings.Builder
+		cmd.SetOut(&buf)
+		cmd.SetArgs(args)
+		err := cmd.ExecuteContext(provider.WithWorkingDirectory(t.Context(), workDir))
+		require.NoError(t, err)
+		return buf.String()
+	}
+
+	subcmds := [][]string{
+		{"run", "resolver", "--help"},
+		{"validate", "resolver", "--help"},
+	}
+
+	for _, args := range subcmds {
+		label := strings.Join(args[:2], "_")
+
+		t.Run(label+"/user config discovery.actionFiles", func(t *testing.T) {
+			t.Parallel()
+			workDir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(workDir, "deploy.yaml"), []byte(deploySolutionYAML), 0o600))
+
+			cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+			require.NoError(t, os.WriteFile(cfgPath, []byte("discovery:\n  actionFiles:\n    - deploy.yaml\n"), 0o600))
+
+			out := runHelp(t, workDir, &RootOptions{
+				BinaryName: "mycli",
+				ConfigPath: cfgPath,
+			}, args...)
+			assert.Contains(t, out, "deployEnv")
+			assert.Contains(t, out, "target environment from deploy.yaml")
+		})
+
+		t.Run(label+"/RootOptions.ConfigDefaults discovery.actionFiles", func(t *testing.T) {
+			t.Parallel()
+			workDir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(workDir, "deploy.yaml"), []byte(deploySolutionYAML), 0o600))
+
+			missingCfg := filepath.Join(t.TempDir(), "missing-config.yaml")
+			out := runHelp(t, workDir, &RootOptions{
+				BinaryName:     "mycli",
+				ConfigPath:     missingCfg,
+				ConfigDefaults: []byte("discovery:\n  actionFiles:\n    - deploy.yaml\n"),
+			}, args...)
+			assert.Contains(t, out, "deployEnv")
+			assert.Contains(t, out, "target environment from deploy.yaml")
+		})
+
+		t.Run(label+"/explicit ActionDiscoveryFileNames overrides config and ConfigDefaults", func(t *testing.T) {
+			t.Parallel()
+			workDir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(workDir, "deploy.yaml"), []byte(deploySolutionYAML), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(workDir, "override.yaml"), []byte(overrideSolutionYAML), 0o600))
+
+			cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+			require.NoError(t, os.WriteFile(cfgPath, []byte("discovery:\n  actionFiles:\n    - deploy.yaml\n"), 0o600))
+
+			out := runHelp(t, workDir, &RootOptions{
+				BinaryName:               "mycli",
+				ConfigPath:               cfgPath,
+				ConfigDefaults:           []byte("discovery:\n  actionFiles:\n    - deploy.yaml\n"),
+				ActionDiscoveryFileNames: []string{"override.yaml"},
+			}, args...)
+			assert.Contains(t, out, "clusterParam")
+			assert.Contains(t, out, "target cluster from override.yaml")
+			assert.NotContains(t, out, "deployEnv")
+		})
+	}
 }
