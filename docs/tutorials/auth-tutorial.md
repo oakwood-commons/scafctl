@@ -3408,6 +3408,36 @@ terminal, the most common cause is the AADSTS500113 error above -- check the
 browser tab for an error message. The improved timeout message will now suggest
 checking redirect URI registration.
 
+### Browser Shows 401 Unauthorized on Authorize URL
+
+When running `scafctl auth login <handler>` with an interactive custom OAuth2
+handler, opening the `authorizeURL` in a browser may render a bare
+`401 Unauthorized` error page instead of redirecting to a login page, while
+`scafctl` continues waiting for the local callback until it times out.
+
+Some OAuth2 authorization endpoints (such as Quay-style container registries and
+certain self-hosted services) require an existing web-UI session cookie on
+`/oauth/authorize` and return `401` to unauthenticated browsers rather than
+redirecting to their sign-in page first. Because that `401` response is rendered
+directly in your browser rather than returned to `scafctl`, the CLI cannot
+detect it automatically.
+
+**Fix:**
+
+1. Sign in to the target service's web UI first **in the same browser (and
+   browser profile)** that opens the authorize URL. `scafctl` opens your system
+   default browser automatically -- if your active session lives in a different
+   browser, copy the full `authorizeURL` from the opened tab's address bar into
+   that authenticated browser. If the system browser launcher cannot start at
+   all (for example, `xdg-open` is not installed), pass `--debug` to log the
+   `authorizeURL` in terminal output (`--debug` logs the URL only when starting
+   the launcher command itself fails, not when `xdg-open` starts and later fails
+   in a headless session); over SSH, also forward `callbackPort` with
+   `ssh -L <port>:localhost:<port>` so the redirect reaches `scafctl`'s
+   localhost listener.
+2. Re-run `scafctl auth login <handler>` and approve the application consent
+   prompt.
+
 ### Wrong Tenant
 
 If you're getting 401 errors but you're authenticated, you may be authenticated to the wrong tenant:
@@ -3575,10 +3605,10 @@ auth:
     - name: quay
       displayName: "Quay.io"
       authorizeURL: "https://quay.io/oauth/authorize"
-      tokenURL: "https://quay.io/oauth/access_token"
       clientID: "your-app-client-id"
       defaultFlow: interactive
-      responseType: token    # Quay only supports implicit grant (response_type=token)
+      responseType: token    # Quay uses implicit grant (response_type=token; tokenURL not needed)
+      callbackPort: 8400     # Match the Redirect URI registered on the Quay OAuth app (http://localhost:8400)
       scopes:
         - "repo:read"
       registry: "quay.io"
@@ -3604,8 +3634,17 @@ scafctl catalog login quay.io
 Custom handlers support all three OAuth2 flows:
 
 - **Interactive** (authorization code + PKCE) -- requires `authorizeURL`. Set `responseType: token` for implicit grant servers. Set `disablePKCE: true` for servers that support auth code but reject PKCE parameters
-- **Device code** (RFC 8628) -- requires `deviceAuthURL`  
+- **Device code** (RFC 8628) -- requires `deviceAuthURL`
 - **Client credentials** -- requires `clientSecret`
+
+> [!IMPORTANT]
+> **Prerequisite -- active browser session for non-redirecting authorize endpoints:**
+> Some OAuth2 servers (including Quay-style container registries) return a bare
+> `401 Unauthorized` page on `authorizeURL` instead of redirecting
+> unauthenticated browsers to a login page. Before running
+> `scafctl auth login <name>`, sign in to the target service's web UI in the
+> **same browser (and browser profile)** that will open the authorize URL -- see
+> [Browser Shows 401 Unauthorized on Authorize URL](#browser-shows-401-unauthorized-on-authorize-url).
 
 For advanced configurations including token exchange and identity
 verification, see [examples/auth/custom-oauth2-config.md](https://github.com/oakwood-commons/scafctl/blob/main/examples/auth/custom-oauth2-config.md).
