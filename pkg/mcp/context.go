@@ -10,6 +10,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/credentials"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -128,7 +129,8 @@ func NewContext(opts ...ContextOption) context.Context {
 	}
 	ctx = settings.IntoContext(ctx, s)
 
-	// IO streams
+	// IO streams (route provider fallback writers here and suppress GitHub Actions
+	// ::add-mask:: commands so stdio JSON-RPC streams are never corrupted).
 	ios := cfg.ioStreams
 	if ios == nil {
 		ios = &terminal.IOStreams{
@@ -136,6 +138,8 @@ func NewContext(opts ...ContextOption) context.Context {
 			ErrOut: io.Discard,
 		}
 	}
+	ctx = provider.WithFallbackWriters(ctx, ios.Out, ios.ErrOut)
+	ctx = redact.WithSuppressGitHubActionsMasks(ctx)
 
 	// Writer
 	w := writer.New(ios, s)
@@ -144,19 +148,19 @@ func NewContext(opts ...ContextOption) context.Context {
 	return ctx
 }
 
-// contextWithCwd returns the server context with a working directory override.
-// If cwd is empty, the original context is returned unchanged. If cwd is
-// non-empty, it is resolved to an absolute path and validated as an existing
-// directory before being injected into the context.
+// contextWithCwd returns the server context with a fresh per-call redaction
+// tracker and optional working directory override so tool invocations never
+// share a process-global tracker across MCP requests.
 func (s *Server) contextWithCwd(cwd string) (context.Context, error) {
+	baseCtx := redact.WithTracker(s.ctx, redact.NewTracker())
 	if cwd == "" {
-		return s.ctx, nil
+		return baseCtx, nil
 	}
 	absCwd, err := provider.ValidateDirectory(cwd)
 	if err != nil {
 		return nil, err
 	}
-	return provider.WithWorkingDirectory(s.ctx, absCwd), nil
+	return provider.WithWorkingDirectory(baseCtx, absCwd), nil
 }
 
 // withSolutionDir anchors path resolution to the solution file's directory so

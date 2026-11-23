@@ -21,10 +21,12 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/effective"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	solrender "github.com/oakwood-commons/scafctl/pkg/solution/render"
@@ -409,8 +411,17 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 		return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 	}
 
+	// Ensure a fresh redaction tracker and placeholder CredentialResolver are
+	// active before any state pre-load or resolver execution so render never
+	// touches keyrings, mints live tokens, or leaks sensitive resolver values.
+	if redact.FromContext(ctx) == nil {
+		ctx = redact.WithTracker(ctx, redact.NewTracker())
+	}
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+
 	// Resolve resolvers first to get data for action inputs
 	resolverData := make(map[string]any)
+	var resolverExecCtx *resolver.Context
 	if sol.Spec.HasResolvers() {
 		lgr.V(1).Info("resolving resolvers for action inputs")
 
@@ -432,17 +443,18 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 		}
 
 		resolverCfg := o.getEffectiveResolverConfig(ctx)
-		resolverData, err = solrender.ExecuteResolvers(ctx, sol, params, reg, resolverCfg, lgr, resolver.WithSeededResults(stateSeed))
+		resolverData, resolverExecCtx, err = solrender.ExecuteResolversWithContext(ctx, sol, params, reg, resolverCfg, lgr, resolver.WithSeededResults(stateSeed))
 		if err != nil {
 			return o.exitWithCode(err, exitcode.RenderFailed)
 		}
 	}
 
-	// Build the action graph
+	// Build the action graph and scrub sensitive/credential-backed materialized inputs
 	graph, err := action.BuildGraph(ctx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
 		return o.exitWithCode(fmt.Errorf("failed to build action graph: %w", err), exitcode.RenderFailed)
 	}
+	action.RedactGraphInputs(graph, redact.FromContext(ctx), execute.SensitiveResolverNames(sol, resolverExecCtx))
 
 	// For test generation, render as JSON and then derive assertions.
 	renderFormat := o.Output
@@ -493,8 +505,14 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 		return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 	}
 
+	if redact.FromContext(ctx) == nil {
+		ctx = redact.WithTracker(ctx, redact.NewTracker())
+	}
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+
 	// Resolve resolvers first to get data for action inputs (for full graph)
 	resolverData := make(map[string]any)
+	var resolverExecCtx *resolver.Context
 	if sol.Spec.HasResolvers() {
 		lgr.V(1).Info("resolving resolvers for action inputs")
 
@@ -516,7 +534,7 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 		}
 
 		resolverCfg := o.getEffectiveResolverConfig(ctx)
-		resolverData, err = solrender.ExecuteResolvers(ctx, sol, params, reg, resolverCfg, lgr, resolver.WithSeededResults(stateSeed))
+		resolverData, resolverExecCtx, err = solrender.ExecuteResolversWithContext(ctx, sol, params, reg, resolverCfg, lgr, resolver.WithSeededResults(stateSeed))
 		if err != nil {
 			return o.exitWithCode(err, exitcode.RenderFailed)
 		}
@@ -527,6 +545,7 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 	if err != nil {
 		return o.exitWithCode(fmt.Errorf("failed to build action graph: %w", err), exitcode.RenderFailed)
 	}
+	action.RedactGraphInputs(graph, redact.FromContext(ctx), execute.SensitiveResolverNames(sol, resolverExecCtx))
 
 	lgr.V(1).Info("action graph built successfully",
 		"actions", len(graph.Actions),

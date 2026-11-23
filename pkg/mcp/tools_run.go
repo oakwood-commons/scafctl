@@ -227,6 +227,7 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 		actionCfg.OutputDir = outputDir
 	}
 	actionCfg.Cwd = originalCwd
+	actionCfg.ResolverContext = resolverExecCtx
 
 	actionResult, err := execute.Actions(actionCtx, sol, resolverData, reg, actionCfg)
 	if err != nil {

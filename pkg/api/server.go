@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -299,9 +300,10 @@ func withAppConfig(cfg *config.Config) func(http.Handler) http.Handler {
 	}
 }
 
-// withServerRuntimeDeps attaches the server's auth registry, secret store, and
-// credential resolver to every HTTP request context so solution and provider
-// endpoints can resolve scrt: and tkn: ValueRefs consistently with CLI/MCP.
+// withServerRuntimeDeps attaches the server's auth registry, secret store,
+// credential resolver, and a fresh request-isolated redaction tracker (with CI
+// mask commands and process stdout/stderr fallback streams suppressed) to every
+// HTTP request context.
 func withServerRuntimeDeps(authReg *auth.Registry, secretStore secrets.Store) func(http.Handler) http.Handler {
 	resolver := credentials.NewResolver()
 	return func(next http.Handler) http.Handler {
@@ -316,9 +318,9 @@ func withServerRuntimeDeps(authReg *auth.Registry, secretStore secrets.Store) fu
 			if spec.CredentialResolverFromContext(rctx) == nil {
 				rctx = credentials.WithResolver(rctx, resolver)
 			}
-			if redact.FromContext(rctx) == nil {
-				rctx = redact.WithTracker(rctx, redact.NewTracker())
-			}
+			rctx = redact.WithTracker(rctx, redact.NewTracker())
+			rctx = redact.WithSuppressGitHubActionsMasks(rctx)
+			rctx = provider.WithFallbackWriters(rctx, io.Discard, io.Discard)
 			next.ServeHTTP(w, r.WithContext(rctx))
 		})
 	}

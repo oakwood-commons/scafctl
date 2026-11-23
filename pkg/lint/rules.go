@@ -818,6 +818,17 @@ var KnownRules = map[string]RuleMeta{
 			"resolvers:\n  authHeader:\n    sensitive: true\n    resolve:\n      with:\n        - provider: static\n          inputs:\n            value:\n              tkn: github",
 		},
 	},
+	"persisted-sensitive-resolver": {
+		Rule:        "persisted-sensitive-resolver",
+		Severity:    string(SeverityWarning),
+		Category:    "security",
+		Description: "A resolver combines 'persist: true' or 'immutable: true' with 'sensitive: true' or a 'scrt:'/'tkn:' credential reference.",
+		Why:         "State documents are stored in plaintext files or remote backends and must never persist live credentials. The state manager replaces sensitive and credential-backed values with '[REDACTED]' before saving, so persisting or locking them cannot replay or verify the real credential.",
+		Fix:         "Remove 'persist: true' and 'immutable: true' from resolvers that set 'sensitive: true' or reference 'scrt:' / 'tkn:'.",
+		Examples: []string{
+			"resolvers:\n  apiToken:\n    sensitive: true\n    resolve:\n      with:\n        - provider: static\n          inputs:\n            value:\n              scrt: api-token",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

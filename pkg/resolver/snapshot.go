@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 )
@@ -104,6 +105,12 @@ func CaptureSnapshot(
 	}
 
 	results := resolverCtx.GetAllResults()
+	tracker := redact.FromContext(ctx)
+
+	scrubbedParams := parameters
+	if tracker != nil && parameters != nil {
+		scrubbedParams = tracker.RedactMap(parameters)
+	}
 
 	snapshot := &Snapshot{
 		Metadata: SnapshotMetadata{
@@ -114,7 +121,7 @@ func CaptureSnapshot(
 			TotalDuration: format.Duration(totalDuration),
 			Status:        string(overallStatus),
 		},
-		Parameters: parameters,
+		Parameters: scrubbedParams,
 		Resolvers:  make(map[string]*SnapshotResolver),
 		Phases:     []SnapshotPhase{},
 	}
@@ -131,30 +138,45 @@ func CaptureSnapshot(
 			ProviderCalls: result.ProviderCallCount,
 		}
 
-		// Handle value and sensitive data
-		// Note: We don't have access to the original Resolver definition here
-		// The caller should pass sensitive flag or we need to enhance ExecutionResult
-		// For now, we'll redact based on a convention (value will be redacted by caller if needed)
-		sr.Value = result.Value
-
-		// Value size
-		if result.ValueSizeBytes > 0 {
-			sr.ValueSizeBytes = result.ValueSizeBytes
+		// Unconditionally mask credential-backed entries and scrub any tracked
+		// secret substrings so snapshots never persist live host credentials
+		// even when captured without --redact.
+		if result.CredentialBacked {
+			sr.Value = "<redacted>"
+			sr.Sensitive = true
+			sr.ValueSizeBytes = 0
+		} else {
+			val := result.Value
+			if tracker != nil {
+				val = tracker.RedactAny(val)
+			}
+			sr.Value = val
+			if result.ValueSizeBytes > 0 {
+				sr.ValueSizeBytes = result.ValueSizeBytes
+			}
 		}
 
 		// Error
 		if result.Error != nil {
-			sr.Error = result.Error.Error()
+			errMsg := result.Error.Error()
+			if tracker != nil {
+				errMsg = tracker.RedactString(errMsg)
+			}
+			sr.Error = errMsg
 		}
 
 		// Failed attempts
 		if len(result.FailedAttempts) > 0 {
 			sr.FailedAttempts = make([]SnapshotFailedAttempt, len(result.FailedAttempts))
 			for i, attempt := range result.FailedAttempts {
+				attErr := attempt.Error
+				if tracker != nil {
+					attErr = tracker.RedactString(attErr)
+				}
 				sr.FailedAttempts[i] = SnapshotFailedAttempt{
 					Provider:   attempt.Provider,
 					SourceStep: attempt.SourceStep,
-					Error:      attempt.Error,
+					Error:      attErr,
 					Duration:   format.Duration(attempt.Duration),
 					Timestamp:  attempt.Timestamp.Format(time.RFC3339),
 				}
@@ -219,16 +241,14 @@ func RedactSensitiveValues(snapshot *Snapshot, resolvers []ResolverLike) {
 	}
 }
 
-// SaveSnapshot saves a snapshot to a JSON file
+// SaveSnapshot saves a snapshot to a JSON file with owner-only (0600) permissions.
 func SaveSnapshot(snapshot *Snapshot, filePath string) error {
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal snapshot: %w", err)
 	}
 
-	// gosec: G306 - Snapshot files may contain debugging info but not secrets (redacted)
-	// nolint:gosec
-	if err := os.WriteFile(filePath, data, 0o644); err != nil {
+	if err := os.WriteFile(filePath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write snapshot file: %w", err)
 	}
 

@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -106,7 +107,7 @@ spec:
 `
 	require.NoError(t, os.WriteFile(solFile, []byte(solYAML), 0o600))
 
-	t.Run("preview_resolvers uses placeholder and never leaks live secret", func(t *testing.T) {
+	t.Run("preview_resolvers redacts sensitive resolvers and never touches live secret", func(t *testing.T) {
 		req := mcp.CallToolRequest{}
 		req.Params.Name = "preview_resolvers"
 		req.Params.Arguments = map[string]any{"path": solFile}
@@ -120,7 +121,31 @@ spec:
 		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
 		resolvers := parsed["resolvers"].(map[string]any)
 		sh := resolvers["secret_header"].(map[string]any)
-		assert.Equal(t, "Bearer <redacted:scrt:mcp-secret>", sh["value"])
+		assert.Equal(t, "[REDACTED]", sh["value"])
+		np := resolvers["numeric_pin"].(map[string]any)
+		assert.Equal(t, "[REDACTED]", np["value"])
+	})
+
+	t.Run("render_solution scrubs sensitive resolverData and materialized inputs", func(t *testing.T) {
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "render_solution"
+		req.Params.Arguments = map[string]any{"path": solFile}
+
+		res, err := srv.handleRenderSolution(context.Background(), req)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		text := res.Content[0].(mcp.TextContent).Text
+		assert.NotContains(t, text, rawSecret)
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		resData := parsed["resolverData"].(map[string]any)
+		assert.Equal(t, "[REDACTED]", resData["secret_header"])
+		assert.Equal(t, "[REDACTED]", resData["numeric_pin"])
+		graphMap := parsed["graph"].(map[string]any)
+		actionsMap := graphMap["actions"].(map[string]any)
+		writeSecret := actionsMap["write_secret"].(map[string]any)
+		writeInputs := writeSecret["inputs"].(map[string]any)
+		assert.Equal(t, "[REDACTED]", writeInputs["content"])
 	})
 
 	t.Run("preview_action shows symbolic deferred inputs and placeholders", func(t *testing.T) {
@@ -228,5 +253,44 @@ spec:
 		text := res.Content[0].(mcp.TextContent).Text
 		assert.NotContains(t, text, rawSecret)
 		assert.Contains(t, text, "[REDACTED]")
+	})
+
+	t.Run("MCP server isolates per-call trackers from parent root tracker and suppresses CI masks", func(t *testing.T) {
+		t.Setenv("GITHUB_ACTIONS", "true")
+		parentTracker := redact.NewTracker()
+		parentTracker.Track("parent_global_secret_do_not_bleed")
+		parentCtx := redact.WithTracker(context.Background(), parentTracker)
+
+		isolatedSrv, err := NewServer(
+			WithServerContext(parentCtx),
+			WithServerVersion("test"),
+			WithServerRegistry(reg),
+			WithSecretStore(store),
+			WithServerAuthRegistry(authReg),
+		)
+		require.NoError(t, err)
+		assert.True(t, redact.SuppressGitHubActionsMasksFromContext(isolatedSrv.ctx))
+
+		// Call 1 resolves mcp-secret; parentTracker must NOT accumulate mcp-secret,
+		// and Call 2 must NOT redact mcp-secret when passed as an ordinary literal!
+		req1 := mcp.CallToolRequest{}
+		req1.Params.Name = "run_provider"
+		req1.Params.Arguments = map[string]any{
+			"provider": "static",
+			"inputs":   map[string]any{"value": map[string]any{"scrt": "mcp-secret"}},
+		}
+		_, err = isolatedSrv.handleRunProvider(parentCtx, req1)
+		require.NoError(t, err)
+		assert.False(t, parentTracker.ContainsTracked(rawSecret), "parent root tracker must not accumulate MCP tool secrets")
+
+		req2 := mcp.CallToolRequest{}
+		req2.Params.Name = "run_provider"
+		req2.Params.Arguments = map[string]any{
+			"provider": "static",
+			"inputs":   map[string]any{"value": "harmless parent_global_secret_do_not_bleed literal"},
+		}
+		res2, err := isolatedSrv.handleRunProvider(parentCtx, req2)
+		require.NoError(t, err)
+		assert.Contains(t, res2.Content[0].(mcp.TextContent).Text, "parent_global_secret_do_not_bleed")
 	})
 }

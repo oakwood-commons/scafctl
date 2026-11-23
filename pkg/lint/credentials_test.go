@@ -160,4 +160,52 @@ spec:
 		assert.GreaterOrEqual(t, invalidCredCount, 4, "expected findings for internal prefix, traversal, handler, profile, and minValidFor")
 		assert.Equal(t, 1, unmarkedCount)
 	})
+
+	t.Run("flags persist and immutable combined with sensitive or credential refs", func(t *testing.T) {
+		raw := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: persisted-secret-lint
+  version: 1.0.0
+state:
+  load:
+    provider: file
+    inputs:
+      path: state.json
+  save:
+    - extends: load
+spec:
+  resolvers:
+    persistedSens:
+      type: string
+      persist: true
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: secret
+    immutableCred:
+      type: string
+      immutable: true
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                scrt: deploy-key
+`
+		var sol solution.Solution
+		require.NoError(t, sol.FromYAML([]byte(raw)))
+
+		res := Solution(&sol, "solution.yaml", reg)
+		var persistedSensCount int
+		for _, f := range res.Findings {
+			if f.RuleName == "persisted-sensitive-resolver" {
+				persistedSensCount++
+			}
+		}
+		assert.Equal(t, 2, persistedSensCount)
+	})
 }

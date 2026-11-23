@@ -302,6 +302,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		// resolvers (above) keep resolving bundle-relative inputs against the
 		// staged solution directory.
 		if sol.Spec.HasWorkflow() {
+			actionCfg.ResolverContext = resolverResult.Context
 			actionCtx := provider.WithWorkingDirectory(ctx, cwd)
 			actionResult, err := execute.Actions(actionCtx, sol, resolverResult.Data, executionRegistry, actionCfg)
 			if err != nil {
@@ -328,15 +329,18 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 			return nil, err
 		}
 
+		if redact.FromContext(ctx) == nil {
+			ctx = redact.WithTracker(ctx, redact.NewTracker())
+		}
 		validation := execute.ValidateSolution(ctx, sol, executionRegistry)
 
-		resolverData, err := execute.ResolversForPreview(ctx, sol, input.Body.Params, executionRegistry)
+		previewResult, err := execute.ResolversWithContextForPreview(ctx, sol, input.Body.Params, executionRegistry)
 		if err != nil {
 			return nil, api.HandleError(ctx, err, "solution-render", http.StatusInternalServerError, "resolver execution failed")
 		}
 
 		resp := &SolutionRenderResponse{}
-		resp.Body.ResolverData = resolverData
+		resp.Body.ResolverData = execute.SanitizeResolverDataForResponse(sol, previewResult.Context, previewResult.Data, redact.FromContext(ctx))
 		resp.Body.Validation = validation
 		return resp, nil
 	})

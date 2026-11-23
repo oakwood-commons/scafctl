@@ -222,10 +222,24 @@ func lintUnmarkedSensitiveCredentialResolvers(sol *solution.Solution, result *Re
 
 	for _, name := range names {
 		res := sol.Spec.Resolvers[name]
-		if res == nil || res.Sensitive {
+		if res == nil {
 			continue
 		}
-		if resolverReferencesCredentials(res, callUsesCredentials) {
+		refsCred := resolverReferencesCredentials(res, callUsesCredentials)
+		if (res.Persist || res.Immutable) && (res.Sensitive || refsCred) {
+			result.addFinding(
+				SeverityWarning,
+				"security",
+				fmt.Sprintf("resolvers.%s", name),
+				fmt.Sprintf("resolver '%s' combines 'persist: true' or 'immutable: true' with 'sensitive: true' or credential references", name),
+				"Remove 'persist' / 'immutable' from sensitive or credential-backed resolvers (persisted state redacts credential values to [REDACTED])",
+				"persisted-sensitive-resolver",
+			)
+		}
+		if res.Sensitive {
+			continue
+		}
+		if refsCred {
 			result.addFinding(
 				SeverityWarning,
 				"security",

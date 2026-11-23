@@ -48,6 +48,11 @@ type InputResolver struct {
 
 	// ctx is the execution context for CEL and template evaluation
 	ctx context.Context
+
+	// preResolved indicates incoming inputs were already evaluated from spec.ValueRef
+	// by an upstream caller (action/state executor), so ValueRef form parsing and
+	// nested ValueRef evaluation must be skipped to prevent second-order injection.
+	preResolved bool
 }
 
 // NewInputResolver creates a new input resolver for the given schema and context.
@@ -62,13 +67,32 @@ func NewInputResolver(ctx context.Context, schema *jsonschema.Schema, sensitiveF
 	for _, f := range sensitiveFields {
 		sf[f] = true
 	}
+	for f, isSec := range SecretPropertiesFromContext(ctx) {
+		if isSec {
+			sf[f] = true
+		}
+	}
 
 	return &InputResolver{
 		schema:          schema,
 		sensitiveFields: sf,
 		resolverContext: resolverCtx,
 		ctx:             ctx,
+		preResolved:     PreResolvedInputsFromContext(ctx),
 	}
+}
+
+func (r *InputResolver) isInputSecret(propName string, inputValue InputValue) bool {
+	if r.sensitiveFields[propName] || inputValue.Scrt != "" || inputValue.Tkn != nil {
+		return true
+	}
+	if !r.preResolved && inputValue.Literal != nil {
+		vr := spec.ValueRef{Literal: inputValue.Literal}
+		if vr.ContainsCredentialRef() {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveInputs resolves all provider inputs from their declared forms into concrete values.
@@ -93,7 +117,7 @@ func (r *InputResolver) ResolveInputs(rawInputs any) (map[string]any, error) {
 	if r.schema == nil || r.schema.Properties == nil {
 		// No schema properties — pass through any literal inputs
 		for propName, inputValue := range inputMap {
-			value, err := r.resolveValue(propName, inputValue, false)
+			value, err := r.resolveValue(propName, inputValue, r.isInputSecret(propName, inputValue))
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve property %q: %w", propName, err)
 			}
@@ -112,7 +136,7 @@ func (r *InputResolver) ResolveInputs(rawInputs any) (map[string]any, error) {
 	for propName, propSchema := range r.schema.Properties {
 		inputValue, exists := inputMap[propName]
 		isRequired := requiredSet[propName]
-		isSecret := r.sensitiveFields[propName]
+		isSecret := r.isInputSecret(propName, inputValue)
 
 		// Check if property is required
 		if !exists {
@@ -180,6 +204,17 @@ func (r *InputResolver) normalizeInputMap(rawInputs any) (map[string]InputValue,
 	}
 
 	result := make(map[string]InputValue)
+
+	if r.preResolved {
+		for key, value := range inputsMap {
+			if iv, ok := value.(InputValue); ok {
+				result[key] = InputValue{Literal: iv.Literal}
+				continue
+			}
+			result[key] = InputValue{Literal: value}
+		}
+		return result, nil
+	}
 
 	for key, value := range inputsMap {
 		// Check if it's already an InputValue
@@ -321,7 +356,11 @@ func (r *InputResolver) validateExclusivity(propName string, input InputValue) e
 // resolveValue resolves an InputValue to a concrete value based on its form.
 func (r *InputResolver) resolveValue(propName string, input InputValue, isSecret bool) (any, error) {
 	// Literal form — resolve any nested ValueRef maps ({scrt:...}, {tkn:...}, etc.)
+	// unless inputs were already resolved upstream.
 	if input.Literal != nil {
+		if r.preResolved {
+			return input.Literal, nil
+		}
 		switch input.Literal.(type) {
 		case map[string]any, []any:
 			vr := spec.ValueRef{Literal: input.Literal}

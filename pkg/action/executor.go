@@ -84,6 +84,11 @@ type Executor struct {
 	// functions (spec.functions), injected into provider context so templates
 	// rendered by actions can invoke them.
 	templateFuncBinder provider.TemplateFuncBinder
+
+	// sensitiveResolvers lists resolver names marked sensitive: true or backed
+	// by credentials so ActionResult.Inputs and coercion errors mask them
+	// regardless of value length or coerced scalar type.
+	sensitiveResolvers map[string]bool
 }
 
 // ExecutorOption configures the executor.
@@ -785,7 +790,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		return err
 	}
 
-	redactedInputs := actionTracker.RedactMap(resolvedInputs)
+	redactedInputs, secretProps := e.maskResolvedActionInputs(action, resolvedInputs, actionTracker)
 	if needFingerprintInputs && fingerprintInputs == nil {
 		if fpIn, fpErr := e.resolveFingerprintInputs(ctx, action, graph.AliasMap, actionTracker); fpErr == nil {
 			fingerprintInputs = fpIn
@@ -836,6 +841,9 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		// Go templates (e.g. go-template, file) during action execution.
 		if e.templateFuncBinder != nil {
 			execCtx = provider.WithTemplateFuncBinder(execCtx, e.templateFuncBinder)
+		}
+		if len(secretProps) > 0 {
+			execCtx = provider.WithSecretProperties(execCtx, secretProps)
 		}
 		return e.callProvider(execCtx, providerName, resolvedInputs)
 	}
@@ -1124,8 +1132,9 @@ func (e *Executor) callProvider(ctx context.Context, providerName string, inputs
 		return nil, fmt.Errorf("provider %q does not support action capability", providerName)
 	}
 
-	// Set up execution context with action mode
-	execCtx := provider.WithExecutionMode(ctx, provider.CapabilityAction)
+	// Set up execution context with action mode and mark inputs pre-resolved so
+	// InputResolver does not re-parse or re-evaluate untrusted ValueRef-shaped maps.
+	execCtx := provider.WithPreResolvedInputs(provider.WithExecutionMode(ctx, provider.CapabilityAction))
 
 	// Pass through IOStreams from context if available (set by executePhase)
 	if streams, ok := provider.IOStreamsFromContext(ctx); ok {

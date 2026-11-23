@@ -23,6 +23,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -115,11 +116,12 @@ type HostServiceDeps struct {
 }
 
 type brokerTrackerSlot struct {
-	mu          sync.Mutex
-	activeRoot  *redact.Tracker
-	activeList  []*redact.Tracker
-	activeCount int
-	waitCh      chan struct{}
+	mu                sync.Mutex
+	activeRoot        *redact.Tracker
+	activePlaceholder bool
+	activeList        []*redact.Tracker
+	activeCount       int
+	waitCh            chan struct{}
 }
 
 func newBrokerTrackerSlot() *brokerTrackerSlot {
@@ -127,14 +129,22 @@ func newBrokerTrackerSlot() *brokerTrackerSlot {
 }
 
 func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker) (func(), error) {
-	if s == nil || tracker == nil {
+	if s == nil {
 		return func() {}, nil
+	}
+	placeholder := spec.IsPlaceholderCredentialResolver(ctx)
+	if tracker == nil {
+		if !placeholder {
+			return func() {}, nil
+		}
+		tracker = redact.NewTracker()
 	}
 	root := tracker.Root()
 	for {
 		s.mu.Lock()
-		if s.activeCount == 0 || s.activeRoot == root {
+		if s.activeCount == 0 || (s.activeRoot == root && s.activePlaceholder == placeholder) {
 			s.activeRoot = root
+			s.activePlaceholder = placeholder
 			s.activeCount++
 			s.activeList = append(s.activeList, tracker)
 			if s.waitCh == nil {
@@ -155,6 +165,7 @@ func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker
 					s.activeCount--
 					if s.activeCount == 0 {
 						s.activeRoot = nil
+						s.activePlaceholder = false
 						if s.waitCh != nil {
 							close(s.waitCh)
 							s.waitCh = nil
@@ -173,6 +184,19 @@ func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker
 			return nil, ctx.Err()
 		}
 	}
+}
+
+func (s *brokerTrackerSlot) isPlaceholder() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeCount > 0 && s.activePlaceholder
+}
+
+func (d *HostServiceDeps) isPlaceholderMode() bool {
+	return d != nil && d.trackerSlot.isPlaceholder()
 }
 
 func (s *brokerTrackerSlot) track(secret string) {
@@ -247,7 +271,8 @@ type HostServiceServer struct {
 
 // GetSecret implements HostService.GetSecret
 func (h *HostServiceServer) GetSecret(ctx context.Context, req *proto.GetSecretRequest) (*proto.GetSecretResponse, error) {
-	if h.Deps.SecretStore == nil {
+	placeholder := h.Deps.isPlaceholderMode()
+	if h.Deps.SecretStore == nil && !placeholder {
 		return &proto.GetSecretResponse{
 			Error: "secret store not available",
 		}, nil
@@ -262,6 +287,13 @@ func (h *HostServiceServer) GetSecret(ctx context.Context, req *proto.GetSecretR
 	}
 	if h.Deps.isSecretDenied(req.Name) {
 		return &proto.GetSecretResponse{Error: "access denied: secret name is in a reserved internal namespace"}, nil
+	}
+
+	if placeholder {
+		return &proto.GetSecretResponse{
+			Value: fmt.Sprintf("<redacted:scrt:%s>", req.Name),
+			Found: true,
+		}, nil
 	}
 
 	value, err := h.Deps.SecretStore.Get(ctx, req.Name)
@@ -486,7 +518,8 @@ func (h *HostServiceServer) ListAuthHandlers(ctx context.Context, _ *proto.ListA
 
 // GetAuthToken implements HostService.GetAuthToken
 func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuthTokenRequest) (*proto.GetAuthTokenResponse, error) {
-	if h.Deps.AuthTokenFunc == nil && h.Deps.AuthTokenWithHostnameFunc == nil {
+	placeholder := h.Deps.isPlaceholderMode()
+	if h.Deps.AuthTokenFunc == nil && h.Deps.AuthTokenWithHostnameFunc == nil && !placeholder {
 		return &proto.GetAuthTokenResponse{
 			Error: "auth token service not available",
 		}, nil
@@ -518,6 +551,17 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 		// This prevents downstream GetToken from re-resolving the active profile
 		// from config, which would override an explicit built-in selection.
 		ctx = auth.WithProfileResolved(ctx)
+	}
+
+	if placeholder {
+		handlerLabel := req.HandlerName
+		if handlerLabel == "" {
+			handlerLabel = "default"
+		}
+		return &proto.GetAuthTokenResponse{
+			AccessToken: fmt.Sprintf("<redacted:tkn:%s>", handlerLabel),
+			TokenType:   "Bearer",
+		}, nil
 	}
 
 	if h.Deps.HostConfig != nil && config.FromContext(ctx) == nil {

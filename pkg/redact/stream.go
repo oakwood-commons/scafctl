@@ -15,11 +15,12 @@ import (
 // bytes. Call Flush when the producer finishes to emit any remaining buffered
 // bytes after final redaction.
 type StreamWriter struct {
-	mu        sync.Mutex
-	w         io.Writer
-	tracker   *Tracker
-	emitMasks bool
-	buf       []byte
+	mu          sync.Mutex
+	w           io.Writer
+	tracker     *Tracker
+	emitMasks   bool
+	atLineStart bool
+	buf         []byte
 }
 
 // NewStreamWriter wraps w with chunk-boundary-safe secret redaction backed by tracker.
@@ -36,10 +37,33 @@ func NewStreamWriterWithMasks(w io.Writer, tracker *Tracker, emitMasks bool) *St
 		return nil
 	}
 	return &StreamWriter{
-		w:         w,
-		tracker:   tracker.Root(),
-		emitMasks: emitMasks,
+		w:           w,
+		tracker:     tracker.Root(),
+		emitMasks:   emitMasks,
+		atLineStart: true,
 	}
+}
+
+func (s *StreamWriter) writeBytesLocked(b []byte) error {
+	if len(b) == 0 {
+		return nil
+	}
+	if _, err := s.w.Write(b); err != nil {
+		return err
+	}
+	s.atLineStart = b[len(b)-1] == '\n'
+	return nil
+}
+
+func (s *StreamWriter) writeStringLocked(str string) error {
+	if str == "" {
+		return nil
+	}
+	if _, err := io.WriteString(s.w, str); err != nil {
+		return err
+	}
+	s.atLineStart = str[len(str)-1] == '\n'
+	return nil
 }
 
 // Write buffers incoming bytes enough to detect secrets split across Write
@@ -56,19 +80,23 @@ func (s *StreamWriter) Write(p []byte) (int, error) {
 
 	if s.tracker == nil || s.tracker.MaxSecretLen() == 0 {
 		if len(s.buf) > 0 {
-			if _, err := s.w.Write(s.buf); err != nil {
+			if err := s.writeBytesLocked(s.buf); err != nil {
 				return 0, err
 			}
 			s.buf = s.buf[:0]
 		}
-		if _, err := s.w.Write(p); err != nil {
+		if err := s.writeBytesLocked(p); err != nil {
 			return 0, err
 		}
 		return origLen, nil
 	}
 
 	if s.emitMasks {
-		s.tracker.EmitGitHubActionsMasks(s.w)
+		var err error
+		s.atLineStart, err = s.tracker.emitGitHubActionsMasks(s.w, s.atLineStart)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	s.buf = append(s.buf, p...)
@@ -79,7 +107,7 @@ func (s *StreamWriter) Write(p []byte) (int, error) {
 		if nl := bytes.LastIndexByte(s.buf, '\n'); nl >= 0 {
 			complete := string(s.buf[:nl+1])
 			scrubbed := s.tracker.RedactString(complete)
-			if _, err := io.WriteString(s.w, scrubbed); err != nil {
+			if err := s.writeStringLocked(scrubbed); err != nil {
 				return 0, err
 			}
 			rest := copy(s.buf, s.buf[nl+1:])
@@ -140,7 +168,7 @@ func (s *StreamWriter) drainSafePrefixLocked() error {
 	}
 
 	if out.Len() > 0 {
-		if _, err := s.w.Write(out.Bytes()); err != nil {
+		if err := s.writeBytesLocked(out.Bytes()); err != nil {
 			return err
 		}
 	}
@@ -167,6 +195,5 @@ func (s *StreamWriter) Flush() error {
 	if s.tracker != nil {
 		data = s.tracker.RedactString(data)
 	}
-	_, err := io.WriteString(s.w, data)
-	return err
+	return s.writeStringLocked(data)
 }

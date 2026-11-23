@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 )
@@ -428,6 +429,7 @@ func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequ
 	if s.ctx != nil {
 		ctx = mergeContext(ctx, s.ctx)
 	}
+	ctx = redact.WithTracker(ctx, redact.NewTracker())
 	name, err := request.RequireString("provider")
 	if err != nil {
 		return newStructuredError(ErrCodeInvalidInput, err.Error(),

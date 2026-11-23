@@ -20,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -296,4 +297,113 @@ func TestHostServiceBroker_TracksCredentialsWrapsStreamsAndIsolatesPooledRuns(t 
 	assert.False(t, trackerA.ContainsTracked("broker_secret_bravo_2222"), "Run A tracker must not inherit Run B broker secrets")
 	assert.True(t, trackerB.ContainsTracked("broker_secret_bravo_2222"))
 	assert.False(t, trackerB.ContainsTracked("broker_secret_alpha_1111"), "Run B tracker must not inherit Run A broker secrets")
+}
+
+type failingSecretStore struct{}
+
+func (failingSecretStore) Get(context.Context, string) ([]byte, error) {
+	return nil, fmt.Errorf("SecretStore.Get must not be called in placeholder mode")
+}
+func (failingSecretStore) Set(context.Context, string, []byte) error { return nil }
+func (failingSecretStore) Delete(context.Context, string) error      { return nil }
+func (failingSecretStore) List(context.Context) ([]string, error)    { return nil, nil }
+func (failingSecretStore) Exists(context.Context, string) (bool, error) {
+	return false, nil
+}
+func (failingSecretStore) Rotate(context.Context) error { return nil }
+func (failingSecretStore) KeyringBackend() string       { return "mock" }
+
+type whatIfBrokerMockPlugin struct {
+	streamingBrokerMockPlugin
+	whatIfFn func(ctx context.Context, name string, input map[string]any) (string, error)
+}
+
+func (w *whatIfBrokerMockPlugin) DescribeWhatIf(ctx context.Context, name string, input map[string]any) (string, error) {
+	if w.whatIfFn != nil {
+		return w.whatIfFn(ctx, name, input)
+	}
+	return "", nil
+}
+
+func TestHostServiceBroker_PlaceholderModeInDryRunAndWhatIf(t *testing.T) {
+	t.Parallel()
+
+	var hostServer *HostServiceServer
+	mockImpl := &whatIfBrokerMockPlugin{}
+
+	deps := HostServiceDeps{
+		SecretStore:          failingSecretStore{},
+		AllowedSecretPrefix:  "app.",
+		DeniedSecretPrefixes: []string{"scafctl."},
+		AllowedAuthHandlers:  []string{"github"},
+		AuthTokenWithHostnameFunc: func(context.Context, string, string, string, int64, bool) (*proto.GetAuthTokenResponse, error) {
+			return nil, fmt.Errorf("AuthTokenWithHostnameFunc must not be called in placeholder mode")
+		},
+	}
+
+	client, err := newClientWithConnector("scafctl-plugin-placeholder-test", func(_ string, cfg pluginConfig) (any, *hplugin.Client, error) {
+		gp := cfg.grpcPlugin.(*GRPCPlugin)
+		hostServer = &HostServiceServer{Deps: *gp.HostDeps}
+		return mockImpl, &hplugin.Client{}, nil
+	}, func(o *clientOptions) {
+		cp := deps
+		o.hostDeps = &cp
+	})
+	require.NoError(t, err)
+	require.NotNil(t, hostServer)
+
+	wrapper, err := NewProviderWrapper(client, "preview-prov")
+	require.NoError(t, err)
+
+	mockImpl.execFunc = func(_ context.Context, _ string, _ map[string]any) (*provider.Output, error) {
+		// Disallowed secret prefix and disallowed auth handler still fail in placeholder mode!
+		deniedSec, err := hostServer.GetSecret(context.Background(), &proto.GetSecretRequest{Name: "other.secret"})
+		require.NoError(t, err)
+		assert.Contains(t, deniedSec.Error, "outside allowed scope")
+
+		internalSec, err := hostServer.GetSecret(context.Background(), &proto.GetSecretRequest{Name: "scafctl.internal"})
+		require.NoError(t, err)
+		assert.Contains(t, internalSec.Error, "outside allowed scope")
+
+		deniedTok, err := hostServer.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{HandlerName: "gcp"})
+		require.NoError(t, err)
+		assert.Contains(t, deniedTok.Error, "not in the allowed set")
+
+		// Allowed secret and handler return symbolic placeholders without calling SecretStore or AuthTokenFunc!
+		okSec, err := hostServer.GetSecret(context.Background(), &proto.GetSecretRequest{Name: "app.api-key"})
+		require.NoError(t, err)
+		assert.Empty(t, okSec.Error)
+		assert.True(t, okSec.Found)
+
+		okTok, err := hostServer.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{HandlerName: "github"})
+		require.NoError(t, err)
+		assert.Empty(t, okTok.Error)
+
+		return &provider.Output{Data: map[string]any{
+			"secret": okSec.Value,
+			"token":  okTok.AccessToken,
+		}}, nil
+	}
+
+	mockImpl.whatIfFn = func(_ context.Context, _ string, _ map[string]any) (string, error) {
+		okSec, err := hostServer.GetSecret(context.Background(), &proto.GetSecretRequest{Name: "app.deploy-key"})
+		if err != nil {
+			return "", err
+		}
+		okTok, err := hostServer.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{HandlerName: "github"})
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Would deploy using %s and %s", okSec.Value, okTok.AccessToken), nil
+	}
+
+	previewCtx := spec.WithCredentialResolver(context.Background(), spec.PlaceholderCredentialResolver())
+	out, err := wrapper.Execute(previewCtx, map[string]any{})
+	require.NoError(t, err)
+	data := out.Data.(map[string]any)
+	assert.Equal(t, "<redacted:scrt:app.api-key>", data["secret"])
+	assert.Equal(t, "<redacted:tkn:github>", data["token"])
+
+	whatIfMsg := wrapper.Descriptor().DescribeWhatIf(previewCtx, map[string]any{})
+	assert.Equal(t, "Would deploy using <redacted:scrt:app.deploy-key> and <redacted:tkn:github>", whatIfMsg)
 }

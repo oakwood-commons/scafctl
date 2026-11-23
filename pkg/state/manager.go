@@ -447,6 +447,7 @@ func (m *Manager) writeTarget(ctx context.Context, target SaveTarget, stateData 
 	if err != nil {
 		return TargetWrite{}, fmt.Errorf("project state data: %w", err)
 	}
+	dataMap = tracker.RedactMap(dataMap)
 
 	// Capture the write's reporting facts before inputs gains the
 	// operation/data keys below.
@@ -604,9 +605,10 @@ func resolveWithParams(ctx context.Context, vr *spec.ValueRef, resolverData, par
 }
 
 // providerContext returns the context a state provider operation runs in:
-// the state execution mode, plus the configured working directory, if any.
+// the state execution mode with inputs marked pre-resolved, plus the configured
+// working directory, if any.
 func (m *Manager) providerContext(ctx context.Context) context.Context {
-	ctx = provider.WithExecutionMode(ctx, provider.CapabilityState)
+	ctx = provider.WithPreResolvedInputs(provider.WithExecutionMode(ctx, provider.CapabilityState))
 	if m.workingDir != "" {
 		ctx = provider.WithWorkingDirectory(ctx, m.workingDir)
 	}

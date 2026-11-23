@@ -658,6 +658,11 @@ func IsValueRefMap(m map[string]any) bool {
 	return isValueRefMap(m)
 }
 
+// ParseNestedValueRef converts a map matching IsValueRefMap into a ValueRef.
+func ParseNestedValueRef(m map[string]any) (*ValueRef, error) {
+	return parseNestedValueRef(m)
+}
+
 // isValueRefMap checks whether m is a map with exactly one key from
 // {rslvr, expr, tmpl, scrt, tkn} and no other keys.
 func isValueRefMap(m map[string]any) bool {

@@ -253,7 +253,56 @@ type DynamicCredentialStreamingProvider interface {
 const (
 	fallbackIOStreamsFlagKey scafctlContextKey = "scafctl.provider.fallbackIOStreams"
 	fallbackWritersKey       scafctlContextKey = "scafctl.provider.fallbackWriters"
+	preResolvedInputsKey     scafctlContextKey = "scafctl.provider.preResolvedInputs"
+	maskedPropsKey           scafctlContextKey = "scafctl.provider.maskedProps"
 )
+
+// WithPreResolvedInputs marks ctx so InputResolver treats incoming provider
+// inputs as already-resolved concrete values (skipping ValueRef form-key
+// extraction and nested ValueRef evaluation while still applying schema
+// defaults and type coercion). Used by action and state executors that have
+// already evaluated spec.ValueRef inputs before calling provider.Execute.
+func WithPreResolvedInputs(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, preResolvedInputsKey, true)
+}
+
+// PreResolvedInputsFromContext reports whether incoming provider inputs have
+// already undergone spec.ValueRef resolution.
+func PreResolvedInputsFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(preResolvedInputsKey).(bool)
+	return v
+}
+
+// WithSecretProperties attaches additional property names whose values came
+// from secret/credential sources so InputResolver masks coercion errors even
+// when inputs were pre-resolved or shorter than redact.MinSecretLength.
+func WithSecretProperties(ctx context.Context, props map[string]bool) context.Context {
+	if ctx == nil || len(props) == 0 {
+		return ctx
+	}
+	cp := make(map[string]bool, len(props))
+	for k, v := range props {
+		if v {
+			cp[k] = true
+		}
+	}
+	return context.WithValue(ctx, maskedPropsKey, cp)
+}
+
+// SecretPropertiesFromContext returns the secret property set stored in ctx, or nil.
+func SecretPropertiesFromContext(ctx context.Context) map[string]bool {
+	if ctx == nil {
+		return nil
+	}
+	m, _ := ctx.Value(maskedPropsKey).(map[string]bool)
+	return m
+}
 
 type fallbackWriters struct {
 	out    io.Writer

@@ -471,6 +471,30 @@ func Resolvers(
 	}, nil
 }
 
+// SensitiveResolverNames returns the set of resolver names in sol that are
+// declared sensitive: true or were marked CredentialBacked in resolverCtx.
+func SensitiveResolverNames(sol *solution.Solution, resolverCtx *resolver.Context) map[string]bool {
+	names := make(map[string]bool)
+	if sol != nil {
+		for name, r := range sol.Spec.Resolvers {
+			if r != nil && r.Sensitive {
+				names[name] = true
+			}
+		}
+	}
+	if resolverCtx != nil {
+		for name, res := range resolverCtx.GetAllResults() {
+			if res != nil && res.CredentialBacked {
+				names[name] = true
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
+}
+
 // SanitizeResolverDataForResponse builds a response-only copy of resolverData
 // suitable for REST API and MCP JSON responses without mutating resolverData
 // (so downstream action execution continues to receive raw sensitive values).
@@ -509,19 +533,21 @@ func SanitizeResolverDataForResponse(
 	return out
 }
 
-// ResolversForPreview is a convenience wrapper over Resolvers that returns
-// only the resolved data map. It initialises a default builtin registry when
-// registry is nil and reads the execution config from context. This is the
-// shared entry point for preview/render operations in both the MCP server
-// and the CLI.
-func ResolversForPreview(
+// ResolversWithContextForPreview runs resolvers under PlaceholderCredentialResolver
+// and returns the full ResolverExecutionResult (both Data and Context) so render
+// and preview callers can sanitize sensitive/credential-backed outputs after
+// building action graphs.
+func ResolversWithContextForPreview(
 	ctx context.Context,
 	sol *solution.Solution,
 	params map[string]any,
 	registry ProviderLookup,
-) (map[string]any, error) {
+) (*ResolverExecutionResult, error) {
 	if !sol.Spec.HasResolvers() {
-		return make(map[string]any), nil
+		return &ResolverExecutionResult{
+			Data:    make(map[string]any),
+			Context: resolver.NewContext(),
+		}, nil
 	}
 
 	// Use the side-effect-free placeholder CredentialResolver during render/preview
@@ -538,11 +564,24 @@ func ResolversForPreview(
 	}
 
 	cfg := ResolverExecutionConfigFromContext(ctx)
-	result, err := Resolvers(ctx, sol, params, registry, cfg)
+	return Resolvers(ctx, sol, params, registry, cfg)
+}
+
+// ResolversForPreview is a convenience wrapper over Resolvers that returns
+// only the resolved data map. It initialises a default builtin registry when
+// registry is nil and reads the execution config from context. This is the
+// shared entry point for preview/render operations in both the MCP server
+// and the CLI.
+func ResolversForPreview(
+	ctx context.Context,
+	sol *solution.Solution,
+	params map[string]any,
+	registry ProviderLookup,
+) (map[string]any, error) {
+	result, err := ResolversWithContextForPreview(ctx, sol, params, registry)
 	if err != nil {
 		return nil, err
 	}
-
 	return result.Data, nil
 }
 
@@ -602,6 +641,10 @@ type ActionExecutionConfig struct {
 	// Callers that change the working directory before creating the executor
 	// (e.g., bundle extraction) should set this explicitly.
 	Cwd string `json:"-" yaml:"-"`
+
+	// ResolverContext optionally supplies resolver execution metadata so action
+	// input snapshots mask CredentialBacked resolvers alongside sensitive: true ones.
+	ResolverContext *resolver.Context `json:"-" yaml:"-"`
 }
 
 // ActionExecutionResult wraps the action executor result with additional metadata.
@@ -660,6 +703,7 @@ func Actions(
 	executorOpts := []action.ExecutorOption{
 		action.WithRegistry(registry),
 		action.WithResolverData(resolverData),
+		action.WithSensitiveResolvers(SensitiveResolverNames(sol, cfg.ResolverContext)),
 		action.WithDefaultTimeout(cfg.DefaultTimeout),
 		action.WithGracePeriod(cfg.GracePeriod),
 	}

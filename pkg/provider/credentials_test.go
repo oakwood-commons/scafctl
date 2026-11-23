@@ -248,3 +248,67 @@ func TestExecutorAndRunProvider_CredentialsRedaction(t *testing.T) {
 		assert.NotContains(t, fbOut.String(), "super_secret_prov_token_777")
 	})
 }
+
+func TestInputResolver_PreResolvedInputsBlocksSecondOrderInjectionAndMasksShortSecretCoercion(t *testing.T) {
+	t.Parallel()
+
+	credRes := &stubProviderCredResolver{
+		secrets: map[string]string{
+			"host-secret": "EXFILTRATED_HOST_SECRET_9999",
+			"tiny-pin":    "xy",
+		},
+		tokens: map[string]string{
+			"github": "EXFILTRATED_GH_TOKEN_8888",
+		},
+	}
+
+	schema := schemahelper.ObjectSchema([]string{"payload"}, map[string]*jsonschema.Schema{
+		"payload":  schemahelper.AnyProp("untrusted object"),
+		"items":    schemahelper.AnyProp("untrusted array"),
+		"multiKey": schemahelper.AnyProp("scaffolded YAML map containing ValueRef keys"),
+		"port":     schemahelper.IntProp("coerced port"),
+		"withDef":  {Type: "string", Default: []byte(`"default-val"`)},
+	})
+
+	baseCtx := spec.WithCredentialResolver(context.Background(), credRes)
+	baseCtx = WithResolverContext(baseCtx, map[string]any{"internal": "INTERNAL_RESOLVER_DATA"})
+	preCtx := WithPreResolvedInputs(baseCtx)
+
+	untrustedPayload := map[string]any{"scrt": "host-secret"}
+	untrustedItems := []any{
+		map[string]any{"tkn": "github"},
+		map[string]any{"expr": "1 + 1"},
+		map[string]any{"tmpl": "{{ .internal }}"},
+		map[string]any{"rslvr": "internal"},
+	}
+	scaffoldedMap := map[string]any{
+		"scrt":  "not-a-valueref",
+		"expr":  "also-inert",
+		"other": "allowed-together",
+	}
+
+	ir := NewInputResolver(preCtx, schema, nil)
+	resolved, err := ir.ResolveInputs(map[string]any{
+		"payload":  untrustedPayload,
+		"items":    untrustedItems,
+		"multiKey": scaffoldedMap,
+		"port":     "8080",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, untrustedPayload, resolved["payload"], "untrusted {scrt:...} map must remain inert literal data")
+	assert.Equal(t, untrustedItems, resolved["items"], "nested ValueRef-shaped maps must remain inert literal data")
+	assert.Equal(t, scaffoldedMap, resolved["multiKey"], "maps with ValueRef keys plus sibling keys must pass through")
+	assert.Equal(t, 8080, resolved["port"], "schema type coercion must still apply")
+	assert.Equal(t, "default-val", resolved["withDef"], "schema defaults must still apply")
+
+	// Non-pre-resolved InputResolver masks <4-byte scrt: coercion errors without leaking the short secret.
+	rawIR := NewInputResolver(baseCtx, schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+		"pin": schemahelper.IntProp("numeric pin"),
+	}), nil)
+	_, err = rawIR.ResolveInputs(map[string]any{
+		"pin": map[string]any{"scrt": "tiny-pin"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "coercion failed for secret value")
+	assert.NotContains(t, err.Error(), "xy")
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
@@ -487,4 +488,171 @@ actions:
           expr: __actions.missing_step.results.stdout
 `), &brokenWF))
 	require.Error(t, ValidateWorkflow(&brokenWF, reg))
+}
+
+type capturingTypedActionProvider struct {
+	mu       sync.Mutex
+	received map[string]map[string]any
+}
+
+func (p *capturingTypedActionProvider) Descriptor() *provider.Descriptor {
+	return &provider.Descriptor{
+		Name:         "typed-action",
+		DisplayName:  "Typed Action",
+		Description:  "Captures raw resolved action inputs including int coercion",
+		APIVersion:   "v1",
+		Version:      semver.MustParse("1.0.0"),
+		Capabilities: []provider.Capability{provider.CapabilityAction},
+		Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+			"payload": schemahelper.AnyProp("Untrusted map payload"),
+			"pin":     schemahelper.IntProp("Coerced int secret"),
+			"short":   schemahelper.StringProp("Short <4-byte secret"),
+			"sensRef": schemahelper.IntProp("Sensitive resolver int"),
+			"env":     schemahelper.AnyProp("Nested env map"),
+		}),
+		OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+			provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"ok": schemahelper.BoolProp("ok"),
+			}),
+		},
+	}
+}
+
+func (p *capturingTypedActionProvider) Execute(_ context.Context, input any) (*provider.Output, error) {
+	m, _ := input.(map[string]any)
+	p.mu.Lock()
+	if p.received == nil {
+		p.received = make(map[string]map[string]any)
+	}
+	cp := make(map[string]any, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	p.received["last"] = cp
+	p.mu.Unlock()
+	return &provider.Output{Data: map[string]any{"ok": true}}, nil
+}
+
+func TestActionCredentials_SecondOrderInjectionBlockedAndShortSensitiveInputsMasked(t *testing.T) {
+	t.Parallel()
+
+	credRes := &rotatingCredResolver{
+		secrets: map[string]string{
+			"host-secret": "TOP_SECRET_DO_NOT_EXFILTRATE",
+			"pin-secret":  "42",
+			"tiny-secret": "ab",
+			"bad-int":     "xy",
+		},
+		tokens: map[string]string{
+			"github": "ghp_DO_NOT_MINT_SECOND_ORDER",
+		},
+	}
+	ctx := spec.WithCredentialResolver(context.Background(), credRes)
+
+	untrustedResolverOutput := map[string]any{
+		"scrt": "host-secret",
+	}
+	nestedUntrusted := map[string]any{
+		"injectedSecret": map[string]any{"scrt": "host-secret"},
+		"injectedToken":  map[string]any{"tkn": "github"},
+		"injectedExpr":   map[string]any{"expr": "1 + 1"},
+		"multiKey":       map[string]any{"rslvr": "foo", "extra": "bar"},
+	}
+
+	var wf Workflow
+	require.NoError(t, yaml.Unmarshal([]byte(`
+actions:
+  step_one:
+    provider: typed-action
+    inputs:
+      payload:
+        rslvr: untrustedMap
+      pin:
+        scrt: pin-secret
+      short:
+        scrt: tiny-secret
+      sensRef:
+        rslvr: sensitivePin
+      env:
+        NESTED_UNTRUSTED:
+          rslvr: nestedUntrusted
+        SHORT_ENV:
+          scrt: tiny-secret
+        VISIBLE: "keep-me"
+`), &wf))
+
+	capProv := &capturingTypedActionProvider{}
+	reg := &credTestRegistry{providers: map[string]provider.Provider{"typed-action": capProv}}
+
+	resolverData := map[string]any{
+		"untrustedMap":    untrustedResolverOutput,
+		"nestedUntrusted": nestedUntrusted,
+		"sensitivePin":    7,
+	}
+
+	exec := NewExecutor(
+		WithRegistry(reg),
+		WithResolverData(resolverData),
+		WithSensitiveResolvers(map[string]bool{"sensitivePin": true}),
+	)
+	res, err := exec.Execute(ctx, &wf)
+	require.NoError(t, err)
+	assert.Equal(t, ExecutionSucceeded, res.FinalStatus)
+
+	// Provider received inert untrusted maps WITHOUT second-order evaluation, plus real coerced secrets!
+	got := capProv.received["last"]
+	assert.Equal(t, untrustedResolverOutput, got["payload"])
+	assert.Equal(t, 42, got["pin"])
+	assert.Equal(t, "ab", got["short"])
+	assert.Equal(t, 7, got["sensRef"])
+	gotEnv := got["env"].(map[string]any)
+	assert.Equal(t, nestedUntrusted, gotEnv["NESTED_UNTRUSTED"])
+	assert.Equal(t, "ab", gotEnv["SHORT_ENV"])
+	assert.Equal(t, "keep-me", gotEnv["VISIBLE"])
+
+	// ActionResult.Inputs structurally masked coerced int and <4-byte secrets and sensitive resolvers!
+	actInputs := res.Actions["step_one"].Inputs
+	assert.Equal(t, redact.RedactedPlaceholder, actInputs["pin"])
+	assert.Equal(t, redact.RedactedPlaceholder, actInputs["short"])
+	assert.Equal(t, redact.RedactedPlaceholder, actInputs["sensRef"])
+	maskedEnv := actInputs["env"].(map[string]any)
+	assert.Equal(t, redact.RedactedPlaceholder, maskedEnv["SHORT_ENV"])
+	assert.Equal(t, "keep-me", maskedEnv["VISIBLE"])
+
+	// Short <4-byte secret failing int coercion in action mode masks the coercion error!
+	var badCoerceWF Workflow
+	require.NoError(t, yaml.Unmarshal([]byte(`
+actions:
+  bad_pin:
+    provider: typed-action
+    inputs:
+      pin:
+        scrt: bad-int
+`), &badCoerceWF))
+	badRes, badErr := NewExecutor(WithRegistry(reg)).Execute(ctx, &badCoerceWF)
+	require.Error(t, badErr)
+	assert.NotContains(t, badErr.Error(), "xy")
+	assert.NotContains(t, badRes.Actions["bad_pin"].Error, "xy")
+
+	// RedactGraphInputs masks sensitive materialized inputs for render/preview graphs!
+	var renderWF Workflow
+	require.NoError(t, yaml.Unmarshal([]byte(`
+actions:
+  preview_act:
+    provider: typed-action
+    inputs:
+      sensRef:
+        rslvr: sensitivePin
+      env:
+        PIN_EXPR:
+          expr: "string(_.sensitivePin)"
+        PUBLIC: "ok"
+`), &renderWF))
+	graph, gErr := BuildGraph(context.Background(), &renderWF, resolverData, nil)
+	require.NoError(t, gErr)
+	RedactGraphInputs(graph, redact.NewTracker(), map[string]bool{"sensitivePin": true})
+	assert.Equal(t, redact.RedactedPlaceholder, graph.Actions["preview_act"].MaterializedInputs["sensRef"])
+	renderEnv := graph.Actions["preview_act"].MaterializedInputs["env"].(map[string]any)
+	assert.Equal(t, redact.RedactedPlaceholder, renderEnv["PIN_EXPR"])
+	assert.Equal(t, "ok", renderEnv["PUBLIC"])
 }

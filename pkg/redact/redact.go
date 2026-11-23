@@ -468,14 +468,28 @@ func (t *Tracker) redactAnyDepth(v any, depth int) any {
 	}
 }
 
+// escapeGitHubActionsMaskData escapes workflow-command data per GitHub Actions
+// runner rules (% -> %25, \r -> %0D, \n -> %0A) so literal percent signs in
+// secrets are not decoded by the runner when registering masks.
+func escapeGitHubActionsMaskData(s string) string {
+	s = strings.ReplaceAll(s, "%", "%25")
+	s = strings.ReplaceAll(s, "\r", "%0D")
+	s = strings.ReplaceAll(s, "\n", "%0A")
+	return s
+}
+
 // EmitGitHubActionsMasks writes "::add-mask::<line>\n" to w once per unique
 // single-line secret when GITHUB_ACTIONS=true. Callers wrapping stdout in a
 // StreamWriter must pass the underlying unredacted writer before streaming
 // starts so the mask command itself is not scrubbed.
 func (t *Tracker) EmitGitHubActionsMasks(w io.Writer) {
+	_, _ = t.emitGitHubActionsMasks(w, true)
+}
+
+func (t *Tracker) emitGitHubActionsMasks(w io.Writer, atLineStart bool) (bool, error) {
 	root := t.Root()
 	if root == nil || w == nil || os.Getenv("GITHUB_ACTIONS") != "true" {
-		return
+		return atLineStart, nil
 	}
 
 	root.mu.Lock()
@@ -492,9 +506,22 @@ func (t *Tracker) EmitGitHubActionsMasks(w io.Writer) {
 	}
 	root.mu.Unlock()
 
-	for _, line := range toEmit {
-		_, _ = fmt.Fprintf(w, "::add-mask::%s\n", line)
+	if len(toEmit) == 0 {
+		return atLineStart, nil
 	}
+	if !atLineStart {
+		if _, err := io.WriteString(w, "\n"); err != nil {
+			return false, err
+		}
+		atLineStart = true
+	}
+	for _, line := range toEmit {
+		if _, err := fmt.Fprintf(w, "::add-mask::%s\n", escapeGitHubActionsMaskData(line)); err != nil {
+			return atLineStart, err
+		}
+		atLineStart = true
+	}
+	return atLineStart, nil
 }
 
 // matchLongestAt returns the length of the longest tracked secret that is a

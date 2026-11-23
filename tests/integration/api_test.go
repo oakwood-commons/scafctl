@@ -3117,13 +3117,14 @@ spec:
 	defer solServer.Close()
 	solURL := solServer.URL + "/solution.yaml"
 
-	// 1. POST /v1/solutions/render returns placeholder without touching live secrets.
+	// 1. POST /v1/solutions/render redacts sensitive resolvers without touching live secrets.
 	renderObj := e.POST("/v1/solutions/render").
 		WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
 		Expect().
 		Status(http.StatusOK).
 		JSON().Object()
-	renderObj.Value("resolverData").Object().HasValue("bearer_secret", "Bearer <redacted:scrt:api-deploy-secret>")
+	renderObj.Value("resolverData").Object().HasValue("bearer_secret", "[REDACTED]")
+	renderObj.Value("resolverData").Object().HasValue("pin_code", "[REDACTED]")
 
 	// 2. POST /v1/solutions/dryrun emits preview without writing file or leaking secret.
 	dryBody := e.POST("/v1/solutions/dryrun").

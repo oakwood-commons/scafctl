@@ -572,7 +572,12 @@ func (c *Client) ExecuteProviderStream(ctx context.Context, providerName string,
 
 // DescribeWhatIf returns a human-readable description of what the provider would do
 func (c *Client) DescribeWhatIf(ctx context.Context, providerName string, input map[string]any) (string, error) {
-	return c.plugin.DescribeWhatIf(ctx, providerName, input)
+	execCtx, release, err := c.acquireTracker(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	return c.plugin.DescribeWhatIf(execCtx, providerName, input)
 }
 
 // ExtractDependencies returns resolver dependency names from the provider's inputs.

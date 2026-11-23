@@ -671,6 +671,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	actionExecutor := action.NewExecutor(
 		action.WithRegistry(reg),
 		action.WithResolverData(resolverData),
+		action.WithSensitiveResolvers(execute.SensitiveResolverNames(sol, resolverCtx)),
 		action.WithExecutionData(resolverExecutionData),
 		action.WithProgressCallback(actionProgressCallback),
 		action.WithDefaultTimeout(actionCfg.DefaultTimeout),

@@ -25,6 +25,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
@@ -625,7 +626,7 @@ func (s *Server) Close() {
 // up-to-date configuration on every tool invocation (e.g. after an auth
 // profile switch via auth_set_profile).
 func (s *Server) freshConfigContext(ctx context.Context) context.Context {
-	merged := mergeContext(ctx, s.ctx)
+	merged := redact.WithTracker(mergeContext(ctx, s.ctx), redact.NewTracker())
 	if s.cfgReloader != nil {
 		if cfg := s.cfgReloader.Config(); cfg != nil {
 			merged = config.WithConfig(merged, cfg)

@@ -9,8 +9,16 @@ import (
 	"sort"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 )
+
+func persistedResolverValue(r *resolver.Resolver, result *resolver.ExecutionResult) any {
+	if (r != nil && r.Sensitive) || (result != nil && result.CredentialBacked) {
+		return redact.RedactedPlaceholder
+	}
+	return result.Value
+}
 
 // CheckMissingLocks guards against silently replacing immutable locks. It
 // returns a *MissingLocksError when a loaded state document carries parameters
@@ -86,6 +94,7 @@ func PersistResolvers(stateData *Data, resolverCtx *resolver.Context, resolvers 
 			continue
 		}
 
+		persistedVal := persistedResolverValue(r, result)
 		existing, exists := stateData.Resolvers[r.Name]
 
 		if r.Immutable {
@@ -104,7 +113,7 @@ func PersistResolvers(stateData *Data, resolverCtx *resolver.Context, resolvers 
 					createdAt = existing.CreatedAt
 				}
 				stateData.Resolvers[r.Name] = &PersistedEntry{
-					Value:     result.Value,
+					Value:     persistedVal,
 					Type:      string(r.Type),
 					Immutable: true,
 					CreatedAt: createdAt,
@@ -114,7 +123,7 @@ func PersistResolvers(stateData *Data, resolverCtx *resolver.Context, resolvers 
 			}
 
 			// Subsequent run: verify the value matches.
-			if !immutableValuesEqual(existing.Value, result.Value) {
+			if !immutableValuesEqual(existing.Value, persistedVal) {
 				return immutableMismatchError(r.Name)
 			}
 			continue
@@ -134,7 +143,7 @@ func PersistResolvers(stateData *Data, resolverCtx *resolver.Context, resolvers 
 			createdAt = existing.CreatedAt
 		}
 		stateData.Resolvers[r.Name] = &PersistedEntry{
-			Value:     result.Value,
+			Value:     persistedVal,
 			Type:      string(r.Type),
 			Immutable: false,
 			CreatedAt: createdAt,
@@ -174,7 +183,7 @@ func VerifyImmutables(stateData *Data, resolverCtx *resolver.Context, resolvers 
 			continue
 		}
 
-		if !immutableValuesEqual(existing.Value, result.Value) {
+		if !immutableValuesEqual(existing.Value, persistedResolverValue(r, result)) {
 			return immutableMismatchError(r.Name)
 		}
 	}

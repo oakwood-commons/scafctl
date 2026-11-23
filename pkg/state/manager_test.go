@@ -5,6 +5,7 @@ package state
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -889,6 +891,43 @@ func TestManagerCheckpoint(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, result)
 	})
+
+	t.Run("Save scrubs tracked secrets from dataMap and blocks second-order ValueRef injection", func(t *testing.T) {
+		t.Parallel()
+		mgr, full, intent := newMgr(t, false)
+		tracker := redact.NewTracker()
+		tracker.Track("super_secret_param_value")
+
+		// Install a CredentialResolver that would fail loudly if second-order scrt: were evaluated.
+		ctx := redact.WithTracker(context.Background(), tracker)
+		ctx = spec.WithCredentialResolver(ctx, errCredResolver{})
+
+		untrustedParam := map[string]any{"scrt": "do-not-resolve"}
+		params := map[string]any{
+			"injected": untrustedParam,
+			"leaked":   "prefix super_secret_param_value suffix",
+		}
+		sd := NewData()
+		_, err := mgr.Save(ctx, sd, resolver.NewContext(), nil, params, nil, solMeta, nil)
+		require.NoError(t, err)
+		require.Len(t, full.saveCalls, 1)
+		require.Len(t, intent.saveCalls, 1)
+
+		savedFull := full.saveCalls[0]["data"].(map[string]any)
+		savedParams := savedFull["parameters"].(map[string]any)
+		assert.Equal(t, map[string]any{"scrt": "do-not-resolve"}, savedParams["injected"], "untrusted {scrt:...} map in state data must stay inert")
+		assert.Equal(t, "prefix [REDACTED] suffix", savedParams["leaked"], "tracked secrets in state dataMap must be redacted before state_save")
+	})
+}
+
+type errCredResolver struct{}
+
+func (errCredResolver) ResolveSecret(_ context.Context, name string) (string, error) {
+	return "", fmt.Errorf("unexpected second-order ResolveSecret(%q)", name)
+}
+
+func (errCredResolver) ResolveToken(_ context.Context, req spec.TokenRef) (string, error) {
+	return "", fmt.Errorf("unexpected second-order ResolveToken(%q)", req.Handler)
 }
 
 func TestManagerSave_Immutable(t *testing.T) {

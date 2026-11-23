@@ -293,3 +293,29 @@ func TestChildTracker_AndByteSliceRedaction(t *testing.T) {
 	assert.Contains(t, out.String(), "::add-mask::secret-bytes-value-999\n")
 	assert.Contains(t, out.String(), "streaming [REDACTED]\n")
 }
+
+func TestStreamWriter_GitHubActionsMasksAtColumnZeroAndPercentEscaped(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+
+	tr := NewTracker()
+	var out bytes.Buffer
+	sw := NewStreamWriterWithMasks(&out, tr, true)
+
+	// 1. Write mid-line output BEFORE any secret is tracked (leaves cursor mid-line).
+	_, err := sw.Write([]byte("progress..."))
+	require.NoError(t, err)
+	assert.Equal(t, "progress...", out.String())
+
+	// 2. Dynamically track a secret containing '%' (must be escaped as %25 and start on column 0).
+	tr.Track("tok%40percent%25val")
+	_, err = sw.Write([]byte(" using tok%40percent%25val"))
+	require.NoError(t, err)
+
+	// 3. Subsequent write with NO new secrets must not insert extra blank lines.
+	_, err = sw.Write([]byte(" done\n"))
+	require.NoError(t, err)
+	require.NoError(t, sw.Flush())
+
+	got := out.String()
+	assert.Equal(t, "progress...\n::add-mask::tok%2540percent%2525val\n using [REDACTED] done\n", got)
+}
