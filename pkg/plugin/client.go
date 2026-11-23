@@ -35,6 +35,72 @@ type pluginConfig struct {
 	logger             hclog.Logger           // if nil, a null logger is used
 	startTimeout       time.Duration          // if >0, bounds plugin startup/handshake
 	grpcMaxMessageSize int                    // if >0, overrides default gRPC max message size
+
+	// socketDir, when non-nil, asks connectPlugin to create a host-owned
+	// directory for the plugin's unix socket and to store its path here (empty
+	// when no directory is used). The caller removes it once the plugin is
+	// gone; see newSocketDir.
+	socketDir *string
+}
+
+const (
+	// socketDirPrefix names the directory the host creates for a plugin's unix
+	// socket. It matches the prefix go-plugin uses for directories it creates
+	// itself.
+	socketDirPrefix = "plugin-dir"
+
+	// maxSocketPathLen is the longest unix socket path the host will allow.
+	// sun_path holds 104 bytes on macOS and the BSDs (108 on Linux), including
+	// the terminating NUL; one conservative limit is applied everywhere so the
+	// behavior does not depend on the platform.
+	maxSocketPathLen = 103
+
+	// socketFileNameLen is the longest name go-plugin gives a socket inside
+	// its directory: "plugin" followed by a 32-bit decimal number.
+	socketFileNameLen = len("plugin") + 10
+)
+
+// newSocketDir creates a private directory for a plugin's unix socket. A
+// plugin that is killed, or that crashes, cannot remove its own socket, so
+// letting it create the socket in the shared temp directory leaves the file
+// behind for good. A directory the host created is one the host can delete
+// once the plugin is gone, whatever state the plugin died in.
+//
+// It returns "" when the host should not or cannot own a directory, in which
+// case the plugin creates its socket as it always did:
+//   - on Windows, where go-plugin talks over TCP;
+//   - when PLUGIN_UNIX_SOCKET_DIR is already set in the environment the host
+//     runs in and that environment reaches the plugin (inheritsHostEnv). That
+//     operator has chosen where plugin sockets go, and go-plugin appends the
+//     host's environment after the variables set here, so their value would
+//     win and a directory made here would sit unused. A sanitized environment
+//     does not pass the variable on, so it is not a reason to skip there;
+//   - when a socket path inside the directory would exceed the platform limit,
+//     which would stop the plugin from starting at all.
+func newSocketDir(inheritsHostEnv bool) string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	if inheritsHostEnv && os.Getenv(plugin.EnvUnixSocketDir) != "" {
+		return ""
+	}
+	dir, err := os.MkdirTemp("", socketDirPrefix)
+	if err != nil {
+		return ""
+	}
+	if len(dir)+1+socketFileNameLen > maxSocketPathLen {
+		_ = os.RemoveAll(dir)
+		return ""
+	}
+	return dir
+}
+
+// removeSocketDir deletes a directory made by newSocketDir. An empty dir means
+// none was used.
+func removeSocketDir(dir string) {
+	if dir != "" {
+		_ = os.RemoveAll(dir)
+	}
 }
 
 // resolveGRPCMaxMessageSize returns the effective gRPC max message size.
@@ -64,6 +130,21 @@ func connectPlugin(pluginPath string, cfg pluginConfig) (any, *plugin.Client, er
 
 	maxMsgSize := resolveGRPCMaxMessageSize(cfg.grpcMaxMessageSize)
 
+	cmd := cmdFn(pluginPath)
+	if cfg.socketDir != nil {
+		*cfg.socketDir = newSocketDir(!cfg.skipHostEnv)
+		if *cfg.socketDir != "" {
+			// Unless the environment is sanitized (skipHostEnv), go-plugin
+			// appends the host environment and its own variables after
+			// cmd.Env, so this adds to what the plugin inherits. The last value
+			// of a repeated variable wins, which is why newSocketDir makes no
+			// directory when the host already sets this one: the value set here
+			// is then the only one the plugin sees. When the environment is
+			// sanitized the plugin sees only the allowlisted variables and this.
+			cmd.Env = append(cmd.Env, plugin.EnvUnixSocketDir+"="+*cfg.socketDir)
+		}
+	}
+
 	//nolint:noctx // Context not available at plugin initialization time
 	clientConfig := &plugin.ClientConfig{
 		HandshakeConfig: plugin.HandshakeConfig{
@@ -74,7 +155,7 @@ func connectPlugin(pluginPath string, cfg pluginConfig) (any, *plugin.Client, er
 		Plugins: map[string]plugin.Plugin{
 			cfg.pluginName: cfg.grpcPlugin,
 		},
-		Cmd:              cmdFn(pluginPath),
+		Cmd:              cmd,
 		SkipHostEnv:      cfg.skipHostEnv,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		// Always set an explicit logger so HC_LOG env vars cannot force debug
@@ -240,6 +321,10 @@ type Client struct {
 	name         string
 	trackerSlot  *brokerTrackerSlot
 
+	// socketDir is the host-owned directory holding the plugin's unix socket,
+	// removed by Kill. Empty when the plugin creates its socket itself.
+	socketDir string
+
 	// descriptorCache caches GetProviderDescriptor results to avoid redundant
 	// RPCs for the same provider within a single client lifecycle.
 	mu              sync.RWMutex
@@ -400,13 +485,17 @@ func WithGRPCMaxMessageSize(size int) ClientOption {
 
 // buildPluginClient is a shared helper that processes options, builds the command
 // function, constructs an hclog logger if needed, and returns the result.
+//
+// It also returns the directory the host created for the plugin's socket, which
+// the caller must remove after killing the plugin (empty when none was made).
+// On any error the directory has already been removed.
 func buildPluginClient[T any](
 	pluginPath string,
 	opts []ClientOption,
 	connectFn func(string, pluginConfig) (any, *plugin.Client, error),
 	makeCfg func(clientOptions, hclog.Logger, func(string) *exec.Cmd) pluginConfig,
 	assertPlugin func(any) (T, error),
-) (T, *plugin.Client, error) {
+) (T, *plugin.Client, string, error) {
 	var zero T
 	if connectFn == nil {
 		connectFn = connectPlugin
@@ -428,18 +517,22 @@ func buildPluginClient[T any](
 	}
 
 	cfg := makeCfg(o, hcLogger, cmdFn)
+	var socketDir string
+	cfg.socketDir = &socketDir
 	raw, client, err := connectFn(pluginPath, cfg)
 	if err != nil {
-		return zero, nil, err
+		removeSocketDir(socketDir)
+		return zero, nil, "", err
 	}
 
 	typed, err := assertPlugin(raw)
 	if err != nil {
 		client.Kill()
-		return zero, nil, err
+		removeSocketDir(socketDir)
+		return zero, nil, "", err
 	}
 
-	return typed, client, nil
+	return typed, client, socketDir, nil
 }
 
 // newClientWithConnector creates a provider plugin client using the given connector.
@@ -452,7 +545,7 @@ func newClientWithConnector(
 	opts ...ClientOption,
 ) (*Client, error) {
 	slot := newBrokerTrackerSlot()
-	providerPlugin, client, err := buildPluginClient(
+	providerPlugin, client, socketDir, err := buildPluginClient(
 		pluginPath,
 		opts,
 		connectFn,
@@ -490,6 +583,7 @@ func newClientWithConnector(
 		path:         pluginPath,
 		name:         pluginNameFromPath(pluginPath),
 		trackerSlot:  slot,
+		socketDir:    socketDir,
 	}, nil
 }
 
@@ -588,7 +682,10 @@ func (c *Client) ExtractDependencies(ctx context.Context, providerName string, i
 	return c.plugin.ExtractDependencies(ctx, providerName, inputs)
 }
 
-// Kill terminates the plugin process
+// Kill terminates the plugin process and removes the directory that held its
+// socket. Removing the directory is what makes a plugin that died without
+// closing its socket, by crashing or being killed, leave nothing behind. It is
+// safe to call more than once.
 func (c *Client) Kill() {
 	if c == nil {
 		return
@@ -596,6 +693,7 @@ func (c *Client) Kill() {
 	if c.pluginClient != nil {
 		c.pluginClient.Kill()
 	}
+	removeSocketDir(c.socketDir)
 }
 
 // Name returns the plugin name
@@ -630,6 +728,10 @@ type AuthHandlerClient struct {
 	multiLockMu sync.Mutex
 	serverMode  bool
 	wrappers    []*AuthHandlerWrapper
+
+	// socketDir is the host-owned directory holding the plugin's unix socket,
+	// removed by Kill. Empty when the plugin creates its socket itself.
+	socketDir string
 }
 
 // newAuthHandlerClientWithConnector creates an auth handler plugin client
@@ -647,7 +749,7 @@ func newAuthHandlerClientWithConnector(
 	// PromptBroker the HostService server sees. Resolving options a second
 	// time would allocate a different isolated broker.
 	var served *HostServiceDeps
-	authPlugin, client, err := buildPluginClient(
+	authPlugin, client, socketDir, err := buildPluginClient(
 		pluginPath,
 		opts,
 		connectFn,
@@ -683,6 +785,7 @@ func newAuthHandlerClientWithConnector(
 		name:            pluginNameFromPath(pluginPath),
 		startupDuration: time.Since(startupStart),
 		hostDeps:        served,
+		socketDir:       socketDir,
 	}, nil
 }
 
@@ -844,11 +947,13 @@ func (c *AuthHandlerClient) ActivateServerMode(ctx context.Context, settings []b
 	return fmt.Errorf("activate server mode failed: plugin does not support server mode")
 }
 
-// Kill terminates the plugin process.
+// Kill terminates the plugin process and removes the directory that held its
+// socket. It is safe to call more than once.
 func (c *AuthHandlerClient) Kill() {
 	if c.pluginClient != nil {
 		c.pluginClient.Kill()
 	}
+	removeSocketDir(c.socketDir)
 }
 
 // Name returns the plugin name.

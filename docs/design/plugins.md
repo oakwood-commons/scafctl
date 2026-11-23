@@ -228,7 +228,7 @@ service HostService {
 | Streaming | `ExecuteProviderStream` | host -> plugin | When IOStreams are available |
 | Dry-run | `DescribeWhatIf` | host -> plugin | During `run solution --dry-run` |
 | Dependencies | `ExtractDependencies` | host -> plugin | During DAG construction |
-| Shutdown | `StopProvider` | host -> plugin | During cancellation or cleanup |
+| Shutdown | `StopProvider` | host -> plugin | Reserved for aborting in-flight work; the host does not call it. A plugin is ended by killing its client (see Process Cleanup) |
 | Callbacks | `HostService.*` | plugin -> host | Anytime during execution |
 
 ### Auth Handler RPC Lifecycle
@@ -244,7 +244,7 @@ service HostService {
 | Token | `ListCachedTokens` | host -> plugin | On cache listing |
 | Token | `PurgeExpiredTokens` | host -> plugin | On cache cleanup |
 | Groups | `GetGroups` | host -> plugin | On group membership lookup (`auth token --decode`, `HostService.GetAuthGroups`) |
-| Shutdown | `StopAuthHandler` | host -> plugin | During cancellation or cleanup |
+| Shutdown | `StopAuthHandler` | host -> plugin | Reserved for releasing handler resources; the host does not call it. A plugin is ended by killing its client (see Process Cleanup) |
 | Callbacks | `HostService.*` | plugin -> host | Anytime during handler operations |
 
 ### ConfigureProvider
@@ -292,7 +292,18 @@ optional host features so handlers can rank login flows before the first
 
 ### StopAuthHandler
 
-Called during CLI shutdown or context cancellation to allow auth handler plugins to release resources gracefully. The RPC carries only the `handler_name`. If the plugin does not implement `StopAuthHandler` (older plugins), the host silently ignores the `Unimplemented` gRPC status.
+Lets an auth handler plugin release resources for a named handler. The RPC carries only the `handler_name`. The host does not currently call it: shutting a plugin down is `Kill()` on its client (see Process Cleanup). If the plugin does not implement `StopAuthHandler` (older plugins), a caller that does invoke it should treat the `Unimplemented` gRPC status as success.
+
+### Process Cleanup
+
+A plugin is a separate process that ignores SIGINT, so nothing but the host will ever stop it. The host's guarantees:
+
+- **Graceful first.** `Client.Kill()` (and `AuthHandlerClient.Kill()`) asks the plugin's go-plugin server to shut down and allows two seconds for it to exit and close its own socket; only a plugin that does not exit in time is force-killed. This holds while a call is still blocked in the plugin.
+- **The host owns the socket directory.** On Unix the host creates a private `plugin-dir*` directory under the temp directory per plugin, passes it as `PLUGIN_UNIX_SOCKET_DIR`, and deletes it in `Kill()`. A plugin that crashes, is killed, or fails its handshake cannot delete its own socket; the host-owned directory is what keeps that from leaving a file behind. Where the path would be too long for a socket, on Windows (TCP), and when `PLUGIN_UNIX_SOCKET_DIR` is already set in the host's environment (an operator's choice, which is honored and whose directory is never deleted), the plugin creates its socket itself.
+- **Failure leaves nothing.** A failed start kills the plugin and removes the directory before the error is returned.
+- **Owners release what they hold.** `Pool` and `VersionPool` kill managed plugins on `Shutdown`; a client handed to an already-closed pool via `Adopt` is killed rather than dropped; `api.Server.Start` releases its pool and preloaded clients on every exit path, after in-flight requests drain.
+
+Plugins not built on the SDK should create their socket inside `PLUGIN_UNIX_SOCKET_DIR` when it is set.
 
 ### GetGroups
 
@@ -641,7 +652,7 @@ Plugins are an implementation detail that enables extensibility.
 - gRPC communication provides language flexibility (Go, Python, Rust, etc.)
 - Plugin providers and built-in providers are indistinguishable to users
 - Plugins are the primary extensibility mechanism
-- Plugin crashes are handled gracefully
+- Plugin crashes are handled gracefully: the host surfaces an error, and the process and its socket are cleaned up (see Process Cleanup)
 - Plugin directory is configurable
 - Plugins may expose multiple providers
 - Provider names must be unique across built-ins and plugins

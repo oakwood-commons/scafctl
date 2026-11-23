@@ -403,12 +403,22 @@ func (s *Server) HandlerCtx() *HandlerContext {
 }
 
 // Start starts the HTTP server and blocks until shutdown.
+//
+// When Start returns, by whatever path, the server has also released the plugin
+// processes it holds: the pool and any preloaded clients. This is the plugin
+// counterpart of cancelling the server context below. It matters because
+// plugins ignore SIGINT and nothing else will stop them once the process exits.
+// The release happens after in-flight requests are drained, since the deferred
+// call runs only once the shutdown goroutine has finished draining.
 func (s *Server) Start() error {
 	// Cancel the server context when Start returns so background goroutines
 	// (e.g. rate-limit cleanup) are stopped on all exit paths, including
 	// early TLS validation failures.
 	defer s.cancel()
 
+	// Registered after the cancel above, so it runs first: plugins are released
+	// on every exit path too, including failing to listen and invalid TLS.
+	defer s.stopPlugins()
 	apiCfg := s.cfg.APIServer
 
 	addr := s.buildHTTPServer()
@@ -471,6 +481,18 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	atomic.StoreInt32(&s.isShuttingDown, 1)
 	s.cancel()
 
+	s.stopPlugins()
+
+	if s.httpSrv != nil {
+		return s.httpSrv.Shutdown(ctx)
+	}
+	return nil
+}
+
+// stopPlugins stops every plugin process the server holds: the pool's, and the
+// clients preloaded outside it. It is idempotent, so the shutdown paths can each
+// call it without coordinating.
+func (s *Server) stopPlugins() {
 	// Shut down plugin pool (kills all managed plugin processes)
 	if s.pluginPool != nil {
 		s.pluginPool.Shutdown()
@@ -480,11 +502,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	for _, c := range s.pluginClients {
 		c.Kill()
 	}
-
-	if s.httpSrv != nil {
-		return s.httpSrv.Shutdown(ctx)
-	}
-	return nil
 }
 
 // buildHTTPServer constructs s.httpSrv from configuration and returns the

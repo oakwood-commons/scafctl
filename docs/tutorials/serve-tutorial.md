@@ -256,7 +256,8 @@ The server handles `SIGINT` and `SIGTERM` signals gracefully:
 
 1. Sets the readiness probe to return 503 (stops receiving new traffic)
 2. Waits for in-flight requests to complete (up to `shutdownTimeout`)
-3. Shuts down cleanly
+3. Stops plugin processes (the plugin pool and any preloaded providers)
+4. Shuts down cleanly
 
 ```bash
 # Send SIGTERM to gracefully stop
