@@ -530,9 +530,10 @@ func validatePastedRedirectURL(value, redirectURI string) error {
 //
 // Chromium-based browsers omit the "http://" scheme when copying a loopback
 // URL from the address bar (e.g. "localhost:8400/callback?code=..."). When
-// redirectURI uses "http://" on a loopback host and the trimmed input lacks
-// "://" while starting with the expected loopback host/port, "http://" is
-// restored before parsing.
+// redirectURI uses "http://" on a loopback host and the trimmed input starts
+// with the expected loopback host/port followed by end-of-input, "/", "?", or
+// "#", "http://" is restored before parsing (even when query or fragment
+// parameters contain URL values such as error_uri=https://...).
 func normalizePastedRedirectURL(value, redirectURI string) (string, error) {
 	if len(value) > promptPasteMaxLen {
 		return "", fmt.Errorf("pasted redirect URL exceeds the maximum length of %d characters", promptPasteMaxLen)
@@ -545,7 +546,7 @@ func normalizePastedRedirectURL(value, redirectURI string) (string, error) {
 	if validateExpectedRedirectURI(redirectURI) == nil {
 		want, _ = url.Parse(redirectURI)
 	}
-	if want != nil && want.Scheme == "http" && isLoopbackHost(want.Hostname()) && !strings.Contains(trimmed, "://") &&
+	if want != nil && want.Scheme == "http" && isLoopbackHost(want.Hostname()) &&
 		len(trimmed) >= len(want.Host) && strings.EqualFold(trimmed[:len(want.Host)], want.Host) &&
 		(len(trimmed) == len(want.Host) || trimmed[len(want.Host)] == '/' || trimmed[len(want.Host)] == '?' || trimmed[len(want.Host)] == '#') {
 		trimmed = "http://" + want.Host + trimmed[len(want.Host):]

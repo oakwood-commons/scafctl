@@ -71,6 +71,18 @@ func TestValidatePastedRedirectURL_SchemeLessLoopback(t *testing.T) {
 			redirectURI: "http://[::1]:8400/callback",
 			want:        "http://[::1]:8400/callback?code=abc",
 		},
+		{
+			name:        "scheme-less localhost with URL-valued error_uri query parameter",
+			value:       "localhost:8400/callback?error=access_denied&error_uri=https://example.com/help",
+			redirectURI: "http://localhost:8400/callback",
+			want:        "http://localhost:8400/callback?error=access_denied&error_uri=https://example.com/help",
+		},
+		{
+			name:        "scheme-less 127.0.0.1 with URL-valued iss parameter",
+			value:       "127.0.0.1:8400/callback?code=abc&iss=https://issuer.example.com",
+			redirectURI: "http://127.0.0.1:8400/callback",
+			want:        "http://127.0.0.1:8400/callback?code=abc&iss=https://issuer.example.com",
+		},
 	}
 
 	for _, tc := range okCases {
@@ -92,6 +104,11 @@ func TestValidatePastedRedirectURL_SchemeLessLoopback(t *testing.T) {
 			name:        "whitespace-only value rejected",
 			value:       "   \t\n  ",
 			redirectURI: "http://localhost:8400/callback",
+		},
+		{
+			name:        "localhost used as outer scheme rejected",
+			value:       "localhost://callback?code=SECRET",
+			redirectURI: "http://localhost",
 		},
 		{
 			name:        "scheme-less port prefix lookalike rejected",

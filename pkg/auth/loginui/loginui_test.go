@@ -1057,6 +1057,24 @@ func TestValidateStatusPasteInput(t *testing.T) {
 			expectedURI: "",
 			want:        "http://localhost:51234/?code=early",
 		},
+		{
+			name:        "scheme-less localhost with URL-valued error_uri query parameter",
+			raw:         "localhost:8400/callback?error=access_denied&error_uri=https://example.com/help",
+			expectedURI: "http://localhost:8400/callback",
+			want:        "http://localhost:8400/callback?error=access_denied&error_uri=https://example.com/help",
+		},
+		{
+			name:        "scheme-less 127.0.0.1 with URL-valued iss parameter",
+			raw:         "127.0.0.1:8400/callback?code=abc&iss=https://issuer.example.com",
+			expectedURI: "http://127.0.0.1:8400/callback",
+			want:        "http://127.0.0.1:8400/callback?code=abc&iss=https://issuer.example.com",
+		},
+		{
+			name:        "scheme-less IPv6 loopback with URL-valued fragment parameter",
+			raw:         "[::1]:8400/callback#access_token=tok123&iss=https://issuer.example.com",
+			expectedURI: "http://[::1]:8400/callback",
+			want:        "http://[::1]:8400/callback#access_token=tok123&iss=https://issuer.example.com",
+		},
 	}
 
 	for _, tc := range okCases {
@@ -1076,6 +1094,10 @@ func TestValidateStatusPasteInput(t *testing.T) {
 		{"empty", "   ", "http://localhost:8400/callback"},
 		{"exceeds max length", "http://localhost:8400/cb?code=" + strings.Repeat("x", maxPasteRedirectURLLen), ""},
 		{"plain garbage", "not-a-url-SECRET123", ""},
+		{"leading colon-slash-slash", "://localhost:8400/callback?code=SECRET123", "http://localhost:8400/callback"},
+		{"non-http outer scheme", "ftp://localhost:8400/callback?code=SECRET123", "http://localhost:8400/callback"},
+		{"custom scheme with plus-dash-dot", "custom+scheme-1.0://localhost:8400/callback?code=SECRET123", ""},
+		{"localhost as scheme", "localhost://callback?code=SECRET123", ""},
 		{"external authorization URL", "https://login.example.com/oauth2/authorize?code=SECRET123", ""},
 		{"non-loopback IP", "http://192.168.1.10:8400/callback?code=SECRET123", ""},
 		{"userinfo spoofing", "http://evil@localhost:8400/callback?code=SECRET123", ""},

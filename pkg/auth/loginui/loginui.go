@@ -826,9 +826,10 @@ func validateStatusPasteInput(raw, expectedRedirectURI string) (string, error) {
 
 // normalizeSchemeLessLoopbackURL restores the "http://" scheme when a browser
 // strips it while copying a loopback URL (localhost, 127.0.0.0/8, or [::1])
-// from the address bar.
+// from the address bar, even when query or fragment parameters contain URL
+// values such as error_uri=https://... or iss=https://....
 func normalizeSchemeLessLoopbackURL(trimmed string, want *url.URL) string {
-	if strings.Contains(trimmed, "://") {
+	if hasOuterURLScheme(trimmed) {
 		return trimmed
 	}
 	if want != nil && !strings.EqualFold(want.Scheme, "http") {
@@ -840,6 +841,34 @@ func normalizeSchemeLessLoopbackURL(trimmed string, want *url.URL) string {
 		return trimmed
 	}
 	return candidate
+}
+
+// hasOuterURLScheme reports whether s starts with an RFC 3986 "<scheme>://"
+// prefix (or a malformed leading "://") rather than only containing "://"
+// inside a path, query, or fragment parameter.
+func hasOuterURLScheme(s string) bool {
+	idx := strings.Index(s, "://")
+	if idx < 0 {
+		return false
+	}
+	if idx == 0 {
+		return true
+	}
+	for i := 0; i < idx; i++ {
+		c := s[i]
+		isAlpha := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		isDigit := c >= '0' && c <= '9'
+		if i == 0 {
+			if !isAlpha {
+				return false
+			}
+			continue
+		}
+		if !isAlpha && !isDigit && c != '+' && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 // canonicalizeLoopbackSchemeAndHost lowercases the URL scheme and host (or
