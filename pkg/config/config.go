@@ -327,6 +327,7 @@ func (m *Manager) setDefaults() {
 		"httpClient.trustProxyResolution",
 		"httpClient.trustedProxy",
 		"auth.browser",
+		"discovery.actionFiles",
 	} {
 		// Errors only when called with no key, which cannot happen here.
 		_ = m.v.BindEnv(key)

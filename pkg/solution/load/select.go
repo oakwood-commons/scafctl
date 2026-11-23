@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 )
 
@@ -20,8 +21,10 @@ const (
 	// (resolvers, actions). args[0] is the source only when it cannot be a
 	// name: a URL, a registry reference, or a versioned name ("app@1.2.3").
 	ArgsAreNames ArgPolicy = iota
-	// ArgsAreNamesOrCatalog is ArgsAreNames, plus a bare args[0] ("app") is a
-	// catalog name when no solution file is discovered.
+	// ArgsAreNamesOrCatalog is ArgsAreNames, plus a bare name args[0] is
+	// selected before discovery when --catalog or --version scopes it, or a
+	// valid catalog bare name (catalog.IsValidName) is selected as a fallback
+	// when no solution file is discovered.
 	ArgsAreNamesOrCatalog
 )
 
@@ -39,11 +42,15 @@ type Selection struct {
 // comes from:
 //
 //  1. explicit (the -f value), when set;
-//  2. args[0], when it is a URL, registry reference, or versioned name;
+//  2. args[0], when it is a URL, registry reference, or versioned name, or
+//     (with ArgsAreNamesOrCatalog, catalog references enabled, and an explicit
+//     catalog or version option) a bare name;
 //  3. auto-discovery, when a solution file is found;
-//  4. with ArgsAreNamesOrCatalog and catalog references enabled, a bare
-//     name args[0].
+//  4. with ArgsAreNamesOrCatalog and catalog references enabled, a valid
+//     catalog bare name args[0] (matching catalog.IsValidName).
 //
+// Malformed reference syntax in explicit or args[0] fails immediately with
+// source.ErrInvalidRef rather than falling through to auto-discovery.
 // A source taken from args[0] is removed from the returned Args. Otherwise
 // the discovery error (wrapping ErrNoSolutionFound) is returned. opts scope
 // the selected source (see source.WithCatalog, source.WithVersion). Select
@@ -54,8 +61,23 @@ func (r *Router) Select(ctx context.Context, explicit string, args []string, pol
 	if explicit != "" {
 		return selection(explicit, args, opts)
 	}
-	if len(args) > 0 && isUnambiguousSource(args[0]) {
-		return selection(args[0], args[1:], opts)
+	if len(args) > 0 {
+		c, err := source.Classify(args[0])
+		if err != nil {
+			return Selection{}, err
+		}
+		if isUnambiguousClass(c) {
+			return selection(args[0], args[1:], opts)
+		}
+		if policy == ArgsAreNamesOrCatalog && r.catalog != nil && len(opts) > 0 && c.Kind == source.KindBareName {
+			scoped, err := selection(args[0], args[1:], opts)
+			if err != nil {
+				return Selection{}, err
+			}
+			if scoped.Source.Catalog != "" || scoped.Source.Version != "" {
+				return scoped, nil
+			}
+		}
 	}
 	if r.discover == nil {
 		return Selection{}, notEnabled(source.Classification{Kind: source.KindAutoDiscover})
@@ -122,13 +144,9 @@ func selection(path string, args []string, opts []source.Option) (Selection, err
 // ("app@1.2.3").
 const nameVersionSeparator = "@"
 
-// isUnambiguousSource reports whether arg can only be a solution source: a
-// URL, a registry reference, or a versioned name.
-func isUnambiguousSource(arg string) bool {
-	c, err := source.Classify(arg)
-	if err != nil {
-		return false
-	}
+// isUnambiguousClass reports whether c can only be a solution source: a URL, a
+// registry reference, or a versioned name.
+func isUnambiguousClass(c source.Classification) bool {
 	switch c.Kind {
 	case source.KindURL, source.KindRemoteRef:
 		return true
@@ -139,8 +157,9 @@ func isUnambiguousSource(arg string) bool {
 	return false
 }
 
-// isCatalogName reports whether arg, on its own, classifies as a catalog name.
+// isCatalogName reports whether arg classifies as an unversioned bare name
+// that satisfies catalog artifact naming rules.
 func isCatalogName(arg string) bool {
 	c, err := source.Classify(arg)
-	return err == nil && c.Kind == source.KindBareName
+	return err == nil && c.Kind == source.KindBareName && catalog.IsValidName(c.Ref)
 }

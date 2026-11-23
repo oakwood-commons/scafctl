@@ -1000,9 +1000,11 @@ type PluginSignaturesConfig struct {
 
 // DiscoveryConfig holds auto-discovery preferences.
 type DiscoveryConfig struct {
-	// ActionFiles overrides the file names searched during "run action"
-	// auto-discovery. When empty, the built-in defaults are used.
-	ActionFiles []string `json:"actionFiles,omitempty" yaml:"actionFiles,omitempty" mapstructure:"actionFiles" doc:"File names for action auto-discovery" maxItems:"20"`
+	// ActionFiles overrides the action file names searched during auto-discovery
+	// in action mode ("run action", "run resolver --action", "validate resolver --action")
+	// and as the fallback in resolver mode ("run resolver", "validate resolver").
+	// When empty, the built-in defaults ("actions.yaml", "actions.yml") are used.
+	ActionFiles []string `json:"actionFiles,omitempty" yaml:"actionFiles,omitempty" mapstructure:"actionFiles" doc:"Action file names for action-mode and resolver-fallback auto-discovery" maxItems:"20"`
 }
 
 // APIServerConfig holds REST API server configuration.

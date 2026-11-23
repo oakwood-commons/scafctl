@@ -15940,6 +15940,171 @@ func TestIntegration_ExplicitFile_GoTaskTaskfileStillErrors(t *testing.T) {
 	assert.Contains(t, stderr, "metadata.name is required")
 }
 
+func TestIntegration_RunAndValidateResolver_CamelCaseAndActionsDiscovery(t *testing.T) {
+	t.Parallel()
+
+	solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: camel-case-solution
+  version: 1.0.0
+spec:
+  resolvers:
+    wifToken:
+      type: string
+      description: workload identity federation token
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: token-from-solution
+`
+
+	actionsYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: camel-case-actions
+  version: 1.0.0
+spec:
+  resolvers:
+    wifToken:
+      type: string
+      description: workload identity federation token
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: token-from-actions
+  workflow:
+    actions:
+      release:
+        description: release using wifToken
+        provider: message
+        inputs:
+          message:
+            rslvr: wifToken
+`
+
+	t.Run("solution.yaml with camelCase resolver", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), []byte(solutionYAML), 0o644))
+
+		stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "wifToken", "-o", "json")
+		assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+		assert.Contains(t, stdout, "token-from-solution")
+
+		vStdout, vStderr, vExitCode := runScafctlInDir(t, tmpDir, "validate", "resolver", "wifToken", "-o", "json")
+		assert.Equal(t, 0, vExitCode, "stderr: %s", vStderr)
+		assert.Contains(t, vStdout, "token-from-solution")
+	})
+
+	t.Run("actions.yaml-only repository", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "actions.yaml"), []byte(actionsYAML), 0o644))
+
+		stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "wifToken", "-o", "json")
+		assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+		assert.Contains(t, stdout, "token-from-actions")
+
+		vStdout, vStderr, vExitCode := runScafctlInDir(t, tmpDir, "validate", "resolver", "wifToken", "-o", "json")
+		assert.Equal(t, 0, vExitCode, "stderr: %s", vStderr)
+		assert.Contains(t, vStdout, "token-from-actions")
+
+		aStdout, aStderr, aExitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "--action", "release", "-o", "json")
+		assert.Equal(t, 0, aExitCode, "stderr: %s", aStderr)
+		assert.Contains(t, aStdout, "token-from-actions")
+	})
+
+	t.Run("coexisting solution.yaml and actions.yaml", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), []byte(solutionYAML), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "actions.yaml"), []byte(actionsYAML), 0o644))
+
+		stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "wifToken", "-o", "json", "--verbose")
+		assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+		assert.Contains(t, stdout, "token-from-solution")
+		assert.NotContains(t, stderr, "Multiple solution files found")
+
+		aStdout, aStderr, aExitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "--action", "release", "-o", "json")
+		assert.Equal(t, 0, aExitCode, "stderr: %s", aStderr)
+		assert.Contains(t, aStdout, "token-from-actions")
+	})
+
+	t.Run("empty directory with camelCase resolver exits FileNotFound", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+
+		_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "wifToken")
+		assert.Equal(t, exitcode.FileNotFound, exitCode, "stderr: %s", stderr)
+		assert.Contains(t, stderr, "no solution file found")
+		assert.NotContains(t, stderr, "invalid solution reference")
+
+		_, vStderr, vExitCode := runScafctlInDir(t, tmpDir, "validate", "resolver", "wifToken")
+		assert.Equal(t, exitcode.FileNotFound, vExitCode, "stderr: %s", vStderr)
+		assert.Contains(t, vStderr, "no solution file found")
+		assert.NotContains(t, vStderr, "invalid solution reference")
+	})
+
+	t.Run("malformed positional ref exits InvalidInput", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), []byte(solutionYAML), 0o644))
+
+		_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "my-app@")
+		assert.Equal(t, exitcode.InvalidInput, exitCode, "stderr: %s", stderr)
+		assert.Contains(t, stderr, "invalid solution reference")
+	})
+
+	t.Run("local resolver typo in solution directory reports unknown resolver instead of catalog lookup", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), []byte(solutionYAML), 0o644))
+
+		_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "my-resolvr")
+		assert.Equal(t, exitcode.InvalidInput, exitCode, "stderr: %s", stderr)
+		assert.Contains(t, stderr, "unknown resolver(s): my-resolvr")
+		assert.Contains(t, stderr, "wifToken")
+	})
+
+	t.Run("bare catalog name with --version or --catalog overrides local solution discovery", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), []byte(solutionYAML), 0o644))
+
+		_, vStderr, vExitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "my-app", "--version", "^1.0.0", "wifToken")
+		assert.NotEqual(t, 0, vExitCode)
+		assert.NotContains(t, vStderr, "not a auto-discover")
+		assert.Contains(t, vStderr, `"my-app"`)
+
+		_, cStderr, cExitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "my-app", "--catalog", "nonexistent-cat", "wifToken")
+		assert.NotEqual(t, 0, cExitCode)
+		assert.NotContains(t, cStderr, "not a auto-discover")
+		assert.Contains(t, cStderr, "nonexistent-cat")
+	})
+
+	t.Run("embedder RootOptions BinaryName mycli and ActionDiscoveryFileNames", func(t *testing.T) {
+		t.Parallel()
+		deployDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(deployDir, "deploy.yaml"), []byte(actionsYAML), 0o644))
+
+		var outBuf, errBuf bytes.Buffer
+		rootCmd, cleanup := scafctl.Root(&scafctl.RootOptions{
+			BinaryName:               "mycli",
+			ActionDiscoveryFileNames: []string{"deploy.yaml"},
+			IOStreams:                &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &outBuf, ErrOut: &errBuf},
+			ExitFunc:                 func(_ int) {},
+		})
+		defer cleanup()
+
+		rootCmd.SetArgs([]string{"run", "resolver", "wifToken", "--cwd", deployDir, "-o", "json"})
+		require.NoError(t, rootCmd.Execute(), "stderr: %s", errBuf.String())
+		assert.Contains(t, outBuf.String(), "token-from-actions")
+	})
+}
+
 // ============================================================================
 // State Command Tests
 // ============================================================================

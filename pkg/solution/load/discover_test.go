@@ -176,6 +176,56 @@ func TestDiscoverLoader_Discover(t *testing.T) {
 			want:  []Discovery{{Path: "solution.yaml"}},
 		},
 		{
+			name:  "resolver mode prefers solution over higher-folder actions without ambiguity",
+			opts:  []DiscoverOption{WithDiscoveryMode(settings.DiscoveryModeResolver)},
+			files: map[string]string{"scafctl/actions.yaml": "", "solution.yaml": ""},
+			want:  []Discovery{{Path: "solution.yaml"}},
+		},
+		{
+			name:  "resolver mode falls back to actions.yaml when no solution exists",
+			opts:  []DiscoverOption{WithDiscoveryMode(settings.DiscoveryModeResolver)},
+			files: map[string]string{"actions.yaml": ""},
+			want:  []Discovery{{Path: "actions.yaml", IsActionFile: true}},
+		},
+		{
+			name:  "resolver mode skips go-task taskfile and falls back to actions.yaml",
+			opts:  []DiscoverOption{WithDiscoveryMode(settings.DiscoveryModeResolver)},
+			files: map[string]string{"taskfile.yaml": goTaskfile, "actions.yaml": ""},
+			want:  []Discovery{{Path: "actions.yaml", IsActionFile: true}},
+		},
+		{
+			name:  "resolver mode keeps solution taskfile over actions.yaml",
+			opts:  []DiscoverOption{WithDiscoveryMode(settings.DiscoveryModeResolver)},
+			files: map[string]string{"taskfile.yaml": solutionTaskfile, "actions.yaml": ""},
+			want:  []Discovery{{Path: "taskfile.yaml"}},
+		},
+		{
+			name:       "resolver mode custom binary and custom action files prefers solution",
+			binaryName: "mycli",
+			opts: []DiscoverOption{
+				WithDiscoveryMode(settings.DiscoveryModeResolver),
+				WithCustomActionFiles([]string{"deploy.yaml"}),
+			},
+			files: map[string]string{".mycli/mycli.yaml": "", "mycli/deploy.yaml": "", "actions.yaml": ""},
+			want:  []Discovery{{Path: ".mycli/mycli.yaml"}},
+		},
+		{
+			name:       "resolver mode custom binary and custom action files fallback",
+			binaryName: "mycli",
+			opts: []DiscoverOption{
+				WithDiscoveryMode(settings.DiscoveryModeResolver),
+				WithCustomActionFiles([]string{"deploy.yaml"}),
+			},
+			files: map[string]string{"mycli/deploy.yaml": "", "actions.yaml": ""},
+			want:  []Discovery{{Path: "mycli/deploy.yaml", IsActionFile: true}},
+		},
+		{
+			name:        "resolver mode nothing found lists both solution and action candidates",
+			opts:        []DiscoverOption{WithDiscoveryMode(settings.DiscoveryModeResolver)},
+			wantErr:     ErrNoSolutionFound,
+			wantErrText: "actions.yaml",
+		},
+		{
 			name:  "default mode never sets alternate",
 			files: map[string]string{"solution.yaml": "", "actions.yaml": ""},
 			want:  []Discovery{{Path: "solution.yaml"}},
@@ -400,6 +450,69 @@ func TestNewDiscoverLoader(t *testing.T) {
 		assert.Equal(t, settings.SolutionFoldersFor("mycli"), dl.folders)
 		assert.Equal(t, settings.FileNamesForMode(settings.DiscoveryModeAction, "mycli", custom), dl.fileNames)
 	})
+
+	t.Run("resolver mode splits solution and fallback action files", func(t *testing.T) {
+		t.Parallel()
+		custom := []string{"deploy.yaml"}
+		dl := NewDiscoverLoader(nil, "mycli",
+			WithDiscoveryMode(settings.DiscoveryModeResolver),
+			WithCustomActionFiles(custom),
+		)
+		assert.Equal(t, settings.DiscoveryModeResolver, dl.mode)
+		assert.Equal(t, settings.SolutionFileNamesFor("mycli"), dl.fileNames)
+		assert.Equal(t, custom, dl.fallbackFileNames)
+	})
+}
+
+func TestDiscoverLoader_ResolverMode_EmbedderZeroAmbiguityWarning(t *testing.T) {
+	t.Parallel()
+
+	t.Run("coexisting mycli solution and custom action file emit zero ambiguity warning", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeTree(t, dir, map[string]string{
+			"mycli.yaml":  validSolutionYAML,
+			"deploy.yaml": validSolutionYAML,
+		})
+		ctx, errOut := verboseWriterCtx(provider.WithWorkingDirectory(t.Context(), dir))
+
+		dl := NewDiscoverLoader(nil, "mycli",
+			WithDiscoveryMode(settings.DiscoveryModeResolver),
+			WithCustomActionFiles([]string{"deploy.yaml"}),
+		)
+		ms, err := dl.Load(ctx, source.Classification{Kind: source.KindAutoDiscover})
+		require.NoError(t, err)
+		assert.Empty(t, ms.OtherMatches, "action file must not appear as an alternate match when a solution file exists")
+
+		ReportDiscovery(ctx, ms)
+		assert.Contains(t, errOut.String(), "Using "+filepath.Join(dir, "mycli.yaml"))
+		assert.NotContains(t, errOut.String(), "Multiple solution files found")
+	})
+
+	t.Run("custom action file loads when no solution file exists", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeTree(t, dir, map[string]string{
+			"deploy.yaml":  validSolutionYAML,
+			"actions.yaml": "not: [valid",
+		})
+		ctx, errOut := verboseWriterCtx(provider.WithWorkingDirectory(t.Context(), dir))
+
+		dl := NewDiscoverLoader(nil, "mycli",
+			WithDiscoveryMode(settings.DiscoveryModeResolver),
+			WithCustomActionFiles([]string{"deploy.yaml"}),
+		)
+		ms, err := dl.Load(ctx, source.Classification{Kind: source.KindAutoDiscover})
+		require.NoError(t, err)
+		require.NotNil(t, ms.Discovery)
+		assert.True(t, ms.Discovery.IsActionFile)
+		assert.Equal(t, filepath.Join(dir, "deploy.yaml"), ms.Discovery.Path)
+		assert.Empty(t, ms.OtherMatches)
+
+		ReportDiscovery(ctx, ms)
+		assert.Contains(t, errOut.String(), "Using "+filepath.Join(dir, "deploy.yaml"))
+		assert.NotContains(t, errOut.String(), "Multiple solution files found")
+	})
 }
 
 // verboseWriterCtx returns ctx with a verbose, colorless writer whose stderr
@@ -528,6 +641,20 @@ func TestDiscoverPath(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("resolver mode uses custom action files from context when no solution exists", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeTree(t, dir, map[string]string{"mycli/deploy.yaml": ""})
+		ctx := settings.IntoContext(provider.WithWorkingDirectory(t.Context(), dir), &settings.Run{
+			BinaryName:               "mycli",
+			ActionDiscoveryFileNames: []string{"deploy.yaml"},
+		})
+
+		got, err := DiscoverPath(ctx, DiscoveryRiskLow, WithDiscoveryMode(settings.DiscoveryModeResolver))
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(dir, "mycli", "deploy.yaml"), got)
+	})
 }
 
 func TestReportSource(t *testing.T) {
@@ -569,6 +696,22 @@ func BenchmarkDiscoverLoader_Load(b *testing.B) {
 	writeTree(b, dir, map[string]string{"solution.yaml": validSolutionYAML})
 	ctx := provider.WithWorkingDirectory(b.Context(), dir)
 	dl := NewDiscoverLoader(nil, "scafctl")
+	c := source.Classification{Kind: source.KindAutoDiscover}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := dl.Load(ctx, c); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDiscoverLoader_Load_ResolverFallback(b *testing.B) {
+	dir := b.TempDir()
+	writeTree(b, dir, map[string]string{"actions.yaml": validSolutionYAML})
+	ctx := provider.WithWorkingDirectory(b.Context(), dir)
+	dl := NewDiscoverLoader(nil, "scafctl", WithDiscoveryMode(settings.DiscoveryModeResolver))
 	c := source.Classification{Kind: source.KindAutoDiscover}
 
 	b.ReportAllocs()

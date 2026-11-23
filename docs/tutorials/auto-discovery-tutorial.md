@@ -75,10 +75,8 @@ The search combines these folder prefixes with these file names:
 6. `scafctl.json`
 7. `taskfile.yaml`
 8. `taskfile.yml`
-9. `actions.yaml`
-10. `actions.yml`
 
-This produces 30 candidate paths checked in this exact order:
+This produces 24 candidate paths checked in this exact order:
 
 | Priority | Path |
 |----------|------|
@@ -90,28 +88,22 @@ This produces 30 candidate paths checked in this exact order:
 | 6 | `scafctl/scafctl.json` |
 | 7 | `scafctl/taskfile.yaml` |
 | 8 | `scafctl/taskfile.yml` |
-| 9 | `scafctl/actions.yaml` |
-| 10 | `scafctl/actions.yml` |
-| 11 | `.scafctl/solution.yaml` |
-| 12 | `.scafctl/solution.yml` |
-| 13 | `.scafctl/scafctl.yaml` |
-| 14 | `.scafctl/scafctl.yml` |
-| 15 | `.scafctl/solution.json` |
-| 16 | `.scafctl/scafctl.json` |
-| 17 | `.scafctl/taskfile.yaml` |
-| 18 | `.scafctl/taskfile.yml` |
-| 19 | `.scafctl/actions.yaml` |
-| 20 | `.scafctl/actions.yml` |
-| 21 | `solution.yaml` |
-| 22 | `solution.yml` |
-| 23 | `scafctl.yaml` |
-| 24 | `scafctl.yml` |
-| 25 | `solution.json` |
-| 26 | `scafctl.json` |
-| 27 | `taskfile.yaml` |
-| 28 | `taskfile.yml` |
-| 29 | `actions.yaml` |
-| 30 | `actions.yml` |
+| 9 | `.scafctl/solution.yaml` |
+| 10 | `.scafctl/solution.yml` |
+| 11 | `.scafctl/scafctl.yaml` |
+| 12 | `.scafctl/scafctl.yml` |
+| 13 | `.scafctl/solution.json` |
+| 14 | `.scafctl/scafctl.json` |
+| 15 | `.scafctl/taskfile.yaml` |
+| 16 | `.scafctl/taskfile.yml` |
+| 17 | `solution.yaml` |
+| 18 | `solution.yml` |
+| 19 | `scafctl.yaml` |
+| 20 | `scafctl.yml` |
+| 21 | `solution.json` |
+| 22 | `scafctl.json` |
+| 23 | `taskfile.yaml` |
+| 24 | `taskfile.yml` |
 
 The first file that exists is used -- with one exception: a `taskfile.yaml`/
 `taskfile.yml` that is **not** a scafctl Solution (it parses as YAML but carries
@@ -121,7 +113,7 @@ none of the recognized solution headers -- `apiVersion: scafctl.io/v1`,
 the next candidate, with a note under `--verbose`. Explicit `-f` is unaffected:
 pointing `-f` at such a file still reports the full validation error.
 
-> **Note:** `taskfile.yaml` is NOT searched in action discovery mode (`scafctl run action`). It is only searched in default and solution discovery modes.
+> **Note:** Action files (`actions.yaml`, `actions.yml`) are excluded from the default 24-path search list and from `scafctl run solution`. In action discovery mode (`scafctl run action`, `scafctl run resolver --action`, `scafctl validate resolver --action`), action files are searched first across the 3 folders with solution files as fallback (and `taskfile.yaml` is excluded). In resolver discovery mode (`scafctl run resolver`, `scafctl validate resolver`), the 24 solution candidates above are searched first, falling back to `actions.yaml`/`actions.yml` across the 3 folders only when no solution file exists.
 
 ### Multi-Match Ambiguity Handling
 
@@ -157,14 +149,16 @@ Auto-discovery works with every command that accepts `-f`:
 
 | Command | Auto-Discovery | Notes |
 |---------|:--------------:|-------|
-| `scafctl run solution` | ✅ | Also supports catalog bare names and URLs |
-| `scafctl run resolver` | ✅ | Falls back to auto-discovery when `-f` is omitted |
-| `scafctl lint` | ✅ | Discovers and lints the local solution |
-| `scafctl render solution` | ✅ | Discovers solution for rendering |
-| `scafctl test functional` | ✅ | Discovers solution to run functional tests |
-| `scafctl test list` | ✅ | Discovers solution to list test cases |
-| `scafctl test init` | ✅ | Discovers solution to generate test scaffold |
-| `scafctl plugins install` | ✅ | Discovers solution to install referenced plugins |
+| `scafctl run solution` | Yes | Also supports catalog bare names and URLs |
+| `scafctl run action` | Yes | Searches `actions.yaml`/`actions.yml` first, then solution files |
+| `scafctl run resolver` | Yes | Searches solution files first, falls back to `actions.yaml`/`actions.yml`, then valid catalog bare names |
+| `scafctl validate resolver` | Yes | Same discovery and catalog fallback as `run resolver` |
+| `scafctl lint` | Yes | Discovers and lints the local solution |
+| `scafctl render solution` | Yes | Discovers solution for rendering |
+| `scafctl test functional` | Yes | Discovers solution to run functional tests |
+| `scafctl test list` | Yes | Discovers solution to list test cases |
+| `scafctl test init` | Yes | Discovers solution to generate test scaffold |
+| `scafctl plugins install` | Yes | Discovers solution to install referenced plugins |
 
 ## Examples
 
@@ -323,7 +317,7 @@ cd /path/to/project; scafctl run solution
 {{% /tab %}}
 {{< /tabs >}}
 
-All 30 candidate paths are resolved against the `--cwd` target.
+All 24 candidate paths are resolved against the `--cwd` target.
 
 ## When Auto-Discovery Fails
 

@@ -290,6 +290,18 @@ func TestIsActionFile(t *testing.T) {
 	}
 }
 
+func TestActionOnlyFileNames(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, []string{"actions.yaml", "actions.yml"}, ActionOnlyFileNames(nil))
+	assert.Equal(t, []string{"actions.yaml", "actions.yml"}, ActionOnlyFileNames([]string{}))
+
+	custom := []string{"deploy.yaml", "tasks.yml"}
+	got := ActionOnlyFileNames(custom)
+	assert.Equal(t, custom, got)
+	got[0] = "mutated.yaml"
+	assert.Equal(t, "deploy.yaml", custom[0], "ActionOnlyFileNames must clone custom slice")
+}
+
 func TestFileNamesForMode(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -331,6 +343,22 @@ func TestFileNamesForMode(t *testing.T) {
 			wantFirst:         "custom.yaml",
 			wantContains:      "solution.yaml",
 		},
+		{
+			name:         "resolver mode puts solution files before actions",
+			mode:         DiscoveryModeResolver,
+			binaryName:   "scafctl",
+			wantFirst:    "solution.yaml",
+			wantContains: "actions.yaml",
+		},
+		{
+			name:              "resolver mode with custom action files",
+			mode:              DiscoveryModeResolver,
+			binaryName:        "mycli",
+			customActionFiles: []string{"custom.yaml"},
+			wantFirst:         "solution.yaml",
+			wantContains:      "custom.yaml",
+			wantNotContains:   "actions.yaml",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -357,6 +385,7 @@ func TestDiscoveryMode_String(t *testing.T) {
 		{DiscoveryModeDefault, "default"},
 		{DiscoveryModeAction, "action"},
 		{DiscoveryModeSolution, "solution"},
+		{DiscoveryModeResolver, "resolver"},
 		{DiscoveryMode(99), "unknown(99)"},
 	}
 	for _, tt := range tests {
@@ -375,6 +404,7 @@ func TestFileNamesForMode_CustomActionFiles_NoMutation(t *testing.T) {
 	copy(original, custom)
 
 	_ = FileNamesForMode(DiscoveryModeAction, "scafctl", custom)
+	_ = FileNamesForMode(DiscoveryModeResolver, "scafctl", custom)
 
 	assert.Equal(t, original, custom, "FileNamesForMode must not mutate the input slice")
 }

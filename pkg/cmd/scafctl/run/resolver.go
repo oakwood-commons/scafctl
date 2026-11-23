@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	cmdflags "github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	cmdlint "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/flags"
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
@@ -131,7 +132,7 @@ SOLUTION SOURCE:
   Solutions can be loaded from:
   - Local file or catalog: Use -f flag (e.g., -f ./solution.yaml or -f my-app@1.2.3)
   - URL: Provide an HTTP(S) URL via -f/--file (also detected as a positional arg)
-  - Auto-discovery: If no source is specified, searches for solution.yaml in current directory
+  - Auto-discovery: If no source is specified, searches for solution files first (falling back to actions.yaml when none exist, or preferring actions.yaml when --action is set)
 
 RESOLVER SELECTION:
   Pass resolver names as positional arguments to execute only specific
@@ -302,7 +303,7 @@ Examples:
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata (phases, timing, dependencies, providers) in output")
 	cCmd.Flags().StringArrayVar(&options.Actions, "action", nil, "Scope resolver output to the resolvers consumed by this action (repeatable)")
 
-	setResolverHelpFunc(cCmd)
+	setResolverHelpFunc(cCmd, cliParams)
 
 	return cCmd
 }
@@ -399,7 +400,7 @@ Examples:
 		f.Usage = "Strict gate: treat lint warnings as fatal and require explicit bundle.plugins (errors and schema violations are always fatal)"
 	}
 
-	setResolverHelpFunc(cCmd)
+	setResolverHelpFunc(cCmd, cliParams)
 
 	return cCmd
 }
@@ -441,9 +442,14 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		o.ShowExecution = true
 	}
 
-	// Prefer solution files during auto-discovery; actions.yaml is irrelevant
-	// for resolver execution and should not trigger ambiguity warnings.
-	o.discoveryMode = settings.DiscoveryModeSolution
+	// When --action is set, prefer action files just like 'run action'.
+	// Otherwise search solution files first and fall back to action files only
+	// when no solution file exists, avoiding ambiguity warnings when both exist.
+	if len(o.Actions) > 0 {
+		o.discoveryMode = settings.DiscoveryModeAction
+	} else {
+		o.discoveryMode = settings.DiscoveryModeResolver
+	}
 
 	lgr.V(1).Info("running resolver",
 		"file", o.File,
@@ -1066,20 +1072,30 @@ func (a *resolverAdapter) GetSensitive() bool { return a.sensitive }
 // resolver input documentation when a solution file is available.
 // For example, `scafctl run resolver -f solution.yaml --help` will show the
 // standard command help plus the solution's resolver parameter table.
-func setResolverHelpFunc(cmd *cobra.Command) {
+func setResolverHelpFunc(cmd *cobra.Command, cliParams *settings.Run) {
 	defaultHelp := cmd.HelpFunc()
 	cmd.SetHelpFunc(func(c *cobra.Command, args []string) {
+		// Cobra skips PersistentPreRun on --help; seed cliParams into the
+		// context when absent so embedder BinaryName and ActionDiscoveryFileNames
+		// still govern help-time auto-discovery.
+		ctx := c.Context()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		ctx = helpDiscoveryContext(ctx, c, cliParams)
+		c.SetContext(ctx)
+
 		// Render the default help first
 		defaultHelp(c, args)
 
 		// Try to determine the solution file path from the -f flag or auto-discovery
-		solutionPath := extractSolutionPath(c)
+		solutionPath := extractSolutionPathWithArgs(c, args)
 		if solutionPath == "" {
 			return
 		}
 
-		// Load the solution (best effort — don't fail help on errors)
-		sol, err := inspect.LoadSolution(c.Context(), solutionPath)
+		// Load the solution (best effort -- don't fail help on errors)
+		sol, err := inspect.LoadSolution(ctx, solutionPath)
 		if err != nil {
 			return
 		}
@@ -1090,6 +1106,39 @@ func setResolverHelpFunc(cmd *cobra.Command) {
 			fmt.Fprint(c.OutOrStdout(), helpText)
 		}
 	})
+}
+
+// helpDiscoveryContext loads discovery.actionFiles for --help when PersistentPreRun is skipped.
+func helpDiscoveryContext(ctx context.Context, c *cobra.Command, cliParams *settings.Run) context.Context {
+	effective := *settings.NewCliParams()
+	if cliParams != nil {
+		effective = *cliParams
+	}
+	if existing, ok := settings.FromContext(ctx); ok && existing != nil {
+		effective = *existing
+	}
+	if len(effective.ActionDiscoveryFileNames) == 0 {
+		cfg := config.FromContext(ctx)
+		if cfg == nil {
+			binaryName := effective.BinaryName
+			if binaryName == "" {
+				binaryName = settings.CliBinaryName
+			}
+			opts := []config.ManagerOption{config.WithEnvPrefix(settings.SafeEnvPrefix(binaryName))}
+			if raw := c.Root().Annotations["configDefaults"]; raw != "" {
+				opts = append(opts, config.WithBaseConfig([]byte(raw)))
+			}
+			var cfgPath string
+			if f := c.Flag("config"); f != nil {
+				cfgPath = f.Value.String()
+			}
+			cfg, _ = config.NewManager(cfgPath, opts...).Load()
+		}
+		if cfg != nil {
+			effective.ActionDiscoveryFileNames = cfg.Discovery.ActionFiles
+		}
+	}
+	return settings.IntoContext(ctx, &effective)
 }
 
 // resolveActionResolverNames looks up the specified action(s) in the solution's
@@ -1201,16 +1250,27 @@ func localSolutionFile(sel load.Selection, cwd string) string {
 // 2. os.Args as a fallback (scanning for -f flag)
 // 3. Auto-discovery in the current directory
 func extractSolutionPath(c *cobra.Command) string {
+	return extractSolutionPathWithArgs(c, nil)
+}
+
+func extractSolutionPathWithArgs(c *cobra.Command, helpArgs []string) string {
 	// Try the parsed flag value
 	if f := c.Flags().Lookup("file"); f != nil && f.Value.String() != "" {
 		return f.Value.String()
 	}
 
-	// Fallback: scan os.Args for -f or --file
-	osArgs := os.Args
-	for i, arg := range osArgs {
-		if (arg == "-f" || arg == "--file") && i+1 < len(osArgs) {
-			return osArgs[i+1]
+	rawArgs := helpArgs
+	if len(rawArgs) == 0 {
+		rawArgs = os.Args
+	}
+
+	// Fallback: scan rawArgs for -f or --file
+	for i, arg := range rawArgs {
+		if arg == "--" {
+			break
+		}
+		if (arg == "-f" || arg == "--file") && i+1 < len(rawArgs) {
+			return rawArgs[i+1]
 		}
 		if strings.HasPrefix(arg, "-f=") {
 			return strings.TrimPrefix(arg, "-f=")
@@ -1220,12 +1280,43 @@ func extractSolutionPath(c *cobra.Command) string {
 		}
 	}
 
-	// Final fallback: auto-discover the solution file. Help is best effort, so
-	// nothing found (or a command run without a context) shows no inputs.
+	// Final fallback: auto-discover the solution file using the same discovery
+	// mode as Run (--action prefers action files; otherwise solution-first with
+	// action-file fallback). Help is best effort, so nothing found (or a command
+	// run without a context) shows no inputs.
 	ctx := c.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	path, _ := load.DiscoverPath(ctx, load.DiscoveryRiskLow)
+	mode := settings.DiscoveryModeResolver
+	if hasActionFlag(c, rawArgs) {
+		mode = settings.DiscoveryModeAction
+	}
+	path, _ := load.DiscoverPath(ctx, load.DiscoveryRiskLow, load.WithDiscoveryMode(mode))
 	return path
+}
+
+// hasActionFlag reports whether --action was provided on c or in rawArgs.
+func hasActionFlag(c *cobra.Command, rawArgs []string) bool {
+	if actions, err := c.Flags().GetStringArray("action"); err == nil && len(actions) > 0 {
+		return true
+	}
+	return hasActionFlagInArgs(rawArgs)
+}
+
+// hasActionFlagInArgs reports whether args contains a non-empty --action flag
+// before any "--" argument terminator.
+func hasActionFlagInArgs(args []string) bool {
+	for i, arg := range args {
+		if arg == "--" {
+			break
+		}
+		if arg == "--action" && i+1 < len(args) && args[i+1] != "" {
+			return true
+		}
+		if strings.HasPrefix(arg, "--action=") && len(arg) > len("--action=") {
+			return true
+		}
+	}
+	return false
 }

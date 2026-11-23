@@ -446,6 +446,9 @@ const (
 	DiscoveryModeAction
 	// DiscoveryModeSolution searches only solution files (excludes actions.yaml/yml).
 	DiscoveryModeSolution
+	// DiscoveryModeResolver searches solution and taskfile names first across all
+	// folders, falling back to action files only when no solution file exists.
+	DiscoveryModeResolver
 )
 
 // String returns a human-readable label for the discovery mode.
@@ -457,6 +460,8 @@ func (m DiscoveryMode) String() string {
 		return "action"
 	case DiscoveryModeSolution:
 		return "solution"
+	case DiscoveryModeResolver:
+		return "resolver"
 	default:
 		return fmt.Sprintf("unknown(%d)", int(m))
 	}
@@ -472,8 +477,8 @@ func SolutionFoldersFor(binaryName string) []string {
 }
 
 // SolutionFileNamesFor returns the solution file names for the given binary name.
-// Action file names (actions.yaml/yml) are intentionally excluded; they are only
-// returned by [ActionFileNamesFor] for use with [DiscoveryModeAction].
+// Action file names (actions.yaml/yml) are intentionally excluded; they are
+// searched in [DiscoveryModeAction] and as a fallback in [DiscoveryModeResolver].
 func SolutionFileNamesFor(binaryName string) []string {
 	return []string{
 		"solution.yaml",
@@ -484,6 +489,19 @@ func SolutionFileNamesFor(binaryName string) []string {
 		fmt.Sprintf("%s.json", binaryName),
 		"taskfile.yaml",
 		"taskfile.yml",
+	}
+}
+
+// ActionOnlyFileNames returns customActionFiles when non-empty (cloned so
+// callers cannot mutate the input slice), otherwise the default action file
+// names (actions.yaml, actions.yml) without solution file fallbacks.
+func ActionOnlyFileNames(customActionFiles []string) []string {
+	if len(customActionFiles) > 0 {
+		return slices.Clone(customActionFiles)
+	}
+	return []string{
+		"actions.yaml",
+		"actions.yml",
 	}
 }
 
@@ -503,11 +521,11 @@ func ActionFileNamesFor(binaryName string) []string {
 }
 
 // FileNamesForMode returns the appropriate file name list based on mode and binary name.
-// When customActionFiles is non-empty and mode is DiscoveryModeAction, those file names
-// are used instead of the defaults (with solution and taskfile names appended as fallback).
+// When customActionFiles is non-empty and mode is DiscoveryModeAction or
+// DiscoveryModeResolver, those file names replace the default action file names.
 func FileNamesForMode(mode DiscoveryMode, binaryName string, customActionFiles []string) []string {
 	switch mode {
-	case DiscoveryModeDefault:
+	case DiscoveryModeDefault, DiscoveryModeSolution:
 		return SolutionFileNamesFor(binaryName)
 	case DiscoveryModeAction:
 		if len(customActionFiles) > 0 {
@@ -515,8 +533,8 @@ func FileNamesForMode(mode DiscoveryMode, binaryName string, customActionFiles [
 			return slices.Concat(customActionFiles, SolutionFileNamesFor(binaryName))
 		}
 		return ActionFileNamesFor(binaryName)
-	case DiscoveryModeSolution:
-		return SolutionFileNamesFor(binaryName)
+	case DiscoveryModeResolver:
+		return slices.Concat(SolutionFileNamesFor(binaryName), ActionOnlyFileNames(customActionFiles))
 	default:
 		return SolutionFileNamesFor(binaryName)
 	}
@@ -588,8 +606,11 @@ type Run struct {
 	// overrides this default.
 	DetailedExitCode bool `json:"detailedExitCode" yaml:"detailedExitCode" doc:"Return a distinct exit code on partial success"`
 
-	// ActionDiscoveryFileNames overrides the file names used by "run action"
-	// auto-discovery. When empty, defaults from ActionFileNamesFor are used.
+	// ActionDiscoveryFileNames overrides the action file names used by
+	// auto-discovery in DiscoveryModeAction ("run action", "run resolver --action",
+	// "validate resolver --action") and as the fallback in DiscoveryModeResolver
+	// ("run resolver", "validate resolver"). When empty, defaults ("actions.yaml",
+	// "actions.yml") are used.
 	ActionDiscoveryFileNames []string `json:"-" yaml:"-"`
 }
 
