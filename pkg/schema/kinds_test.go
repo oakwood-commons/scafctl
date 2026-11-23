@@ -102,6 +102,7 @@ func TestBuiltinKindDefinitions_ReturnsExpectedKinds(t *testing.T) {
 	expectedNames := []string{
 		"provider", "solution", "action", "workflow",
 		"resolver", "spec", "schema", "retry", "function",
+		"valueref", "tokenref",
 	}
 	assert.Len(t, defs, len(expectedNames))
 

@@ -18,6 +18,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
@@ -633,4 +635,80 @@ func TestGenerate_FingerprintStatus_NoSources(t *testing.T) {
 	require.Len(t, report.ActionPlan, 1)
 	assert.Empty(t, report.ActionPlan[0].FingerprintStatus)
 	assert.Empty(t, report.ActionPlan[0].FingerprintReason)
+}
+
+func TestGenerate_MasksSensitiveNumericAndShortValuesInWhatIfAndVerboseInputs(t *testing.T) {
+	t.Parallel()
+
+	sol := minimalSolution("sensitive-dryrun")
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"sensitivePin": {
+			Name:      "sensitivePin",
+			Sensitive: true,
+		},
+		"shortCode": {
+			Name:      "shortCode",
+			Sensitive: true,
+		},
+		"credDerivedPort": {
+			Name: "credDerivedPort",
+		},
+	}
+
+	pinRef := "sensitivePin"
+	shortRef := "shortCode"
+	portRef := "credDerivedPort"
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"deploy": {
+				Provider: "shell",
+				Inputs: map[string]*spec.ValueRef{
+					"pin":    {Resolver: &pinRef},
+					"short":  {Resolver: &shortRef},
+					"port":   {Resolver: &portRef},
+					"public": {Literal: "keep-visible"},
+				},
+			},
+		},
+	}
+
+	reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+	require.NoError(t, reg.Register(newMockProviderWithWhatIf("shell",
+		func(_ context.Context, input any) (string, error) {
+			inputs, _ := input.(map[string]any)
+			return fmt.Sprintf("Would deploy pin=%v short=%v port=%v pub=%v",
+				inputs["pin"], inputs["short"], inputs["port"], inputs["public"]), nil
+		},
+	)))
+
+	rctx := resolver.NewContext()
+	rctx.SetResult("credDerivedPort", &resolver.ExecutionResult{
+		Value:            8443,
+		Status:           resolver.ExecutionStatusSuccess,
+		CredentialBacked: true,
+	})
+
+	report, err := Generate(context.Background(), sol, Options{
+		Registry:        reg,
+		Verbose:         true,
+		ResolverContext: rctx,
+		ResolverData: map[string]any{
+			"sensitivePin":    94,
+			"shortCode":       "xy",
+			"credDerivedPort": 8443,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, report.ActionPlan, 1)
+
+	act := report.ActionPlan[0]
+	assert.Equal(t, "Would deploy pin=[REDACTED] short=[REDACTED] port=[REDACTED] pub=keep-visible", act.WhatIf)
+	assert.NotContains(t, act.WhatIf, "94")
+	assert.NotContains(t, act.WhatIf, "xy")
+	assert.NotContains(t, act.WhatIf, "8443")
+
+	assert.Equal(t, redact.RedactedPlaceholder, act.MaterializedInputs["pin"])
+	assert.Equal(t, redact.RedactedPlaceholder, act.MaterializedInputs["short"])
+	assert.Equal(t, redact.RedactedPlaceholder, act.MaterializedInputs["port"])
+	assert.Equal(t, "keep-visible", act.MaterializedInputs["public"])
 }

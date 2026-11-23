@@ -13,6 +13,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 )
 
 // ProviderWrapper wraps a plugin provider to implement the provider.Provider interface
@@ -165,6 +166,23 @@ func (w *ProviderWrapper) Descriptor() *provider.Descriptor {
 	return w.descriptor
 }
 
+// UsesDynamicHostCredentials reports that out-of-process plugin providers may
+// request secrets or auth tokens from HostService during Execute, requiring
+// redacting stream wrappers even when the run tracker starts empty.
+func (w *ProviderWrapper) UsesDynamicHostCredentials() bool {
+	return true
+}
+
+func scrubPluginOutput(tracker *redact.Tracker, out *provider.Output) *provider.Output {
+	if out == nil || tracker == nil || tracker.Count() == 0 {
+		return out
+	}
+	cp := *out
+	cp.Warnings = tracker.RedactSlice(cp.Warnings)
+	cp.Metadata = tracker.RedactMap(cp.Metadata)
+	return &cp
+}
+
 // Execute executes the provider. When IOStreams are present in the context,
 // it attempts to use streaming execution so that incremental output (e.g. from
 // exec-like providers) reaches the terminal in real time. Falls back to the
@@ -185,51 +203,62 @@ func (w *ProviderWrapper) Execute(ctx context.Context, input any) (*provider.Out
 		return nil, fmt.Errorf("%s: expected map[string]any, got %T", w.descriptor.Name, input)
 	}
 
+	tracker := redact.FromContext(ctx)
+	if tracker == nil {
+		tracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, tracker)
+	}
+
 	lgr.V(1).Info("executing plugin provider", "provider", w.descriptor.Name)
 
-	// If IOStreams are available, prefer streaming so the user sees output
-	// as it arrives. Fall back to unary if the plugin doesn't support it.
-	if ioStreams, hasIO := provider.IOStreamsFromContext(ctx); hasIO && ioStreams != nil {
-		var lastOutput *provider.Output
-		var streamChunkErr string
-		streamErr := w.client.ExecuteProviderStream(ctx, w.providerName, inputs, func(chunk StreamChunk) {
-			if chunk.Stdout != nil && ioStreams.Out != nil {
-				_, _ = ioStreams.Out.Write(chunk.Stdout)
+	// If caller-supplied IOStreams are available (not synthesized fallback
+	// streams), prefer streaming so the user sees output as it arrives.
+	if !provider.IsFallbackIOStreams(ctx) {
+		if rawStreams, hasIO := provider.IOStreamsFromContext(ctx); hasIO && rawStreams != nil {
+			streamCtx, flushStreams := provider.WrapRedactingIOStreams(ctx, tracker, w)
+			ioStreams, _ := provider.IOStreamsFromContext(streamCtx)
+			var lastOutput *provider.Output
+			var streamChunkErr string
+			streamErr := w.client.ExecuteProviderStream(streamCtx, w.providerName, inputs, func(chunk StreamChunk) {
+				if chunk.Stdout != nil && ioStreams != nil && ioStreams.Out != nil {
+					_, _ = ioStreams.Out.Write(chunk.Stdout)
+				}
+				if chunk.Stderr != nil && ioStreams != nil && ioStreams.ErrOut != nil {
+					_, _ = ioStreams.ErrOut.Write(chunk.Stderr)
+				}
+				if chunk.Error != "" {
+					streamChunkErr = chunk.Error
+				}
+				if chunk.Result != nil {
+					lastOutput = chunk.Result
+				}
+			})
+			flushStreams()
+			if streamErr == nil {
+				if streamChunkErr != "" {
+					return nil, tracker.RedactError(fmt.Errorf("%s: %s", w.descriptor.Name, streamChunkErr))
+				}
+				lgr.V(1).Info("plugin provider completed (streaming)", "provider", w.descriptor.Name)
+				if lastOutput != nil {
+					return scrubPluginOutput(tracker, lastOutput), nil
+				}
+				return &provider.Output{}, nil
 			}
-			if chunk.Stderr != nil && ioStreams.ErrOut != nil {
-				_, _ = ioStreams.ErrOut.Write(chunk.Stderr)
+			// Only fall through for streaming-not-supported; other errors are real failures.
+			if !errors.Is(streamErr, ErrStreamingNotSupported) {
+				return nil, tracker.RedactError(fmt.Errorf("%s: %w", w.descriptor.Name, streamErr))
 			}
-			if chunk.Error != "" {
-				streamChunkErr = chunk.Error
-			}
-			if chunk.Result != nil {
-				lastOutput = chunk.Result
-			}
-		})
-		if streamErr == nil {
-			if streamChunkErr != "" {
-				return nil, fmt.Errorf("%s: %s", w.descriptor.Name, streamChunkErr)
-			}
-			lgr.V(1).Info("plugin provider completed (streaming)", "provider", w.descriptor.Name)
-			if lastOutput != nil {
-				return lastOutput, nil
-			}
-			return &provider.Output{}, nil
+			lgr.V(2).Info("plugin does not support streaming, falling back to unary", "provider", w.descriptor.Name)
 		}
-		// Only fall through for streaming-not-supported; other errors are real failures.
-		if !errors.Is(streamErr, ErrStreamingNotSupported) {
-			return nil, fmt.Errorf("%s: %w", w.descriptor.Name, streamErr)
-		}
-		lgr.V(2).Info("plugin does not support streaming, falling back to unary", "provider", w.descriptor.Name)
 	}
 
 	result, err := w.client.ExecuteProvider(ctx, w.providerName, inputs)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", w.descriptor.Name, err)
+		return nil, tracker.RedactError(fmt.Errorf("%s: %w", w.descriptor.Name, err))
 	}
 
 	lgr.V(1).Info("plugin provider completed", "provider", w.descriptor.Name)
-	return result, nil
+	return scrubPluginOutput(tracker, result), nil
 }
 
 // Client returns the underlying plugin client

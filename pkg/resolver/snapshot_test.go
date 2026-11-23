@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -612,4 +613,68 @@ func TestSnapshot_LoadFixture(t *testing.T) {
 			assert.Equal(t, tt.expectedCount, len(snapshot.Resolvers))
 		})
 	}
+}
+
+func TestCaptureAndSaveSnapshot_CredentialBackedScrubbingAndPermissions(t *testing.T) {
+	t.Parallel()
+
+	tracker := redact.NewTracker()
+	tracker.Track("live_secret_token_abcd1234")
+
+	rctx := NewContext()
+	rctx.SetResult("credPin", &ExecutionResult{
+		Value:            77,
+		Status:           ExecutionStatusSuccess,
+		Phase:            1,
+		ValueSizeBytes:   2,
+		CredentialBacked: true,
+	})
+	rctx.SetResult("derivedHeader", &ExecutionResult{
+		Value:          "Bearer live_secret_token_abcd1234",
+		Status:         ExecutionStatusSuccess,
+		Phase:          2,
+		ValueSizeBytes: 33,
+	})
+
+	ctx := WithContext(redact.WithTracker(context.Background(), tracker), rctx)
+	snap, err := CaptureSnapshot(
+		ctx,
+		"cred-snap",
+		"1.0.0",
+		"dev",
+		map[string]any{"rawParam": "tok=live_secret_token_abcd1234"},
+		10*time.Millisecond,
+		ExecutionStatusSuccess,
+	)
+	require.NoError(t, err)
+
+	// Even WITHOUT RedactSensitiveValues (--redact=false), credential-backed entries
+	// and tracked secret substrings in values/parameters are scrubbed.
+	assert.Equal(t, "<redacted>", snap.Resolvers["credPin"].Value)
+	assert.True(t, snap.Resolvers["credPin"].Sensitive)
+	assert.Zero(t, snap.Resolvers["credPin"].ValueSizeBytes)
+	assert.Equal(t, "Bearer [REDACTED]", snap.Resolvers["derivedHeader"].Value)
+	assert.Equal(t, "tok=[REDACTED]", snap.Parameters["rawParam"])
+
+	tmpFile := filepath.Join(t.TempDir(), "snap.json")
+	require.NoError(t, SaveSnapshot(snap, tmpFile))
+	info, err := os.Stat(tmpFile)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	// Overwriting an existing 0644 snapshot file must tighten its permissions to 0600!
+	existingBroadFile := filepath.Join(t.TempDir(), "legacy-0644-snap.json")
+	require.NoError(t, os.WriteFile(existingBroadFile, []byte(`{"stale":true,"padding":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}`), 0o644)) //nolint:gosec // intentional 0644 fixture to test overwrite chmod
+	require.NoError(t, os.Chmod(existingBroadFile, 0o644))                                                                                    //nolint:gosec // bypass umask so fixture starts 0644
+	beforeInfo, err := os.Stat(existingBroadFile)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), beforeInfo.Mode().Perm())
+
+	require.NoError(t, SaveSnapshot(snap, existingBroadFile))
+	afterInfo, err := os.Stat(existingBroadFile)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), afterInfo.Mode().Perm())
+	reloaded, err := LoadSnapshot(existingBroadFile)
+	require.NoError(t, err)
+	assert.Equal(t, "<redacted>", reloaded.Resolvers["credPin"].Value)
 }

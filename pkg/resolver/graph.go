@@ -310,6 +310,12 @@ func extractStrictFromLiteral(literal any, deps map[string]bool) {
 			// Template ValueRef: inferred best-effort, not strict.
 			isValueRef = true
 		}
+		if _, ok := v["scrt"]; ok && len(v) == 1 {
+			isValueRef = true
+		}
+		if _, ok := v["tkn"]; ok && len(v) == 1 {
+			isValueRef = true
+		}
 		if isValueRef {
 			return
 		}
@@ -503,7 +509,7 @@ func extractHardCelFromLiteral(literal any, hard map[string]bool) {
 			extractHardCelFromTemplateUnderscore(tmpl, hard)
 		}
 		for key, val := range v {
-			if key == "expr" || key == "rslvr" || key == "tmpl" {
+			if key == "expr" || key == "rslvr" || key == "tmpl" || key == "scrt" || key == "tkn" {
 				continue
 			}
 			extractHardCelFromLiteral(val, hard)
@@ -546,6 +552,12 @@ func extractOptionalFromLiteral(literal any, optional map[string]bool) {
 			isValueRef = true
 		}
 		if _, ok := v["tmpl"].(string); ok {
+			isValueRef = true
+		}
+		if _, ok := v["scrt"]; ok && len(v) == 1 {
+			isValueRef = true
+		}
+		if _, ok := v["tkn"]; ok && len(v) == 1 {
 			isValueRef = true
 		}
 		if isValueRef {
@@ -615,6 +627,12 @@ func extractDepsFromLiteralWithExclusions(literal any, deps, exclude map[string]
 		}
 		if tmpl, ok := v["tmpl"].(string); ok {
 			extractDepsFromTemplateCtx(tmpl, deps, scanCtxFromExclude(exclude))
+			isValueRef = true
+		}
+		if _, ok := v["scrt"]; ok && len(v) == 1 {
+			isValueRef = true
+		}
+		if _, ok := v["tkn"]; ok && len(v) == 1 {
 			isValueRef = true
 		}
 		if isValueRef {
@@ -782,6 +800,12 @@ func literalDataKeys(data any) map[string]bool {
 	if _, ok := m["tmpl"]; ok {
 		return nil
 	}
+	if _, ok := m["scrt"]; ok && len(m) == 1 {
+		return nil
+	}
+	if _, ok := m["tkn"]; ok && len(m) == 1 {
+		return nil
+	}
 	keys := make(map[string]bool, len(m))
 	for k := range m {
 		keys[k] = true
@@ -825,6 +849,10 @@ func extractDepsFromProviderInputs(providerName string, inputs map[string]*Value
 			rawInputs[key] = map[string]any{"expr": string(*ref.Expr)}
 		case ref.Tmpl != nil:
 			rawInputs[key] = map[string]any{"tmpl": string(*ref.Tmpl)}
+		case ref.Secret != nil:
+			rawInputs[key] = map[string]any{"scrt": *ref.Secret}
+		case ref.Token != nil:
+			rawInputs[key] = map[string]any{"tkn": ref.Token.Handler}
 		}
 	}
 

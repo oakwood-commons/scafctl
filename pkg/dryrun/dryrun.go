@@ -18,7 +18,10 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 )
 
@@ -84,6 +87,40 @@ type Options struct {
 	// When set, this workflow is used instead of sol.Spec.Workflow,
 	// allowing callers to pass a filtered workflow without mutating the solution.
 	Workflow *action.Workflow `json:"-" yaml:"-"`
+	// ResolverContext optionally carries resolver execution metadata so dry-run
+	// masks CredentialBacked resolvers (including numeric and <4-byte values)
+	// alongside resolvers declared sensitive: true on the solution.
+	ResolverContext *resolver.Context `json:"-" yaml:"-"`
+	// SensitiveResolvers optionally supplies extra resolver names to mask
+	// structurally before generating WhatIf descriptions or MaterializedInputs.
+	SensitiveResolvers map[string]bool `json:"-" yaml:"-"`
+}
+
+func sensitiveResolverSet(sol *solution.Solution, resolverCtx *resolver.Context, extra map[string]bool) map[string]bool {
+	names := make(map[string]bool)
+	for k, v := range extra {
+		if v {
+			names[k] = true
+		}
+	}
+	if sol != nil {
+		for name, r := range sol.Spec.Resolvers {
+			if r != nil && r.Sensitive {
+				names[name] = true
+			}
+		}
+	}
+	if resolverCtx != nil {
+		for name, res := range resolverCtx.GetAllResults() {
+			if res != nil && res.CredentialBacked {
+				names[name] = true
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
 }
 
 // Generate builds a structured WhatIf dry-run report from a solution and
@@ -92,6 +129,9 @@ type Options struct {
 // For each action, the provider's DescribeWhatIf is called with the
 // materialized inputs to generate a context-specific WhatIf message.
 func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Report, error) {
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+	tracker := redact.FromContext(ctx)
+
 	reg := opts.Registry
 	resolverData := opts.ResolverData
 	if resolverData == nil {
@@ -117,6 +157,7 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 		if err != nil {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("action graph build failed: %v", err))
 		} else {
+			action.RedactGraphInputs(graph, tracker, sensitiveResolverSet(sol, opts.ResolverContext, opts.SensitiveResolvers))
 			report.TotalActions = len(graph.Actions)
 			report.TotalPhases = graph.TotalPhases()
 
@@ -175,19 +216,13 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 				if len(ea.DeferredInputs) > 0 {
 					entry.DeferredInputs = make(map[string]string, len(ea.DeferredInputs))
 					for k, v := range ea.DeferredInputs {
-						expr := v.OriginalExpr
-						if expr == "" {
-							expr = v.OriginalTmpl
-						}
-						if expr == "" && v.Deferred {
-							expr = "(deferred)"
-						}
-						entry.DeferredInputs[k] = expr
+						entry.DeferredInputs[k] = v.Summary()
 					}
 				}
 
 				// Generate WhatIf message from the provider
-				entry.WhatIf = describeWhatIf(ctx, reg, ea.Provider, ea.MaterializedInputs)
+				matInputs := tracker.RedactMap(ea.MaterializedInputs)
+				entry.WhatIf = tracker.RedactString(describeWhatIf(ctx, reg, ea.Provider, matInputs))
 
 				// Check fingerprint status for actions with sources
 				if len(ea.Sources) > 0 && opts.StateData != nil && opts.Cwd != "" {
@@ -197,8 +232,8 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 				}
 
 				// Only include MaterializedInputs in verbose mode
-				if opts.Verbose && len(ea.MaterializedInputs) > 0 {
-					entry.MaterializedInputs = ea.MaterializedInputs
+				if opts.Verbose && len(matInputs) > 0 {
+					entry.MaterializedInputs = matInputs
 				}
 
 				report.ActionPlan = append(report.ActionPlan, entry)

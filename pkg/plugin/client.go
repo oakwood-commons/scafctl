@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/go-plugin"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"google.golang.org/grpc"
 )
@@ -236,6 +237,7 @@ type Client struct {
 	plugin       ProviderPlugin
 	path         string
 	name         string
+	trackerSlot  *brokerTrackerSlot
 
 	// descriptorCache caches GetProviderDescriptor results to avoid redundant
 	// RPCs for the same provider within a single client lifecycle.
@@ -446,15 +448,20 @@ func newClientWithConnector(
 	connectFn func(string, pluginConfig) (any, *plugin.Client, error),
 	opts ...ClientOption,
 ) (*Client, error) {
+	slot := newBrokerTrackerSlot()
 	providerPlugin, client, err := buildPluginClient(
 		pluginPath,
 		opts,
 		connectFn,
 		func(o clientOptions, logger hclog.Logger, cmdFn func(string) *exec.Cmd) pluginConfig {
+			deps := providerPluginHostDeps(o.hostDeps)
+			if deps != nil {
+				deps.trackerSlot = slot
+			}
 			return pluginConfig{
 				handshake:          HandshakeConfig,
 				pluginName:         PluginName,
-				grpcPlugin:         &GRPCPlugin{HostDeps: o.hostDeps},
+				grpcPlugin:         &GRPCPlugin{HostDeps: deps},
 				cmdFn:              cmdFn,
 				skipHostEnv:        o.sanitizeEnv,
 				logger:             logger,
@@ -479,6 +486,7 @@ func newClientWithConnector(
 		plugin:       providerPlugin,
 		path:         pluginPath,
 		name:         pluginNameFromPath(pluginPath),
+		trackerSlot:  slot,
 	}, nil
 }
 
@@ -521,9 +529,30 @@ func (c *Client) GetProviderDescriptor(ctx context.Context, providerName string)
 	return desc, nil
 }
 
+func (c *Client) acquireTracker(ctx context.Context) (context.Context, func(), error) {
+	if c == nil || c.trackerSlot == nil {
+		return ctx, func() {}, nil
+	}
+	tracker := redact.FromContext(ctx)
+	if tracker == nil {
+		tracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, tracker)
+	}
+	release, err := c.trackerSlot.acquire(ctx, tracker)
+	if err != nil {
+		return ctx, nil, err
+	}
+	return ctx, release, nil
+}
+
 // ExecuteProvider executes a provider with the given input
 func (c *Client) ExecuteProvider(ctx context.Context, providerName string, input map[string]any) (*provider.Output, error) {
-	return c.plugin.ExecuteProvider(ctx, providerName, input)
+	execCtx, release, err := c.acquireTracker(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return c.plugin.ExecuteProvider(execCtx, providerName, input)
 }
 
 // ConfigureProvider sends host-side configuration to a named provider.
@@ -533,12 +562,22 @@ func (c *Client) ConfigureProvider(ctx context.Context, providerName string, cfg
 
 // ExecuteProviderStream executes a provider with streaming output.
 func (c *Client) ExecuteProviderStream(ctx context.Context, providerName string, input map[string]any, cb func(StreamChunk)) error {
-	return c.plugin.ExecuteProviderStream(ctx, providerName, input, cb)
+	execCtx, release, err := c.acquireTracker(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return c.plugin.ExecuteProviderStream(execCtx, providerName, input, cb)
 }
 
 // DescribeWhatIf returns a human-readable description of what the provider would do
 func (c *Client) DescribeWhatIf(ctx context.Context, providerName string, input map[string]any) (string, error) {
-	return c.plugin.DescribeWhatIf(ctx, providerName, input)
+	execCtx, release, err := c.acquireTracker(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	return c.plugin.DescribeWhatIf(execCtx, providerName, input)
 }
 
 // ExtractDependencies returns resolver dependency names from the provider's inputs.

@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/redact"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // RunOptions configures a direct provider execution.
@@ -157,19 +160,27 @@ func RunProvider(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	// Set execution context
 	ctx = WithExecutionMode(ctx, capability)
 	ctx = WithDryRun(ctx, opts.DryRun)
+	if opts.DryRun {
+		ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+	}
+	tracker := redact.FromContext(ctx)
+	if tracker == nil {
+		tracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, tracker)
+	}
 
 	// Execute
 	start := time.Now()
 	result, err := Execute(ctx, opts.Provider, opts.Inputs)
 	elapsed := time.Since(start)
 	if err != nil {
-		return nil, fmt.Errorf("provider execution failed: %w", err)
+		return nil, tracker.RedactError(fmt.Errorf("provider execution failed: %w", err))
 	}
 
 	return &RunResult{
 		Provider:   desc.Name,
 		Capability: string(capability),
-		Data:       result.Output.Data,
+		Data:       tracker.RedactAny(result.Output.Data),
 		Warnings:   result.Output.Warnings,
 		Metadata:   result.Output.Metadata,
 		DryRun:     result.DryRun,

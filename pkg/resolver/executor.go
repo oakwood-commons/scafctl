@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
@@ -318,6 +319,13 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 	}
 
 	lgr.V(1).Info("resolver execution plan", "phases", len(buildResult.Phases))
+
+	// Ensure a run-level secret redaction tracker is attached to ctx and
+	// propagated on the returned context so downstream phases (such as actions)
+	// scrub secrets resolved or derived during resolver execution.
+	if redact.FromContext(ctx) == nil {
+		ctx = redact.WithTracker(ctx, redact.NewTracker())
+	}
 
 	// Create resolver context
 	resolverCtx := NewContext()
@@ -718,12 +726,19 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 		result.DependencyCount = len(extractDependencies(r, nil))
 
 		// Collect failed attempts from context
+		runTracker := redact.FromContext(ctx)
 		if existing, ok := resolverCtx.data.Load("__failed_attempts"); ok {
 			if attempts, ok := existing.([]ProviderAttempt); ok {
 				result.FailedAttempts = attempts
 			}
 			// Clean up temporary storage
 			resolverCtx.data.Delete("__failed_attempts")
+		}
+		if !r.Sensitive && result.Value != nil {
+			result.Value = runTracker.RedactAny(result.Value)
+		}
+		if result.Error != nil {
+			result.Error = runTracker.RedactError(result.Error)
 		}
 
 		// Only store result in context if resolver was NOT skipped
@@ -772,6 +787,10 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	resolverContext, cancelResolver := context.WithTimeout(ctx, timeout)
 	defer cancelResolver()
 
+	runTracker := redact.FromContext(resolverContext)
+	resTracker := redact.NewChildTracker(runTracker)
+	resolverContext = redact.WithTracker(resolverContext, resTracker)
+
 	// Check if this resolver has a mocked value (injected via WithMockedResolvers).
 	// If so, the value is already in the resolver context; skip execution entirely.
 	// Note: we do NOT call OnResolverComplete here because the phase runner
@@ -789,6 +808,7 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	// reuse its value and skip execution to avoid invoking the provider twice.
 	if seeded, ok := e.seededResult(r.Name); ok {
 		result.Value = seeded.Value
+		result.CredentialBacked = seeded.CredentialBacked
 		// Preserve the seeded status/error rather than assuming success. A
 		// seeded ExecutionResult carries its own outcome, and forcing success
 		// here would mask a failed pre-pass result and let the main run proceed
@@ -854,6 +874,8 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	})
 
 	if err != nil {
+		err = resTracker.RedactError(err)
+		result.CredentialBacked = resTracker.HadCredential()
 		// Emit nil on failure (partial emission)
 		result.Value = nil
 		result.Status = ExecutionStatusFailed
@@ -883,8 +905,14 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 		})
 
 		if err != nil {
+			err = resTracker.RedactError(err)
+			result.CredentialBacked = resTracker.HadCredential() || runTracker.ContainsTracked(value)
 			// Emit pre-transform value (partial emission)
-			result.Value = value
+			if r.Sensitive {
+				result.Value = value
+			} else {
+				result.Value = runTracker.RedactAny(value)
+			}
 			result.Status = ExecutionStatusFailed
 			result.Error = &ExecutionError{
 				ResolverName:  r.Name,
@@ -899,25 +927,43 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 		value = transformed
 	}
 
+	// Scrub credential material from non-sensitive resolver outputs immediately
+	// after resolve/transform (before type coercion, validation, or size checks
+	// can emit partial values or embed value in errors), while keeping
+	// sensitive: true resolver values intact in memory for downstream steps and
+	// registering derived values in the run-level tracker only when the resolver
+	// actually resolved or derived from a credential.
+	result.CredentialBacked = resTracker.HadCredential() || runTracker.ContainsTracked(value)
+	if r.Sensitive {
+		if result.CredentialBacked {
+			runTracker.TrackValue(value)
+		}
+	} else {
+		value = runTracker.RedactAny(value)
+	}
+
 	// Type coercion on the final value (after resolve + optional transform)
 	// The type field describes the resolver's output contract, so we enforce it
 	// exactly once on whatever the final value is.
 	if r.Type != "" && r.Type != TypeAny {
 		coerced, err := CoerceType(value, r.Type)
 		if err != nil {
-			result.Value = value
-			result.Status = ExecutionStatusFailed
-			result.Error = &TypeCoercionError{
-				ResolverName:  r.Name,
-				Phase:         coercionPhase,
-				SourceType:    fmt.Sprintf("%T", value),
-				TargetType:    r.Type,
-				Cause:         err,
-				CustomMessage: resolveCustomErrorMessage(resolverContext, r, err),
+			if !spec.IsPlaceholderCredentialResolver(resolverContext) || !result.CredentialBacked {
+				result.Value = value
+				result.Status = ExecutionStatusFailed
+				result.Error = &TypeCoercionError{
+					ResolverName:  r.Name,
+					Phase:         coercionPhase,
+					SourceType:    fmt.Sprintf("%T", value),
+					TargetType:    r.Type,
+					Cause:         err,
+					CustomMessage: resolveCustomErrorMessage(resolverContext, r, err),
+				}
+				return false, result.Error
 			}
-			return false, result.Error
+		} else {
+			value = coerced
 		}
-		value = coerced
 	}
 
 	// Execute validate phase (runs all validations and aggregates failures)
@@ -965,6 +1011,17 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 				"size", valueSize,
 				"limit", e.warnValueSize)
 		}
+	}
+
+	// Re-apply redaction/tracking after coercion in case CoerceType converted a
+	// composite/typed value into a string.
+	result.CredentialBacked = result.CredentialBacked || resTracker.HadCredential() || runTracker.ContainsTracked(value)
+	if r.Sensitive {
+		if result.CredentialBacked {
+			runTracker.TrackValue(value)
+		}
+	} else {
+		value = runTracker.RedactAny(value)
 	}
 
 	// Emit final value
@@ -1206,6 +1263,7 @@ func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase)
 		attemptDuration := time.Since(attemptStart)
 
 		if err != nil {
+			err = redact.FromContext(ctx).RedactError(err)
 			lgr.V(1).Info("provider failed",
 				"source", i+1,
 				logKeyProvider, source.Provider,
@@ -1337,6 +1395,7 @@ func (e *Executor) executeTransformPhase(ctx context.Context, phase *TransformPh
 		attemptDuration := time.Since(attemptStart)
 
 		if err != nil {
+			err = redact.FromContext(ctx).RedactError(err)
 			lgr.V(1).Info("transform provider failed",
 				logKeyStep, i+1,
 				logKeyProvider, transform.Provider,
@@ -1778,13 +1837,9 @@ func (e *Executor) executeProviderWithIterationContext(ctx context.Context, prov
 	}
 	ctxWithResolvers = provider.WithIterationContext(ctxWithResolvers, provIterCtx)
 
-	output, err := prov.Execute(ctxWithResolvers, inputs)
+	output, err := invokeResolverProvider(ctxWithResolvers, prov, inputs)
 	if err != nil {
 		return nil, err
-	}
-
-	if output == nil {
-		return nil, fmt.Errorf("provider returned nil output")
 	}
 
 	return output.Data, nil
@@ -1922,9 +1977,11 @@ func (e *Executor) evaluateValidationRule(ctx context.Context, ruleIndex int, se
 		}
 	}
 
-	// Redact message if sensitive
+	// Redact message if sensitive, or scrub tracked credentials otherwise
 	if sensitive {
 		message = "[REDACTED]"
+	} else {
+		message = redact.FromContext(ctx).RedactString(message)
 	}
 
 	return 1, &ValidationFailure{
@@ -1975,13 +2032,9 @@ func (e *Executor) executeProviderWithSelf(ctx context.Context, providerName str
 	}
 
 	// Execute provider
-	output, err := prov.Execute(ctxWithResolvers, inputs)
+	output, err := invokeResolverProvider(ctxWithResolvers, prov, inputs)
 	if err != nil {
 		return nil, err
-	}
-
-	if output == nil {
-		return nil, fmt.Errorf("provider returned nil output")
 	}
 
 	return output.Data, nil
@@ -1999,6 +2052,30 @@ func calculateValueSize(value any) int64 {
 		return 0
 	}
 	return int64(len(data))
+}
+
+// invokeResolverProvider executes prov with stream-level redaction, GitHub Actions
+// masking, and output warning/metadata/error scrubbing.
+func invokeResolverProvider(ctx context.Context, prov provider.Provider, inputs map[string]any) (*provider.Output, error) {
+	tracker := redact.FromContext(ctx)
+	if tracker == nil {
+		tracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, tracker)
+	}
+	execCtx, flushStreams := provider.WrapRedactingIOStreams(ctx, tracker, prov)
+
+	output, err := prov.Execute(execCtx, inputs)
+	flushStreams()
+	if err != nil {
+		return nil, tracker.RedactError(err)
+	}
+	if output == nil {
+		return nil, fmt.Errorf("provider returned nil output")
+	}
+	scrubbed := *output
+	scrubbed.Warnings = tracker.RedactSlice(scrubbed.Warnings)
+	scrubbed.Metadata = tracker.RedactMap(scrubbed.Metadata)
+	return &scrubbed, nil
 }
 
 // trackFailedAttempt records a failed provider attempt in the current resolver's execution result
@@ -2022,16 +2099,15 @@ func (e *Executor) trackFailedAttempt(resolverCtx *Context, providerName, phase 
 	// Instead, we'll need to pass it down or use a context value
 	// For now, we'll store it in a slice in the context that the defer will pick up
 
-	// Try to get existing attempts
-	var attempts []ProviderAttempt
+	// Copy existing attempts into a new backing slice so concurrent resolvers in
+	// the same phase never share or overwrite backing array capacity.
+	var existingAttempts []ProviderAttempt
 	if existing, ok := resolverCtx.data.Load("__failed_attempts"); ok {
-		if existingAttempts, ok := existing.([]ProviderAttempt); ok {
-			attempts = existingAttempts
-		}
+		existingAttempts, _ = existing.([]ProviderAttempt)
 	}
-
-	// Append new attempt
-	attempts = append(attempts, attempt)
+	attempts := make([]ProviderAttempt, len(existingAttempts)+1)
+	copy(attempts, existingAttempts)
+	attempts[len(existingAttempts)] = attempt
 
 	// Store back
 	resolverCtx.data.Store("__failed_attempts", attempts)

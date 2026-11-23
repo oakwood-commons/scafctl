@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -197,9 +198,16 @@ func (m *Manager) load(ctx context.Context, resolverData, params map[string]any,
 		}, nil
 	}
 
+	tracker := redact.FromContext(ctx)
+	if tracker == nil {
+		tracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, tracker)
+	}
+
 	// Resolve load inputs -- resolverData is exposed as _, CLI params as __params.
 	loadInputs, err := m.resolveInputs(ctx, m.config.Load.Inputs, resolverData, params)
 	if err != nil {
+		err = tracker.RedactError(err)
 		if missing := MissingParams(ctx, m.config, params); len(missing) > 0 {
 			return nil, &MissingParamsError{
 				Missing:  missing,
@@ -215,7 +223,7 @@ func (m *Manager) load(ctx context.Context, resolverData, params map[string]any,
 	}
 
 	// Capture the location before loadInputs gains the operation key.
-	location := resolveLocation(loadInputs)
+	location := tracker.RedactString(resolveLocation(loadInputs))
 
 	loadInputs["operation"] = "state_load"
 	execCtx := m.providerContext(ctx)
@@ -414,11 +422,17 @@ func (m *Manager) writeTarget(ctx context.Context, target SaveTarget, stateData 
 		return TargetWrite{}, fmt.Errorf("unsupported extends value %q (only %q is supported)", target.Extends, ExtendsLoad)
 	}
 
+	tracker := redact.FromContext(ctx)
+	if tracker == nil {
+		tracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, tracker)
+	}
+
 	// Resolve inputs -- resolver outputs are available as _ and CLI params as
 	// __params, since every resolver has run by save time.
 	inputs, err := m.resolveInputs(ctx, target.Inputs, resolverData, mergedParams)
 	if err != nil {
-		return TargetWrite{}, fmt.Errorf("resolve inputs: %w", err)
+		return TargetWrite{}, fmt.Errorf("resolve inputs: %w", tracker.RedactError(err))
 	}
 
 	saveProvider, err := m.getStateProvider(target.Provider)
@@ -433,12 +447,13 @@ func (m *Manager) writeTarget(ctx context.Context, target SaveTarget, stateData 
 	if err != nil {
 		return TargetWrite{}, fmt.Errorf("project state data: %w", err)
 	}
+	dataMap = tracker.RedactMap(dataMap)
 
 	// Capture the write's reporting facts before inputs gains the
 	// operation/data keys below.
 	written := TargetWrite{
 		Provider: target.Provider,
-		Location: resolveLocation(inputs),
+		Location: tracker.RedactString(resolveLocation(inputs)),
 		Format:   normalizeFormat(target.Format),
 	}
 
@@ -553,8 +568,8 @@ func resolveWithParams(ctx context.Context, vr *spec.ValueRef, resolverData, par
 		return nil, nil
 	}
 
-	// Literal and resolver references don't need params
-	if vr.Literal != nil || vr.Resolver != nil {
+	// Literal, resolver, secret, and token references don't need params
+	if vr.Literal != nil || vr.Resolver != nil || vr.Secret != nil || vr.Token != nil {
 		return vr.Resolve(ctx, resolverData, nil)
 	}
 
@@ -590,9 +605,10 @@ func resolveWithParams(ctx context.Context, vr *spec.ValueRef, resolverData, par
 }
 
 // providerContext returns the context a state provider operation runs in:
-// the state execution mode, plus the configured working directory, if any.
+// the state execution mode with inputs marked pre-resolved, plus the configured
+// working directory, if any.
 func (m *Manager) providerContext(ctx context.Context) context.Context {
-	ctx = provider.WithExecutionMode(ctx, provider.CapabilityState)
+	ctx = provider.WithPreResolvedInputs(provider.WithExecutionMode(ctx, provider.CapabilityState))
 	if m.workingDir != "" {
 		ctx = provider.WithWorkingDirectory(ctx, m.workingDir)
 	}

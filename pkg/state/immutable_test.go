@@ -10,6 +10,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestVerifyImmutables(t *testing.T) {
@@ -368,6 +369,39 @@ func TestPersistResolvers(t *testing.T) {
 		err := PersistResolvers(sd, rctx, resolvers, map[string]bool{"cluster_id": true})
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrImmutableEntry)
+	})
+
+	t.Run("sensitive and credential-backed resolvers never persist raw values", func(t *testing.T) {
+		resolvers := []*resolver.Resolver{
+			{Name: "sens_tok", Type: "string", Persist: true, Sensitive: true},
+			{Name: "cred_pin", Type: "int", Immutable: true},
+		}
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("sens_tok", &resolver.ExecutionResult{
+			Value:  "live-sensitive-secret-1234",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		rctx.SetResult("cred_pin", &resolver.ExecutionResult{
+			Value:            42,
+			Status:           resolver.ExecutionStatusSuccess,
+			CredentialBacked: true,
+		})
+
+		sd := NewData()
+		require.NoError(t, PersistResolvers(sd, rctx, resolvers, nil))
+		assert.Equal(t, "[REDACTED]", sd.Resolvers["sens_tok"].Value)
+		assert.Equal(t, "[REDACTED]", sd.Resolvers["cred_pin"].Value)
+
+		// Subsequent VerifyImmutables and PersistResolvers succeed with rotated live secret
+		rctx.SetResult("cred_pin", &resolver.ExecutionResult{
+			Value:            99,
+			Status:           resolver.ExecutionStatusSuccess,
+			CredentialBacked: true,
+		})
+		require.NoError(t, VerifyImmutables(sd, rctx, resolvers))
+		require.NoError(t, PersistResolvers(sd, rctx, resolvers, nil))
+		assert.Equal(t, "[REDACTED]", sd.Resolvers["cred_pin"].Value)
 	})
 }
 

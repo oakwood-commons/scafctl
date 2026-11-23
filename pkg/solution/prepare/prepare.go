@@ -980,7 +980,7 @@ func missingOfficialAuthHandlers(
 	officialReg *authofficial.Registry,
 ) []authofficial.AuthHandler {
 	var missing []authofficial.AuthHandler
-	for _, name := range sol.Spec.ReferencedAuthHandlerNames() {
+	for _, name := range sol.ReferencedAuthHandlerNames() {
 		if authReg != nil && authReg.Has(name) {
 			continue
 		}

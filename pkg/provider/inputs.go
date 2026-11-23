@@ -16,6 +16,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 const (
@@ -24,12 +25,14 @@ const (
 )
 
 // InputValue represents a single input value with exactly one form specified.
-// Only one of Literal, Rslvr, Expr, or Tmpl should be set.
+// Only one of Literal, Rslvr, Expr, Tmpl, Scrt, or Tkn should be set.
 type InputValue struct {
 	Literal any                        `json:"literal,omitempty" yaml:"literal,omitempty" doc:"Direct static value"`
 	Rslvr   string                     `json:"rslvr,omitempty" yaml:"rslvr,omitempty" doc:"Resolver binding (e.g., 'environment')"`
 	Expr    celexp.Expression          `json:"expr,omitempty" yaml:"expr,omitempty" doc:"CEL expression to evaluate"`
 	Tmpl    gotmpl.GoTemplatingContent `json:"tmpl,omitempty" yaml:"tmpl,omitempty" doc:"Go template to render"`
+	Scrt    string                     `json:"scrt,omitempty" yaml:"scrt,omitempty" doc:"Host secret name"`
+	Tkn     *spec.TokenRef             `json:"tkn,omitempty" yaml:"tkn,omitempty" doc:"Auth handler token reference"`
 }
 
 // InputResolver resolves provider inputs from various forms into concrete values.
@@ -45,6 +48,11 @@ type InputResolver struct {
 
 	// ctx is the execution context for CEL and template evaluation
 	ctx context.Context
+
+	// preResolved indicates incoming inputs were already evaluated from spec.ValueRef
+	// by an upstream caller (action/state executor), so ValueRef form parsing and
+	// nested ValueRef evaluation must be skipped to prevent second-order injection.
+	preResolved bool
 }
 
 // NewInputResolver creates a new input resolver for the given schema and context.
@@ -59,13 +67,32 @@ func NewInputResolver(ctx context.Context, schema *jsonschema.Schema, sensitiveF
 	for _, f := range sensitiveFields {
 		sf[f] = true
 	}
+	for f, isSec := range SecretPropertiesFromContext(ctx) {
+		if isSec {
+			sf[f] = true
+		}
+	}
 
 	return &InputResolver{
 		schema:          schema,
 		sensitiveFields: sf,
 		resolverContext: resolverCtx,
 		ctx:             ctx,
+		preResolved:     PreResolvedInputsFromContext(ctx),
 	}
+}
+
+func (r *InputResolver) isInputSecret(propName string, inputValue InputValue) bool {
+	if r.sensitiveFields[propName] || inputValue.Scrt != "" || inputValue.Tkn != nil {
+		return true
+	}
+	if !r.preResolved && inputValue.Literal != nil {
+		vr := spec.ValueRef{Literal: inputValue.Literal}
+		if vr.ContainsCredentialRef() {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveInputs resolves all provider inputs from their declared forms into concrete values.
@@ -90,7 +117,7 @@ func (r *InputResolver) ResolveInputs(rawInputs any) (map[string]any, error) {
 	if r.schema == nil || r.schema.Properties == nil {
 		// No schema properties — pass through any literal inputs
 		for propName, inputValue := range inputMap {
-			value, err := r.resolveValue(propName, inputValue, false)
+			value, err := r.resolveValue(propName, inputValue, r.isInputSecret(propName, inputValue))
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve property %q: %w", propName, err)
 			}
@@ -109,7 +136,7 @@ func (r *InputResolver) ResolveInputs(rawInputs any) (map[string]any, error) {
 	for propName, propSchema := range r.schema.Properties {
 		inputValue, exists := inputMap[propName]
 		isRequired := requiredSet[propName]
-		isSecret := r.sensitiveFields[propName]
+		isSecret := r.isInputSecret(propName, inputValue)
 
 		// Check if property is required
 		if !exists {
@@ -178,6 +205,17 @@ func (r *InputResolver) normalizeInputMap(rawInputs any) (map[string]InputValue,
 
 	result := make(map[string]InputValue)
 
+	if r.preResolved {
+		for key, value := range inputsMap {
+			if iv, ok := value.(InputValue); ok {
+				result[key] = InputValue{Literal: iv.Literal}
+				continue
+			}
+			result[key] = InputValue{Literal: value}
+		}
+		return result, nil
+	}
+
 	for key, value := range inputsMap {
 		// Check if it's already an InputValue
 		if iv, ok := value.(InputValue); ok {
@@ -224,6 +262,46 @@ func (r *InputResolver) normalizeInputMap(rawInputs any) (map[string]InputValue,
 					return nil, fmt.Errorf("property %q: tmpl must be a string or GoTemplatingContent, got %T", key, tmpl)
 				}
 			}
+			if scrt, exists := valueMap["scrt"]; exists {
+				s, ok := scrt.(string)
+				if !ok || strings.TrimSpace(s) == "" {
+					return nil, fmt.Errorf("property %q: scrt must be a non-empty string, got %T", key, scrt)
+				}
+				iv.Scrt = s
+				formKeyFound = true
+			}
+			if tkn, exists := valueMap["tkn"]; exists {
+				switch tv := tkn.(type) {
+				case spec.TokenRef:
+					cp := tv
+					iv.Tkn = &cp
+					formKeyFound = true
+				case *spec.TokenRef:
+					if tv == nil || strings.TrimSpace(tv.Handler) == "" {
+						return nil, fmt.Errorf("property %q: tkn handler must not be empty", key)
+					}
+					iv.Tkn = tv
+					formKeyFound = true
+				default:
+					rawJSON, mErr := json.Marshal(map[string]any{"tkn": tkn})
+					if mErr != nil {
+						return nil, fmt.Errorf("property %q: invalid tkn value: %w", key, mErr)
+					}
+					var parsed spec.ValueRef
+					if uErr := json.Unmarshal(rawJSON, &parsed); uErr != nil {
+						return nil, fmt.Errorf("property %q: invalid tkn value: %w", key, uErr)
+					}
+					if parsed.Token == nil {
+						return nil, fmt.Errorf("property %q: invalid tkn value", key)
+					}
+					iv.Tkn = parsed.Token
+					formKeyFound = true
+				}
+			}
+
+			if (iv.Scrt != "" || iv.Tkn != nil) && len(valueMap) != 1 {
+				return nil, fmt.Errorf("property %q: credential reference must contain only a single key", key)
+			}
 
 			// If no form keys found, treat the entire map as a literal value
 			if !formKeyFound {
@@ -257,13 +335,19 @@ func (r *InputResolver) validateExclusivity(propName string, input InputValue) e
 	if input.Tmpl != "" {
 		formsSet++
 	}
+	if input.Scrt != "" {
+		formsSet++
+	}
+	if input.Tkn != nil {
+		formsSet++
+	}
 
 	if formsSet == 0 {
-		return fmt.Errorf("property %q: no input form specified (must provide one of: literal, rslvr, expr, tmpl)", propName)
+		return fmt.Errorf("property %q: no input form specified (must provide one of: literal, rslvr, expr, tmpl, scrt, tkn)", propName)
 	}
 
 	if formsSet > 1 {
-		return fmt.Errorf("property %q: multiple input forms specified (only one of literal, rslvr, expr, tmpl is allowed)", propName)
+		return fmt.Errorf("property %q: multiple input forms specified (only one of literal, rslvr, expr, tmpl, scrt, tkn is allowed)", propName)
 	}
 
 	return nil
@@ -271,9 +355,32 @@ func (r *InputResolver) validateExclusivity(propName string, input InputValue) e
 
 // resolveValue resolves an InputValue to a concrete value based on its form.
 func (r *InputResolver) resolveValue(propName string, input InputValue, isSecret bool) (any, error) {
-	// Literal form - return as-is
+	// Literal form — resolve any nested ValueRef maps ({scrt:...}, {tkn:...}, etc.)
+	// unless inputs were already resolved upstream.
 	if input.Literal != nil {
-		return input.Literal, nil
+		if r.preResolved {
+			return input.Literal, nil
+		}
+		switch input.Literal.(type) {
+		case map[string]any, []any:
+			vr := spec.ValueRef{Literal: input.Literal}
+			return vr.Resolve(r.ctx, r.resolverContext, nil)
+		default:
+			return input.Literal, nil
+		}
+	}
+
+	// Host secret form
+	if input.Scrt != "" {
+		scrt := input.Scrt
+		vr := spec.ValueRef{Secret: &scrt}
+		return vr.Resolve(r.ctx, r.resolverContext, nil)
+	}
+
+	// Auth handler token form
+	if input.Tkn != nil {
+		vr := spec.ValueRef{Token: input.Tkn}
+		return vr.Resolve(r.ctx, r.resolverContext, nil)
 	}
 
 	// Resolver binding form - lookup in resolver context

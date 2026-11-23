@@ -106,7 +106,7 @@ func ExtractLiteralFromInputs(inputs map[string]*spec.ValueRef, key string) stri
 	if vr == nil {
 		return ""
 	}
-	if vr.Expr != nil || vr.Tmpl != nil || vr.Resolver != nil {
+	if vr.Expr != nil || vr.Tmpl != nil || vr.Resolver != nil || vr.Secret != nil || vr.Token != nil {
 		return ""
 	}
 	s, ok := vr.Literal.(string)

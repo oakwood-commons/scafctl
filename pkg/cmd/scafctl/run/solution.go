@@ -24,6 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -32,6 +33,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -515,6 +517,13 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
+	if redact.FromContext(ctx) == nil {
+		ctx = redact.WithTracker(ctx, redact.NewTracker())
+	}
+	if o.DryRun {
+		ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+	}
+
 	// Inject CLI overrides into context before dry-run or live execution,
 	// so both paths honour --output-dir, --on-conflict, and --backup.
 	actionCtx := ctx
@@ -594,7 +603,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 			// as fatal.
 			o.renderResolverDiagnostics(ctx, err)
 			o.validationWarn = err
-			o.validationWarnResolvers = o.buildResolverOutputMap(resolverData, sol)
+			o.validationWarnResolvers = o.buildRedactedResolverOutputMap(ctx, resolverCtx, resolverData, sol)
 		} else {
 			// Fatal: resolve/transform failures under any policy, and
 			// validation failures under the "error" policy. Preserve the
@@ -604,7 +613,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 			if validationOnly {
 				code = exitcode.ValidationFailed
 			}
-			return o.failStructured(ctx, o.buildResolverOutputMap(resolverData, sol), err, code)
+			return o.failStructured(ctx, o.buildRedactedResolverOutputMap(ctx, resolverCtx, resolverData, sol), err, code)
 		}
 	}
 
@@ -662,6 +671,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	actionExecutor := action.NewExecutor(
 		action.WithRegistry(reg),
 		action.WithResolverData(resolverData),
+		action.WithSensitiveResolvers(execute.SensitiveResolverNames(sol, resolverCtx)),
 		action.WithExecutionData(resolverExecutionData),
 		action.WithProgressCallback(actionProgressCallback),
 		action.WithDefaultTimeout(actionCfg.DefaultTimeout),
@@ -741,24 +751,28 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 // actionCtx carries CLI overrides (output-dir, on-conflict, backup, working-dir)
 // so that dryrun.Generate / WhatIf sees the same context as real execution.
 func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg providerLookup, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
+	// Never touch keyrings or mint live tokens during --dry-run.
+	resolverCtx = spec.WithCredentialResolver(resolverCtx, spec.PlaceholderCredentialResolver())
+	actionCtx = spec.WithCredentialResolver(actionCtx, spec.PlaceholderCredentialResolver())
 	// Execute resolvers via the shared method so that IOStreams, progress
 	// callbacks, and CLI-flag-driven config are wired identically to the
 	// live execution path. Resolver providers are side-effect-free, so we
 	// get real data for WhatIf message generation safely.
 	resolvers := sol.Spec.ResolversToSlice()
-	resolverData, _, err := o.executeResolvers(resolverCtx, sol, resolvers, params, reg, withSeededResults(stateSeed))
+	resolverData, resExecCtx, err := o.executeResolvers(resolverCtx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if err != nil {
 		// Non-fatal — report will include warnings about missing resolver data.
 		resolverData = make(map[string]any)
 	}
 
 	report, err := dryrun.Generate(actionCtx, sol, dryrun.Options{
-		Registry:     reg,
-		ResolverData: resolverData,
-		Verbose:      o.Verbose,
-		Workflow:     workflow,
-		StateData:    stateData,
-		Cwd:          cwd,
+		Registry:        reg,
+		ResolverData:    resolverData,
+		ResolverContext: resExecCtx,
+		Verbose:         o.Verbose,
+		Workflow:        workflow,
+		StateData:       stateData,
+		Cwd:             cwd,
 	})
 	if err != nil {
 		return o.exitWithCode(resolverCtx, fmt.Errorf("dry-run failed: %w", err), exitcode.GeneralError)

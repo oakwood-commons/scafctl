@@ -22,7 +22,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -455,11 +457,12 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	lgr.V(1).Info("using capability", "capability", capability)
 	o.logVerboseExecution(w, capability, inputs)
 
-	// Configure execution context (IOStreams, conflict strategy, output dir)
+	// Configure execution context (IOStreams, conflict strategy, output dir, redaction tracker)
 	ctx, err = o.configureExecutionContext(ctx, capability)
 	if err != nil {
 		return err
 	}
+	tracker := redact.FromContext(ctx)
 
 	// Execute the provider
 	start := time.Now()
@@ -467,6 +470,7 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	elapsed := time.Since(start)
 
 	if err != nil {
+		err = tracker.RedactError(err)
 		w.Errorf("provider execution failed: %v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
@@ -479,6 +483,9 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 		"duration", elapsed.Round(time.Millisecond),
 		"dryRun", result.DryRun,
 		"hasWarnings", len(result.Output.Warnings) > 0)
+
+	// Scrub tracked scrt:/tkn: credentials from output data before rendering
+	result.Output.Data = tracker.RedactAny(result.Output.Data)
 
 	// Build output
 	output := o.buildOutput(result, elapsed)
@@ -605,6 +612,12 @@ func (o *ProviderOptions) configureExecutionContext(ctx context.Context, capabil
 
 	ctx = provider.WithExecutionMode(ctx, capability)
 	ctx = provider.WithDryRun(ctx, o.DryRun)
+	if o.DryRun {
+		ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+	}
+	if redact.FromContext(ctx) == nil {
+		ctx = redact.WithTracker(ctx, redact.NewTracker())
+	}
 
 	// Inject IOStreams so streaming providers can write to the terminal.
 	// For structured output modes, route provider stdout to stderr.

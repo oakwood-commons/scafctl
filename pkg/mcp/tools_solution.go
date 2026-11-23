@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -30,6 +31,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 )
 
@@ -651,15 +653,16 @@ func (s *Server) renderActionGraph(resolverCtx, actionCtx context.Context, sol *
 	}
 
 	// Execute resolvers to get data for action inputs
-	resolverData, err := s.executeResolversForRender(resolverCtx, sol, params)
+	previewResult, err := s.executeResolversWithContextForRender(resolverCtx, sol, params)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
 			WithSuggestion("Check resolver configuration with preview_resolvers"),
 			WithRelatedTools("preview_resolvers", "lint_solution"),
 		), nil
 	}
+	resolverData := previewResult.Data
 
-	// Build the action graph
+	// Build the action graph and scrub sensitive/credential-backed materialized inputs
 	graph, err := action.BuildGraph(actionCtx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build action graph: %v", err),
@@ -667,6 +670,7 @@ func (s *Server) renderActionGraph(resolverCtx, actionCtx context.Context, sol *
 			WithRelatedTools("lint_solution"),
 		), nil
 	}
+	action.RedactGraphInputs(graph, redact.FromContext(resolverCtx), execute.SensitiveResolverNames(sol, previewResult.Context))
 
 	// Render as JSON
 	renderOpts := &action.RenderOptions{
@@ -682,8 +686,9 @@ func (s *Server) renderActionGraph(resolverCtx, actionCtx context.Context, sol *
 		), nil
 	}
 
-	// Embed resolver data alongside the graph for a complete picture
-	if len(resolverData) > 0 || outputDir != "" {
+	// Embed sanitized resolver data alongside the graph for a complete picture
+	sanitizedResolvers := execute.SanitizeResolverDataForResponse(sol, previewResult.Context, resolverData, redact.FromContext(resolverCtx))
+	if len(sanitizedResolvers) > 0 || outputDir != "" {
 		type actionGraphWithResolvers struct {
 			Graph        json.RawMessage `json:"graph"`
 			ResolverData map[string]any  `json:"resolverData,omitempty"`
@@ -691,7 +696,7 @@ func (s *Server) renderActionGraph(resolverCtx, actionCtx context.Context, sol *
 		}
 		return mcp.NewToolResultJSON(actionGraphWithResolvers{
 			Graph:        json.RawMessage(rendered),
-			ResolverData: resolverData,
+			ResolverData: sanitizedResolvers,
 			OutputDir:    outputDir,
 		})
 	}
@@ -709,13 +714,14 @@ func (s *Server) renderActionDepsGraph(resolverCtx, actionCtx context.Context, s
 	}
 
 	// Execute resolvers to get data for action inputs
-	resolverData, err := s.executeResolversForRender(resolverCtx, sol, params)
+	previewResult, err := s.executeResolversWithContextForRender(resolverCtx, sol, params)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
 			WithSuggestion("Check resolver configuration with preview_resolvers"),
 			WithRelatedTools("preview_resolvers", "lint_solution"),
 		), nil
 	}
+	resolverData := previewResult.Data
 
 	// Build the action graph
 	graph, err := action.BuildGraph(actionCtx, sol.Spec.Workflow, resolverData, nil)
@@ -725,6 +731,7 @@ func (s *Server) renderActionDepsGraph(resolverCtx, actionCtx context.Context, s
 			WithRelatedTools("lint_solution"),
 		), nil
 	}
+	action.RedactGraphInputs(graph, redact.FromContext(resolverCtx), execute.SensitiveResolverNames(sol, previewResult.Context))
 
 	// Build visualization
 	viz := action.BuildVisualization(graph)
@@ -751,9 +758,8 @@ func (s *Server) renderActionDepsGraph(resolverCtx, actionCtx context.Context, s
 	return mcp.NewToolResultJSON(resp)
 }
 
-// executeResolversForRender runs resolver execution for render operations.
-func (s *Server) executeResolversForRender(ctx context.Context, sol *solution.Solution, params map[string]any) (map[string]any, error) {
-	return execute.ResolversForPreview(ctx, sol, params, s.providerLookup())
+func (s *Server) executeResolversWithContextForRender(ctx context.Context, sol *solution.Solution, params map[string]any) (*execute.ResolverExecutionResult, error) {
+	return execute.ResolversWithContextForPreview(ctx, sol, params, s.providerLookup())
 }
 
 // handlePreviewResolvers executes a solution's resolver chain and returns each resolver's value.
@@ -900,6 +906,7 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	progress.report(ctx, 1, "Loading and validating solution")
 
 	progress.report(ctx, 2, fmt.Sprintf("Executing %d resolvers", len(sol.Spec.Resolvers)))
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
 	result, err := execute.Resolvers(ctx, sol, params, reg, cfg)
 	if err != nil {
 		return buildResolverExecutionError(err, sol), nil
@@ -1015,8 +1022,16 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 			}
 		}
 
+		previewTracker := redact.FromContext(ctx)
 		if res, ok := result.Context.GetResult(name); ok {
-			preview.Value = res.Value
+			switch {
+			case rslvr.Sensitive || res.CredentialBacked:
+				preview.Value = redact.RedactedPlaceholder
+			case previewTracker != nil:
+				preview.Value = previewTracker.RedactAny(res.Value)
+			default:
+				preview.Value = res.Value
+			}
 			switch res.Status {
 			case resolver.ExecutionStatusSuccess:
 				preview.Status = "resolved"
@@ -1028,7 +1043,14 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 				preview.Status = "unresolved"
 			}
 		} else if val, ok := result.Data[name]; ok {
-			preview.Value = val
+			switch {
+			case rslvr.Sensitive:
+				preview.Value = redact.RedactedPlaceholder
+			case previewTracker != nil:
+				preview.Value = previewTracker.RedactAny(val)
+			default:
+				preview.Value = val
+			}
 			preview.Status = "resolved"
 		} else {
 			preview.Status = "unresolved"

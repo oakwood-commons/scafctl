@@ -651,3 +651,62 @@ func TestSolutionOptions_prepareForExecution_Verbose(t *testing.T) {
 	assert.Contains(t, errBuf.String(), "Loading solution from: "+path)
 	assert.Contains(t, errBuf.String(), "Solution loaded: discovered (version=1.0.0")
 }
+
+func TestSolutionOptions_RenderRedactsSensitiveMaterializedInputs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "solution.yaml")
+	solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: render-sensitive-test
+  version: 1.0.0
+spec:
+  resolvers:
+    secretPin:
+      type: int
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 9876
+    secretList:
+      type: array
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - 9494
+                - 9595
+  workflow:
+    actions:
+      deploy:
+        provider: message
+        inputs:
+          message:
+            expr: "'deploy --pin=' + string(_.secretPin)"
+      fanout:
+        forEach:
+          in:
+            rslvr: secretList
+        provider: message
+        inputs:
+          message:
+            tkn: github
+`
+	require.NoError(t, os.WriteFile(path, []byte(solYAML), 0o600))
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cmd := CommandSolution(&settings.Run{}, ioStreams, "render")
+	cmd.SetArgs([]string{"-f", path, "-o", "json"})
+	cmd.SetContext(verboseRenderContext(dir, ioStreams))
+
+	require.NoError(t, cmd.Execute())
+	assert.NotContains(t, outBuf.String(), "9876")
+	assert.NotContains(t, outBuf.String(), "9494")
+	assert.NotContains(t, outBuf.String(), "9595")
+	assert.Contains(t, outBuf.String(), "[REDACTED]")
+}

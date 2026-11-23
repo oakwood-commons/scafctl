@@ -20,6 +20,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/shellexec"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting/mockexec"
@@ -922,6 +923,9 @@ func (r *Runner) executeCommandInProcess(ctx context.Context, tc *TestCase, st *
 		defer os.Remove(mocksFile)
 		ctx = settings.WithMockedResolversFile(ctx, mocksFile)
 	}
+
+	// Suppress ::add-mask:: workflow command emission into in-memory test capture buffers.
+	ctx = redact.WithSuppressGitHubActionsMasks(ctx)
 
 	// Execute command
 	cmdErr := rootCmd.ExecuteContext(ctx)

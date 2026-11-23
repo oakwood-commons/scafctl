@@ -18,9 +18,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // ---------------------------------------------------------------------------
@@ -469,6 +471,102 @@ func Resolvers(
 	}, nil
 }
 
+// SensitiveResolverNames returns the set of resolver names in sol that are
+// declared sensitive: true or were marked CredentialBacked in resolverCtx.
+func SensitiveResolverNames(sol *solution.Solution, resolverCtx *resolver.Context) map[string]bool {
+	names := make(map[string]bool)
+	if sol != nil {
+		for name, r := range sol.Spec.Resolvers {
+			if r != nil && r.Sensitive {
+				names[name] = true
+			}
+		}
+	}
+	if resolverCtx != nil {
+		for name, res := range resolverCtx.GetAllResults() {
+			if res != nil && res.CredentialBacked {
+				names[name] = true
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
+}
+
+// SanitizeResolverDataForResponse builds a response-only copy of resolverData
+// suitable for REST API and MCP JSON responses without mutating resolverData
+// (so downstream action execution continues to receive raw sensitive values).
+// Every resolver marked sensitive: true in sol or flagged CredentialBacked in
+// resolverCtx has its entire value replaced with [REDACTED] regardless of Go
+// type (covering coerced ints, short strings, and byte slices), and remaining
+// entries are scrubbed against tracker.
+func SanitizeResolverDataForResponse(
+	sol *solution.Solution,
+	resolverCtx *resolver.Context,
+	resolverData map[string]any,
+	tracker *redact.Tracker,
+) map[string]any {
+	if resolverData == nil {
+		return nil
+	}
+	out := make(map[string]any, len(resolverData))
+	for name, val := range resolverData {
+		if sol != nil {
+			if r, ok := sol.Spec.Resolvers[name]; ok && r != nil && r.Sensitive {
+				out[name] = redact.RedactedPlaceholder
+				continue
+			}
+		}
+		if resolverCtx != nil {
+			if res, ok := resolverCtx.GetResult(name); ok && res != nil && res.CredentialBacked {
+				out[name] = redact.RedactedPlaceholder
+				continue
+			}
+		}
+		out[name] = val
+	}
+	if tracker != nil {
+		out = tracker.RedactMap(out)
+	}
+	return out
+}
+
+// ResolversWithContextForPreview runs resolvers under PlaceholderCredentialResolver
+// and returns the full ResolverExecutionResult (both Data and Context) so render
+// and preview callers can sanitize sensitive/credential-backed outputs after
+// building action graphs.
+func ResolversWithContextForPreview(
+	ctx context.Context,
+	sol *solution.Solution,
+	params map[string]any,
+	registry ProviderLookup,
+) (*ResolverExecutionResult, error) {
+	if !sol.Spec.HasResolvers() {
+		return &ResolverExecutionResult{
+			Data:    make(map[string]any),
+			Context: resolver.NewContext(),
+		}, nil
+	}
+
+	// Use the side-effect-free placeholder CredentialResolver during render/preview
+	// so resolver-side scrt:/tkn: references emit symbolic placeholders without
+	// touching keyrings or minting live tokens.
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+
+	if registry == nil {
+		reg, err := builtin.DefaultRegistry(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create provider registry: %w", err)
+		}
+		registry = reg
+	}
+
+	cfg := ResolverExecutionConfigFromContext(ctx)
+	return Resolvers(ctx, sol, params, registry, cfg)
+}
+
 // ResolversForPreview is a convenience wrapper over Resolvers that returns
 // only the resolved data map. It initialises a default builtin registry when
 // registry is nil and reads the execution config from context. This is the
@@ -480,24 +578,10 @@ func ResolversForPreview(
 	params map[string]any,
 	registry ProviderLookup,
 ) (map[string]any, error) {
-	if !sol.Spec.HasResolvers() {
-		return make(map[string]any), nil
-	}
-
-	if registry == nil {
-		reg, err := builtin.DefaultRegistry(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create provider registry: %w", err)
-		}
-		registry = reg
-	}
-
-	cfg := ResolverExecutionConfigFromContext(ctx)
-	result, err := Resolvers(ctx, sol, params, registry, cfg)
+	result, err := ResolversWithContextForPreview(ctx, sol, params, registry)
 	if err != nil {
 		return nil, err
 	}
-
 	return result.Data, nil
 }
 
@@ -557,6 +641,10 @@ type ActionExecutionConfig struct {
 	// Callers that change the working directory before creating the executor
 	// (e.g., bundle extraction) should set this explicitly.
 	Cwd string `json:"-" yaml:"-"`
+
+	// ResolverContext optionally supplies resolver execution metadata so action
+	// input snapshots mask CredentialBacked resolvers alongside sensitive: true ones.
+	ResolverContext *resolver.Context `json:"-" yaml:"-"`
 }
 
 // ActionExecutionResult wraps the action executor result with additional metadata.
@@ -615,6 +703,7 @@ func Actions(
 	executorOpts := []action.ExecutorOption{
 		action.WithRegistry(registry),
 		action.WithResolverData(resolverData),
+		action.WithSensitiveResolvers(SensitiveResolverNames(sol, cfg.ResolverContext)),
 		action.WithDefaultTimeout(cfg.DefaultTimeout),
 		action.WithGracePeriod(cfg.GracePeriod),
 	}

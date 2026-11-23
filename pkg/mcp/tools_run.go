@@ -14,6 +14,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 )
@@ -111,6 +113,12 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 		}
 	}
 
+	// Attach a fresh run-scoped redaction tracker so secrets resolved during the
+	// resolver phase remain tracked across the action phase and response formatting
+	// without leaking across unrelated MCP tool calls.
+	runTracker := redact.NewTracker()
+	ctx = redact.WithTracker(ctx, runTracker)
+
 	// Capture caller's CWD before preparation may os.Chdir to a bundle temp dir.
 	originalCwd, err := provider.GetWorkingDirectory(ctx)
 	if err != nil {
@@ -178,7 +186,10 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 	progress.setTotal(totalSteps)
 
 	// Step 1: Execute resolvers.
-	var resolverData map[string]any
+	var (
+		resolverData    map[string]any
+		resolverExecCtx *resolver.Context
+	)
 	if sol.Spec.HasResolvers() {
 		progress.report(ctx, 1, "Executing resolvers")
 
@@ -191,6 +202,7 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 			), nil
 		}
 		resolverData = result.Data
+		resolverExecCtx = result.Context
 	} else {
 		resolverData = make(map[string]any)
 	}
@@ -202,7 +214,7 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 		return mcp.NewToolResultJSON(map[string]any{
 			"status":       "success",
 			"type":         "resolver-only",
-			"resolverData": resolverData,
+			"resolverData": execute.SanitizeResolverDataForResponse(sol, resolverExecCtx, resolverData, runTracker),
 			"solution":     sol.Metadata.Name,
 		})
 	}
@@ -215,6 +227,7 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 		actionCfg.OutputDir = outputDir
 	}
 	actionCfg.Cwd = originalCwd
+	actionCfg.ResolverContext = resolverExecCtx
 
 	actionResult, err := execute.Actions(actionCtx, sol, resolverData, reg, actionCfg)
 	if err != nil {
@@ -226,7 +239,7 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 
 	progress.report(ctx, 3, "Execution complete")
 
-	return mcp.NewToolResultJSON(buildRunResult(sol, resolverData, actionResult.Result, request.GetBool("show_execution", false)))
+	return mcp.NewToolResultJSON(buildRunResult(sol, execute.SanitizeResolverDataForResponse(sol, resolverExecCtx, resolverData, runTracker), actionResult.Result, request.GetBool("show_execution", false)))
 }
 
 // buildRunResult constructs the structured response from a solution execution.

@@ -135,6 +135,7 @@ func Solution(sol *solution.Solution, filePath string, registry providerLookup) 
 	lintParameterNumericMatches(sol, result)
 	lintTests(sol, filePath, result)
 	lintProviderInputs(sol, result, registry)
+	lintCredentials(sol, result)
 	lintDeprecatedFields(sol, result)
 	lintBundlePlugins(sol, result)
 
@@ -2663,7 +2664,8 @@ func lintProviderInputsForStep(providerName string, inputs map[string]*spec.Valu
 				continue
 			}
 
-			if err := resolved.Validate(val.Literal); err != nil {
+			candidate := substituteNestedValueRefPlaceholders(val.Literal)
+			if err := resolved.Validate(candidate); err != nil {
 				result.addFinding(SeverityError, "provider", inputLoc,
 					fmt.Sprintf("invalid value for input %q of provider %q: %v", key, providerName, err),
 					"Check the expected type and constraints for this input",

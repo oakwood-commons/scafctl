@@ -25,6 +25,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 )
@@ -117,6 +119,7 @@ type serverConfig struct {
 	logger                   *logr.Logger
 	registry                 *provider.Registry
 	authReg                  *auth.Registry
+	secretStore              secrets.Store
 	config                   *config.Config
 	version                  string
 	name                     string
@@ -199,6 +202,14 @@ func (s *Server) providerLookup() providerLookup {
 func WithServerAuthRegistry(reg *auth.Registry) ServerOption {
 	return func(c *serverConfig) {
 		c.authReg = reg
+	}
+}
+
+// WithSecretStore sets the shared secret store used by MCP tool handlers when
+// resolving scrt: ValueRefs or launching provider plugins.
+func WithSecretStore(store secrets.Store) ServerOption {
+	return func(c *serverConfig) {
+		c.secretStore = store
 	}
 }
 
@@ -446,6 +457,13 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	if cfg.authReg != nil {
 		ctxOpts = append(ctxOpts, WithAuthRegistry(cfg.authReg))
 	}
+	secretStore := cfg.secretStore
+	if secretStore == nil && cfg.ctx != nil {
+		secretStore = secrets.FromContext(cfg.ctx)
+	}
+	if secretStore != nil {
+		ctxOpts = append(ctxOpts, WithContextSecretStore(secretStore))
+	}
 	// Inject settings with BinaryName so domain packages can access the
 	// configured binary name via settings.BinaryNameFromContext.
 	// IsQuiet and NoColor are true because MCP output goes through JSON-RPC,
@@ -608,7 +626,7 @@ func (s *Server) Close() {
 // up-to-date configuration on every tool invocation (e.g. after an auth
 // profile switch via auth_set_profile).
 func (s *Server) freshConfigContext(ctx context.Context) context.Context {
-	merged := mergeContext(ctx, s.ctx)
+	merged := redact.WithTracker(mergeContext(ctx, s.ctx), redact.NewTracker())
 	if s.cfgReloader != nil {
 		if cfg := s.cfgReloader.Config(); cfg != nil {
 			merged = config.WithConfig(merged, cfg)

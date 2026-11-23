@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -27,11 +28,15 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/credentials"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/runmode"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // Server is the REST API server backed by chi and Huma.
@@ -47,6 +52,7 @@ type Server struct {
 	providerReg       *provider.Registry
 	compositeReg      *provider.CompositeRegistry
 	authReg           *auth.Registry
+	secretStore       secrets.Store
 	pluginFetcher     *plugin.Fetcher
 	officialProviders *official.Registry
 	pluginClients     []*plugin.Client
@@ -70,6 +76,7 @@ type serverConfig struct {
 	registry          *provider.Registry
 	compositeReg      *provider.CompositeRegistry
 	authReg           *auth.Registry
+	secretStore       secrets.Store
 	pluginFetcher     *plugin.Fetcher
 	officialProviders *official.Registry
 	pluginClients     []*plugin.Client
@@ -114,6 +121,15 @@ func WithServerCompositeRegistry(reg *provider.CompositeRegistry) ServerOption {
 func WithServerAuthRegistry(reg *auth.Registry) ServerOption {
 	return func(c *serverConfig) {
 		c.authReg = reg
+	}
+}
+
+// WithServerSecretStore sets the shared secret store exposed to credential
+// ValueRefs (scrt:) and provider plugin HostService callbacks on API requests.
+// When unset, NewServer falls back to secrets.FromContext(baseCtx) if present.
+func WithServerSecretStore(store secrets.Store) ServerOption {
+	return func(c *serverConfig) {
+		c.secretStore = store
 	}
 }
 
@@ -224,6 +240,16 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
+	secretStore := sc.secretStore
+	if secretStore == nil {
+		secretStore = secrets.FromContext(baseCtx)
+	}
+	if secretStore != nil {
+		baseCtx = secrets.WithStore(baseCtx, secretStore)
+	}
+	if spec.CredentialResolverFromContext(baseCtx) == nil {
+		baseCtx = credentials.WithResolver(baseCtx, credentials.NewResolver())
+	}
 	ctx, cancel := context.WithCancel(baseCtx)
 
 	version := sc.version
@@ -238,6 +264,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		providerReg:       sc.registry,
 		compositeReg:      sc.compositeReg,
 		authReg:           sc.authReg,
+		secretStore:       secretStore,
 		pluginFetcher:     sc.pluginFetcher,
 		officialProviders: sc.officialProviders,
 		pluginClients:     sc.pluginClients,
@@ -259,6 +286,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	// setting consulted when fetching a solution by URL -- silently fell back to
 	// defaults and could not be configured by an operator at all.
 	s.router.Use(withAppConfig(cfg))
+	s.router.Use(withServerRuntimeDeps(s.authReg, s.secretStore))
 
 	return s, nil
 }
@@ -268,6 +296,32 @@ func withAppConfig(cfg *config.Config) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			next.ServeHTTP(w, r.WithContext(config.WithConfig(r.Context(), cfg)))
+		})
+	}
+}
+
+// withServerRuntimeDeps attaches the server's auth registry, secret store,
+// credential resolver, and a fresh request-isolated redaction tracker (with CI
+// mask commands and process stdout/stderr fallback streams suppressed) to every
+// HTTP request context.
+func withServerRuntimeDeps(authReg *auth.Registry, secretStore secrets.Store) func(http.Handler) http.Handler {
+	resolver := credentials.NewResolver()
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rctx := r.Context()
+			if authReg != nil && auth.RegistryFromContext(rctx) == nil {
+				rctx = auth.WithRegistry(rctx, authReg)
+			}
+			if secretStore != nil && secrets.FromContext(rctx) == nil {
+				rctx = secrets.WithStore(rctx, secretStore)
+			}
+			if spec.CredentialResolverFromContext(rctx) == nil {
+				rctx = credentials.WithResolver(rctx, resolver)
+			}
+			rctx = redact.WithTracker(rctx, redact.NewTracker())
+			rctx = redact.WithSuppressGitHubActionsMasks(rctx)
+			rctx = provider.WithFallbackWriters(rctx, io.Discard, io.Discard)
+			next.ServeHTTP(w, r.WithContext(rctx))
 		})
 	}
 }
@@ -340,6 +394,7 @@ func (s *Server) HandlerCtx() *HandlerContext {
 	hctx.PluginFetcher = s.pluginFetcher
 	hctx.OfficialProviders = s.officialProviders
 	hctx.ServerContext = s.ctx
+	hctx.SecretStore = s.secretStore
 	hctx.PluginPool = s.pluginPool
 	hctx.CompositeRegistry = s.compositeReg
 	hctx.CatalogIndex = s.catalogIndex

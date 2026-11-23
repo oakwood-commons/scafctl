@@ -499,8 +499,8 @@ func extractLiteralString(inputs map[string]*spec.ValueRef, key string) string {
 	if vr == nil {
 		return ""
 	}
-	// Only literal values are analyzed — expr, tmpl, rslvr are skipped.
-	if vr.Expr != nil || vr.Tmpl != nil || vr.Resolver != nil {
+	// Only literal values are analyzed — expr, tmpl, rslvr, scrt, tkn are skipped.
+	if vr.Expr != nil || vr.Tmpl != nil || vr.Resolver != nil || vr.Secret != nil || vr.Token != nil {
 		return ""
 	}
 	s, ok := vr.Literal.(string)

@@ -13,7 +13,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // registerDryRunTools registers dry-run related MCP tools.
@@ -148,6 +150,9 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 		ctx = provider.WithWorkingDirectory(ctx, bundleCwd)
 	}
 
+	// Inject placeholder CredentialResolver so dry-run never touches keyrings or mints live tokens.
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+
 	// Separate action context resolves paths against the caller's CWD.
 	actionCtx := provider.WithWorkingDirectory(ctx, originalCwd)
 
@@ -169,7 +174,10 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 
 	// Execute resolvers normally — resolver providers are side-effect-free,
 	// so we get real data for WhatIf message generation.
-	var resolverData map[string]any
+	var (
+		resolverData    map[string]any
+		resolverExecCtx *resolver.Context
+	)
 	if sol.Spec.HasResolvers() {
 		cfg := execute.ResolverExecutionConfigFromContext(ctx)
 
@@ -178,6 +186,7 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 			resolverData = make(map[string]any)
 		} else {
 			resolverData = result.Data
+			resolverExecCtx = result.Context
 		}
 	}
 
@@ -196,9 +205,10 @@ func (s *Server) handleDryRunSolution(_ context.Context, request mcp.CallToolReq
 	// Generate structured report
 	verbose := request.GetBool("verbose", false)
 	report, err := dryrun.Generate(actionCtx, sol, dryrun.Options{
-		Registry:     reg,
-		ResolverData: resolverData,
-		Verbose:      verbose,
+		Registry:        reg,
+		ResolverData:    resolverData,
+		ResolverContext: resolverExecCtx,
+		Verbose:         verbose,
 	})
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("dry-run failed: %v", err),

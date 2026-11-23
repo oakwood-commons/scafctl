@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
@@ -419,6 +420,47 @@ func TestServer_Context(t *testing.T) {
 	srv, err := NewServer(WithServerContext(ctx))
 	require.NoError(t, err)
 	assert.NotNil(t, srv.Context())
+}
+
+func TestWithServerRuntimeDeps_PerRequestTrackerIsolationAndMaskSuppression(t *testing.T) {
+	t.Parallel()
+
+	parentTracker := redact.NewTracker()
+	parentTracker.Track("root_tracker_secret_1234")
+	parentCtx := redact.WithTracker(context.Background(), parentTracker)
+
+	srv, err := NewServer(WithServerContext(parentCtx))
+	require.NoError(t, err)
+	srv.buildHTTPServer()
+
+	var trackers []*redact.Tracker
+	srv.Router().Get("/probe", func(w http.ResponseWriter, r *http.Request) {
+		tr := redact.FromContext(r.Context())
+		require.NotNil(t, tr)
+		assert.True(t, redact.SuppressGitHubActionsMasksFromContext(r.Context()))
+		if r.URL.Query().Get("track") != "" {
+			tr.Track(r.URL.Query().Get("track"))
+		}
+		trackers = append(trackers, tr)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req1 := httptest.NewRequestWithContext(srv.httpSrv.BaseContext(nil), http.MethodGet, "/probe?track=req1_secret_9999", nil)
+	rec1 := httptest.NewRecorder()
+	srv.Router().ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusOK, rec1.Code)
+
+	req2 := httptest.NewRequestWithContext(srv.httpSrv.BaseContext(nil), http.MethodGet, "/probe", nil)
+	rec2 := httptest.NewRecorder()
+	srv.Router().ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	require.Len(t, trackers, 2)
+	assert.NotSame(t, parentTracker, trackers[0])
+	assert.NotSame(t, trackers[0], trackers[1])
+	assert.False(t, parentTracker.ContainsTracked("req1_secret_9999"))
+	assert.False(t, trackers[1].ContainsTracked("req1_secret_9999"))
+	assert.False(t, trackers[1].ContainsTracked("root_tracker_secret_1234"))
 }
 
 func BenchmarkParseTimeoutOrDefault(b *testing.B) {

@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // RegistryAdapter adapts provider.Registry to action.RegistryInterface and
@@ -119,10 +120,17 @@ func NewResolverExecutor(registry ProviderLookUp, cfg ResolverConfig, extraOpts 
 // extraOpts are appended to the executor (e.g. resolver.WithSeededResults to
 // reuse results computed during a state two-phase pre-load).
 func ExecuteResolvers(ctx context.Context, sol *solution.Solution, params map[string]any, registry ProviderLookUp, cfg ResolverConfig, lgr logr.Logger, extraOpts ...resolver.ExecutorOption) (map[string]any, error) {
+	data, _, err := ExecuteResolversWithContext(ctx, sol, params, registry, cfg, lgr, extraOpts...)
+	return data, err
+}
+
+// ExecuteResolversWithContext runs resolver execution for render operations and
+// returns both the resolved data map and the underlying resolver.Context.
+func ExecuteResolversWithContext(ctx context.Context, sol *solution.Solution, params map[string]any, registry ProviderLookUp, cfg ResolverConfig, lgr logr.Logger, extraOpts ...resolver.ExecutorOption) (map[string]any, *resolver.Context, error) {
 	resolvers := sol.Spec.ResolversToSlice()
 	resolverCtx, err := runResolvers(ctx, sol, resolvers, params, registry, cfg, extraOpts...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	resolverData := make(map[string]any)
@@ -134,7 +142,7 @@ func ExecuteResolvers(ctx context.Context, sol *solution.Solution, params map[st
 	}
 
 	lgr.V(1).Info("resolver execution complete", "resolvedCount", len(resolverData))
-	return resolverData, nil
+	return resolverData, resolverCtx, nil
 }
 
 // ExecuteResolverSubset runs a specific subset of resolvers and returns the
@@ -154,6 +162,10 @@ type ProviderLookUp interface {
 // runResolvers executes the given resolvers and returns the populated resolver
 // context. Calls are wired from the solution when present.
 func runResolvers(ctx context.Context, sol *solution.Solution, resolvers []*resolver.Resolver, params map[string]any, registry ProviderLookUp, cfg ResolverConfig, extraOpts ...resolver.ExecutorOption) (*resolver.Context, error) {
+	// Render never touches keyrings or mints live tokens; resolver-side scrt:/tkn:
+	// references emit symbolic placeholder strings.
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+
 	var opts []resolver.ExecutorOption
 	if sol.Spec.HasCalls() {
 		opts = append(opts, resolver.WithCalls(sol.Spec.Calls))

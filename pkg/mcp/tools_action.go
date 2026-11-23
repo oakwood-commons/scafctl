@@ -12,7 +12,10 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // registerActionTools registers action-related MCP tools.
@@ -112,6 +115,9 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 		ctx = provider.WithWorkingDirectory(ctx, bundleCwd)
 	}
 
+	// Preview never accesses keyrings or mints live tokens.
+	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+
 	// Separate action context resolves paths against the caller's CWD.
 	actionCtx := provider.WithWorkingDirectory(ctx, originalCwd)
 
@@ -125,15 +131,16 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	}
 
 	// Execute resolvers to get data for action inputs
-	resolverData, err := s.executeResolversForRender(ctx, sol, params)
+	previewResult, err := s.executeResolversWithContextForRender(ctx, sol, params)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", err),
 			WithSuggestion("Check resolver configurations with preview_resolvers. Missing parameters can be passed via the params field."),
 			WithRelatedTools("preview_resolvers", "inspect_solution"),
 		), nil
 	}
+	resolverData := previewResult.Data
 
-	// Build the action graph (this materializes inputs)
+	// Build the action graph (this materializes inputs) and scrub sensitive values
 	graph, err := action.BuildGraph(actionCtx, sol.Spec.Workflow, resolverData, nil)
 	if err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build action graph: %v", err),
@@ -141,6 +148,8 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 			WithRelatedTools("lint_solution", "inspect_solution"),
 		), nil
 	}
+	action.RedactGraphInputs(graph, redact.FromContext(ctx), execute.SensitiveResolverNames(sol, previewResult.Context))
+	resolverData = execute.SanitizeResolverDataForResponse(sol, previewResult.Context, resolverData, redact.FromContext(ctx))
 
 	// Build structured preview response
 	type forEachPreview struct {
@@ -248,18 +257,11 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 			}
 		}
 
-		// Map deferred inputs to their expression strings
+		// Map deferred inputs to their symbolic expression/credential summaries
 		if len(ea.DeferredInputs) > 0 {
 			preview.DeferredInputs = make(map[string]string, len(ea.DeferredInputs))
 			for k, v := range ea.DeferredInputs {
-				expr := v.OriginalExpr
-				if expr == "" {
-					expr = v.OriginalTmpl
-				}
-				if expr == "" && v.Deferred {
-					expr = "(deferred)"
-				}
-				preview.DeferredInputs[k] = expr
+				preview.DeferredInputs[k] = v.Summary()
 			}
 		}
 

@@ -539,4 +539,26 @@ A blocked request reports 'blocked by SSRF policy' and names the setting that wo
 		},
 		SeeAlso: []string{"provider", "catalog"},
 	},
+	{
+		Name:     "credentials",
+		Title:    "Credentials (scrt: and tkn: ValueRefs)",
+		Category: "security",
+		Summary:  "Inject host secrets and auth-handler tokens into any provider input with automatic stream, output, error, and dry-run redaction.",
+		Explanation: `Any ValueRef input across resolvers, workflow actions, reusable calls (spec.calls), state backends, and standalone 'run provider' calls can bind a credential directly without shelling out to child CLI processes:
+
+- ` + "`scrt: <name>`" + ` reads a user secret from the encrypted host secret store. Reserved internal namespaces (` + "`scafctl.*`" + ` and custom embedder prefixes) are denied so auth session state stays isolated.
+- ` + "`tkn: <handler>`" + ` (shorthand) or ` + "`tkn: { handler, scope, profile, hostname, minValidFor }`" + ` mints a fresh access token from a registered or auto-fetched official auth handler (` + "`github`" + `, ` + "`gcp`" + `, ` + "`entra`" + `, ` + "`openshift`" + `, etc.).
+
+Both forms work on top-level inputs (such as ` + "`password`" + `) and inline inside nested maps and arrays (such as ` + "`exec`" + ` ` + "`inputs.env`" + ` or ` + "`http`" + ` ` + "`inputs.headers`" + `).
+
+**Automatic defense-in-depth redaction:**
+1. **Late-bound action deferral:** Action inputs containing ` + "`scrt:`" + ` or ` + "`tkn:`" + ` are deferred until the action actually executes. ` + "`render solution`" + `, ` + "`--dry-run`" + `, and ` + "`preview_action`" + ` emit symbolic summaries (` + "`scrt:npm-token`" + `, ` + "`tkn:github`" + `) without touching keyrings or minting tokens.
+2. **Stream, output, and error scrubbing:** Resolved secret values (including individual lines of multi-line PEM keys) are scrubbed to ` + "`[REDACTED]`" + ` across streaming terminal output (even when split across chunk boundaries), provider warnings/metadata, action ` + "`inputs`" + ` and ` + "`results`" + `, non-sensitive resolver outputs, fingerprint hashes, and error messages.
+3. **CI log masking:** When ` + "`GITHUB_ACTIONS=true`" + `, ` + "`::add-mask::`" + ` commands are emitted before provider execution.
+4. **Sensitive resolvers:** When a resolver legitimately transforms and forwards a credential to downstream steps, mark the resolver ` + "`sensitive: true`" + ` (enforced by the ` + "`unmarked-sensitive-credential-resolver`" + ` lint warning).`,
+		Examples: []string{
+			"spec:\n  workflow:\n    actions:\n      publish:\n        provider: exec\n        inputs:\n          command: npm publish\n          env:\n            NPM_TOKEN:\n              scrt: npm-token\n            GH_TOKEN:\n              tkn: github\n      deploy-cluster:\n        provider: exec\n        inputs:\n          command: oc whoami\n          env:\n            OC_TOKEN:\n              tkn:\n                handler: openshift\n                hostname: prod-east\n                minValidFor: 5m",
+		},
+		SeeAlso: []string{"provider", "action", "resolver", "network-policy"},
+	},
 }

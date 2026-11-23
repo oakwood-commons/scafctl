@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 )
@@ -425,6 +426,10 @@ func (s *Server) handleGetProviderOutputShape(ctx context.Context, request mcp.C
 
 // handleRunProvider executes a provider directly and returns structured output.
 func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.ctx != nil {
+		ctx = mergeContext(ctx, s.ctx)
+	}
+	ctx = redact.WithTracker(ctx, redact.NewTracker())
 	name, err := request.RequireString("provider")
 	if err != nil {
 		return newStructuredError(ErrCodeInvalidInput, err.Error(),

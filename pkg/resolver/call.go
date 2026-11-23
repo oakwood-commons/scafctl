@@ -124,12 +124,9 @@ func (e *Executor) executeProviderWithData(ctx context.Context, providerName str
 		return nil, err
 	}
 
-	output, err := prov.Execute(ctxWithResolvers, inputs)
+	output, err := invokeResolverProvider(ctxWithResolvers, prov, inputs)
 	if err != nil {
 		return nil, err
-	}
-	if output == nil {
-		return nil, fmt.Errorf("provider returned nil output")
 	}
 	return output.Data, nil
 }
@@ -178,12 +175,9 @@ func (e *Executor) executeProviderWithDataAndIteration(ctx context.Context, prov
 	}
 	ctxWithResolvers = provider.WithIterationContext(ctxWithResolvers, provIterCtx)
 
-	output, err := prov.Execute(ctxWithResolvers, inputs)
+	output, err := invokeResolverProvider(ctxWithResolvers, prov, inputs)
 	if err != nil {
 		return nil, err
-	}
-	if output == nil {
-		return nil, fmt.Errorf("provider returned nil output")
 	}
 	return output.Data, nil
 }

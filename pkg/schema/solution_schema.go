@@ -305,12 +305,12 @@ func patchJSONSchemaType(defs map[string]any) {
 	}
 }
 
-// patchValueRef replaces the ValueRef $def with a schema that correctly
-// represents all four forms accepted by ValueRef.UnmarshalYAML:
+// patchValueRef replaces the ValueRef $def with a schema that accurately models
+// the custom UnmarshalYAML/UnmarshalJSON behavior:
 //  1. Scalar literal (string, number, boolean, null)
 //  2. Array literal
-//  3. Map literal (object with no special keys)
-//  4. Structured ref: object with exactly one of {rslvr, expr, tmpl}
+//  3. Map literal (object with no special ValueRef keys)
+//  4. Structured ref: object with exactly one of {rslvr, expr, tmpl, scrt, tkn}
 func patchValueRef(defs map[string]any) {
 	// Find the ValueRef key — the namer prepends the package name.
 	key := findDefKey(defs, "ValueRef")
@@ -318,9 +318,63 @@ func patchValueRef(defs map[string]any) {
 		return
 	}
 
-	// Build the structured reference schema (object with rslvr/expr/tmpl).
+	tokenRefObject := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"handler"},
+		"properties": map[string]any{
+			"handler": map[string]any{
+				"type":        "string",
+				"description": "Auth handler name",
+				"minLength":   1,
+				"maxLength":   128,
+				"pattern":     "^[a-z0-9][a-z0-9-]*$",
+			},
+			"scope": map[string]any{
+				"type":        "string",
+				"description": "OAuth2/OIDC scope(s) for handlers supporting per-request scopes",
+				"maxLength":   2048,
+			},
+			"profile": map[string]any{
+				"type":        "string",
+				"description": "Named auth profile override",
+				"maxLength":   128,
+			},
+			"hostname": map[string]any{
+				"type":        "string",
+				"description": "Target cluster/server hostname or alias (requires token_hostname capability)",
+				"maxLength":   512,
+			},
+			"minValidFor": map[string]any{
+				"type":        "string",
+				"description": "Minimum remaining validity duration (e.g. 5m, 30s)",
+				"maxLength":   64,
+			},
+		},
+	}
+
+	if tokenKey := findDefKey(defs, "TokenRef"); tokenKey != "" {
+		defs[tokenKey] = map[string]any{
+			"description": "Auth token reference minted by an auth handler (string shorthand or structured object).",
+			"anyOf": []any{
+				map[string]any{
+					"type":        "string",
+					"description": "Auth handler name shorthand (e.g. github)",
+					"minLength":   1,
+					"maxLength":   128,
+					"pattern":     "^[a-z0-9][a-z0-9-]*$",
+				},
+				tokenRefObject,
+			},
+		}
+	}
+
+	// Build the structured reference schema (object with exactly one of rslvr/expr/tmpl/scrt/tkn).
 	structuredRef := map[string]any{
-		"type": "object",
+		"type":                 "object",
+		"additionalProperties": false,
+		"minProperties":        1,
+		"maxProperties":        1,
 		"properties": map[string]any{
 			"rslvr": map[string]any{
 				"type":        "string",
@@ -335,16 +389,45 @@ func patchValueRef(defs map[string]any) {
 				"type":        "string",
 				"description": "Go template to execute",
 			},
+			"scrt": map[string]any{
+				"type":        "string",
+				"description": "Secret name from the host secret store",
+				"minLength":   1,
+				"maxLength":   255,
+			},
+			"tkn": map[string]any{
+				"description": "Auth token reference minted by an auth handler",
+				"anyOf": []any{
+					map[string]any{
+						"type":        "string",
+						"description": "Auth handler name shorthand",
+						"minLength":   1,
+						"maxLength":   128,
+						"pattern":     "^[a-z0-9][a-z0-9-]*$",
+					},
+					tokenRefObject,
+				},
+			},
 		},
 	}
 
-	// ValueRef accepts any of: string, number, integer, boolean, null,
-	// array, or an object (which could be a literal map or a structured ref
-	// with rslvr/expr/tmpl). We use anyOf because an object with rslvr/expr/tmpl
-	// keys would match multiple schemas in a strict oneOf.
+	literalMap := map[string]any{
+		"type": "object",
+		"not": map[string]any{
+			"anyOf": []any{
+				map[string]any{"required": []any{"rslvr"}},
+				map[string]any{"required": []any{"expr"}},
+				map[string]any{"required": []any{"tmpl"}},
+				map[string]any{"required": []any{"scrt"}},
+				map[string]any{"required": []any{"tkn"}},
+			},
+		},
+	}
+
 	defs[key] = map[string]any{
 		"description": "A value that can be a literal (string, number, boolean, array, object), " +
-			"a resolver reference (rslvr), a CEL expression (expr), or a Go template (tmpl).",
+			"a resolver reference (rslvr), a CEL expression (expr), a Go template (tmpl), " +
+			"a host secret reference (scrt), or an auth token reference (tkn).",
 		"anyOf": []any{
 			map[string]any{"type": "string"},
 			map[string]any{"type": "number"},
@@ -353,6 +436,7 @@ func patchValueRef(defs map[string]any) {
 			map[string]any{"type": "null"},
 			map[string]any{"type": "array"},
 			structuredRef,
+			literalMap,
 		},
 	}
 }
