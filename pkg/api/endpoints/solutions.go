@@ -295,7 +295,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		}
 
 		resp := &SolutionRunResponse{}
-		resp.Body.ResolverData = redact.FromContext(ctx).RedactMap(resolverResult.Data)
+		resp.Body.ResolverData = execute.SanitizeResolverDataForResponse(sol, resolverResult.Context, resolverResult.Data, redact.FromContext(ctx))
 
 		// Execute actions if workflow exists. Like the CLI, actions resolve
 		// relative output paths against the caller's working directory, while

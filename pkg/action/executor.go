@@ -729,6 +729,41 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		ctx = redact.WithTracker(ctx, actionTracker)
 	}
 
+	// Phase 2: Input-based fingerprint check (only when files were fresh).
+	// Compares fingerprint-normalized inputs hash against stored state so rotating
+	// credential bytes stay cache-hit stable while scrt:/tkn: reference or option
+	// changes invalidate the cache.
+	// Skipped when fingerprint.scope is "files" (user opted out of input hashing).
+	var fingerprintInputs map[string]any
+	needFingerprintInputs := e.fingerprintChecker != nil && len(action.Sources) > 0 && fingerprintScope(action.Action) != FingerprintScopeFiles
+	if filesFresh {
+		scope := fingerprintScope(action.Action)
+		if scope == FingerprintScopeFiles {
+			// scope: files — skip input check, files alone determine freshness
+			e.actionContext.MarkSkipped(actionName, SkipReasonUpToDate)
+			if e.progressCallback != nil {
+				e.progressCallback.OnActionSkipped(actionName, string(SkipReasonUpToDate))
+			}
+			return nil
+		}
+
+		var fpInputsErr error
+		fingerprintInputs, fpInputsErr = e.resolveFingerprintInputs(ctx, action, graph.AliasMap, actionTracker)
+		if fpInputsErr == nil {
+			fpResult, fpErr := e.fingerprintChecker.CheckInputs(ctx, actionName, fingerprintInputs)
+			if fpErr != nil {
+				logger.FromContext(ctx).V(0).Info("fingerprint inputs check failed, executing action",
+					"action", actionName, "error", fpErr.Error())
+			} else if !fpResult.Stale {
+				e.actionContext.MarkSkipped(actionName, SkipReasonUpToDate)
+				if e.progressCallback != nil {
+					e.progressCallback.OnActionSkipped(actionName, string(SkipReasonUpToDate))
+				}
+				return nil
+			}
+		}
+	}
+
 	if action.HasCall() {
 		callPlan, err = e.expandActionCall(ctx, action, graph.AliasMap)
 		if err == nil {
@@ -751,31 +786,11 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	}
 
 	redactedInputs := actionTracker.RedactMap(resolvedInputs)
-
-	// Phase 2: Input-based fingerprint check (only when files were fresh).
-	// Compares resolved inputs hash against stored state to detect resolver changes.
-	// Skipped when fingerprint.scope is "files" (user opted out of input hashing).
-	if filesFresh {
-		scope := fingerprintScope(action.Action)
-		if scope == FingerprintScopeFiles {
-			// scope: files — skip input check, files alone determine freshness
-			e.actionContext.MarkSkipped(actionName, SkipReasonUpToDate)
-			if e.progressCallback != nil {
-				e.progressCallback.OnActionSkipped(actionName, string(SkipReasonUpToDate))
-			}
-			return nil
-		}
-
-		fpResult, fpErr := e.fingerprintChecker.CheckInputs(ctx, actionName, redactedInputs)
-		if fpErr != nil {
-			logger.FromContext(ctx).V(0).Info("fingerprint inputs check failed, executing action",
-				"action", actionName, "error", fpErr.Error())
-		} else if !fpResult.Stale {
-			e.actionContext.MarkSkipped(actionName, SkipReasonUpToDate)
-			if e.progressCallback != nil {
-				e.progressCallback.OnActionSkipped(actionName, string(SkipReasonUpToDate))
-			}
-			return nil
+	if needFingerprintInputs && fingerprintInputs == nil {
+		if fpIn, fpErr := e.resolveFingerprintInputs(ctx, action, graph.AliasMap, actionTracker); fpErr == nil {
+			fingerprintInputs = fpIn
+		} else {
+			fingerprintInputs = redactedInputs
 		}
 	}
 
@@ -892,14 +907,16 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Success (read output without mutating it in place, since dedupMemo may
 	// share the *provider.Output pointer across concurrent actions in a phase).
-	var results any
+	var rawResults any
 	if output != nil {
-		results = actionTracker.RedactAny(output.Data)
+		rawResults = output.Data
 	}
 
-	// Validate result against schema if defined
+	// Validate original provider output against schema before redacting so
+	// credential-bearing fields do not fail length, pattern, enum, or format
+	// constraints after placeholder substitution. Any validation diagnostic is
+	// scrubbed before logging, callbacks, or error publication.
 	if action.ResultSchema != nil {
-		// Determine effective mode: action-level overrides workflow-level
 		mode := action.ResultSchemaMode
 		if mode == "" {
 			mode = e.workflowResultSchemaMode
@@ -907,7 +924,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		mode = mode.OrDefault()
 
 		if mode != ResultSchemaModeIgnore {
-			if validationErr := ValidateResult(results, action.ResultSchema); validationErr != nil {
+			if validationErr := ValidateResult(rawResults, action.ResultSchema); validationErr != nil {
+				validationErr = actionTracker.RedactError(validationErr)
 				switch mode {
 				case ResultSchemaModeError:
 					e.actionContext.MarkFailed(actionName, validationErr.Error())
@@ -916,8 +934,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 					}
 					cont, decideErr := e.actionShouldContinue(ctx, action, validationErr, attempts, maxAttempts)
 					if decideErr != nil {
-						// Surface an invalid continueOnError expression/config
-						// rather than masking it behind the schema failure.
+						decideErr = actionTracker.RedactError(decideErr)
 						return errors.Join(fmt.Errorf("result schema validation failed: %w", validationErr), decideErr)
 					}
 					if cont {
@@ -928,23 +945,27 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 					logger.FromContext(ctx).V(0).Info("result schema validation warning",
 						"action", actionName,
 						"error", validationErr.Error())
-					// Continue execution - don't fail
 				case ResultSchemaModeIgnore:
-					// Already handled above, but included for exhaustive switch
 				}
 			}
 		}
 	}
 
+	var results any
+	if rawResults != nil {
+		results = actionTracker.RedactAny(rawResults)
+	}
+
 	e.actionContext.MarkSucceeded(actionName, results)
 
-	// Record fingerprint after successful execution (using redacted inputs so
-	// rotating JWT iat/exp claims do not invalidate idempotency caches).
+	// Record fingerprint after successful execution using symbolic credential
+	// identity markers (no live credential bytes) so rotating JWT claims stay
+	// cache-hit stable while scrt:/tkn: reference or option edits invalidate.
 	if e.fingerprintChecker != nil && len(action.Sources) > 0 {
 		scope := fingerprintScope(action.Action)
 		var recordInputs map[string]any
 		if scope != FingerprintScopeFiles {
-			recordInputs = redactedInputs
+			recordInputs = fingerprintInputs
 		}
 		if recordErr := e.fingerprintChecker.Record(ctx, actionName, action.Sources, action.Generates, e.cwd, recordInputs); recordErr != nil {
 			logger.FromContext(ctx).V(0).Info("fingerprint record failed",
@@ -962,6 +983,39 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	}
 
 	return nil
+}
+
+// resolveFingerprintInputs evaluates action inputs against FingerprintCredentialResolver
+// so scrt: names and full tkn: options are preserved deterministically without
+// touching secret stores or minting tokens, then scrubs any resolver-derived
+// tracked secrets from the resulting map.
+func (e *Executor) resolveFingerprintInputs(
+	ctx context.Context,
+	action *ExpandedAction,
+	aliasMap map[string]string,
+	actionTracker *redact.Tracker,
+) (map[string]any, error) {
+	fpCtx := spec.WithCredentialResolver(
+		redact.WithTracker(ctx, redact.NewTracker()),
+		spec.FingerprintCredentialResolver(),
+	)
+	var (
+		fpInputs map[string]any
+		err      error
+	)
+	if action.HasCall() {
+		plan, callErr := e.expandActionCall(fpCtx, action, aliasMap)
+		if callErr != nil {
+			return nil, callErr
+		}
+		fpInputs = plan.Inputs
+	} else {
+		fpInputs, err = e.resolveInputs(fpCtx, action, aliasMap)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return actionTracker.RedactMap(fpInputs), nil
 }
 
 // warnEmptySources surfaces user-visible warnings when an action's source globs

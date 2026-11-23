@@ -256,3 +256,40 @@ func TestTracker_ConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestChildTracker_AndByteSliceRedaction(t *testing.T) {
+	root := NewTracker()
+	child := NewChildTracker(root)
+	assert.Same(t, root, child.Root())
+	assert.False(t, child.HadCredential())
+
+	// Short secrets (< MinSecretLength) still record HadCredential() on the child
+	// without adding over-broad 2-byte patterns to the substring replacer.
+	child.Track("42")
+	assert.True(t, child.HadCredential())
+	assert.Equal(t, 0, root.Count())
+
+	// Full-length secrets tracked on child populate root and scrub []byte values.
+	child.Track("secret-bytes-value-999")
+	assert.Equal(t, 1, child.Count())
+	assert.True(t, root.ContainsTracked([]byte("prefix secret-bytes-value-999 suffix")))
+	assert.False(t, root.ContainsTracked([]byte("harmless payload")))
+
+	origBytes := []byte("payload=secret-bytes-value-999")
+	scrubbed := root.RedactAny(origBytes).([]byte)
+	assert.Equal(t, "payload=[REDACTED]", string(scrubbed))
+	assert.Equal(t, "payload=secret-bytes-value-999", string(origBytes))
+
+	ctx := WithSuppressGitHubActionsMasks(context.Background())
+	assert.True(t, SuppressGitHubActionsMasksFromContext(ctx))
+	assert.False(t, SuppressGitHubActionsMasksFromContext(context.Background()))
+
+	t.Setenv("GITHUB_ACTIONS", "true")
+	var out bytes.Buffer
+	sw := NewStreamWriterWithMasks(&out, child, true)
+	_, err := sw.Write([]byte("streaming secret-bytes-value-999\n"))
+	require.NoError(t, err)
+	require.NoError(t, sw.Flush())
+	assert.Contains(t, out.String(), "::add-mask::secret-bytes-value-999\n")
+	assert.Contains(t, out.String(), "streaming [REDACTED]\n")
+}

@@ -61,6 +61,7 @@ type ExecutionResult struct {
 	ValueSizeBytes    int64             `json:"valueSizeBytes" yaml:"valueSizeBytes" doc:"Size of the value in bytes" example:"1024"`
 	DependencyCount   int               `json:"dependencyCount" yaml:"dependencyCount" doc:"Number of dependencies" example:"3"`
 	FailedAttempts    []ProviderAttempt `json:"failedAttempts,omitempty" yaml:"failedAttempts,omitempty" doc:"Failed provider attempts (for debugging)" maxItems:"10"`
+	CredentialBacked  bool              `json:"credentialBacked,omitempty" yaml:"credentialBacked,omitempty" doc:"Whether execution resolved or derived from a tracked credential"`
 }
 
 // Context is a thread-safe storage for resolver results and execution metadata

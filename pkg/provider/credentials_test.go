@@ -212,4 +212,39 @@ func TestExecutorAndRunProvider_CredentialsRedaction(t *testing.T) {
 		assert.NotContains(t, err.Error(), "super_secret_prov_token_777")
 		assert.Contains(t, err.Error(), "[REDACTED]")
 	})
+
+	t.Run("Fallback streams scrub stdout and stderr when IOStreams absent or partially nil outside CI", func(t *testing.T) {
+		t.Setenv("GITHUB_ACTIONS", "false")
+		prov := &echoingTestProvider{}
+
+		// Case 1: No IOStreams in context at all.
+		var fbOut, fbErr bytes.Buffer
+		ctxNoStreams := spec.WithCredentialResolver(context.Background(), credRes)
+		ctxNoStreams = WithFallbackWriters(ctxNoStreams, &fbOut, &fbErr)
+		_, err := RunProvider(ctxNoStreams, RunOptions{
+			Provider: prov,
+			Inputs: map[string]any{
+				"token": map[string]any{"scrt": "deploy-key"},
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "streamed=[REDACTED]\n", fbOut.String())
+		assert.NotContains(t, fbOut.String(), "super_secret_prov_token_777")
+
+		// Case 2: IOStreams present with nil Out destination.
+		fbOut.Reset()
+		fbErr.Reset()
+		ctxNilOut := spec.WithCredentialResolver(context.Background(), credRes)
+		ctxNilOut = WithFallbackWriters(ctxNilOut, &fbOut, &fbErr)
+		ctxNilOut = WithIOStreams(ctxNilOut, &IOStreams{Out: nil, ErrOut: &fbErr})
+		_, err = RunProvider(ctxNilOut, RunOptions{
+			Provider: prov,
+			Inputs: map[string]any{
+				"token": map[string]any{"scrt": "deploy-key"},
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "streamed=[REDACTED]\n", fbOut.String())
+		assert.NotContains(t, fbOut.String(), "super_secret_prov_token_777")
+	})
 }

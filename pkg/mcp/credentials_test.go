@@ -23,6 +23,7 @@ func TestMCPTools_CredentialsAndRedaction(t *testing.T) {
 	store := secrets.NewMockStore()
 	const rawSecret = "mcp-top-secret-value-334455"
 	store.Data["mcp-secret"] = []byte(rawSecret)
+	store.Data["mcp-short-pin"] = []byte("77")
 
 	authReg := auth.NewRegistry()
 	gh := auth.NewMockHandler("github")
@@ -53,9 +54,9 @@ func TestMCPTools_CredentialsAndRedaction(t *testing.T) {
 	outFile := filepath.Join(tmpDir, "mcp-delivered.txt")
 	solFile := filepath.Join(tmpDir, "solution.yaml")
 
-	// Workflow actions reference ONLY rslvr: secret_header (plus a direct scrt: on
-	// notify) so both preview placeholder safety and run_solution cross-phase
-	// redaction are exercised.
+	// Workflow actions reference ONLY rslvr: secret_header and numeric_pin (plus a
+	// direct tkn: on notify) so both preview placeholder safety and run_solution
+	// cross-phase redaction (including coerced int secrets) are exercised.
 	solYAML := `apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
@@ -77,6 +78,15 @@ spec:
           - provider: cel
             inputs:
               expression: '"Bearer " + __self'
+    numeric_pin:
+      type: int
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                scrt: mcp-short-pin
   workflow:
     actions:
       write_secret:
@@ -85,7 +95,7 @@ spec:
           operation: write
           path: ` + filepath.ToSlash(outFile) + `
           content:
-            rslvr: secret_header
+            tmpl: "{{ .secret_header }}:{{ .numeric_pin }}"
       notify:
         dependsOn:
           - write_secret
@@ -161,10 +171,45 @@ spec:
 		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
 		resData := parsed["resolverData"].(map[string]any)
 		assert.Equal(t, "[REDACTED]", resData["secret_header"])
+		assert.Equal(t, "[REDACTED]", resData["numeric_pin"])
 
 		written, err := os.ReadFile(outFile) //nolint:gosec // test path
 		require.NoError(t, err)
-		assert.Equal(t, "Bearer "+rawSecret, string(written))
+		assert.Equal(t, "Bearer "+rawSecret+":77", string(written))
+	})
+
+	t.Run("run_solution resolver-only masks sensitive coerced int and short secrets", func(t *testing.T) {
+		resOnlyFile := filepath.Join(tmpDir, "resolver-only.yaml")
+		resOnlyYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: mcp-res-only-cred
+  version: "1.0.0"
+spec:
+  resolvers:
+    numeric_pin:
+      type: int
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                scrt: mcp-short-pin
+`
+		require.NoError(t, os.WriteFile(resOnlyFile, []byte(resOnlyYAML), 0o600))
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "run_solution"
+		req.Params.Arguments = map[string]any{"path": resOnlyFile}
+
+		res, err := srv.handleRunSolution(context.Background(), req)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		text := res.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		resData := parsed["resolverData"].(map[string]any)
+		assert.Equal(t, "[REDACTED]", resData["numeric_pin"])
 	})
 
 	t.Run("run_provider resolves scrt and scrubs returned data", func(t *testing.T) {

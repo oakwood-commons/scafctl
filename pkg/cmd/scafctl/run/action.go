@@ -26,6 +26,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -411,6 +412,9 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	if redact.FromContext(ctx) == nil {
 		ctx = redact.WithTracker(ctx, redact.NewTracker())
 	}
+	if o.DryRun {
+		ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+	}
 
 	// Inject CLI overrides into context
 	actionCtx := ctx
@@ -478,7 +482,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 			// as fatal.
 			o.renderResolverDiagnostics(ctx, err)
 			o.validationWarn = err
-			o.validationWarnResolvers = o.buildResolverOutputMap(resolverData, sol)
+			o.validationWarnResolvers = o.buildRedactedResolverOutputMap(ctx, resolverCtx, resolverData, sol)
 		} else {
 			// Fatal: resolve/transform failures under any policy, and
 			// validation failures under the "error" policy. Preserve the
@@ -488,7 +492,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 			if validationOnly {
 				code = exitcode.ValidationFailed
 			}
-			return o.failStructured(ctx, o.buildResolverOutputMap(resolverData, sol), err, code)
+			return o.failStructured(ctx, o.buildRedactedResolverOutputMap(ctx, resolverCtx, resolverData, sol), err, code)
 		}
 	}
 	resolverElapsed := time.Since(start)

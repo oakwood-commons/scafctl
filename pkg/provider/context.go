@@ -6,9 +6,12 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"os"
 	"text/template"
 
 	sdkprovider "github.com/oakwood-commons/scafctl-plugin-sdk/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 )
 
 // --- SDK type aliases ---
@@ -237,4 +240,124 @@ func WithTemplateFuncBinder(ctx context.Context, binder TemplateFuncBinder) cont
 func TemplateFuncBinderFromContext(ctx context.Context) (TemplateFuncBinder, bool) {
 	binder, ok := ctx.Value(templateFuncBinderKey).(TemplateFuncBinder)
 	return binder, ok
+}
+
+// DynamicCredentialStreamingProvider is implemented by providers (such as plugin
+// wrappers) that may fetch credentials dynamically from host services during
+// Execute rather than solely through static input resolution. Executors wrap
+// their output streams up front even when the redaction tracker starts empty.
+type DynamicCredentialStreamingProvider interface {
+	UsesDynamicHostCredentials() bool
+}
+
+const (
+	fallbackIOStreamsFlagKey scafctlContextKey = "scafctl.provider.fallbackIOStreams"
+	fallbackWritersKey       scafctlContextKey = "scafctl.provider.fallbackWriters"
+)
+
+type fallbackWriters struct {
+	out    io.Writer
+	errOut io.Writer
+}
+
+// WithFallbackWriters overrides the default process-level fallback writers
+// (os.Stdout and os.Stderr) used when redacting streams are installed for
+// executions that omit IOStreams or leave individual destinations nil.
+func WithFallbackWriters(ctx context.Context, out, errOut io.Writer) context.Context {
+	return context.WithValue(ctx, fallbackWritersKey, fallbackWriters{out: out, errOut: errOut})
+}
+
+func resolveFallbackWriters(ctx context.Context) (out, errOut io.Writer) {
+	out = os.Stdout
+	errOut = os.Stderr
+	if ctx == nil {
+		return out, errOut
+	}
+	if fw, ok := ctx.Value(fallbackWritersKey).(fallbackWriters); ok {
+		if fw.out != nil {
+			out = fw.out
+		}
+		if fw.errOut != nil {
+			errOut = fw.errOut
+		}
+	}
+	return out, errOut
+}
+
+// IsFallbackIOStreams reports whether the IOStreams in ctx were synthesized
+// solely as a redacting fallback for providers (like debug) that write to
+// os.Stdout/os.Stderr when IOStreams are absent, rather than supplied by a
+// caller opting into interactive terminal streaming.
+func IsFallbackIOStreams(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(fallbackIOStreamsFlagKey).(bool)
+	return v
+}
+
+// WrapRedactingIOStreams ensures that whenever credentials are tracked in
+// tracker (or prov implements DynamicCredentialStreamingProvider), ctx carries
+// non-nil Out and ErrOut StreamWriters backed by tracker. It returns the
+// derived context and an idempotent flush function.
+func WrapRedactingIOStreams(ctx context.Context, tracker *redact.Tracker, prov any) (context.Context, func()) {
+	noop := func() {}
+	if tracker == nil {
+		return ctx, noop
+	}
+	forceWrap := false
+	if dyn, ok := prov.(DynamicCredentialStreamingProvider); ok && dyn.UsesDynamicHostCredentials() {
+		forceWrap = true
+	}
+	if !forceWrap && tracker.Count() == 0 {
+		return ctx, noop
+	}
+
+	emitMasks := !redact.SuppressGitHubActionsMasksFromContext(ctx)
+	fbOut, fbErr := resolveFallbackWriters(ctx)
+
+	var outSW, errSW *redact.StreamWriter
+	wrapOut := func(target io.Writer) io.Writer {
+		if target == nil {
+			target = fbOut
+		}
+		if existing, ok := target.(*redact.StreamWriter); ok {
+			return existing
+		}
+		outSW = redact.NewStreamWriterWithMasks(target, tracker, emitMasks)
+		return outSW
+	}
+	wrapErr := func(target io.Writer) io.Writer {
+		if target == nil {
+			target = fbErr
+		}
+		if existing, ok := target.(*redact.StreamWriter); ok {
+			return existing
+		}
+		errSW = redact.NewStreamWriter(target, tracker)
+		return errSW
+	}
+
+	if streams, ok := IOStreamsFromContext(ctx); ok && streams != nil {
+		wrapped := *streams
+		wrapped.Out = wrapOut(streams.Out)
+		wrapped.ErrOut = wrapErr(streams.ErrOut)
+		ctx = WithIOStreams(ctx, &wrapped)
+	} else {
+		wrapped := &IOStreams{
+			Out:    wrapOut(fbOut),
+			ErrOut: wrapErr(fbErr),
+		}
+		ctx = WithIOStreams(ctx, wrapped)
+		ctx = context.WithValue(ctx, fallbackIOStreamsFlagKey, true)
+	}
+
+	return ctx, func() {
+		if outSW != nil {
+			_ = outSW.Flush()
+		}
+		if errSW != nil {
+			_ = errSW.Flush()
+		}
+	}
 }

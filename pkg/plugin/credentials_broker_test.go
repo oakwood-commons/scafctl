@@ -4,14 +4,20 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	hplugin "github.com/hashicorp/go-plugin"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
@@ -157,4 +163,137 @@ func TestHostServiceServer_GetAuthToken_HostnameForwarding(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Contains(t, unsupportedResp.Error, "does not support per-request hostname")
+}
+
+type streamingBrokerMockPlugin struct {
+	MockProviderPlugin
+	streamFn func(ctx context.Context, name string, input map[string]any, cb func(StreamChunk)) error
+}
+
+func (s *streamingBrokerMockPlugin) GetProviderDescriptor(_ context.Context, providerName string) (*provider.Descriptor, error) {
+	return &provider.Descriptor{
+		Name:         providerName,
+		Version:      semver.MustParse("1.0.0"),
+		Capabilities: []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+	}, nil
+}
+
+func (s *streamingBrokerMockPlugin) ExecuteProviderStream(ctx context.Context, name string, input map[string]any, cb func(StreamChunk)) error {
+	if s.streamFn != nil {
+		return s.streamFn(ctx, name, input, cb)
+	}
+	return ErrStreamingNotSupported
+}
+
+func TestHostServiceBroker_TracksCredentialsWrapsStreamsAndIsolatesPooledRuns(t *testing.T) {
+	t.Parallel()
+
+	store := secrets.NewMockStore()
+	store.Data["run-a-secret"] = []byte("broker_secret_alpha_1111")
+	store.Data["run-b-secret"] = []byte("broker_secret_bravo_2222")
+
+	authReg := auth.NewRegistry()
+	gh := auth.NewMockHandler("github")
+	gh.GetTokenResult = &auth.Token{
+		AccessToken: "gho_broker_minted_token_3333",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}
+	require.NoError(t, authReg.Register(gh))
+
+	baseCtx := auth.WithRegistry(context.Background(), authReg)
+	baseCtx = secrets.WithStore(baseCtx, store)
+	opts := AuthClientOptsFromContext(baseCtx)
+
+	var hostServer *HostServiceServer
+	mockImpl := &streamingBrokerMockPlugin{}
+	client, err := newClientWithConnector("scafctl-plugin-broker-test", func(_ string, cfg pluginConfig) (any, *hplugin.Client, error) {
+		gp := cfg.grpcPlugin.(*GRPCPlugin)
+		hostServer = &HostServiceServer{Deps: *gp.HostDeps}
+		return mockImpl, &hplugin.Client{}, nil
+	}, opts...)
+	require.NoError(t, err)
+	require.NotNil(t, hostServer)
+
+	wrapper, err := NewProviderWrapper(client, "broker-prov")
+	require.NoError(t, err)
+
+	// 1. Streaming execution starting with an EMPTY tracker: plugin fetches both a
+	// secret and an auth token via HostService over an independent background RPC
+	// context, then echoes them across split stream chunks, warnings, and metadata.
+	mockImpl.streamFn = func(_ context.Context, _ string, _ map[string]any, cb func(StreamChunk)) error {
+		secResp, sErr := hostServer.GetSecret(context.Background(), &proto.GetSecretRequest{Name: "run-a-secret"})
+		if sErr != nil {
+			return sErr
+		}
+		tokResp, tErr := hostServer.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{HandlerName: "github"})
+		if tErr != nil {
+			return tErr
+		}
+		cb(StreamChunk{Stdout: []byte("out=" + secResp.Value[:10])})
+		cb(StreamChunk{Stdout: []byte(secResp.Value[10:] + " tok=" + tokResp.AccessToken + "\n")})
+		cb(StreamChunk{Stderr: []byte("err=" + secResp.Value + "\n")})
+		cb(StreamChunk{Result: &provider.Output{
+			Data:     map[string]any{"echo": "val=" + secResp.Value},
+			Warnings: []string{"warn=" + tokResp.AccessToken},
+			Metadata: map[string]any{"meta": secResp.Value},
+			Streamed: true,
+		}})
+		return nil
+	}
+
+	var outBuf, errBuf bytes.Buffer
+	runTracker := redact.NewTracker()
+	execCtx := redact.WithTracker(context.Background(), runTracker)
+	execCtx = provider.WithExecutionMode(execCtx, provider.CapabilityAction)
+	execCtx = provider.WithIOStreams(execCtx, &provider.IOStreams{Out: &outBuf, ErrOut: &errBuf})
+
+	execRes, err := provider.NewExecutor().Execute(execCtx, wrapper, map[string]any{})
+	require.NoError(t, err)
+	assert.Equal(t, "out=[REDACTED] tok=[REDACTED]\n", outBuf.String())
+	assert.Equal(t, "err=[REDACTED]\n", errBuf.String())
+	assert.Equal(t, []string{"warn=[REDACTED]"}, execRes.Output.Warnings)
+	assert.Equal(t, "[REDACTED]", execRes.Output.Metadata["meta"])
+	assert.Equal(t, "val=[REDACTED]", runTracker.RedactString(execRes.Output.Data.(map[string]any)["echo"].(string)))
+
+	// 2. Concurrent runs sharing the same pooled *Client keep their trackers strictly isolated.
+	mockImpl.streamFn = nil
+	mockImpl.execFunc = func(_ context.Context, _ string, input map[string]any) (*provider.Output, error) {
+		secName := input["secretName"].(string)
+		secResp, sErr := hostServer.GetSecret(context.Background(), &proto.GetSecretRequest{Name: secName})
+		if sErr != nil {
+			return nil, sErr
+		}
+		time.Sleep(15 * time.Millisecond)
+		if input["fail"] == true {
+			return nil, fmt.Errorf("plugin failed with %s", secResp.Value)
+		}
+		return &provider.Output{Data: map[string]any{"ok": true}}, nil
+	}
+
+	trackerA := redact.NewTracker()
+	trackerB := redact.NewTracker()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		ctxA := redact.WithTracker(context.Background(), trackerA)
+		_, execErr := wrapper.Execute(ctxA, map[string]any{"secretName": "run-a-secret", "fail": true})
+		require.Error(t, execErr)
+		assert.NotContains(t, execErr.Error(), "broker_secret_alpha_1111")
+		assert.Contains(t, execErr.Error(), "[REDACTED]")
+	}()
+	go func() {
+		defer wg.Done()
+		ctxB := redact.WithTracker(context.Background(), trackerB)
+		_, execErr := wrapper.Execute(ctxB, map[string]any{"secretName": "run-b-secret", "fail": false})
+		require.NoError(t, execErr)
+	}()
+	wg.Wait()
+
+	assert.True(t, trackerA.ContainsTracked("broker_secret_alpha_1111"))
+	assert.False(t, trackerA.ContainsTracked("broker_secret_bravo_2222"), "Run A tracker must not inherit Run B broker secrets")
+	assert.True(t, trackerB.ContainsTracked("broker_secret_bravo_2222"))
+	assert.False(t, trackerB.ContainsTracked("broker_secret_alpha_1111"), "Run B tracker must not inherit Run A broker secrets")
 }

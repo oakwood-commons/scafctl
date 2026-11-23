@@ -427,7 +427,7 @@ func (p *MessageProvider) executeTextMode(ctx context.Context, inputs map[string
 
 	// Write to the terminal unless suppressed by --quiet.
 	streamed := false
-	if !isQuiet {
+	if !isQuiet && !provider.IsFallbackIOStreams(ctx) {
 		ioStreams, ok := provider.IOStreamsFromContext(ctx)
 		if ok && ioStreams != nil {
 			if err := p.writeToTerminal(ioStreams, styled, dest); err != nil {
@@ -477,12 +477,14 @@ func (p *MessageProvider) executeRawMode(ctx context.Context, inputs map[string]
 	// Write to the terminal. Raw mode ignores --quiet because it is intended
 	// for machine-readable output that callers may pipe or redirect.
 	streamed := false
-	ioStreams, ok := provider.IOStreamsFromContext(ctx)
-	if ok && ioStreams != nil {
-		if err := p.writeToTerminal(ioStreams, output, dest); err != nil {
-			return nil, fmt.Errorf("%s: failed to write raw output: %w", ProviderName, err)
+	if !provider.IsFallbackIOStreams(ctx) {
+		ioStreams, ok := provider.IOStreamsFromContext(ctx)
+		if ok && ioStreams != nil {
+			if err := p.writeToTerminal(ioStreams, output, dest); err != nil {
+				return nil, fmt.Errorf("%s: failed to write raw output: %w", ProviderName, err)
+			}
+			streamed = true
 		}
-		streamed = true
 	}
 
 	lgr.V(1).Info("Raw output",
@@ -666,7 +668,10 @@ func (p *MessageProvider) executeDataMode(ctx context.Context, inputs map[string
 	lgr := logger.FromContext(ctx)
 	data := inputs[fieldData]
 
-	ioStreams, _ := provider.IOStreamsFromContext(ctx)
+	var ioStreams *provider.IOStreams
+	if !provider.IsFallbackIOStreams(ctx) {
+		ioStreams, _ = provider.IOStreamsFromContext(ctx)
+	}
 
 	noColor := false
 	isQuiet := false

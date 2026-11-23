@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"reflect"
 	"sync"
 	"time"
@@ -788,6 +787,10 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	resolverContext, cancelResolver := context.WithTimeout(ctx, timeout)
 	defer cancelResolver()
 
+	runTracker := redact.FromContext(resolverContext)
+	resTracker := redact.NewChildTracker(runTracker)
+	resolverContext = redact.WithTracker(resolverContext, resTracker)
+
 	// Check if this resolver has a mocked value (injected via WithMockedResolvers).
 	// If so, the value is already in the resolver context; skip execution entirely.
 	// Note: we do NOT call OnResolverComplete here because the phase runner
@@ -805,6 +808,7 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	// reuse its value and skip execution to avoid invoking the provider twice.
 	if seeded, ok := e.seededResult(r.Name); ok {
 		result.Value = seeded.Value
+		result.CredentialBacked = seeded.CredentialBacked
 		// Preserve the seeded status/error rather than assuming success. A
 		// seeded ExecutionResult carries its own outcome, and forcing success
 		// here would mask a failed pre-pass result and let the main run proceed
@@ -870,7 +874,8 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	})
 
 	if err != nil {
-		err = redact.FromContext(resolverContext).RedactError(err)
+		err = resTracker.RedactError(err)
+		result.CredentialBacked = resTracker.HadCredential()
 		// Emit nil on failure (partial emission)
 		result.Value = nil
 		result.Status = ExecutionStatusFailed
@@ -900,12 +905,13 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 		})
 
 		if err != nil {
-			err = redact.FromContext(resolverContext).RedactError(err)
+			err = resTracker.RedactError(err)
+			result.CredentialBacked = resTracker.HadCredential() || runTracker.ContainsTracked(value)
 			// Emit pre-transform value (partial emission)
 			if r.Sensitive {
 				result.Value = value
 			} else {
-				result.Value = redact.FromContext(resolverContext).RedactAny(value)
+				result.Value = runTracker.RedactAny(value)
 			}
 			result.Status = ExecutionStatusFailed
 			result.Error = &ExecutionError{
@@ -925,10 +931,13 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	// after resolve/transform (before type coercion, validation, or size checks
 	// can emit partial values or embed value in errors), while keeping
 	// sensitive: true resolver values intact in memory for downstream steps and
-	// registering derived string values in the run-level redaction tracker.
-	runTracker := redact.FromContext(resolverContext)
+	// registering derived values in the run-level tracker only when the resolver
+	// actually resolved or derived from a credential.
+	result.CredentialBacked = resTracker.HadCredential() || runTracker.ContainsTracked(value)
 	if r.Sensitive {
-		runTracker.TrackValue(value)
+		if result.CredentialBacked {
+			runTracker.TrackValue(value)
+		}
 	} else {
 		value = runTracker.RedactAny(value)
 	}
@@ -939,19 +948,22 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	if r.Type != "" && r.Type != TypeAny {
 		coerced, err := CoerceType(value, r.Type)
 		if err != nil {
-			result.Value = value
-			result.Status = ExecutionStatusFailed
-			result.Error = &TypeCoercionError{
-				ResolverName:  r.Name,
-				Phase:         coercionPhase,
-				SourceType:    fmt.Sprintf("%T", value),
-				TargetType:    r.Type,
-				Cause:         err,
-				CustomMessage: resolveCustomErrorMessage(resolverContext, r, err),
+			if !spec.IsPlaceholderCredentialResolver(resolverContext) || !result.CredentialBacked {
+				result.Value = value
+				result.Status = ExecutionStatusFailed
+				result.Error = &TypeCoercionError{
+					ResolverName:  r.Name,
+					Phase:         coercionPhase,
+					SourceType:    fmt.Sprintf("%T", value),
+					TargetType:    r.Type,
+					Cause:         err,
+					CustomMessage: resolveCustomErrorMessage(resolverContext, r, err),
+				}
+				return false, result.Error
 			}
-			return false, result.Error
+		} else {
+			value = coerced
 		}
-		value = coerced
 	}
 
 	// Execute validate phase (runs all validations and aggregates failures)
@@ -1003,8 +1015,11 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 
 	// Re-apply redaction/tracking after coercion in case CoerceType converted a
 	// composite/typed value into a string.
+	result.CredentialBacked = result.CredentialBacked || resTracker.HadCredential() || runTracker.ContainsTracked(value)
 	if r.Sensitive {
-		runTracker.TrackValue(value)
+		if result.CredentialBacked {
+			runTracker.TrackValue(value)
+		}
 	} else {
 		value = runTracker.RedactAny(value)
 	}
@@ -2043,40 +2058,14 @@ func calculateValueSize(value any) int64 {
 // masking, and output warning/metadata/error scrubbing.
 func invokeResolverProvider(ctx context.Context, prov provider.Provider, inputs map[string]any) (*provider.Output, error) {
 	tracker := redact.FromContext(ctx)
-	execCtx := ctx
-	var outSW, errSW *redact.StreamWriter
-
-	if tracker != nil && tracker.Count() > 0 {
-		if streams, ok := provider.IOStreamsFromContext(ctx); ok && streams != nil {
-			if streams.Out != nil {
-				tracker.EmitGitHubActionsMasks(streams.Out)
-				outSW = redact.NewStreamWriter(streams.Out, tracker)
-			} else {
-				tracker.EmitGitHubActionsMasks(os.Stdout)
-			}
-			if streams.ErrOut != nil {
-				errSW = redact.NewStreamWriter(streams.ErrOut, tracker)
-			}
-			wrapped := *streams
-			if outSW != nil {
-				wrapped.Out = outSW
-			}
-			if errSW != nil {
-				wrapped.ErrOut = errSW
-			}
-			execCtx = provider.WithIOStreams(ctx, &wrapped)
-		} else {
-			tracker.EmitGitHubActionsMasks(os.Stdout)
-		}
+	if tracker == nil {
+		tracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, tracker)
 	}
+	execCtx, flushStreams := provider.WrapRedactingIOStreams(ctx, tracker, prov)
 
 	output, err := prov.Execute(execCtx, inputs)
-	if outSW != nil {
-		_ = outSW.Flush()
-	}
-	if errSW != nil {
-		_ = errSW.Flush()
-	}
+	flushStreams()
 	if err != nil {
 		return nil, tracker.RedactError(err)
 	}

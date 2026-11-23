@@ -607,7 +607,8 @@ func splitPhaseForExclusive(phase []string, actions map[string]*ExpandedAction) 
 	return subPhases
 }
 
-// extractActionsRefsFromDeferred extracts __actions references from a deferred value.
+// extractActionsRefsFromDeferred extracts __actions references from a deferred value,
+// including inline expr:/tmpl: ValueRef nodes nested inside maps and arrays.
 func extractActionsRefsFromDeferred(dv *DeferredValue) []string {
 	if dv == nil {
 		return nil
@@ -616,26 +617,27 @@ func extractActionsRefsFromDeferred(dv *DeferredValue) []string {
 	refs := sets.Set[string]{}
 
 	if dv.OriginalExpr != "" {
-		// Parse as CEL expression
 		exprRefs := parseActionsRefsForGraph(dv.OriginalExpr)
 		refs.Insert(exprRefs...)
 	}
 
 	if dv.OriginalTmpl != "" {
-		// Parse as Go template
 		tmplRefs := parseActionsRefsForGraph(dv.OriginalTmpl)
 		refs.Insert(tmplRefs...)
+	}
+
+	if dv.OriginalValueRef != nil {
+		refs.Insert(extractActionsRefsFromValueRef(dv.OriginalValueRef)...)
 	}
 
 	return sets.List(refs)
 }
 
-// extractActionsRefsFromValueRef extracts __actions references from a call-site
-// argument ValueRef (its expr or tmpl form). Used to schedule referenced actions
-// before an action that reads their results through call args. Literal values
-// are passed through un-evaluated, so they are intentionally not scanned: a
-// literal string that happens to contain "__actions." is data, not a reference,
-// and must not create a phantom dependency edge.
+// extractActionsRefsFromValueRef extracts __actions references from a ValueRef
+// (its top-level expr/tmpl form or inline {expr:...}/{tmpl:...} ValueRef maps
+// nested inside map/array literals). Ordinary literal strings are intentionally
+// not scanned so literal data containing "__actions." never creates phantom
+// dependency edges.
 func extractActionsRefsFromValueRef(v *spec.ValueRef) []string {
 	if v == nil {
 		return nil
@@ -648,7 +650,35 @@ func extractActionsRefsFromValueRef(v *spec.ValueRef) []string {
 	if v.Tmpl != nil {
 		refs.Insert(parseActionsRefsForGraph(string(*v.Tmpl))...)
 	}
+	if v.Literal != nil {
+		extractActionsRefsFromNestedLiteral(v.Literal, refs, 0)
+	}
 	return sets.List(refs)
+}
+
+func extractActionsRefsFromNestedLiteral(val any, refs sets.Set[string], depth int) {
+	if depth > maxDeferredLiteralDepth || val == nil {
+		return
+	}
+	switch typed := val.(type) {
+	case map[string]any:
+		if spec.IsValueRefMap(typed) {
+			if exprStr, ok := typed["expr"].(string); ok {
+				refs.Insert(parseActionsRefsForGraph(exprStr)...)
+			}
+			if tmplStr, ok := typed["tmpl"].(string); ok {
+				refs.Insert(parseActionsRefsForGraph(tmplStr)...)
+			}
+			return
+		}
+		for _, item := range typed {
+			extractActionsRefsFromNestedLiteral(item, refs, depth+1)
+		}
+	case []any:
+		for _, item := range typed {
+			extractActionsRefsFromNestedLiteral(item, refs, depth+1)
+		}
+	}
 }
 
 // computeExecutionPhases computes topologically sorted execution phases.

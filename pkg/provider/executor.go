@@ -6,7 +6,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/redact"
@@ -211,43 +210,13 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 		executionInput = decoded
 	}
 
-	// Wrap IOStreams with rolling holdback redaction and emit GitHub Actions
-	// workflow mask commands before executing the provider when credentials
-	// have been tracked in this execution context.
-	execCtx := ctx
-	var outSW, errSW *redact.StreamWriter
-	if tracker.Count() > 0 {
-		if streams, ok := IOStreamsFromContext(ctx); ok && streams != nil {
-			if streams.Out != nil {
-				tracker.EmitGitHubActionsMasks(streams.Out)
-				outSW = redact.NewStreamWriter(streams.Out, tracker)
-			} else {
-				tracker.EmitGitHubActionsMasks(os.Stdout)
-			}
-			if streams.ErrOut != nil {
-				errSW = redact.NewStreamWriter(streams.ErrOut, tracker)
-			}
-			wrapped := *streams
-			if outSW != nil {
-				wrapped.Out = outSW
-			}
-			if errSW != nil {
-				wrapped.ErrOut = errSW
-			}
-			execCtx = WithIOStreams(ctx, &wrapped)
-		} else {
-			tracker.EmitGitHubActionsMasks(os.Stdout)
-		}
-	}
+	// Wrap IOStreams (or install redacting fallback streams for nil destinations)
+	// and lazily emit GitHub Actions workflow mask commands when streaming starts.
+	execCtx, flushStreams := WrapRedactingIOStreams(ctx, tracker, provider)
 
 	// Execute the provider with either typed input or map
 	outputPtr, err := provider.Execute(execCtx, executionInput)
-	if outSW != nil {
-		_ = outSW.Flush()
-	}
-	if errSW != nil {
-		_ = errSW.Flush()
-	}
+	flushStreams()
 
 	// Calculate execution duration
 	executionDuration := time.Since(startTime)

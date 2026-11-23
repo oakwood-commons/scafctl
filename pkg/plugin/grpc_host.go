@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
@@ -19,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"google.golang.org/grpc"
@@ -107,6 +109,96 @@ type HostServiceDeps struct {
 	// GetAuthToken callbacks can resolve configured hostname aliases and
 	// dynamic hostname inventories.
 	HostConfig *config.Config `json:"-" yaml:"-" doc:"Host configuration for auth hostname resolution (not serialized)."`
+	// trackerSlot associates incoming HostService GetSecret and GetAuthToken
+	// callbacks with the active execution's redaction tracker per plugin client.
+	trackerSlot *brokerTrackerSlot
+}
+
+type brokerTrackerSlot struct {
+	mu          sync.Mutex
+	activeRoot  *redact.Tracker
+	activeList  []*redact.Tracker
+	activeCount int
+	waitCh      chan struct{}
+}
+
+func newBrokerTrackerSlot() *brokerTrackerSlot {
+	return &brokerTrackerSlot{}
+}
+
+func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker) (func(), error) {
+	if s == nil || tracker == nil {
+		return func() {}, nil
+	}
+	root := tracker.Root()
+	for {
+		s.mu.Lock()
+		if s.activeCount == 0 || s.activeRoot == root {
+			s.activeRoot = root
+			s.activeCount++
+			s.activeList = append(s.activeList, tracker)
+			if s.waitCh == nil {
+				s.waitCh = make(chan struct{})
+			}
+			s.mu.Unlock()
+
+			var once sync.Once
+			return func() {
+				once.Do(func() {
+					s.mu.Lock()
+					for i, t := range s.activeList {
+						if t == tracker {
+							s.activeList = append(s.activeList[:i], s.activeList[i+1:]...)
+							break
+						}
+					}
+					s.activeCount--
+					if s.activeCount == 0 {
+						s.activeRoot = nil
+						if s.waitCh != nil {
+							close(s.waitCh)
+							s.waitCh = nil
+						}
+					}
+					s.mu.Unlock()
+				})
+			}, nil
+		}
+		waitCh := s.waitCh
+		s.mu.Unlock()
+
+		select {
+		case <-waitCh:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (s *brokerTrackerSlot) track(secret string) {
+	if s == nil || secret == "" {
+		return
+	}
+	s.mu.Lock()
+	root := s.activeRoot
+	children := append([]*redact.Tracker(nil), s.activeList...)
+	s.mu.Unlock()
+
+	if root != nil {
+		root.Track(secret)
+	}
+	for _, t := range children {
+		if t != nil && t != root {
+			t.Track(secret)
+		}
+	}
+}
+
+func (d *HostServiceDeps) trackBrokerSecret(secret string) {
+	if d == nil || d.trackerSlot == nil || secret == "" {
+		return
+	}
+	d.trackerSlot.track(secret)
 }
 
 // isSecretAllowed checks whether the given secret name is within the allowed
@@ -182,8 +274,10 @@ func (h *HostServiceServer) GetSecret(ctx context.Context, req *proto.GetSecretR
 		}, nil
 	}
 
+	secretVal := string(value)
+	h.Deps.trackBrokerSecret(secretVal)
 	return &proto.GetSecretResponse{
-		Value: string(value),
+		Value: secretVal,
 		Found: true,
 	}, nil
 }
@@ -448,6 +542,9 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 		return &proto.GetAuthTokenResponse{
 			Error: fmt.Sprintf("get auth token: %v", err),
 		}, nil
+	}
+	if resp != nil && resp.Error == "" && resp.AccessToken != "" {
+		h.Deps.trackBrokerSecret(resp.AccessToken)
 	}
 
 	return resp, nil

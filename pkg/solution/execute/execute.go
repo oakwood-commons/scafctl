@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -468,6 +469,44 @@ func Resolvers(
 		Data:    resolverData,
 		Context: resolverCtx,
 	}, nil
+}
+
+// SanitizeResolverDataForResponse builds a response-only copy of resolverData
+// suitable for REST API and MCP JSON responses without mutating resolverData
+// (so downstream action execution continues to receive raw sensitive values).
+// Every resolver marked sensitive: true in sol or flagged CredentialBacked in
+// resolverCtx has its entire value replaced with [REDACTED] regardless of Go
+// type (covering coerced ints, short strings, and byte slices), and remaining
+// entries are scrubbed against tracker.
+func SanitizeResolverDataForResponse(
+	sol *solution.Solution,
+	resolverCtx *resolver.Context,
+	resolverData map[string]any,
+	tracker *redact.Tracker,
+) map[string]any {
+	if resolverData == nil {
+		return nil
+	}
+	out := make(map[string]any, len(resolverData))
+	for name, val := range resolverData {
+		if sol != nil {
+			if r, ok := sol.Spec.Resolvers[name]; ok && r != nil && r.Sensitive {
+				out[name] = redact.RedactedPlaceholder
+				continue
+			}
+		}
+		if resolverCtx != nil {
+			if res, ok := resolverCtx.GetResult(name); ok && res != nil && res.CredentialBacked {
+				out[name] = redact.RedactedPlaceholder
+				continue
+			}
+		}
+		out[name] = val
+	}
+	if tracker != nil {
+		out = tracker.RedactMap(out)
+	}
+	return out
 }
 
 // ResolversForPreview is a convenience wrapper over Resolvers that returns

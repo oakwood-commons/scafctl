@@ -3084,6 +3084,14 @@ spec:
           - provider: cel
             inputs:
               expression: '"Bearer " + __self'
+    pin_code:
+      type: int
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 94
   workflow:
     actions:
       write_file:
@@ -3092,7 +3100,7 @@ spec:
           operation: write
           path: %q
           content:
-            rslvr: bearer_secret
+            tmpl: "{{ .bearer_secret }}:{{ .pin_code }}"
       echo_header:
         dependsOn:
           - write_file
@@ -3126,16 +3134,17 @@ spec:
 	assert.NotContains(t, dryBody, apiSecret)
 	assert.NoFileExists(t, proofFile)
 
-	// 3. POST /v1/solutions/run delivers real secret to file while scrubbing resolverData and actionResult!
-	runBody := e.POST("/v1/solutions/run").
+	// 3. POST /v1/solutions/run delivers real secret and coerced int to file while scrubbing resolverData and actionResult!
+	runResp := e.POST("/v1/solutions/run").
 		WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
 		Expect().
-		Status(http.StatusOK).
-		Body().Raw()
+		Status(http.StatusOK)
+	runBody := runResp.Body().Raw()
 	assert.NotContains(t, runBody, apiSecret, "API run response must scrub resolved secrets")
-	assert.Contains(t, runBody, "[REDACTED]")
+	runResp.JSON().Object().Value("resolverData").Object().HasValue("bearer_secret", "[REDACTED]")
+	runResp.JSON().Object().Value("resolverData").Object().HasValue("pin_code", "[REDACTED]")
 
 	gotBytes, err := os.ReadFile(proofFile) //nolint:gosec // test path
 	require.NoError(t, err)
-	assert.Equal(t, "Bearer "+apiSecret, string(gotBytes))
+	assert.Equal(t, "Bearer "+apiSecret+":94", string(gotBytes))
 }

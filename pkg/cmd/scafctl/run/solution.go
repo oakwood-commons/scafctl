@@ -520,6 +520,9 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	if redact.FromContext(ctx) == nil {
 		ctx = redact.WithTracker(ctx, redact.NewTracker())
 	}
+	if o.DryRun {
+		ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
+	}
 
 	// Inject CLI overrides into context before dry-run or live execution,
 	// so both paths honour --output-dir, --on-conflict, and --backup.
@@ -600,7 +603,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 			// as fatal.
 			o.renderResolverDiagnostics(ctx, err)
 			o.validationWarn = err
-			o.validationWarnResolvers = o.buildResolverOutputMap(resolverData, sol)
+			o.validationWarnResolvers = o.buildRedactedResolverOutputMap(ctx, resolverCtx, resolverData, sol)
 		} else {
 			// Fatal: resolve/transform failures under any policy, and
 			// validation failures under the "error" policy. Preserve the
@@ -610,7 +613,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 			if validationOnly {
 				code = exitcode.ValidationFailed
 			}
-			return o.failStructured(ctx, o.buildResolverOutputMap(resolverData, sol), err, code)
+			return o.failStructured(ctx, o.buildRedactedResolverOutputMap(ctx, resolverCtx, resolverData, sol), err, code)
 		}
 	}
 

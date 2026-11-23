@@ -135,4 +135,127 @@ spec:
 	stdout, stderr, _, err = runMyCLI("run", "solution", "-f", internalSolPath, "-o", "json")
 	assert.True(t, err != nil || code != 0 || bytes.Contains([]byte(stdout+stderr), []byte("reserved internal namespace")))
 	assert.NotContains(t, stdout+stderr, "embedder_internal_auth_9999")
+
+	// 5. run resolver -o json (and --show-sensitive -o json) scrubs credential-backed
+	// sensitive resolvers independently of the format-aware sensitivity policy.
+	store.Data["short-pin"] = []byte("84")
+	resJSONSolPath := filepath.Join(tmpDir, "resolver-json.yaml")
+	resJSONYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolver-json-redact
+  version: 1.0.0
+spec:
+  resolvers:
+    apiToken:
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                tkn: github
+    shortPin:
+      type: int
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                scrt: short-pin
+`
+	require.NoError(t, os.WriteFile(resJSONSolPath, []byte(resJSONYAML), 0o600))
+	stdout, stderr, code, err = runMyCLI("run", "resolver", "-f", resJSONSolPath, "-o", "json", "--show-sensitive")
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.NotContains(t, stdout+stderr, "gho_embedder_token_7777")
+	assert.Contains(t, stdout, `"apiToken": "[REDACTED]"`)
+	assert.Contains(t, stdout, `"shortPin": "[REDACTED]"`)
+
+	// 6. --dry-run on both 'run solution' and 'run action' with state load inputs
+	// and Phase-A state-preload resolvers never touches SecretStore or mints tokens.
+	countingStore := secrets.NewMockStore()
+	countingStore.Data["state-secret"] = []byte("live_state_secret_should_not_read")
+	ghDry := auth.NewMockHandler("github")
+	ghDry.GetTokenResult = &auth.Token{
+		AccessToken: "gho_live_dryrun_should_not_mint",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}
+
+	stateFile := filepath.Join(tmpDir, "persisted-state.json")
+	stateDryPath := filepath.Join(tmpDir, "state-dryrun.yaml")
+	stateDryYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-preload-dryrun
+  version: 1.0.0
+state:
+  enabled:
+    expr: _.state_prefix != ""
+  load:
+    provider: file
+    inputs:
+      operation: read
+      path: ` + filepath.ToSlash(stateFile) + `
+      content:
+        scrt: state-secret
+spec:
+  resolvers:
+    state_prefix:
+      type: string
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                tkn: github
+  workflow:
+    actions:
+      noop:
+        provider: message
+        inputs:
+          message:
+            scrt: state-secret
+`
+	require.NoError(t, os.WriteFile(stateFile, []byte(`{"schemaVersion":2}`), 0o600))
+	require.NoError(t, os.WriteFile(stateDryPath, []byte(stateDryYAML), 0o600))
+
+	runDryCLI := func(args ...string) (string, string, int, error) {
+		var outB, errB bytes.Buffer
+		ec := 0
+		cmd, cleanup := Root(&RootOptions{
+			BinaryName:          "mycli",
+			SecretStore:         countingStore,
+			BuiltinAuthHandlers: []auth.Handler{ghDry},
+			IOStreams: &terminal.IOStreams{
+				In:     io.NopCloser(bytes.NewReader(nil)),
+				Out:    &outB,
+				ErrOut: &errB,
+			},
+			ExitFunc: func(c int) { ec = c },
+		})
+		defer cleanup()
+		cmd.SetArgs(args)
+		execErr := cmd.Execute()
+		return outB.String(), errB.String(), ec, execErr
+	}
+
+	stdout, stderr, code, err = runDryCLI("run", "solution", "-f", stateDryPath, "--dry-run", "-o", "json")
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Empty(t, countingStore.GetCalls, "run solution --dry-run must not read SecretStore during state preload")
+	assert.Empty(t, ghDry.GetTokenCalls, "run solution --dry-run must not mint tokens during state preload")
+	assert.NotContains(t, stdout+stderr, "live_state_secret_should_not_read")
+	assert.NotContains(t, stdout+stderr, "gho_live_dryrun_should_not_mint")
+
+	stdout, stderr, code, err = runDryCLI("run", "action", "-f", stateDryPath, "--dry-run", "-o", "json")
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Empty(t, countingStore.GetCalls, "run action --dry-run must not read SecretStore during state preload")
+	assert.Empty(t, ghDry.GetTokenCalls, "run action --dry-run must not mint tokens during state preload")
+	assert.NotContains(t, stdout+stderr, "live_state_secret_should_not_read")
+	assert.NotContains(t, stdout+stderr, "gho_live_dryrun_should_not_mint")
 }

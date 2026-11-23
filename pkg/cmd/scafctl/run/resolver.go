@@ -23,6 +23,7 @@ import (
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	resolverdetail "github.com/oakwood-commons/scafctl/pkg/resolver/detail"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -611,6 +612,10 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.showResolverGraph(ctx, resolvers, reg)
 	}
 
+	if redact.FromContext(ctx) == nil {
+		ctx = redact.WithTracker(ctx, redact.NewTracker())
+	}
+
 	// Snapshot mode: execute resolvers and save snapshot
 	if o.Snapshot {
 		return o.showResolverSnapshot(ctx, sol, resolvers, params, reg)
@@ -695,7 +700,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	}
 
 	// Build output and write
-	results := o.buildResolverOutputMap(resolverData, sol)
+	results := o.buildRedactedResolverOutputMap(ctx, resolverCtx, resolverData, sol)
 	if err := o.checkValueSizes(results, *lgr); err != nil {
 		return o.failStructured(ctx, results, err, exitcode.ValidationFailed)
 	}

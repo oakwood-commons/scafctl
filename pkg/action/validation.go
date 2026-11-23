@@ -622,7 +622,8 @@ func validateActionsReferences(action *Action, section string, workflow *Workflo
 	}
 }
 
-// extractRefsFromValueRef extracts __actions references from a ValueRef.
+// extractRefsFromValueRef extracts __actions references from a ValueRef,
+// including inline {expr:...}/{tmpl:...} ValueRef maps nested in map/array literals.
 func extractRefsFromValueRef(v *spec.ValueRef, refs map[string]struct{}) {
 	if v == nil {
 		return
@@ -634,6 +635,37 @@ func extractRefsFromValueRef(v *spec.ValueRef, refs map[string]struct{}) {
 
 	if v.Tmpl != nil {
 		extractRefsFromTemplate(v.Tmpl, refs)
+	}
+
+	if v.Literal != nil {
+		extractRefsFromNestedLiteral(v.Literal, refs, 0)
+	}
+}
+
+func extractRefsFromNestedLiteral(val any, refs map[string]struct{}, depth int) {
+	if depth > maxDeferredLiteralDepth || val == nil {
+		return
+	}
+	switch typed := val.(type) {
+	case map[string]any:
+		if spec.IsValueRefMap(typed) {
+			if exprStr, ok := typed["expr"].(string); ok {
+				e := celexp.Expression(exprStr)
+				extractRefsFromExpression(&e, refs)
+			}
+			if tmplStr, ok := typed["tmpl"].(string); ok {
+				t := gotmpl.GoTemplatingContent(tmplStr)
+				extractRefsFromTemplate(&t, refs)
+			}
+			return
+		}
+		for _, item := range typed {
+			extractRefsFromNestedLiteral(item, refs, depth+1)
+		}
+	case []any:
+		for _, item := range typed {
+			extractRefsFromNestedLiteral(item, refs, depth+1)
+		}
 	}
 }
 

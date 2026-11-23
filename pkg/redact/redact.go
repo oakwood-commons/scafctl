@@ -31,20 +31,25 @@ const (
 	maxRedactDepth = 32
 )
 
-type trackerContextKey struct{}
+type (
+	trackerContextKey       struct{}
+	suppressMasksContextKey struct{}
+)
 
 // Tracker records secret values resolved during a run and scrubs them from
 // strings, structured maps/slices, errors, and streaming output.
 // All methods are safe for concurrent use, and nil-receiver methods act as
 // safe no-ops returning inputs unchanged.
 type Tracker struct {
-	mu       sync.RWMutex
-	seen     map[string]struct{}
-	masked   map[string]struct{}
-	sorted   []string // sorted longest-first, then lexicographically
-	replacer *strings.Replacer
-	maxLen   int
-	hasMulti bool
+	mu            sync.RWMutex
+	parent        *Tracker
+	hadCredential bool
+	seen          map[string]struct{}
+	masked        map[string]struct{}
+	sorted        []string // sorted longest-first, then lexicographically
+	replacer      *strings.Replacer
+	maxLen        int
+	hasMulti      bool
 }
 
 // NewTracker creates an empty secret Tracker.
@@ -53,6 +58,43 @@ func NewTracker() *Tracker {
 		seen:   make(map[string]struct{}),
 		masked: make(map[string]struct{}),
 	}
+}
+
+// NewChildTracker creates a scoped view backed by parent's shared secret set.
+// Any credential registered through the child is stored on the root tracker
+// while also marking HadCredential() on the child, allowing callers (such as
+// per-resolver execution) to detect whether that specific step resolved a
+// credential even when the secret is shorter than MinSecretLength.
+func NewChildTracker(parent *Tracker) *Tracker {
+	root := parent.Root()
+	if root == nil {
+		root = NewTracker()
+	}
+	return &Tracker{
+		parent: root,
+	}
+}
+
+// Root returns the underlying root Tracker, or nil if t is nil.
+func (t *Tracker) Root() *Tracker {
+	if t == nil {
+		return nil
+	}
+	for t.parent != nil {
+		t = t.parent
+	}
+	return t
+}
+
+// HadCredential reports whether Track was called with a non-empty secret on
+// this specific Tracker instance.
+func (t *Tracker) HadCredential() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.hadCredential
 }
 
 // WithTracker attaches a Tracker to ctx.
@@ -72,29 +114,60 @@ func FromContext(ctx context.Context) *Tracker {
 	return t
 }
 
+// WithSuppressGitHubActionsMasks disables ::add-mask:: workflow command
+// emission on streams derived from ctx (used by in-process test harnesses that
+// capture stdout/stderr in memory rather than writing to a CI runner pipe).
+func WithSuppressGitHubActionsMasks(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, suppressMasksContextKey{}, true)
+}
+
+// SuppressGitHubActionsMasksFromContext reports whether ::add-mask:: emission
+// is suppressed on ctx.
+func SuppressGitHubActionsMasksFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(suppressMasksContextKey{}).(bool)
+	return v
+}
+
 // Track registers a secret string (and, for multi-line values, each trimmed
 // non-empty line of at least MinSecretLength bytes) for redaction.
 func (t *Tracker) Track(secret string) {
 	if t == nil || secret == "" {
 		return
 	}
+	t.mu.Lock()
+	t.hadCredential = true
+	t.mu.Unlock()
+
+	root := t.Root()
+	if root != t {
+		root.mu.Lock()
+		root.hadCredential = true
+		root.mu.Unlock()
+	}
+
 	trimmed := strings.TrimSpace(secret)
 	if len(trimmed) < MinSecretLength {
 		return
 	}
 
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	root.mu.Lock()
+	defer root.mu.Unlock()
 
 	changed := false
 	add := func(s string) {
 		if len(s) < MinSecretLength {
 			return
 		}
-		if _, exists := t.seen[s]; exists {
+		if _, exists := root.seen[s]; exists {
 			return
 		}
-		t.seen[s] = struct{}{}
+		root.seen[s] = struct{}{}
 		changed = true
 	}
 
@@ -116,7 +189,7 @@ func (t *Tracker) Track(secret string) {
 	}
 
 	if changed {
-		t.rebuildLocked()
+		root.rebuildLocked()
 	}
 }
 
@@ -189,46 +262,96 @@ func (t *Tracker) rebuildLocked() {
 
 // Count returns the number of unique secret patterns currently tracked.
 func (t *Tracker) Count() int {
-	if t == nil {
+	root := t.Root()
+	if root == nil {
 		return 0
 	}
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return len(t.sorted)
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return len(root.sorted)
 }
 
 // MaxSecretLen returns the byte length of the longest tracked secret, or 0.
 func (t *Tracker) MaxSecretLen() int {
-	if t == nil {
+	root := t.Root()
+	if root == nil {
 		return 0
 	}
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.maxLen
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.maxLen
 }
 
 // HasMultiline reports whether any tracked secret contains a newline.
 func (t *Tracker) HasMultiline() bool {
-	if t == nil {
+	root := t.Root()
+	if root == nil {
 		return false
 	}
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.hasMulti
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.hasMulti
 }
 
 // RedactString replaces all occurrences of tracked secrets in s with [REDACTED].
 func (t *Tracker) RedactString(s string) string {
-	if t == nil || s == "" {
+	root := t.Root()
+	if root == nil || s == "" {
 		return s
 	}
-	t.mu.RLock()
-	replacer := t.replacer
-	t.mu.RUnlock()
+	root.mu.RLock()
+	replacer := root.replacer
+	root.mu.RUnlock()
 	if replacer == nil {
 		return s
 	}
 	return replacer.Replace(s)
+}
+
+// ContainsTracked reports whether v contains any tracked secret substring.
+func (t *Tracker) ContainsTracked(v any) bool {
+	root := t.Root()
+	if root == nil || v == nil || root.Count() == 0 {
+		return false
+	}
+	return root.containsTrackedDepth(v, 0)
+}
+
+func (t *Tracker) containsTrackedDepth(v any, depth int) bool {
+	if depth > maxRedactDepth || v == nil {
+		return false
+	}
+	switch val := v.(type) {
+	case string:
+		return val != "" && t.RedactString(val) != val
+	case []byte:
+		return len(val) > 0 && t.RedactString(string(val)) != string(val)
+	case []string:
+		for _, item := range val {
+			if item != "" && t.RedactString(item) != item {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range val {
+			if t.containsTrackedDepth(item, depth+1) {
+				return true
+			}
+		}
+	case map[string]string:
+		for k, item := range val {
+			if (k != "" && t.RedactString(k) != k) || (item != "" && t.RedactString(item) != item) {
+				return true
+			}
+		}
+	case map[string]any:
+		for k, item := range val {
+			if (k != "" && t.RedactString(k) != k) || t.containsTrackedDepth(item, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // RedactedError wraps an error whose message contained tracked secret material.
@@ -293,7 +416,7 @@ func (t *Tracker) RedactMap(m map[string]any) map[string]any {
 }
 
 // RedactAny deep-clones structured maps/slices in v and scrubs tracked secrets
-// from strings without mutating the input structure.
+// from strings and byte slices without mutating the input structure.
 func (t *Tracker) RedactAny(v any) any {
 	if t == nil || v == nil || t.Count() == 0 {
 		return v
@@ -308,6 +431,18 @@ func (t *Tracker) redactAnyDepth(v any, depth int) any {
 	switch val := v.(type) {
 	case string:
 		return t.RedactString(val)
+	case []byte:
+		if len(val) == 0 {
+			return val
+		}
+		orig := string(val)
+		scrubbed := t.RedactString(orig)
+		if scrubbed == orig {
+			out := make([]byte, len(val))
+			copy(out, val)
+			return out
+		}
+		return []byte(scrubbed)
 	case []string:
 		return t.RedactSlice(val)
 	case []any:
@@ -338,23 +473,24 @@ func (t *Tracker) redactAnyDepth(v any, depth int) any {
 // StreamWriter must pass the underlying unredacted writer before streaming
 // starts so the mask command itself is not scrubbed.
 func (t *Tracker) EmitGitHubActionsMasks(w io.Writer) {
-	if t == nil || w == nil || os.Getenv("GITHUB_ACTIONS") != "true" {
+	root := t.Root()
+	if root == nil || w == nil || os.Getenv("GITHUB_ACTIONS") != "true" {
 		return
 	}
 
-	t.mu.Lock()
+	root.mu.Lock()
 	var toEmit []string
-	for _, s := range t.sorted {
+	for _, s := range root.sorted {
 		if strings.ContainsAny(s, "\r\n") {
 			continue
 		}
-		if _, already := t.masked[s]; already {
+		if _, already := root.masked[s]; already {
 			continue
 		}
-		t.masked[s] = struct{}{}
+		root.masked[s] = struct{}{}
 		toEmit = append(toEmit, s)
 	}
-	t.mu.Unlock()
+	root.mu.Unlock()
 
 	for _, line := range toEmit {
 		_, _ = fmt.Fprintf(w, "::add-mask::%s\n", line)
@@ -362,7 +498,7 @@ func (t *Tracker) EmitGitHubActionsMasks(w io.Writer) {
 }
 
 // matchLongestAt returns the length of the longest tracked secret that is a
-// prefix of buf, or 0 if none matches. Caller must hold t.mu.RLock.
+// prefix of buf, or 0 if none matches. Caller must hold t.mu.RLock on the root tracker.
 func (t *Tracker) matchLongestAt(buf string) int {
 	for _, s := range t.sorted {
 		if strings.HasPrefix(buf, s) {

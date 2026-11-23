@@ -4,11 +4,13 @@
 package resolver
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/debugprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
@@ -134,4 +136,57 @@ resolve:
 	if res.Error != nil {
 		assert.NotContains(t, res.Error.Error(), "not_an_int_secret_999")
 	}
+}
+
+func TestResolverCredentials_DebugProviderFallbackStreamsScrubbed(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "false")
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(debugprovider.NewDebugProvider()))
+
+	var stdoutRes, stderrRes Resolver
+	require.NoError(t, yaml.Unmarshal([]byte(`
+name: debugOut
+resolve:
+  with:
+    - provider: debug
+      inputs:
+        destination: stdout
+        label:
+          scrt: fallback-secret
+`), &stdoutRes))
+	require.NoError(t, yaml.Unmarshal([]byte(`
+name: debugErr
+resolve:
+  with:
+    - provider: debug
+      inputs:
+        destination: stderr
+        label:
+          tkn: github
+`), &stderrRes))
+
+	var fbOut, fbErr bytes.Buffer
+	ctx := spec.WithCredentialResolver(context.Background(), &stubCredResolver{
+		secrets: map[string]string{"fallback-secret": "scrt_fallback_out_112233"},
+		tokens:  map[string]string{"github": "gho_fallback_err_445566"},
+	})
+	ctx = provider.WithFallbackWriters(ctx, &fbOut, &fbErr)
+
+	// Case 1: No IOStreams in context at all.
+	_, err := NewExecutor(reg).Execute(ctx, []*Resolver{&stdoutRes, &stderrRes}, nil)
+	require.NoError(t, err)
+	assert.Contains(t, fbOut.String(), "[REDACTED]")
+	assert.NotContains(t, fbOut.String(), "scrt_fallback_out_112233")
+	assert.Contains(t, fbErr.String(), "[REDACTED]")
+	assert.NotContains(t, fbErr.String(), "gho_fallback_err_445566")
+
+	// Case 2: IOStreams present with nil individual destinations.
+	fbOut.Reset()
+	fbErr.Reset()
+	ctxPartial := provider.WithIOStreams(ctx, &provider.IOStreams{Out: nil, ErrOut: nil})
+	_, err = NewExecutor(reg).Execute(ctxPartial, []*Resolver{&stdoutRes, &stderrRes}, nil)
+	require.NoError(t, err)
+	assert.NotContains(t, fbOut.String(), "scrt_fallback_out_112233")
+	assert.NotContains(t, fbErr.String(), "gho_fallback_err_445566")
 }

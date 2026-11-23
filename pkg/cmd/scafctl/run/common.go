@@ -26,6 +26,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -402,6 +403,30 @@ func (o *sharedResolverOptions) buildResolverOutputMap(resolverData map[string]a
 		results[name] = value
 	}
 
+	return results
+}
+
+// buildRedactedResolverOutputMap applies format-aware sensitivity masking and
+// unconditionally scrubs tracked credentials (from scrt:, tkn:, or HostService
+// broker calls) at CLI serialization boundaries across all output formats while
+// leaving the raw resolverData map intact for downstream execution.
+func (o *sharedResolverOptions) buildRedactedResolverOutputMap(
+	ctx context.Context,
+	resolverCtx *resolver.Context,
+	resolverData map[string]any,
+	sol *solution.Solution,
+) map[string]any {
+	results := o.buildResolverOutputMap(resolverData, sol)
+	if resolverCtx != nil {
+		for name := range results {
+			if res, ok := resolverCtx.GetResult(name); ok && res != nil && res.CredentialBacked {
+				results[name] = redact.RedactedPlaceholder
+			}
+		}
+	}
+	if tracker := redact.FromContext(ctx); tracker != nil {
+		results = tracker.RedactMap(results)
+	}
 	return results
 }
 

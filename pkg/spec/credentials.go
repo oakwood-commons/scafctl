@@ -248,3 +248,36 @@ func (placeholderCredentialResolver) ResolveToken(_ context.Context, req TokenRe
 func PlaceholderCredentialResolver() CredentialResolver {
 	return placeholderCredentialResolver{}
 }
+
+// IsPlaceholderCredentialResolver reports whether ctx currently carries the
+// symbolic PlaceholderCredentialResolver used by render, dry-run, and preview.
+func IsPlaceholderCredentialResolver(ctx context.Context) bool {
+	_, ok := CredentialResolverFromContext(ctx).(placeholderCredentialResolver)
+	return ok
+}
+
+type fingerprintCredentialResolver struct{}
+
+func (fingerprintCredentialResolver) ResolveSecret(_ context.Context, name string) (string, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("secret name must not be empty")
+	}
+	return fmt.Sprintf("<fp:scrt:%s>", name), nil
+}
+
+func (fingerprintCredentialResolver) ResolveToken(_ context.Context, req TokenRef) (string, error) {
+	if strings.TrimSpace(req.Handler) == "" {
+		return "", fmt.Errorf("token handler must not be empty")
+	}
+	return fmt.Sprintf("<fp:tkn:handler=%s|scope=%s|profile=%s|hostname=%s|minValidFor=%s>",
+		req.Handler, req.Scope, req.Profile, req.Hostname, req.MinValidFor), nil
+}
+
+// FingerprintCredentialResolver returns a side-effect-free CredentialResolver
+// for action input fingerprinting. It encodes secret names and full TokenRef
+// options into deterministic symbolic markers without live credential bytes,
+// ensuring rotating JWT claims stay cache-hit stable while reference or option
+// edits invalidate the fingerprint.
+func FingerprintCredentialResolver() CredentialResolver {
+	return fingerprintCredentialResolver{}
+}

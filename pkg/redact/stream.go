@@ -15,21 +15,30 @@ import (
 // bytes. Call Flush when the producer finishes to emit any remaining buffered
 // bytes after final redaction.
 type StreamWriter struct {
-	mu      sync.Mutex
-	w       io.Writer
-	tracker *Tracker
-	buf     []byte
+	mu        sync.Mutex
+	w         io.Writer
+	tracker   *Tracker
+	emitMasks bool
+	buf       []byte
 }
 
 // NewStreamWriter wraps w with chunk-boundary-safe secret redaction backed by tracker.
 // If w is nil, NewStreamWriter returns nil.
 func NewStreamWriter(w io.Writer, tracker *Tracker) *StreamWriter {
+	return NewStreamWriterWithMasks(w, tracker, false)
+}
+
+// NewStreamWriterWithMasks wraps w with chunk-boundary-safe secret redaction and,
+// when emitMasks is true, lazily emits GitHub Actions ::add-mask:: commands on w
+// before forwarding streamed bytes whenever tracked secrets exist.
+func NewStreamWriterWithMasks(w io.Writer, tracker *Tracker, emitMasks bool) *StreamWriter {
 	if w == nil {
 		return nil
 	}
 	return &StreamWriter{
-		w:       w,
-		tracker: tracker,
+		w:         w,
+		tracker:   tracker.Root(),
+		emitMasks: emitMasks,
 	}
 }
 
@@ -56,6 +65,10 @@ func (s *StreamWriter) Write(p []byte) (int, error) {
 			return 0, err
 		}
 		return origLen, nil
+	}
+
+	if s.emitMasks {
+		s.tracker.EmitGitHubActionsMasks(s.w)
 	}
 
 	s.buf = append(s.buf, p...)
