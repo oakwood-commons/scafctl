@@ -39,11 +39,14 @@ against the registry's OAuth2 authorization endpoint.
 > `scafctl auth login <name>`. `scafctl` opens your system default browser
 > automatically -- if your active session lives in a different browser or
 > browser profile, copy the full `authorizeURL` from the opened tab's address
-> bar into that authenticated browser. When automatic browser launch is
-> unavailable (for example, headless WSL), pass `--debug` to log the
-> `authorizeURL` in terminal output; over SSH, also forward `callbackPort`
-> (for example, `ssh -L 8400:localhost:8400 ...`) so the browser redirect
-> reaches `scafctl`'s localhost listener.
+> bar into that authenticated browser. When the system browser launcher cannot
+> start at all (for example, `xdg-open` is not installed in a minimal container
+> or headless Linux environment), pass `--debug` to log the `authorizeURL` in
+> terminal output (`--debug` logs the URL only when starting the launcher
+> command itself fails, not when `xdg-open` starts and exits later without a
+> display). Over SSH, also forward `callbackPort` (for example,
+> `ssh -L 8400:localhost:8400 ...`) so the browser redirect reaches `scafctl`'s
+> localhost listener.
 
 Quay.io and self-hosted Quay OAuth applications use the OAuth2 implicit grant
 (`responseType: token`, which automatically disables PKCE; `tokenURL` is
@@ -105,7 +108,7 @@ scafctl auth login quay
 
 # Verify handler identity and bridged registry credentials
 scafctl auth status quay
-scafctl auth status
+scafctl auth status --all
 
 # Optional: also write bridged credentials for Docker/Podman interop, or re-bridge explicitly
 scafctl auth login quay --force --write-registry-auth

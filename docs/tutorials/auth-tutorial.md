@@ -3428,9 +3428,13 @@ detect it automatically.
    browser profile)** that opens the authorize URL. `scafctl` opens your system
    default browser automatically -- if your active session lives in a different
    browser, copy the full `authorizeURL` from the opened tab's address bar into
-   that authenticated browser (or pass `--debug` when automatic browser launch
-   is unavailable, and forward `callbackPort` with `ssh -L <port>:localhost:<port>`
-   over SSH so the redirect reaches `scafctl`'s localhost listener).
+   that authenticated browser. If the system browser launcher cannot start at
+   all (for example, `xdg-open` is not installed), pass `--debug` to log the
+   `authorizeURL` in terminal output (`--debug` logs the URL only when starting
+   the launcher command itself fails, not when `xdg-open` starts and later fails
+   in a headless session); over SSH, also forward `callbackPort` with
+   `ssh -L <port>:localhost:<port>` so the redirect reaches `scafctl`'s
+   localhost listener.
 2. Re-run `scafctl auth login <handler>` and approve the application consent
    prompt.
 
