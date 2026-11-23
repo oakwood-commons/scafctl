@@ -3238,6 +3238,120 @@ func TestHandler_ConfigFingerprintIsolation_PAT_And_Refresh(t *testing.T) {
 		assert.Equal(t, "access-for-dcr-client-2", tok.AccessToken)
 		assert.False(t, staleRefreshSubmitted.Load(), "refresh token bound to expired/replaced DCR client must not be submitted")
 	})
+
+	t.Run("Workload identity refresh token is invalidated when audience or federatedToken changes", func(t *testing.T) {
+		t.Parallel()
+		var refreshSubmitted atomic.Bool
+		var wifGrantCount atomic.Int32
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			if r.FormValue("grant_type") == "refresh_token" {
+				refreshSubmitted.Store(true)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			wifGrantCount.Add(1)
+			writeJSON(w, tokenResponse{
+				AccessToken:  "wif-tok-" + r.FormValue("audience") + "-" + r.FormValue("client_assertion"),
+				TokenType:    "Bearer",
+				ExpiresIn:    1,
+				RefreshToken: "wif-refresh-old",
+			})
+		}))
+		defer srv.Close()
+
+		dir := t.TempDir()
+		jwt1 := filepath.Join(dir, "jwt1")
+		jwt2 := filepath.Join(dir, "jwt2")
+		require.NoError(t, os.WriteFile(jwt1, []byte("assertion-one"), 0o600))
+		require.NoError(t, os.WriteFile(jwt2, []byte("assertion-two"), 0o600))
+
+		store := secrets.NewMockStore()
+		ctx := context.Background()
+
+		h1, err := New(config.CustomOAuth2Config{
+			Name:               "wif-refresh-fp",
+			TokenURL:           srv.URL + "/token",
+			ClientID:           "cid",
+			Audience:           "api://aud-old",
+			FederatedTokenFile: jwt1,
+			DefaultFlow:        "workload_identity",
+		}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		_, err = h1.Login(ctx, auth.LoginOptions{})
+		require.NoError(t, err)
+
+		// Reconfigure Audience and FederatedTokenFile: previous refresh_token must NOT be used.
+		h2, err := New(config.CustomOAuth2Config{
+			Name:               "wif-refresh-fp",
+			TokenURL:           srv.URL + "/token",
+			ClientID:           "cid",
+			Audience:           "api://aud-new",
+			FederatedTokenFile: jwt2,
+			DefaultFlow:        "workload_identity",
+		}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		tok, err := h2.GetToken(ctx, auth.TokenOptions{MinValidFor: 5 * time.Minute})
+		require.NoError(t, err)
+		assert.Equal(t, "wif-tok-api://aud-new-assertion-two", tok.AccessToken)
+		assert.False(t, refreshSubmitted.Load(), "previous WIF refresh token must not be reused after audience/federatedToken reconfiguration")
+		assert.Equal(t, int32(2), wifGrantCount.Load())
+	})
+
+	t.Run("PAT session stores token username fingerprint and claims atomically in single secret", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		tokFile := filepath.Join(dir, "pat")
+		userFile := filepath.Join(dir, "user")
+		require.NoError(t, os.WriteFile(tokFile, []byte("pat-v1\n"), 0o600))
+		require.NoError(t, os.WriteFile(userFile, []byte("org+user1\n"), 0o600))
+
+		baseStore := secrets.NewMockStore()
+		failStore := &deleteOnCorruptStore{MockStore: baseStore}
+		ctx := context.Background()
+
+		cfg := config.CustomOAuth2Config{
+			Name:        "atomic-pat",
+			Token:       config.SecretRef("file://" + tokFile),
+			Username:    "file://" + userFile,
+			DefaultFlow: "pat",
+		}
+		h, err := New(cfg, WithSecretStore(failStore), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		_, err = h.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+		require.NoError(t, err)
+
+		// Verify single atomic envelope under pat_token (no separate pat_username or pat_fingerprint keys).
+		rawEnvelope, err := baseStore.Get(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix))
+		require.NoError(t, err)
+		var env persistedPATSession
+		require.NoError(t, json.Unmarshal(rawEnvelope, &env))
+		assert.Equal(t, "pat-v1", env.Value)
+		assert.Equal(t, "org+user1", env.Username)
+		assert.NotEmpty(t, env.Fingerprint)
+		require.NotNil(t, env.Claims)
+		assert.Equal(t, "org+user1", env.Claims.Username)
+
+		// Rotate underlying files and simulate store Set failure during ForceRefresh:
+		// previous atomic envelope must remain intact without split-key tearing.
+		require.NoError(t, os.WriteFile(tokFile, []byte("pat-v2\n"), 0o600))
+		require.NoError(t, os.WriteFile(userFile, []byte("org+user2\n"), 0o600))
+		failStore.failSet = true
+
+		_, err = h.GetToken(ctx, auth.TokenOptions{ForceRefresh: true})
+		require.Error(t, err)
+
+		failStore.failSet = false
+		hCheck, err := New(cfg, WithSecretStore(baseStore), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		tok, err := hCheck.GetToken(ctx, auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "pat-v1", tok.AccessToken)
+		assert.Equal(t, "org+user1", hCheck.RegistryUsernameForContext(ctx))
+	})
 }
 
 func TestHandler_CorruptedLogoutMarker_RemainsFailClosedAfterStoreAutoDelete(t *testing.T) {
@@ -3387,7 +3501,7 @@ func TestHandler_CrossFlowReLogin_ClearsStaleRefreshAndPATArtifacts(t *testing.T
 	assert.Equal(t, "acme+stored_robot", hFreshPAT.RegistryUsernameForContext(ctx))
 
 	// 2. Seed a valid refresh token as if from an earlier interactive login, then re-login with client_credentials (no refresh_token).
-	require.NoError(t, h1.storeRefreshToken(ctx, "interactive-user-refresh"))
+	require.NoError(t, h1.storeRefreshTokenForFlow(ctx, auth.FlowInteractive, "interactive-user-refresh"))
 	_, err = h1.Login(ctx, auth.LoginOptions{Flow: auth.FlowClientCredentials})
 	require.NoError(t, err)
 

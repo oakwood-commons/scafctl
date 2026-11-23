@@ -37,29 +37,27 @@ import (
 )
 
 const (
-	secretKeyPrefix               = "scafctl.auth.oauth2." //nolint:gosec // key prefix, not credential
-	secretKeyRefreshSuffix        = "refresh_token"        //nolint:gosec // key suffix, not credential
-	secretKeyMetadataSuffix       = "metadata"             //nolint:gosec // key suffix, not credential
-	secretKeyPATTokenSuffix       = "pat_token"            //nolint:gosec // key suffix, not credential
-	secretKeyPATUsernameSuffix    = "pat_username"         //nolint:gosec // key suffix, not credential
-	secretKeyPATFingerprintSuffix = "pat_fingerprint"      //nolint:gosec // key suffix, not credential
-	secretKeySessionStateSuffix   = "session_state"        //nolint:gosec // key suffix, not credential
-	sessionStateLoggedOut         = "logged_out"
-	sessionStateLoginFailed       = "login_failed"
-	sessionStateCorrupt           = "corrupt"
-	tokenCacheSuffix              = "token."           //nolint:gosec // key suffix, not credential
-	derivedTokenSuffix            = "derived_token"    //nolint:gosec // key suffix, not credential
-	derivedUsernameSuffix         = "derived_username" //nolint:gosec // key suffix, not credential
-	defaultTimeout                = 5 * time.Minute
-	callbackShutdownTimeout       = 5 * time.Second
-	defaultPollInterval           = 5
-	defaultImplicitExpiresIn      = 3600
-	maxResponseBody               = 1 << 20
-	defaultTokenType              = "Bearer"
-	dynamicClientSecretKey        = "dynamic_client"
-	jwtBearerAssertionType        = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" //nolint:gosec // RFC 7523 URI, not credential
-	tokenExchangeGrantType        = "urn:ietf:params:oauth:grant-type:token-exchange"        //nolint:gosec // RFC 8693 URI, not credential
-	deviceCodeGrantType           = "urn:ietf:params:oauth:grant-type:device_code"           //nolint:gosec // RFC 8628 URI, not credential
+	secretKeyPrefix             = "scafctl.auth.oauth2." //nolint:gosec // key prefix, not credential
+	secretKeyRefreshSuffix      = "refresh_token"        //nolint:gosec // key suffix, not credential
+	secretKeyMetadataSuffix     = "metadata"             //nolint:gosec // key suffix, not credential
+	secretKeyPATTokenSuffix     = "pat_token"            //nolint:gosec // key suffix, not credential
+	secretKeySessionStateSuffix = "session_state"        //nolint:gosec // key suffix, not credential
+	sessionStateLoggedOut       = "logged_out"
+	sessionStateLoginFailed     = "login_failed"
+	sessionStateCorrupt         = "corrupt"
+	tokenCacheSuffix            = "token."           //nolint:gosec // key suffix, not credential
+	derivedTokenSuffix          = "derived_token"    //nolint:gosec // key suffix, not credential
+	derivedUsernameSuffix       = "derived_username" //nolint:gosec // key suffix, not credential
+	defaultTimeout              = 5 * time.Minute
+	callbackShutdownTimeout     = 5 * time.Second
+	defaultPollInterval         = 5
+	defaultImplicitExpiresIn    = 3600
+	maxResponseBody             = 1 << 20
+	defaultTokenType            = "Bearer"
+	dynamicClientSecretKey      = "dynamic_client"
+	jwtBearerAssertionType      = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" //nolint:gosec // RFC 7523 URI, not credential
+	tokenExchangeGrantType      = "urn:ietf:params:oauth:grant-type:token-exchange"        //nolint:gosec // RFC 8693 URI, not credential
+	deviceCodeGrantType         = "urn:ietf:params:oauth:grant-type:device_code"           //nolint:gosec // RFC 8628 URI, not credential
 )
 
 type dynamicClient struct {
@@ -132,8 +130,17 @@ type persistedDerivedToken struct {
 }
 
 type persistedRefreshToken struct {
-	Value       string `json:"v"`
-	Fingerprint string `json:"fingerprint"`
+	Value       string    `json:"v"`
+	Flow        auth.Flow `json:"flow,omitempty"`
+	Fingerprint string    `json:"fingerprint"`
+}
+
+type persistedPATSession struct {
+	Value       string       `json:"v"`
+	Username    string       `json:"username,omitempty"`
+	Fingerprint string       `json:"fingerprint"`
+	Claims      *auth.Claims `json:"claims,omitempty"`
+	Scopes      []string     `json:"scopes,omitempty"`
 }
 
 // Handler implements auth.Handler for generic configurable OAuth2 services.
@@ -1035,7 +1042,7 @@ func (h *Handler) patLogin(ctx context.Context, scopes []string, gen uint64) (*a
 		return nil, auth.NewError(h.cfg.Name, "login", auth.ErrNotAuthenticated)
 	}
 
-	if err := h.storePATSessionSecrets(ctx, patToken, username); err != nil {
+	if err := h.storePATSessionSecrets(ctx, patToken, username, claims, scopes); err != nil {
 		return nil, auth.NewError(h.cfg.Name, "store_pat", err)
 	}
 	// Clear any OAuth refresh/derived/cached tokens from an earlier flow on this profile.
@@ -1119,8 +1126,6 @@ func (h *Handler) Logout(ctx context.Context) error {
 		derivedTokenSuffix,
 		derivedUsernameSuffix,
 		secretKeyPATTokenSuffix,
-		secretKeyPATUsernameSuffix,
-		secretKeyPATFingerprintSuffix,
 	} {
 		if err := h.secretStore.Delete(ctx, h.profileSecretKey(ctx, suffix)); err != nil {
 			errs = append(errs, err)
@@ -1220,17 +1225,25 @@ func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 			// match the current PAT configuration fingerprint and have pat_token present.
 			switch {
 			case meta.LastLoginFlow == auth.FlowPAT:
-				_, storedUser, patOK, patErr := h.loadValidStoredPAT(ctx)
+				storedPAT, patOK, patErr := h.loadValidStoredPATSession(ctx)
 				switch {
 				case patErr != nil:
 					corruptMeta = true
 				case patOK && (meta.ExpiresAt.IsZero() || !meta.ExpiresAt.Before(time.Now())):
-					h.restoreStoredPATUsername(ctx, meta, storedUser)
+					h.restoreStoredPATUsername(ctx, meta, storedPAT.Username)
+					claims := meta.Claims
+					if storedPAT.Claims != nil {
+						claims = storedPAT.Claims
+					}
+					scopes := meta.Scopes
+					if storedPAT.Scopes != nil {
+						scopes = storedPAT.Scopes
+					}
 					return &auth.Status{
 						Authenticated: true,
-						Claims:        meta.Claims,
+						Claims:        claims,
 						ExpiresAt:     meta.ExpiresAt,
-						Scopes:        meta.Scopes,
+						Scopes:        scopes,
 						Flow:          meta.LastLoginFlow,
 					}, nil
 				case patOK && !meta.ExpiresAt.IsZero() && meta.ExpiresAt.Before(time.Now()):
@@ -1486,13 +1499,15 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 		// issuer/client configuration fingerprint. If a matching refresh token is
 		// stored for this session and refresh fails, fail closed rather than
 		// silently minting a new headless token over a revoked/invalid session.
-		_, hasRefresh, err := h.loadRefreshToken(ctx)
+		_, storedRefreshFlow, hasRefresh, err := h.loadRefreshTokenWithFlow(ctx)
 		if err != nil {
 			return nil, auth.NewError(h.cfg.Name, "refresh_token", err)
 		}
 		if hasRefresh {
 			sessionFlow := h.resolveDefaultFlow()
-			if meta != nil && meta.LastLoginFlow != "" {
+			if storedRefreshFlow != "" {
+				sessionFlow = storedRefreshFlow
+			} else if meta != nil && meta.LastLoginFlow != "" {
 				sessionFlow = meta.LastLoginFlow
 			}
 			refreshed, refreshErr := h.refreshWithSingleflight(ctx, sessionFlow, scope, opts, gen)
@@ -1588,7 +1603,7 @@ func (h *Handler) refreshWithSingleflight(ctx context.Context, flow auth.Flow, s
 			return nil, activeErr
 		}
 		if tokenResp.RefreshToken != "" {
-			if setErr := h.storeRefreshToken(sfCtx, tokenResp.RefreshToken); setErr != nil {
+			if setErr := h.storeRefreshTokenForFlow(sfCtx, flow, tokenResp.RefreshToken); setErr != nil {
 				pubMu.Unlock()
 				return nil, fmt.Errorf("persist rotated refresh token: %w", setErr)
 			}
@@ -1794,7 +1809,15 @@ func (h *Handler) acquirePATToken(ctx context.Context, scope string, updateStore
 		return nil, activeErr
 	}
 	if updateStored && h.secretStore != nil {
-		_ = h.storePATSessionSecrets(ctx, tok, username)
+		var existingClaims *auth.Claims
+		var existingScopes []string
+		if existing, ok, _ := h.loadValidStoredPATSession(ctx); ok {
+			existingClaims = existing.Claims
+			existingScopes = existing.Scopes
+		}
+		if storeErr := h.storePATSessionSecrets(ctx, tok, username, existingClaims, existingScopes); storeErr != nil {
+			return nil, auth.NewError(h.cfg.Name, "store_pat", storeErr)
+		}
 	}
 	h.setActivePAT(ctx, username)
 	return &auth.Token{
@@ -2275,58 +2298,53 @@ func (h *Handler) patFingerprint() string {
 	}, "|"))
 }
 
-func (h *Handler) storePATSessionSecrets(ctx context.Context, patToken, username string) error {
-	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix), []byte(patToken)); err != nil {
-		return fmt.Errorf("store pat token: %w", err)
+func (h *Handler) storePATSessionSecrets(ctx context.Context, patToken, username string, claims *auth.Claims, scopes []string) error {
+	data, err := json.Marshal(persistedPATSession{
+		Value:       patToken,
+		Username:    username,
+		Fingerprint: h.patFingerprint(),
+		Claims:      claims,
+		Scopes:      scopes,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal pat session: %w", err)
 	}
-	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATFingerprintSuffix), []byte(h.patFingerprint())); err != nil {
-		return fmt.Errorf("store pat fingerprint: %w", err)
-	}
-	if username != "" {
-		if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATUsernameSuffix), []byte(username)); err != nil {
-			h.logger.V(1).Info("failed to persist pat username", "error", err)
-		}
-	} else {
-		_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyPATUsernameSuffix))
+	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix), data); err != nil {
+		return fmt.Errorf("store pat session: %w", err)
 	}
 	return nil
 }
 
-func (h *Handler) loadValidStoredPAT(ctx context.Context) (string, string, bool, error) {
+func (h *Handler) loadValidStoredPATSession(ctx context.Context) (*persistedPATSession, bool, error) {
 	if h.secretStore == nil {
-		return "", "", false, nil
+		return nil, false, nil
 	}
-	fpData, fpErr := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyPATFingerprintSuffix))
-	if fpErr != nil {
-		if errors.Is(fpErr, secrets.ErrNotFound) {
-			return "", "", false, nil
+	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix))
+	if err != nil {
+		if errors.Is(err, secrets.ErrNotFound) {
+			return nil, false, nil
 		}
-		return "", "", false, fpErr
+		return nil, false, err
 	}
-	if string(fpData) != h.patFingerprint() {
-		return "", "", false, nil
+	if len(data) == 0 {
+		return nil, false, nil
 	}
+	var stored persistedPATSession
+	if unmarshalErr := json.Unmarshal(data, &stored); unmarshalErr != nil {
+		return nil, false, fmt.Errorf("unmarshal pat session: %w", unmarshalErr)
+	}
+	if stored.Value == "" || stored.Fingerprint == "" || stored.Fingerprint != h.patFingerprint() {
+		return nil, false, nil
+	}
+	return &stored, true, nil
+}
 
-	patData, patErr := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix))
-	if patErr != nil {
-		if errors.Is(patErr, secrets.ErrNotFound) {
-			return "", "", false, nil
-		}
-		return "", "", false, patErr
+func (h *Handler) loadValidStoredPAT(ctx context.Context) (string, string, bool, error) {
+	stored, ok, err := h.loadValidStoredPATSession(ctx)
+	if err != nil || !ok {
+		return "", "", false, err
 	}
-	if len(patData) == 0 {
-		return "", "", false, nil
-	}
-
-	var username string
-	if uData, uErr := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyPATUsernameSuffix)); uErr != nil {
-		if !errors.Is(uErr, secrets.ErrNotFound) {
-			return "", "", false, uErr
-		}
-	} else if len(uData) > 0 {
-		username = string(uData)
-	}
-	return string(patData), username, true, nil
+	return stored.Value, stored.Username, true, nil
 }
 
 func (h *Handler) restoreStoredPATUsername(ctx context.Context, meta *auth.HandlerMetadata, storedUsername string) {
@@ -3006,7 +3024,7 @@ func (h *Handler) saveCachedToken(ctx context.Context, flow auth.Flow, scope str
 	h.mu.Unlock()
 }
 
-func (h *Handler) refreshFingerprint(ctx context.Context) string {
+func (h *Handler) refreshFingerprint(ctx context.Context, flow auth.Flow) string {
 	var clientID, dcrFP string
 	if h.dcrEnabled() {
 		selected := selectedDynamicClientFromContext(ctx)
@@ -3021,22 +3039,49 @@ func (h *Handler) refreshFingerprint(ctx context.Context) string {
 	} else {
 		clientID = h.cfg.ClientID
 	}
+	var wifGrantType, wifSubjectTokenType, wifFedToken, wifFedFile string
+	if flow == auth.FlowWorkloadIdentity {
+		if !h.hasWorkloadIdentityConfig() {
+			return ""
+		}
+		wifGrantType = h.cfg.WorkloadIdentityGrantType
+		if wifGrantType == "" {
+			wifGrantType = config.WorkloadIdentityGrantClientCredentials
+		}
+		wifSubjectTokenType = h.cfg.SubjectTokenType
+		if wifGrantType == config.WorkloadIdentityGrantTokenExchange && wifSubjectTokenType == "" {
+			wifSubjectTokenType = config.DefaultSubjectTokenType
+		}
+		wifFedToken = string(h.cfg.FederatedToken)
+		wifFedFile = h.cfg.FederatedTokenFile
+	}
 	return auth.FingerprintHash(strings.Join([]string{
+		string(flow),
 		clientID,
 		dcrFP,
 		h.cfg.TokenURL,
 		h.cfg.AuthorizeURL,
 		h.cfg.DeviceAuthURL,
+		h.cfg.Audience,
+		wifGrantType,
+		wifSubjectTokenType,
+		wifFedToken,
+		wifFedFile,
 	}, "|"))
 }
 
 func (h *Handler) storeRefreshToken(ctx context.Context, refreshToken string) error {
-	fp := h.refreshFingerprint(ctx)
+	return h.storeRefreshTokenForFlow(ctx, h.resolveDefaultFlow(), refreshToken)
+}
+
+func (h *Handler) storeRefreshTokenForFlow(ctx context.Context, flow auth.Flow, refreshToken string) error {
+	fp := h.refreshFingerprint(ctx, flow)
 	if fp == "" {
 		return fmt.Errorf("cannot compute refresh token fingerprint without valid client configuration")
 	}
 	data, err := json.Marshal(persistedRefreshToken{
 		Value:       refreshToken,
+		Flow:        flow,
 		Fingerprint: fp,
 	})
 	if err != nil {
@@ -3046,28 +3091,33 @@ func (h *Handler) storeRefreshToken(ctx context.Context, refreshToken string) er
 }
 
 func (h *Handler) loadRefreshToken(ctx context.Context) (string, bool, error) {
+	val, _, ok, err := h.loadRefreshTokenWithFlow(ctx)
+	return val, ok, err
+}
+
+func (h *Handler) loadRefreshTokenWithFlow(ctx context.Context) (string, auth.Flow, bool, error) {
 	if h.secretStore == nil {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix))
 	if err != nil {
 		if errors.Is(err, secrets.ErrNotFound) {
-			return "", false, nil
+			return "", "", false, nil
 		}
-		return "", false, err
+		return "", "", false, err
 	}
 	if len(data) == 0 {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	var stored persistedRefreshToken
 	if unmarshalErr := json.Unmarshal(data, &stored); unmarshalErr != nil {
-		return "", false, fmt.Errorf("unmarshal refresh token: %w", unmarshalErr)
+		return "", "", false, fmt.Errorf("unmarshal refresh token: %w", unmarshalErr)
 	}
-	expectedFP := h.refreshFingerprint(ctx)
+	expectedFP := h.refreshFingerprint(ctx, stored.Flow)
 	if stored.Value == "" || stored.Fingerprint == "" || expectedFP == "" || stored.Fingerprint != expectedFP {
-		return "", false, nil
+		return "", "", false, nil
 	}
-	return stored.Value, true, nil
+	return stored.Value, stored.Flow, true, nil
 }
 
 func (h *Handler) clearDerivedState(ctx context.Context) {
@@ -3089,16 +3139,24 @@ func (h *Handler) clearDerivedState(ctx context.Context) {
 
 func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *auth.Claims, expiresAt time.Time, flow auth.Flow, scopes []string) error {
 	if resp.RefreshToken != "" {
-		if err := h.storeRefreshToken(ctx, resp.RefreshToken); err != nil {
+		if err := h.storeRefreshTokenForFlow(ctx, flow, resp.RefreshToken); err != nil {
 			return fmt.Errorf("store refresh token: %w", err)
 		}
 	} else {
 		_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix))
 	}
-	// Clear any PAT session artifacts from an earlier FlowPAT login on this profile.
+	// Clear any PAT session envelope from an earlier FlowPAT login on this profile.
 	_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix))
-	_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyPATUsernameSuffix))
-	_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyPATFingerprintSuffix))
+	tc := h.profileTokenCache(ctx)
+	if tc != nil {
+		fingerprint := h.cacheFingerprint(ctx, flow)
+		scope := strings.Join(scopes, " ")
+		tok := h.tokenRespToToken(resp, flow, scope)
+		tok.ExpiresAt = expiresAt
+		if err := tc.Set(ctx, flow, fingerprint, scope, tok); err != nil {
+			return err
+		}
+	}
 	meta := &auth.HandlerMetadata{Claims: claims, ExpiresAt: expiresAt, Scopes: scopes, LastLoginFlow: flow}
 	metaBytes, err := json.Marshal(meta)
 	if err != nil {
@@ -3106,14 +3164,6 @@ func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *
 	}
 	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyMetadataSuffix), metaBytes); err != nil {
 		return fmt.Errorf("store metadata: %w", err)
-	}
-	tc := h.profileTokenCache(ctx)
-	if tc != nil {
-		fingerprint := h.cacheFingerprint(ctx, flow)
-		scope := strings.Join(scopes, " ")
-		tok := h.tokenRespToToken(resp, flow, scope)
-		tok.ExpiresAt = expiresAt
-		return tc.Set(ctx, flow, fingerprint, scope, tok)
 	}
 	return nil
 }

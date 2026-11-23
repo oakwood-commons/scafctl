@@ -117,21 +117,25 @@ func PreLoginCheck(ctx context.Context, handler Handler, flow Flow, force, skipI
 		return &PreLoginResult{Action: PreLoginProceed}, nil
 	}
 
-	// If Status is reporting a non-interactive/ambient credential (such as a PAT
-	// or workload identity fallback on a hybrid handler) while the caller is
-	// initiating a different login flow (e.g. defaultFlow: interactive), proceed
-	// rather than blocking interactive login behind ambient credentials.
-	if status.Flow != "" && status.Flow != flow && slices.Contains(skipCheckFlows, status.Flow) {
-		return &PreLoginResult{Action: PreLoginProceed}, nil
+	var identity string
+	if status.Claims != nil {
+		identity = status.Claims.DisplayIdentity()
 	}
-
-	identity := status.Claims.DisplayIdentity()
 
 	if skipIfAuthenticated {
 		return &PreLoginResult{
 			Action:   PreLoginSkip,
 			Identity: identity,
 		}, nil
+	}
+
+	// If Status is reporting a non-interactive/ambient credential (such as a PAT
+	// or workload identity fallback on a hybrid handler) while the caller is
+	// initiating an ordinary login for a different flow (e.g. defaultFlow:
+	// interactive without --skip-if-authenticated), proceed rather than blocking
+	// interactive login behind ambient credentials.
+	if status.Flow != "" && status.Flow != flow && slices.Contains(skipCheckFlows, status.Flow) {
+		return &PreLoginResult{Action: PreLoginProceed}, nil
 	}
 
 	return &PreLoginResult{
