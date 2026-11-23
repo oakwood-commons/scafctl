@@ -152,6 +152,7 @@ type mockHostServiceClient struct {
 	listAuthHandlersErr  error
 	getAuthTokenResp     *proto.GetAuthTokenResponse
 	getAuthTokenErr      error
+	lastGetAuthTokenReq  *proto.GetAuthTokenRequest
 	getAuthGroupsResp    *proto.GetAuthGroupsResponse
 	getAuthGroupsErr     error
 	lastGetAuthGroupsReq *proto.GetAuthGroupsRequest
@@ -181,7 +182,8 @@ func (m *mockHostServiceClient) ListAuthHandlers(_ context.Context, _ *proto.Lis
 	return m.listAuthHandlersResp, m.listAuthHandlersErr
 }
 
-func (m *mockHostServiceClient) GetAuthToken(_ context.Context, _ *proto.GetAuthTokenRequest, _ ...grpc.CallOption) (*proto.GetAuthTokenResponse, error) {
+func (m *mockHostServiceClient) GetAuthToken(_ context.Context, req *proto.GetAuthTokenRequest, _ ...grpc.CallOption) (*proto.GetAuthTokenResponse, error) {
+	m.lastGetAuthTokenReq = req
 	return m.getAuthTokenResp, m.getAuthTokenErr
 }
 

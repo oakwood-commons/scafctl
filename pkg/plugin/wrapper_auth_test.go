@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
 	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -2298,6 +2299,91 @@ func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
 	})
 }
 
+func TestAuthHandlerWrapper_ApplyOverrides_PreservedInGetTokenAndGetGroups(t *testing.T) {
+	t.Parallel()
+
+	var capturedGroupsReq *proto.GetGroupsRequest
+	mockClient := &mockAuthHandlerServiceClient{
+		configureAuthHandlerResp: &proto.ConfigureAuthHandlerResponse{ProtocolVersion: PluginProtocolVersion},
+		getTokenResp:             &proto.GetTokenResponse{AccessToken: "tok", TokenType: "Bearer"},
+		getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+			capturedGroupsReq = req
+			return &proto.GetGroupsResponse{Groups: []string{"g1"}}, nil
+		},
+	}
+	wrapper := NewAuthHandlerWrapper(
+		&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+		AuthHandlerInfo{Name: "entra"},
+	)
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ClientID:      "config-top-client",
+				ActiveProfile: "work",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {ClientID: "config-work-client"},
+				},
+			},
+		},
+	}
+	baseCtx := config.WithConfig(context.Background(), appCfg)
+
+	// Simulate `scafctl auth login entra --client-id cli-override-client` on activeProfile="work",
+	// followed immediately by post-login GetToken / GetGroups on the same wrapper instance.
+	require.NoError(t, wrapper.ApplyOverrides(baseCtx, map[string]string{
+		"clientId": "cli-override-client",
+		"tenantId": "cli-override-tenant",
+	}))
+
+	_, err := wrapper.GetToken(baseCtx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
+	require.NoError(t, err)
+	require.NotNil(t, mockClient.capturedGetTokenReq)
+	assert.Equal(t, "work", mockClient.capturedGetTokenReq.Profile)
+	var tokSettings map[string]any
+	require.NoError(t, json.Unmarshal(mockClient.capturedGetTokenReq.Settings, &tokSettings))
+	assert.Equal(t, "cli-override-client", tokSettings["clientId"])
+	assert.Equal(t, "cli-override-tenant", tokSettings["tenantId"])
+
+	_, err = wrapper.GetGroups(baseCtx)
+	require.NoError(t, err)
+	require.NotNil(t, capturedGroupsReq)
+	assert.Equal(t, "work", capturedGroupsReq.Profile)
+	var grpSettings map[string]any
+	require.NoError(t, json.Unmarshal(capturedGroupsReq.Settings, &grpSettings))
+	assert.Equal(t, "cli-override-client", grpSettings["clientId"])
+	assert.Equal(t, "cli-override-tenant", grpSettings["tenantId"])
+
+	// Switching to the built-in/default profile must NOT leak the "work" overrides.
+	defaultCtx := auth.WithProfileResolved(baseCtx)
+	_, err = wrapper.GetToken(defaultCtx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, mockClient.capturedGetTokenReq.Profile)
+	tokSettings = nil
+	require.NoError(t, json.Unmarshal(mockClient.capturedGetTokenReq.Settings, &tokSettings))
+	assert.Equal(t, "config-top-client", tokSettings["clientId"])
+	assert.NotContains(t, tokSettings, "tenantId")
+
+	// Even when appCfg is nil, switching away from an overridden profile emits "{}" to reset configure-time overrides.
+	noCfgWrapper := NewAuthHandlerWrapper(
+		&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+		AuthHandlerInfo{Name: "entra"},
+	)
+	require.NoError(t, noCfgWrapper.ApplyOverrides(auth.WithProfile(context.Background(), "work"), map[string]string{"clientId": "work-only"}))
+	_, err = noCfgWrapper.GetToken(auth.WithProfileResolved(context.Background()), auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{}`, string(mockClient.capturedGetTokenReq.Settings))
+
+	// Uninitialized client guards on GetToken and ApplyOverrides must not panic.
+	uninitWrapper := NewAuthHandlerWrapper(&AuthHandlerClient{}, AuthHandlerInfo{Name: "entra"})
+	_, err = uninitWrapper.GetToken(context.Background(), auth.TokenOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client is not initialized")
+	err = uninitWrapper.ApplyOverrides(context.Background(), map[string]string{"clientId": "x"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client is not initialized")
+}
+
 type mockGroupsAuthHandlerPlugin struct {
 	*MockAuthHandlerPlugin
 	groupsFunc func(ctx context.Context, handlerName string) ([]string, error)
@@ -2407,12 +2493,13 @@ func TestAuthHandlerWrapper_GetGroups_ResolvesActiveProfileAndDefaultOverride(t 
 		assert.Equal(t, "work-client", settings["clientId"])
 	})
 
-	t.Run("explicit default profile skips activeProfile", func(t *testing.T) {
+	t.Run("explicit default profile skips activeProfile and overrides sdkauth.WithProfile across GetToken and GetGroups", func(t *testing.T) {
 		t.Parallel()
-		var capturedReq *proto.GetGroupsRequest
+		var capturedGroupsReq *proto.GetGroupsRequest
 		mockClient := &mockAuthHandlerServiceClient{
+			getTokenResp: &proto.GetTokenResponse{AccessToken: "tok-default", TokenType: "Bearer"},
 			getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
-				capturedReq = req
+				capturedGroupsReq = req
 				return &proto.GetGroupsResponse{Groups: []string{"g-default"}}, nil
 			},
 		}
@@ -2421,14 +2508,25 @@ func TestAuthHandlerWrapper_GetGroups_ResolvesActiveProfileAndDefaultOverride(t 
 			AuthHandlerInfo{Name: "entra"},
 		)
 
-		ctx := auth.WithProfileResolved(config.WithConfig(context.Background(), appCfg))
+		// Mixed context: sdkauth carries "work", while host explicitly resolved built-in/default ("").
+		ctx := auth.WithProfileResolved(sdkauth.WithProfile(config.WithConfig(context.Background(), appCfg), "work"))
+
+		tok, err := wrapper.GetToken(ctx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
+		require.NoError(t, err)
+		assert.Equal(t, "tok-default", tok.AccessToken)
+		require.NotNil(t, mockClient.capturedGetTokenReq)
+		assert.Empty(t, mockClient.capturedGetTokenReq.Profile)
+
 		groups, err := wrapper.GetGroups(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"g-default"}, groups)
-		require.NotNil(t, capturedReq)
-		assert.Empty(t, capturedReq.Profile)
+		require.NotNil(t, capturedGroupsReq)
+		assert.Empty(t, capturedGroupsReq.Profile)
+
+		assert.JSONEq(t, string(capturedGroupsReq.Settings), string(mockClient.capturedGetTokenReq.Settings),
+			"GetToken and GetGroups must forward identical effective profile settings")
 		var settings map[string]any
-		require.NoError(t, json.Unmarshal(capturedReq.Settings, &settings))
+		require.NoError(t, json.Unmarshal(mockClient.capturedGetTokenReq.Settings, &settings))
 		assert.Equal(t, "top-client", settings["clientId"])
 	})
 

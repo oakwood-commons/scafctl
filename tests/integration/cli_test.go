@@ -18016,6 +18016,9 @@ settings:
 		var decodedWork map[string]any
 		require.NoError(t, json.Unmarshal(outWork.Bytes(), &decodedWork), "stdout must be valid JSON")
 		payloadWork := decodedWork["payload"].(map[string]any)
+		assert.Equal(t, "work", payloadWork["token_profile"])
+		assert.Equal(t, "work-profile-client", payloadWork["token_client_id"])
+		assert.Equal(t, "work-profile-client", payloadWork["token_ctx_client"])
 		assert.Equal(t, true, payloadWork["groups_overage"])
 		assert.Equal(t, float64(3), payloadWork["groups_resolved_count"])
 		assert.Equal(t, []any{
@@ -18024,7 +18027,7 @@ settings:
 			"client:work-profile-client",
 		}, payloadWork["groups_resolved"])
 
-		// 2. --profile default sends "{}" per-RPC settings so configure-time work-profile-client is NOT leaked.
+		// 2. --profile default sends "{}" per-RPC settings on both GetToken and GetGroups so configure-time work-profile-client is NOT leaked.
 		var outDef, errDef bytes.Buffer
 		rootDef, cleanupDef := scafctl.Root(&scafctl.RootOptions{
 			BinaryName:     "mycli",
@@ -18039,6 +18042,9 @@ settings:
 		var decodedDef map[string]any
 		require.NoError(t, json.Unmarshal(outDef.Bytes(), &decodedDef))
 		payloadDef := decodedDef["payload"].(map[string]any)
+		assert.Equal(t, "", payloadDef["token_profile"])
+		assert.Equal(t, "default-client", payloadDef["token_client_id"])
+		assert.Equal(t, "default-client", payloadDef["token_ctx_client"])
 		assert.Equal(t, []any{
 			"00000000-0000-0000-0000-000000000001",
 			"profile:",

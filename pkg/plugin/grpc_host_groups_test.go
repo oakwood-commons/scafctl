@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"testing"
 
 	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
@@ -15,8 +16,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 // --- GetAuthGroups server tests ---
@@ -186,6 +190,18 @@ func TestHostServiceClient_GetAuthGroups_ForwardsProfileAndNormalizesNilGroups(t
 	assert.Equal(t, "entra", mock.lastGetAuthGroupsReq.HandlerName)
 	assert.Equal(t, "work", mock.lastGetAuthGroupsReq.Profile)
 
+	// Explicitly resolved empty profile is encoded as auth.DefaultProfileName on both GetAuthGroups and GetAuthToken.
+	resolvedBuiltinCtx := auth.WithProfileResolved(sdkauth.WithProfile(context.Background(), "work"))
+	_, err = client.GetAuthGroups(resolvedBuiltinCtx, "entra")
+	require.NoError(t, err)
+	assert.Equal(t, auth.DefaultProfileName, mock.lastGetAuthGroupsReq.Profile)
+
+	mock.getAuthTokenResp = &proto.GetAuthTokenResponse{AccessToken: "tok", TokenType: "Bearer"}
+	_, err = client.GetAuthToken(resolvedBuiltinCtx, "entra", "scope", 60, false)
+	require.NoError(t, err)
+	require.NotNil(t, mock.lastGetAuthTokenReq)
+	assert.Equal(t, auth.DefaultProfileName, mock.lastGetAuthTokenReq.Profile)
+
 	// Also supports sdkauth.WithProfile and degrades gracefully on Unimplemented.
 	unimplMock := &mockHostServiceClient{
 		getAuthGroupsErr: status.Error(codes.Unimplemented, "old host"),
@@ -255,9 +271,9 @@ func TestHostServiceServer_GetAuthGroups_PluginWrapperRoundTripWithProfileAndSet
 	assert.Equal(t, "work-client", settings["clientId"])
 	assert.Equal(t, "work-tenant", settings["tenantId"])
 
-	// 2. Provider explicitly selects "default" -> overrides ProfileResolverFunc / activeProfile.
+	// 2. Explicit "default" (or "built-in") -> overrides ProfileResolverFunc / activeProfile AND any parent ctx profile.
 	capturedReq = nil
-	resp, err = server.GetAuthGroups(context.Background(), &proto.GetAuthGroupsRequest{
+	resp, err = server.GetAuthGroups(auth.WithProfile(context.Background(), "work"), &proto.GetAuthGroupsRequest{
 		HandlerName: "entra",
 		Profile:     "default",
 	})
@@ -363,4 +379,104 @@ func TestHostServiceServer_GetAuthGroups_OlderPluginUnimplementedReturnsCleanErr
 	require.NoError(t, err)
 	assert.Nil(t, resp.Groups)
 	assert.Equal(t, `get auth groups: auth handler "github" does not support group membership queries (GroupsProvider not implemented)`, resp.Error)
+}
+
+func TestHostServiceClientToServer_ResolvedBuiltinProfileRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	var capturedGroupsReq *proto.GetGroupsRequest
+	mockPluginClient := &mockAuthHandlerServiceClient{
+		getTokenResp: &proto.GetTokenResponse{
+			AccessToken:   "tok-builtin",
+			TokenType:     "Bearer",
+			ExpiresAtUnix: 1900000000,
+		},
+		getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+			capturedGroupsReq = req
+			return &proto.GetGroupsResponse{Groups: []string{"builtin-grp"}}, nil
+		},
+	}
+
+	reg := auth.NewRegistry()
+	wrapper := NewAuthHandlerWrapper(
+		&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockPluginClient}},
+		AuthHandlerInfo{Name: "entra", DisplayName: "Microsoft Entra ID"},
+	)
+	require.NoError(t, reg.Register(wrapper))
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ClientID:      "top-client",
+				TenantID:      "top-tenant",
+				ActiveProfile: "work",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {
+						ClientID: "work-client",
+						TenantID: "work-tenant",
+					},
+				},
+			},
+		},
+	}
+
+	deps := HostDepsFromAuthRegistry(reg)
+	require.NotNil(t, deps)
+	deps.HostConfig = appCfg
+	deps.ProfileResolverFunc = func(_ string) string { return "work" }
+
+	lis := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	proto.RegisterHostServiceServer(grpcServer, &HostServiceServer{Deps: *deps})
+	go func() {
+		_ = grpcServer.Serve(lis)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+		_ = lis.Close()
+	})
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return lis.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	hostClient := NewHostServiceClient(conn)
+
+	// 1. Explicitly resolved built-in profile ("" with IsProfileResolved, even when sdkauth carries "work")
+	// survives the client->server gRPC round-trip instead of falling back to activeProfile="work".
+	builtinCtx := auth.WithProfileResolved(sdkauth.WithProfile(context.Background(), "work"))
+
+	groups, err := hostClient.GetAuthGroups(builtinCtx, "entra")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"builtin-grp"}, groups)
+	require.NotNil(t, capturedGroupsReq)
+	assert.Empty(t, capturedGroupsReq.Profile)
+	var groupSettings map[string]any
+	require.NoError(t, json.Unmarshal(capturedGroupsReq.Settings, &groupSettings))
+	assert.Equal(t, "top-client", groupSettings["clientId"])
+
+	tokResp, err := hostClient.GetAuthToken(builtinCtx, "entra", "https://graph.microsoft.com/.default", 60, false)
+	require.NoError(t, err)
+	assert.Equal(t, "tok-builtin", tokResp.AccessToken)
+	require.NotNil(t, mockPluginClient.capturedGetTokenReq)
+	assert.Empty(t, mockPluginClient.capturedGetTokenReq.Profile)
+	var tokenSettings map[string]any
+	require.NoError(t, json.Unmarshal(mockPluginClient.capturedGetTokenReq.Settings, &tokenSettings))
+	assert.Equal(t, "top-client", tokenSettings["clientId"])
+
+	// 2. Unresolved empty context still falls back to the host's activeProfile ("work").
+	capturedGroupsReq = nil
+	_, err = hostClient.GetAuthGroups(context.Background(), "entra")
+	require.NoError(t, err)
+	require.NotNil(t, capturedGroupsReq)
+	assert.Equal(t, "work", capturedGroupsReq.Profile)
+	groupSettings = nil
+	require.NoError(t, json.Unmarshal(capturedGroupsReq.Settings, &groupSettings))
+	assert.Equal(t, "work-client", groupSettings["clientId"])
 }

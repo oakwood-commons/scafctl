@@ -590,6 +590,51 @@ func TestAuthHandlerGRPCClient_GetToken_ForwardsServerFields(t *testing.T) {
 	assert.Equal(t, "jwt-assertion-value", mock.capturedGetTokenReq.Assertion)
 }
 
+func TestAuthHandlerGRPCClient_GetToken_ForwardsProfileAndSettings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("forwards profile and fallback TokenRequest.Settings", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockAuthHandlerServiceClient{
+			getTokenResp: &proto.GetTokenResponse{AccessToken: "tok", TokenType: "Bearer"},
+		}
+		client := &AuthHandlerGRPCClient{client: mock}
+
+		ctx := auth.WithProfile(context.Background(), "work")
+		_, err := client.GetToken(ctx, "entra", TokenRequest{
+			Settings: map[string]json.RawMessage{"clientId": json.RawMessage(`"work-client"`)},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, mock.capturedGetTokenReq)
+		assert.Equal(t, "work", mock.capturedGetTokenReq.Profile)
+		assert.JSONEq(t, `{"clientId":"work-client"}`, string(mock.capturedGetTokenReq.Settings))
+	})
+
+	t.Run("honors resolved empty host profile over sdkauth.WithProfile", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockAuthHandlerServiceClient{
+			getTokenResp: &proto.GetTokenResponse{AccessToken: "tok", TokenType: "Bearer"},
+		}
+		client := &AuthHandlerGRPCClient{client: mock}
+
+		mixedCtx := auth.WithProfileResolved(sdkauth.WithProfile(context.Background(), "work"))
+		mixedCtx = sdkplugin.WithRequestSettings(mixedCtx, map[string]json.RawMessage{})
+		_, err := client.GetToken(mixedCtx, "entra", TokenRequest{})
+		require.NoError(t, err)
+		require.NotNil(t, mock.capturedGetTokenReq)
+		assert.Empty(t, mock.capturedGetTokenReq.Profile)
+		assert.JSONEq(t, `{}`, string(mock.capturedGetTokenReq.Settings))
+	})
+
+	t.Run("rejects invalid profile on client", func(t *testing.T) {
+		t.Parallel()
+		client := &AuthHandlerGRPCClient{client: &mockAuthHandlerServiceClient{}}
+		_, err := client.GetToken(auth.WithProfile(context.Background(), "bad profile"), "entra", TokenRequest{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid profile")
+	})
+}
+
 func TestAuthHandlerGRPCClient_ListCachedTokens_Success(t *testing.T) {
 	t.Parallel()
 
@@ -968,6 +1013,44 @@ func TestAuthHandlerGRPCServer_GetToken_Error(t *testing.T) {
 		Scope:       "read",
 	})
 	require.Error(t, err)
+}
+
+func TestAuthHandlerGRPCServer_GetToken_SettingsAndProfile(t *testing.T) {
+	t.Parallel()
+
+	var gotHostProfile, gotSDKProfile string
+	var gotCtxSettings, gotReqSettings map[string]json.RawMessage
+	mock := &MockAuthHandlerPlugin{
+		tokenFunc: func(ctx context.Context, _ string, req TokenRequest) (*TokenResponse, error) {
+			gotHostProfile = auth.ProfileFromContext(ctx)
+			gotSDKProfile = sdkauth.ProfileFromContext(ctx)
+			gotCtxSettings, _ = sdkplugin.RequestSettingsFromContext(ctx)
+			gotReqSettings = req.Settings
+			return &TokenResponse{AccessToken: "tok", TokenType: "Bearer"}, nil
+		},
+	}
+	server := &AuthHandlerGRPCServer{Impl: mock}
+
+	resp, err := server.GetToken(context.Background(), &proto.GetTokenRequest{
+		HandlerName: "entra",
+		Profile:     "work",
+		Settings:    []byte(`{"clientId":"work-client"}`),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "tok", resp.AccessToken)
+	assert.Equal(t, "work", gotHostProfile)
+	assert.Equal(t, "work", gotSDKProfile)
+	assert.JSONEq(t, `"work-client"`, string(gotCtxSettings["clientId"]))
+	assert.JSONEq(t, `"work-client"`, string(gotReqSettings["clientId"]))
+
+	_, err = server.GetToken(context.Background(), &proto.GetTokenRequest{
+		HandlerName: "entra",
+		Settings:    []byte(`{bad`),
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
 func TestAuthHandlerGRPCServer_ListCachedTokens_Error(t *testing.T) {
@@ -2099,6 +2182,11 @@ func TestAuthHandlerGRPCClient_GetGroups(t *testing.T) {
 		assert.Equal(t, []string{"g-sdk"}, groups)
 		assert.Equal(t, "staging", mock.capturedGetGroupsReq.Profile)
 		assert.JSONEq(t, `{}`, string(mock.capturedGetGroupsReq.Settings))
+
+		mixedCtx := auth.WithProfileResolved(sdkauth.WithProfile(context.Background(), "work"))
+		_, err = client.GetGroups(mixedCtx, "entra")
+		require.NoError(t, err)
+		assert.Empty(t, mock.capturedGetGroupsReq.Profile, "explicitly resolved empty host profile must override sdkauth.WithProfile")
 
 		_, err = client.GetGroups(auth.WithProfile(context.Background(), "bad profile"), "entra")
 		require.Error(t, err)

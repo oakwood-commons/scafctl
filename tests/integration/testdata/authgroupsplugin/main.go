@@ -60,11 +60,32 @@ func (p *baseAuthPlugin) GetStatus(_ context.Context, _ string, _ sdkplugin.Stat
 	return &auth.Status{Authenticated: true, ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
-func (p *baseAuthPlugin) GetToken(_ context.Context, _ string, req sdkplugin.TokenRequest) (*sdkplugin.TokenResponse, error) {
+func (p *baseAuthPlugin) effectiveClientID(ctx context.Context, explicit map[string]json.RawMessage) string {
+	clientID := p.configuredClientID
+	settings := explicit
+	hasSettings := settings != nil
+	if !hasSettings {
+		settings, hasSettings = sdkplugin.RequestSettingsFromContext(ctx)
+	}
+	if hasSettings {
+		// Per-RPC settings override ConfigureAuthHandler settings (an empty
+		// map resets configure-time profile settings back to defaults).
+		clientID = "default-client"
+		if raw, has := settings["clientId"]; has {
+			_ = json.Unmarshal(raw, &clientID)
+		}
+	}
+	return clientID
+}
+
+func (p *baseAuthPlugin) GetToken(ctx context.Context, _ string, req sdkplugin.TokenRequest) (*sdkplugin.TokenResponse, error) {
 	hdr, _ := json.Marshal(map[string]any{"alg": "RS256", "typ": "JWT"})
 	payload, _ := json.Marshal(map[string]any{
-		"sub":          "sub-overage-e2e",
-		"_claim_names": map[string]any{"groups": "src1"},
+		"sub":              "sub-overage-e2e",
+		"token_profile":    auth.ProfileFromContext(ctx),
+		"token_client_id":  p.effectiveClientID(ctx, req.Settings),
+		"token_ctx_client": p.effectiveClientID(ctx, nil),
+		"_claim_names":     map[string]any{"groups": "src1"},
 	})
 	jwt := base64.RawURLEncoding.EncodeToString(hdr) + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 	return &sdkplugin.TokenResponse{
@@ -98,15 +119,7 @@ type groupsAuthPlugin struct {
 
 func (p *groupsAuthPlugin) GetGroups(ctx context.Context, _ string) ([]string, error) {
 	profile := auth.ProfileFromContext(ctx)
-	clientID := p.configuredClientID
-	if settings, ok := sdkplugin.RequestSettingsFromContext(ctx); ok {
-		// Per-RPC settings override ConfigureAuthHandler settings (an empty
-		// map resets configure-time profile settings back to defaults).
-		clientID = "default-client"
-		if raw, has := settings["clientId"]; has {
-			_ = json.Unmarshal(raw, &clientID)
-		}
-	}
+	clientID := p.effectiveClientID(ctx, nil)
 	return []string{
 		"00000000-0000-0000-0000-000000000001",
 		"profile:" + profile,
