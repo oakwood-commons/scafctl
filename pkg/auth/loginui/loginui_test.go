@@ -1075,6 +1075,12 @@ func TestValidateStatusPasteInput(t *testing.T) {
 			expectedURI: "http://[::1]:8400/callback",
 			want:        "http://[::1]:8400/callback#access_token=tok123&iss=https://issuer.example.com",
 		},
+		{
+			name:        "fragment access_token with percent-encoded semicolon and percent sign",
+			raw:         "http://localhost:8400/callback#access_token=abc%3Bdef%25zz&token_type=Bearer",
+			expectedURI: "http://localhost:8400/callback",
+			want:        "http://localhost:8400/callback#access_token=abc%3Bdef%25zz&token_type=Bearer",
+		},
 	}
 
 	for _, tc := range okCases {
@@ -1093,6 +1099,7 @@ func TestValidateStatusPasteInput(t *testing.T) {
 	}{
 		{"empty", "   ", "http://localhost:8400/callback"},
 		{"exceeds max length", "http://localhost:8400/cb?code=" + strings.Repeat("x", maxPasteRedirectURLLen), ""},
+		{"scheme-less exceeds max length after adding http scheme", "localhost:8400/cb?code=SECRET123" + strings.Repeat("x", maxPasteRedirectURLLen-len("localhost:8400/cb?code=SECRET123")-2), "http://localhost:8400/cb"},
 		{"plain garbage", "not-a-url-SECRET123", ""},
 		{"leading colon-slash-slash", "://localhost:8400/callback?code=SECRET123", "http://localhost:8400/callback"},
 		{"non-http outer scheme", "ftp://localhost:8400/callback?code=SECRET123", "http://localhost:8400/callback"},

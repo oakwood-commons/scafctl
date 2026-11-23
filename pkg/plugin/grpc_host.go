@@ -577,6 +577,9 @@ func normalizePastedRedirectURL(value, redirectURI string) (string, error) {
 		}
 		trimmed = want.Scheme + "://" + want.Host + afterScheme[hostEnd:]
 	}
+	if len(trimmed) > promptPasteMaxLen {
+		return "", fmt.Errorf("pasted redirect URL exceeds the maximum length of %d characters", promptPasteMaxLen)
+	}
 	return trimmed, nil
 }
 

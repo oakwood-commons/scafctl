@@ -821,7 +821,11 @@ func validateStatusPasteInput(raw, expectedRedirectURI string) (string, error) {
 		return "", errors.New("redirect URL must contain code=, error=, or #access_token=")
 	}
 
-	return canonicalizeLoopbackSchemeAndHost(normalized, want), nil
+	canonical := canonicalizeLoopbackSchemeAndHost(normalized, want)
+	if len(canonical) > maxPasteRedirectURLLen {
+		return "", fmt.Errorf("pasted redirect URL exceeds maximum length of %d characters", maxPasteRedirectURLLen)
+	}
+	return canonical, nil
 }
 
 // normalizeSchemeLessLoopbackURL restores the "http://" scheme when a browser
@@ -914,8 +918,8 @@ func hasOAuthRedirectPayload(parsed *url.URL) bool {
 			return true
 		}
 	}
-	if parsed.Fragment != "" {
-		fq := (&url.URL{RawQuery: parsed.Fragment}).Query()
+	if escapedFragment := parsed.EscapedFragment(); escapedFragment != "" {
+		fq := (&url.URL{RawQuery: escapedFragment}).Query()
 		if fq.Get("access_token") != "" || fq.Get("code") != "" || fq.Get("error") != "" {
 			return true
 		}

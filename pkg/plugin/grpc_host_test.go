@@ -5,6 +5,7 @@ package plugin
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
@@ -109,6 +110,11 @@ func TestValidatePastedRedirectURL_SchemeLessLoopback(t *testing.T) {
 			name:        "localhost used as outer scheme rejected",
 			value:       "localhost://callback?code=SECRET",
 			redirectURI: "http://localhost",
+		},
+		{
+			name:        "scheme-less paste exceeding max length after restoring http scheme rejected",
+			value:       "localhost:8400/callback?code=SECRET" + strings.Repeat("x", promptPasteMaxLen-len("localhost:8400/callback?code=SECRET")-2),
+			redirectURI: "http://localhost:8400/callback",
 		},
 		{
 			name:        "scheme-less port prefix lookalike rejected",
