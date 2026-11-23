@@ -22,7 +22,13 @@ import (
 func ResolveActiveProfile(ctx context.Context, handlerName string) string {
 	// 1. Per-command/solution profile (already set in context by CLI flag or HTTP provider)
 	if p := ProfileFromContext(ctx); p != "" {
-		return p
+		normalized := NormalizeProfileName(p)
+		if normalized != "" {
+			if err := ValidateProfileName(normalized); err != nil {
+				return ""
+			}
+		}
+		return normalized
 	}
 	// An explicit built-in/default selection normalizes to "" and marks the
 	// context resolved; honor it and skip global/config fallbacks.
@@ -92,29 +98,36 @@ func ConfigActiveProfile(ctx context.Context, handlerName string) string {
 		return ""
 	}
 
+	var active string
 	switch handlerName {
 	case "entra":
 		if cfg.Auth.Entra != nil {
-			return cfg.Auth.Entra.ActiveProfile
+			active = cfg.Auth.Entra.ActiveProfile
 		}
 	case "github":
 		if cfg.Auth.GitHub != nil {
-			return cfg.Auth.GitHub.ActiveProfile
+			active = cfg.Auth.GitHub.ActiveProfile
 		}
 	case "gcp":
 		if cfg.Auth.GCP != nil {
-			return cfg.Auth.GCP.ActiveProfile
+			active = cfg.Auth.GCP.ActiveProfile
 		}
 	default:
 		if hc, ok := cfg.Auth.Handlers[handlerName]; ok {
-			if hc.ActiveProfile != "" {
-				return hc.ActiveProfile
+			active = hc.ActiveProfile
+			if active == "" {
+				active = handlerSettingsActiveProfile(hc.Settings)
 			}
-			return handlerSettingsActiveProfile(hc.Settings)
 		}
 	}
 
-	return ""
+	normalized := NormalizeProfileName(active)
+	if normalized != "" {
+		if err := ValidateProfileName(normalized); err != nil {
+			return ""
+		}
+	}
+	return normalized
 }
 
 // ListConfiguredProfiles returns the profile names configured for a handler.
@@ -223,6 +236,7 @@ func validateProfileMap[T any](handlerName, activeProfile string, profiles map[s
 // ListConfiguredProfiles and auth switch without requiring manual config edits.
 // Does nothing for the default (empty) profile.
 func EnsureProfileRegistered(cfg *config.Config, handlerName, profile string) {
+	profile = NormalizeProfileName(profile)
 	if cfg == nil || profile == "" {
 		return
 	}
@@ -235,7 +249,7 @@ func EnsureProfileRegistered(cfg *config.Config, handlerName, profile string) {
 		if cfg.Auth.Entra.Profiles == nil {
 			cfg.Auth.Entra.Profiles = make(map[string]*config.EntraProfileConfig)
 		}
-		if _, exists := cfg.Auth.Entra.Profiles[profile]; !exists {
+		if _, exists := lookupTypedProfileMap(cfg.Auth.Entra.Profiles, profile); !exists {
 			cfg.Auth.Entra.Profiles[profile] = &config.EntraProfileConfig{}
 		}
 	case "github":
@@ -245,7 +259,7 @@ func EnsureProfileRegistered(cfg *config.Config, handlerName, profile string) {
 		if cfg.Auth.GitHub.Profiles == nil {
 			cfg.Auth.GitHub.Profiles = make(map[string]*config.GitHubProfileConfig)
 		}
-		if _, exists := cfg.Auth.GitHub.Profiles[profile]; !exists {
+		if _, exists := lookupTypedProfileMap(cfg.Auth.GitHub.Profiles, profile); !exists {
 			cfg.Auth.GitHub.Profiles[profile] = &config.GitHubProfileConfig{}
 		}
 	case "gcp":
@@ -255,7 +269,7 @@ func EnsureProfileRegistered(cfg *config.Config, handlerName, profile string) {
 		if cfg.Auth.GCP.Profiles == nil {
 			cfg.Auth.GCP.Profiles = make(map[string]*config.GCPProfileConfig)
 		}
-		if _, exists := cfg.Auth.GCP.Profiles[profile]; !exists {
+		if _, exists := lookupTypedProfileMap(cfg.Auth.GCP.Profiles, profile); !exists {
 			cfg.Auth.GCP.Profiles[profile] = &config.GCPProfileConfig{}
 		}
 	default:
@@ -280,6 +294,7 @@ func DeleteProfile(cfg *config.Config, handlerName, profile string) (bool, error
 	if cfg == nil {
 		return false, fmt.Errorf("config is nil")
 	}
+	profile = NormalizeProfileName(profile)
 	if profile == "" {
 		return false, fmt.Errorf("cannot delete the unnamed built-in profile")
 	}
@@ -288,9 +303,8 @@ func DeleteProfile(cfg *config.Config, handlerName, profile string) (bool, error
 	switch handlerName {
 	case "entra":
 		if cfg.Auth.Entra != nil {
-			if _, exists := cfg.Auth.Entra.Profiles[profile]; exists {
-				delete(cfg.Auth.Entra.Profiles, profile)
-				if cfg.Auth.Entra.ActiveProfile == profile {
+			if deleteTypedProfileEntries(cfg.Auth.Entra.Profiles, profile) {
+				if strings.EqualFold(cfg.Auth.Entra.ActiveProfile, profile) {
 					cfg.Auth.Entra.ActiveProfile = ""
 				}
 				found = true
@@ -298,9 +312,8 @@ func DeleteProfile(cfg *config.Config, handlerName, profile string) (bool, error
 		}
 	case "github":
 		if cfg.Auth.GitHub != nil {
-			if _, exists := cfg.Auth.GitHub.Profiles[profile]; exists {
-				delete(cfg.Auth.GitHub.Profiles, profile)
-				if cfg.Auth.GitHub.ActiveProfile == profile {
+			if deleteTypedProfileEntries(cfg.Auth.GitHub.Profiles, profile) {
+				if strings.EqualFold(cfg.Auth.GitHub.ActiveProfile, profile) {
 					cfg.Auth.GitHub.ActiveProfile = ""
 				}
 				found = true
@@ -308,9 +321,8 @@ func DeleteProfile(cfg *config.Config, handlerName, profile string) (bool, error
 		}
 	case "gcp":
 		if cfg.Auth.GCP != nil {
-			if _, exists := cfg.Auth.GCP.Profiles[profile]; exists {
-				delete(cfg.Auth.GCP.Profiles, profile)
-				if cfg.Auth.GCP.ActiveProfile == profile {
+			if deleteTypedProfileEntries(cfg.Auth.GCP.Profiles, profile) {
+				if strings.EqualFold(cfg.Auth.GCP.ActiveProfile, profile) {
 					cfg.Auth.GCP.ActiveProfile = ""
 				}
 				found = true
@@ -330,9 +342,24 @@ func DeleteProfile(cfg *config.Config, handlerName, profile string) (bool, error
 				found = true
 			}
 		}
+		if rawProfiles, hasRaw := handlerSettingsProfilesMap(hc.Settings); hasRaw {
+			for k := range rawProfiles {
+				if strings.EqualFold(k, profile) {
+					delete(rawProfiles, k)
+					found = true
+				}
+			}
+		}
 		if found {
 			if strings.EqualFold(hc.ActiveProfile, profile) {
 				hc.ActiveProfile = ""
+			}
+			for k, v := range hc.Settings {
+				if strings.EqualFold(k, "activeProfile") {
+					if s, isStr := v.(string); isStr && strings.EqualFold(s, profile) {
+						delete(hc.Settings, k)
+					}
+				}
 			}
 			cfg.Auth.Handlers[handlerName] = hc
 		}
@@ -350,6 +377,7 @@ func ResolveEntraConfig(cfg *config.EntraAuthConfig, profile string) *config.Ent
 	if cfg == nil {
 		return nil
 	}
+	profile = NormalizeProfileName(profile)
 
 	// Copy top-level config (shallow copy is sufficient for string/slice fields).
 	resolved := *cfg
@@ -357,7 +385,7 @@ func ResolveEntraConfig(cfg *config.EntraAuthConfig, profile string) *config.Ent
 	resolved.Profiles = nil
 
 	if profile != "" {
-		if p, ok := cfg.Profiles[profile]; ok && p != nil {
+		if p, ok := lookupTypedProfileMap(cfg.Profiles, profile); ok && p != nil {
 			// Profile fields override top-level when non-empty.
 			if p.HTTPClient != nil {
 				resolved.HTTPClient = p.HTTPClient
@@ -427,6 +455,7 @@ func ResolveGitHubConfig(cfg *config.GitHubAuthConfig, profile string) *config.G
 	if cfg == nil {
 		return nil
 	}
+	profile = NormalizeProfileName(profile)
 
 	resolved := *cfg
 	resolved.ActiveProfile = ""
@@ -436,7 +465,7 @@ func ResolveGitHubConfig(cfg *config.GitHubAuthConfig, profile string) *config.G
 		return &resolved
 	}
 
-	p, ok := cfg.Profiles[profile]
+	p, ok := lookupTypedProfileMap(cfg.Profiles, profile)
 	if !ok || p == nil {
 		return &resolved
 	}
@@ -481,6 +510,7 @@ func ResolveGCPConfig(cfg *config.GCPAuthConfig, profile string) *config.GCPAuth
 	if cfg == nil {
 		return nil
 	}
+	profile = NormalizeProfileName(profile)
 
 	resolved := *cfg
 	resolved.ActiveProfile = ""
@@ -490,7 +520,7 @@ func ResolveGCPConfig(cfg *config.GCPAuthConfig, profile string) *config.GCPAuth
 		return &resolved
 	}
 
-	p, ok := cfg.Profiles[profile]
+	p, ok := lookupTypedProfileMap(cfg.Profiles, profile)
 	if !ok || p == nil {
 		return &resolved
 	}
@@ -546,6 +576,7 @@ func HasHandlerSettingsOrProfiles(hc config.HandlerConfig) bool {
 // top of top-level settings. Host-consumed keys and profile metadata
 // ("activeProfile", "profiles") are stripped from the returned map.
 func ResolveHandlerSettings(hc config.HandlerConfig, profile string) map[string]any {
+	profile = NormalizeProfileName(profile)
 	resolved := make(map[string]any, len(hc.Settings))
 	for k, v := range hc.Settings {
 		if isReservedHandlerMetaKey(k) {
@@ -597,6 +628,29 @@ func isReservedHandlerMetaKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+func lookupTypedProfileMap[T any](profiles map[string]*T, profile string) (*T, bool) {
+	if p, ok := profiles[profile]; ok {
+		return p, true
+	}
+	for k, p := range profiles {
+		if strings.EqualFold(k, profile) {
+			return p, true
+		}
+	}
+	return nil, false
+}
+
+func deleteTypedProfileEntries[T any](profiles map[string]*T, profile string) bool {
+	var found bool
+	for k := range profiles {
+		if strings.EqualFold(k, profile) {
+			delete(profiles, k)
+			found = true
+		}
+	}
+	return found
 }
 
 func lookupHandlerProfileMap(profiles map[string]map[string]any, profile string) (map[string]any, bool) {
@@ -652,14 +706,16 @@ func handlerSettingsProfilesMap(settings map[string]any) (map[string]any, bool) 
 func handlerProfileKeys(hc config.HandlerConfig) []string {
 	seen := make(map[string]struct{}, len(hc.Profiles))
 	for k := range hc.Profiles {
-		if ValidateProfileName(k) == nil {
-			seen[k] = struct{}{}
+		norm := NormalizeProfileName(k)
+		if norm != "" && ValidateProfileName(norm) == nil {
+			seen[norm] = struct{}{}
 		}
 	}
 	if rawProfiles, ok := handlerSettingsProfilesMap(hc.Settings); ok {
 		for k := range rawProfiles {
-			if ValidateProfileName(k) == nil {
-				seen[k] = struct{}{}
+			norm := NormalizeProfileName(k)
+			if norm != "" && ValidateProfileName(norm) == nil {
+				seen[norm] = struct{}{}
 			}
 		}
 	}
@@ -703,14 +759,19 @@ func mapKeys[T any](m map[string]*T) []string {
 	if len(m) == 0 {
 		return nil
 	}
-	keys := make([]string, 0, len(m))
+	seen := make(map[string]struct{}, len(m))
 	for k := range m {
-		if ValidateProfileName(k) == nil {
-			keys = append(keys, k)
+		norm := NormalizeProfileName(k)
+		if norm != "" && ValidateProfileName(norm) == nil {
+			seen[norm] = struct{}{}
 		}
 	}
-	if len(keys) == 0 {
+	if len(seen) == 0 {
 		return nil
+	}
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	return keys

@@ -105,15 +105,21 @@ type AuthHandlerWrapper struct {
 	hostCfg               hostConfig // host-level config preserved across reconfigurations
 	mu                    sync.RWMutex
 
-	// configMu serializes ConfigureAuthHandler calls and guards overrides,
-	// serverMode, configured, configuredProfile, and configuredSettingsRaw.
-	// Never hold configMu while acquiring mu or across user-facing RPCs.
+	// configMu guards overrides, serverMode, configured*, and the active-call
+	// gate (inFlight, inFlightProfile, reconfiguring, writersWaiting, waitCh)
+	// so stateful plugin configuration stays stable across each RPC while calls
+	// sharing the same profile and settings execute concurrently.
 	configMu              sync.Mutex
 	overrides             map[string]map[string]string
 	serverMode            bool
 	configured            bool
 	configuredProfile     string
 	configuredSettingsRaw []byte
+	inFlight              int
+	inFlightProfile       string
+	reconfiguring         bool
+	writersWaiting        int
+	waitCh                chan struct{}
 }
 
 // hostConfig stores host-level ProviderConfig fields so ApplyOverrides and
@@ -211,10 +217,11 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 		defer cancelTimeout()
 	}
 
-	ctx, perCallSettings, err := w.prepareCall(ctx)
+	ctx, perCallSettings, release, err := w.beginCall(ctx)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	willOpen, err := w.willOpenBrowserOnLogin(ctx, opts.Flow, effectiveBrowser)
 	if err != nil {
@@ -316,10 +323,11 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 // scafctl-plugin-sdk#58 and is intentionally out of scope for the
 // --callback-port work (#589).
 func (w *AuthHandlerWrapper) Logout(ctx context.Context) error {
-	ctx, _, err := w.prepareCall(ctx)
+	ctx, _, release, err := w.beginCall(ctx)
 	if err != nil {
 		return err
 	}
+	defer release()
 	return w.client.plugin.Logout(ctx, w.handlerName, LogoutRequest{})
 }
 
@@ -333,10 +341,11 @@ func (w *AuthHandlerWrapper) Status(ctx context.Context) (*auth.Status, error) {
 		trace.WithAttributes(attribute.String("auth.handler", w.handlerName)))
 	defer span.End()
 
-	ctx, perCallSettings, err := w.prepareCall(ctx)
+	ctx, perCallSettings, release, err := w.beginCall(ctx)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	return w.client.plugin.GetStatus(ctx, w.handlerName, StatusRequest{
 		Settings: cloneSettingsMap(perCallSettings),
@@ -349,10 +358,11 @@ func (w *AuthHandlerWrapper) GetToken(ctx context.Context, opts auth.TokenOption
 		trace.WithAttributes(attribute.String("auth.handler", w.handlerName)))
 	defer span.End()
 
-	ctx, perCallSettings, err := w.prepareCall(ctx)
+	ctx, perCallSettings, release, err := w.beginCall(ctx)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	req := TokenRequest{
 		Scope:         opts.Scope,
@@ -400,28 +410,31 @@ func (w *AuthHandlerWrapper) InjectAuth(ctx context.Context, req *http.Request, 
 
 // ListCachedTokens implements auth.TokenLister.
 func (w *AuthHandlerWrapper) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo, error) {
-	ctx, _, err := w.prepareCall(ctx)
+	ctx, _, release, err := w.beginCall(ctx)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	return w.client.plugin.ListCachedTokens(ctx, w.handlerName)
 }
 
 // PurgeExpiredTokens implements auth.TokenPurger.
 func (w *AuthHandlerWrapper) PurgeExpiredTokens(ctx context.Context) (int, error) {
-	ctx, _, err := w.prepareCall(ctx)
+	ctx, _, release, err := w.beginCall(ctx)
 	if err != nil {
 		return 0, err
 	}
+	defer release()
 	return w.client.plugin.PurgeExpiredTokens(ctx, w.handlerName)
 }
 
 // DetectAvailableFlows implements auth.FlowDetector.
 func (w *AuthHandlerWrapper) DetectAvailableFlows(ctx context.Context) ([]auth.FlowAvailability, error) {
-	ctx, _, err := w.prepareCall(ctx)
+	ctx, _, release, err := w.beginCall(ctx)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	return w.client.plugin.DetectAvailableFlows(ctx, w.handlerName)
 }
 
@@ -455,9 +468,15 @@ func (w *AuthHandlerWrapper) ApplyOverrides(ctx context.Context, overrides map[s
 	hc := w.getHostConfig()
 
 	w.configMu.Lock()
-	defer w.configMu.Unlock()
+	if err := w.acquireExclusiveReconfigLocked(ctx); err != nil {
+		w.configMu.Unlock()
+		return err
+	}
 
 	if w.serverMode {
+		w.reconfiguring = false
+		w.broadcastLocked()
+		w.configMu.Unlock()
 		return nil
 	}
 	if w.overrides == nil {
@@ -469,17 +488,34 @@ func (w *AuthHandlerWrapper) ApplyOverrides(ctx context.Context, overrides map[s
 	rawForConfigure, _, _, err := w.resolveHandlerSettingsLocked(ctx, hc, profile)
 	if err != nil {
 		restoreProfileOverrides(w.overrides, profile, prevProfileOverrides, hadPrev)
+		w.reconfiguring = false
+		w.broadcastLocked()
+		w.configMu.Unlock()
 		return err
+	}
+	if w.client == nil || w.client.plugin == nil {
+		w.reconfiguring = false
+		w.broadcastLocked()
+		w.configMu.Unlock()
+		return nil
 	}
 
 	cfg := w.buildProviderConfig(hc, profile, rawForConfigure)
-	if err := w.client.ConfigureAuthHandler(ctx, w.handlerName, cfg); err != nil {
+	w.configMu.Unlock()
+
+	cfgErr := w.client.ConfigureAuthHandler(ctx, w.handlerName, cfg)
+
+	w.configMu.Lock()
+	w.reconfiguring = false
+	if cfgErr != nil {
 		restoreProfileOverrides(w.overrides, profile, prevProfileOverrides, hadPrev)
-		return err
+		w.broadcastLocked()
+		w.configMu.Unlock()
+		return cfgErr
 	}
-	w.configured = true
-	w.configuredProfile = profile
-	w.configuredSettingsRaw = bytes.Clone(rawForConfigure)
+	w.recordConfiguredLocked(profile, rawForConfigure)
+	w.broadcastLocked()
+	w.configMu.Unlock()
 	return nil
 }
 
@@ -532,64 +568,177 @@ func (w *AuthHandlerWrapper) resolveEffectiveProfile(ctx context.Context) (conte
 	return finalize(ctx, "")
 }
 
-// prepareCall resolves the per-call profile and handler settings, re-sending
+// beginCall resolves the per-call profile and handler settings, re-sending
 // ConfigureAuthHandler when the target profile or effective settings differ
-// from what the plugin last received (for stateful/legacy plugins) and
-// attaching stateless per-RPC settings to ctx and the returned map (for SDK
-// v0.19.0+ plugins).
-func (w *AuthHandlerWrapper) prepareCall(ctx context.Context) (context.Context, map[string]json.RawMessage, error) {
+// from what the plugin last received (for stateful/legacy plugins), attaching
+// stateless per-RPC settings to ctx and the returned map (for SDK v0.19.0+
+// plugins), and holding an active-call slot until the returned release func is
+// called so concurrent requests for another profile cannot reconfigure a
+// stateful plugin mid-RPC. Calls sharing the same profile and settings run
+// concurrently.
+func (w *AuthHandlerWrapper) beginCall(ctx context.Context) (context.Context, map[string]json.RawMessage, func(), error) {
 	ctx, profile, err := w.resolveEffectiveProfile(ctx)
 	if err != nil {
-		return ctx, nil, err
+		return ctx, nil, nil, err
 	}
 	hc := w.getHostConfig()
 
 	var perCallSettings map[string]json.RawMessage
-	if err := func() error {
-		w.configMu.Lock()
-		defer w.configMu.Unlock()
-
-		// In server mode (scafctl serve), ActivateServerMode owns the plugin's
-		// confidential credentials; never clobber them with CLI settings.
-		if w.serverMode {
-			return nil
-		}
-
-		rawForConfigure, rpcSettings, hasConfigSource, err := w.resolveHandlerSettingsLocked(ctx, hc, profile)
-		if err != nil {
-			return err
-		}
-		perCallSettings = rpcSettings
-
-		if w.client == nil || w.client.plugin == nil {
-			return nil
-		}
-		if !hasConfigSource {
-			if !w.configured || w.configuredProfile == profile {
-				return nil
-			}
-		}
-		if w.configured && w.configuredProfile == profile && bytes.Equal(w.configuredSettingsRaw, rawForConfigure) {
-			return nil
-		}
-
-		cfg := w.buildProviderConfig(hc, profile, rawForConfigure)
-		if err := w.client.ConfigureAuthHandler(ctx, w.handlerName, cfg); err != nil {
-			return fmt.Errorf("plugin auth handler %s configure for profile %q: %w",
-				w.handlerName, auth.DisplayProfileName(profile), err)
-		}
-		w.configured = true
-		w.configuredProfile = profile
-		w.configuredSettingsRaw = bytes.Clone(rawForConfigure)
-		return nil
-	}(); err != nil {
-		return ctx, nil, err
+	release, err := w.acquireCallSlot(ctx, hc, profile, &perCallSettings)
+	if err != nil {
+		return ctx, nil, nil, err
 	}
 
 	if perCallSettings != nil {
 		ctx = WithRequestSettings(ctx, cloneSettingsMap(perCallSettings))
 	}
-	return ctx, perCallSettings, nil
+	return ctx, perCallSettings, release, nil
+}
+
+func (w *AuthHandlerWrapper) acquireCallSlot(
+	ctx context.Context,
+	hc hostConfig,
+	profile string,
+	perCallSettings *map[string]json.RawMessage,
+) (func(), error) {
+	w.configMu.Lock()
+	for {
+		// In server mode (scafctl serve), ActivateServerMode owns the plugin's
+		// confidential credentials; never clobber them with CLI settings.
+		if w.serverMode && !w.reconfiguring {
+			w.configMu.Unlock()
+			return func() {}, nil
+		}
+
+		rawForConfigure, rpcSettings, hasConfigSource, err := w.resolveHandlerSettingsLocked(ctx, hc, profile)
+		if err != nil {
+			w.configMu.Unlock()
+			return nil, err
+		}
+
+		needsReconfig := w.needsConfigureLocked(profile, rawForConfigure, hasConfigSource)
+		if !needsReconfig && !w.reconfiguring && w.writersWaiting == 0 && (w.inFlight == 0 || w.inFlightProfile == profile) {
+			*perCallSettings = rpcSettings
+			w.inFlight++
+			w.inFlightProfile = profile
+			w.configMu.Unlock()
+			return w.releaseCallSlotOnce(), nil
+		}
+
+		if needsReconfig && !w.reconfiguring && w.inFlight == 0 {
+			w.reconfiguring = true
+			cfg := w.buildProviderConfig(hc, profile, rawForConfigure)
+			w.configMu.Unlock()
+
+			cfgErr := w.client.ConfigureAuthHandler(ctx, w.handlerName, cfg)
+
+			w.configMu.Lock()
+			w.reconfiguring = false
+			if cfgErr != nil {
+				w.broadcastLocked()
+				w.configMu.Unlock()
+				return nil, fmt.Errorf("plugin auth handler %s configure for profile %q: %w",
+					w.handlerName, auth.DisplayProfileName(profile), cfgErr)
+			}
+			w.recordConfiguredLocked(profile, rawForConfigure)
+			*perCallSettings = rpcSettings
+			w.inFlight++
+			w.inFlightProfile = profile
+			w.broadcastLocked()
+			w.configMu.Unlock()
+			return w.releaseCallSlotOnce(), nil
+		}
+
+		countedWriter := needsReconfig || (w.inFlight > 0 && w.inFlightProfile != profile)
+		if countedWriter {
+			w.writersWaiting++
+		}
+		waitCh := w.waitChanLocked()
+		w.configMu.Unlock()
+
+		select {
+		case <-waitCh:
+			w.configMu.Lock()
+			if countedWriter {
+				w.writersWaiting--
+			}
+		case <-ctx.Done():
+			w.configMu.Lock()
+			if countedWriter {
+				w.writersWaiting--
+				w.broadcastLocked()
+			}
+			w.configMu.Unlock()
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (w *AuthHandlerWrapper) needsConfigureLocked(profile string, rawForConfigure json.RawMessage, hasConfigSource bool) bool {
+	if w.client == nil || w.client.plugin == nil {
+		return false
+	}
+	var normalizedRaw []byte
+	if len(rawForConfigure) > 0 && string(rawForConfigure) != "{}" {
+		normalizedRaw = rawForConfigure
+	}
+	if !hasConfigSource {
+		return w.configured && (w.configuredProfile != profile || !bytes.Equal(w.configuredSettingsRaw, normalizedRaw))
+	}
+	if !w.configured {
+		return true
+	}
+	return w.configuredProfile != profile || !bytes.Equal(w.configuredSettingsRaw, normalizedRaw)
+}
+
+func (w *AuthHandlerWrapper) releaseCallSlotOnce() func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			w.configMu.Lock()
+			w.inFlight--
+			if w.inFlight == 0 {
+				w.inFlightProfile = ""
+				w.broadcastLocked()
+			}
+			w.configMu.Unlock()
+		})
+	}
+}
+
+func (w *AuthHandlerWrapper) acquireExclusiveReconfigLocked(ctx context.Context) error {
+	for w.reconfiguring || w.inFlight > 0 {
+		w.writersWaiting++
+		waitCh := w.waitChanLocked()
+		w.configMu.Unlock()
+
+		select {
+		case <-waitCh:
+			w.configMu.Lock()
+			w.writersWaiting--
+		case <-ctx.Done():
+			w.configMu.Lock()
+			w.writersWaiting--
+			w.broadcastLocked()
+			return ctx.Err()
+		}
+	}
+	w.reconfiguring = true
+	return nil
+}
+
+func (w *AuthHandlerWrapper) waitChanLocked() chan struct{} {
+	if w.waitCh == nil {
+		w.waitCh = make(chan struct{})
+	}
+	return w.waitCh
+}
+
+func (w *AuthHandlerWrapper) broadcastLocked() {
+	if w.waitCh != nil {
+		close(w.waitCh)
+		w.waitCh = nil
+	}
 }
 
 // resolveHandlerSettingsLocked computes the resolved JSON settings for profile
@@ -784,6 +933,9 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 				AuthCallbackPages: cfg.AuthCallbackPages,
 				BaseSettings:      cloneSettingsMap(cfg.Settings),
 			})
+			// Mark reconfiguring before registration so concurrent callers
+			// obtaining wrapper from registry wait until initial configuration completes.
+			wrapper.reconfiguring = true
 		}
 
 		if err := registry.Register(wrapper); err != nil {
@@ -794,24 +946,23 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 		registered = append(registered, info.Name)
 
 		// Configure only after successful registration so secrets are
-		// never sent to a plugin that won't actually be used. Hold configMu
-		// so concurrent callers obtaining wrapper from registry cannot race
-		// with initial ConfigureAuthHandler.
+		// never sent to a plugin that won't actually be used.
 		if cfg != nil {
+			hostCfg := *cfg
+			hostCfg.Settings = maps.Clone(cfg.Settings)
+			hostCfg.HostServiceID = client.HostServiceID()
+			injectAuthHandlerSettings(ctx, info.Name, &hostCfg)
+			cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg)
 			wrapper.configMu.Lock()
-			if !wrapper.configured {
-				hostCfg := *cfg
-				hostCfg.Settings = maps.Clone(cfg.Settings)
-				hostCfg.HostServiceID = client.HostServiceID()
-				injectAuthHandlerSettings(ctx, info.Name, &hostCfg)
-				if cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg); cfgErr != nil {
-					lgr.Info("failed to configure auth handler plugin",
-						"handler", info.Name,
-						"error", cfgErr)
-				} else {
-					wrapper.recordConfiguredLocked(hostCfg.Profile, hostCfg.Settings[info.Name])
-				}
+			wrapper.reconfiguring = false
+			if cfgErr != nil {
+				lgr.Info("failed to configure auth handler plugin",
+					"handler", info.Name,
+					"error", cfgErr)
+			} else {
+				wrapper.recordConfiguredLocked(hostCfg.Profile, hostCfg.Settings[info.Name])
 			}
+			wrapper.broadcastLocked()
 			wrapper.configMu.Unlock()
 		}
 	}
@@ -1041,12 +1192,22 @@ func KillAllAuthHandlers(clients []*AuthHandlerClient) {
 
 func (w *AuthHandlerWrapper) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
 	w.configMu.Lock()
-	defer w.configMu.Unlock()
-	if err := w.client.ActivateServerMode(ctx, settings); err != nil {
+	if err := w.acquireExclusiveReconfigLocked(ctx); err != nil {
+		w.configMu.Unlock()
 		return err
 	}
-	w.serverMode = true
-	return nil
+	w.configMu.Unlock()
+
+	err := w.client.ActivateServerMode(ctx, settings)
+
+	w.configMu.Lock()
+	w.reconfiguring = false
+	if err == nil {
+		w.serverMode = true
+	}
+	w.broadcastLocked()
+	w.configMu.Unlock()
+	return err
 }
 
 // willOpenBrowserOnLogin reports whether delegating Login to the plugin will

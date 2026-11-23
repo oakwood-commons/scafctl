@@ -131,12 +131,14 @@ func ResetProfileResolution(ctx context.Context) context.Context {
 }
 
 // NormalizeProfileName maps the reserved names "built-in" and "default" to the
-// internal empty string representation. All other names are returned as-is.
+// internal empty string representation, and canonicalizes named profiles to
+// lowercase so CLI flags, secret keys, and Viper-persisted config keys share
+// one case-insensitive identity.
 func NormalizeProfileName(name string) string {
 	if isReservedProfileName(name) {
 		return ""
 	}
-	return name
+	return strings.ToLower(name)
 }
 
 // DisplayProfileName returns the display name for a profile.

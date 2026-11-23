@@ -1425,6 +1425,12 @@ func TestGenericHandlerProfiles(t *testing.T) {
 		t.Parallel()
 		cfg := &config.Config{
 			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{
+					ActiveProfile: "myWork",
+					Profiles: map[string]*config.EntraProfileConfig{
+						"mywork": {ClientID: "entra-work-client"},
+					},
+				},
 				Handlers: map[string]config.HandlerConfig{
 					"openshift": {
 						ActiveProfile: "myWork",
@@ -1435,8 +1441,23 @@ func TestGenericHandlerProfiles(t *testing.T) {
 				},
 			},
 		}
+		ctx := config.WithConfig(context.Background(), cfg)
+		assert.Equal(t, "mywork", ConfigActiveProfile(ctx, "entra"))
+		assert.Equal(t, "mywork", ConfigActiveProfile(ctx, "openshift"))
+		assert.Equal(t, []string{"mywork"}, ListConfiguredProfiles(ctx, "entra"))
+		assert.Equal(t, []string{"mywork"}, ListConfiguredProfiles(ctx, "openshift"))
+		assert.Equal(t, "entra-work-client", ResolveEntraConfig(cfg.Auth.Entra, "myWork").ClientID)
+
+		EnsureProfileRegistered(cfg, "entra", "myWork")
 		EnsureProfileRegistered(cfg, "openshift", "myWork")
+		assert.Len(t, cfg.Auth.Entra.Profiles, 1, "must not duplicate case-variant profile key")
 		assert.Len(t, cfg.Auth.Handlers["openshift"].Profiles, 1, "must not duplicate case-variant profile key")
+
+		foundEntra, err := DeleteProfile(cfg, "entra", "myWork")
+		assert.NoError(t, err)
+		assert.True(t, foundEntra)
+		assert.Empty(t, cfg.Auth.Entra.ActiveProfile)
+		assert.Empty(t, cfg.Auth.Entra.Profiles)
 
 		found, err := DeleteProfile(cfg, "openshift", "myWork")
 		assert.NoError(t, err)

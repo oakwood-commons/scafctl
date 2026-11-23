@@ -1277,6 +1277,7 @@ func (h *Handler) secretKey(suffix string) string {
 // If profile is empty, falls back to the default (no profile) key.
 // Pattern: scafctl.auth.oauth2.<handler>.<profile>.<suffix>
 func (h *Handler) secretKeyWithProfile(profile, suffix string) string {
+	profile = auth.NormalizeProfileName(profile)
 	if profile == "" {
 		return h.secretKey(suffix)
 	}
@@ -1291,6 +1292,7 @@ func (h *Handler) profileSecretKey(ctx context.Context, suffix string) string {
 
 // tokenCacheForProfile returns the token cache prefix for the given profile.
 func (h *Handler) tokenCacheForProfile(profile string) string {
+	profile = auth.NormalizeProfileName(profile)
 	if profile == "" {
 		return h.secretKeyPrefix + h.cfg.Name + "." + tokenCacheSuffix
 	}

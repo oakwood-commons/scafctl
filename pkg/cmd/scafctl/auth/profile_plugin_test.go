@@ -622,3 +622,64 @@ auth:
 	assert.Equal(t, "work", ocpFake.rpcCalls[0].profile)
 	assert.Equal(t, float64(60), ocpFake.rpcCalls[0].settings["apitimeout"])
 }
+
+func TestMixedCaseProfileSaveReloadStatusAndDelete(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("version: 1\n"), 0o600))
+
+	initialCfg, err := config.NewManager(configPath).Load()
+	require.NoError(t, err)
+
+	ocpWrapper, ocpFake := newFakePluginHandler("openshift", nil, []auth.Flow{auth.FlowInteractive})
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(ocpWrapper))
+
+	ctx, buf := newTestContext(t)
+	ctx = auth.WithRegistry(config.WithConfig(ctx, initialCfg), reg)
+
+	// 1. Login with mixed-case --profile myWork; credentials and registered config key
+	// must share one canonical lowercase identity ("mywork") across Viper save/reload.
+	loginCmd := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+	loginCmd.Root().PersistentFlags().String("config", configPath, "")
+	loginCmd.SetContext(ctx)
+	loginCmd.SetArgs([]string{"openshift", "--profile", "myWork", "--flow", "interactive"})
+	require.NoError(t, loginCmd.Execute())
+	assert.True(t, ocpFake.authenticated["mywork"], "login must store credentials under canonical lowercase profile")
+	assert.False(t, ocpFake.authenticated["myWork"], "mixed-case credential namespace must not diverge from Viper key")
+
+	// 2. Reload config through Viper and run unfiltered auth status -- must discover "mywork" as authenticated.
+	reloadedCfg, err := config.NewManager(configPath).Load()
+	require.NoError(t, err)
+	assert.Contains(t, reloadedCfg.Auth.Handlers["openshift"].Profiles, "mywork")
+
+	buf.Reset()
+	reloadCtx := auth.WithRegistry(config.WithConfig(ctx, reloadedCfg), reg)
+	statusCmd := CommandStatus(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+	statusCmd.SetContext(reloadCtx)
+	statusCmd.SetArgs([]string{"openshift", "-o", "json"})
+	require.NoError(t, statusCmd.Execute())
+
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
+	var foundMyWork bool
+	for _, r := range rows {
+		if r["profile"] == "mywork" && r["authenticated"] == true {
+			foundMyWork = true
+		}
+	}
+	assert.True(t, foundMyWork, "unfiltered auth status after Viper reload must find authenticated mywork session")
+
+	// 3. Delete profile (using reloaded lowercase or mixed-case spelling) -- must clear both config and credentials.
+	buf.Reset()
+	delCmd := CommandProfileDelete(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+	delCmd.Root().PersistentFlags().String("config", configPath, "")
+	delCmd.SetContext(reloadCtx)
+	delCmd.SetArgs([]string{"openshift", "mywork"})
+	require.NoError(t, delCmd.Execute())
+
+	assert.False(t, ocpFake.authenticated["mywork"], "profile delete must clear stored credentials")
+	afterDelCfg, err := config.NewManager(configPath).Load()
+	require.NoError(t, err)
+	assert.NotContains(t, afterDelCfg.Auth.Handlers["openshift"].Profiles, "mywork")
+}

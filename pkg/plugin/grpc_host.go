@@ -26,8 +26,14 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+// authProfileMetadataKey carries the execution auth profile (including an
+// explicit "default" marker) across HostService RPCs whose proto message lacks
+// a dedicated profile field (such as GetAuthIdentityRequest in SDK v0.19.0).
+const authProfileMetadataKey = "x-plugin-auth-profile"
 
 // secretNameMaxLen is the maximum allowed length for a secret name.
 const secretNameMaxLen = 256
@@ -116,16 +122,42 @@ type HostServiceDeps struct {
 }
 
 type brokerTrackerSlot struct {
-	mu                sync.Mutex
-	activeRoot        *redact.Tracker
-	activePlaceholder bool
-	activeList        []*redact.Tracker
-	activeCount       int
-	waitCh            chan struct{}
+	mu                   sync.Mutex
+	activeRoot           *redact.Tracker
+	activePlaceholder    bool
+	activeAuthProfile    string
+	activeHasAuthProfile bool
+	activeList           []*redact.Tracker
+	activeCount          int
+	waitCh               chan struct{}
 }
 
 func newBrokerTrackerSlot() *brokerTrackerSlot {
 	return &brokerTrackerSlot{}
+}
+
+func encodeContextAuthProfile(ctx context.Context) (string, bool) {
+	if p := auth.ProfileFromContext(ctx); p != "" {
+		return p, true
+	}
+	if auth.IsProfileResolved(ctx) {
+		return auth.DefaultProfileName, true
+	}
+	return "", false
+}
+
+func incomingMetadataAuthProfile(ctx context.Context) (string, bool) {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if vals := md.Get(authProfileMetadataKey); len(vals) > 0 && vals[0] != "" {
+			return vals[0], true
+		}
+	}
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		if vals := md.Get(authProfileMetadataKey); len(vals) > 0 && vals[0] != "" {
+			return vals[0], true
+		}
+	}
+	return "", false
 }
 
 func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker) (func(), error) {
@@ -133,8 +165,9 @@ func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker
 		return func() {}, nil
 	}
 	placeholder := spec.IsPlaceholderCredentialResolver(ctx)
+	execProfile, hasExecProfile := encodeContextAuthProfile(ctx)
 	if tracker == nil {
-		if !placeholder {
+		if !placeholder && !hasExecProfile {
 			return func() {}, nil
 		}
 		tracker = redact.NewTracker()
@@ -142,9 +175,11 @@ func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker
 	root := tracker.Root()
 	for {
 		s.mu.Lock()
-		if s.activeCount == 0 || (s.activeRoot == root && s.activePlaceholder == placeholder) {
+		if s.activeCount == 0 || (s.activeRoot == root && s.activePlaceholder == placeholder && s.activeAuthProfile == execProfile && s.activeHasAuthProfile == hasExecProfile) {
 			s.activeRoot = root
 			s.activePlaceholder = placeholder
+			s.activeAuthProfile = execProfile
+			s.activeHasAuthProfile = hasExecProfile
 			s.activeCount++
 			s.activeList = append(s.activeList, tracker)
 			if s.waitCh == nil {
@@ -166,6 +201,8 @@ func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker
 					if s.activeCount == 0 {
 						s.activeRoot = nil
 						s.activePlaceholder = false
+						s.activeAuthProfile = ""
+						s.activeHasAuthProfile = false
 						if s.waitCh != nil {
 							close(s.waitCh)
 							s.waitCh = nil
@@ -195,8 +232,27 @@ func (s *brokerTrackerSlot) isPlaceholder() bool {
 	return s.activeCount > 0 && s.activePlaceholder
 }
 
+func (s *brokerTrackerSlot) activeProfile() (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeCount == 0 || !s.activeHasAuthProfile {
+		return "", false
+	}
+	return s.activeAuthProfile, true
+}
+
 func (d *HostServiceDeps) isPlaceholderMode() bool {
 	return d != nil && d.trackerSlot.isPlaceholder()
+}
+
+func (d *HostServiceDeps) activeExecutionProfile() (string, bool) {
+	if d == nil {
+		return "", false
+	}
+	return d.trackerSlot.activeProfile()
 }
 
 func (s *brokerTrackerSlot) track(secret string) {
@@ -447,6 +503,65 @@ func (h *HostServiceServer) ListSecrets(ctx context.Context, req *proto.ListSecr
 	}, nil
 }
 
+// resolveHostAuthCallback selects the default handler when requestedHandler is
+// empty (via AuthHandlersFunc) before resolving the effective auth profile.
+// Profile precedence:
+//  1. Explicit request field (including "default" / "built-in" markers)
+//  2. Incoming gRPC metadata (for RPCs without a proto profile field)
+//  3. Active provider execution profile captured on trackerSlot
+//  4. Host ProfileResolverFunc(effectiveHandler)
+func (h *HostServiceServer) resolveHostAuthCallback(
+	ctx context.Context,
+	requestedHandler string,
+	explicitProfile string,
+) (context.Context, string, error) {
+	effectiveHandler := requestedHandler
+	if effectiveHandler == "" && h.Deps.AuthHandlersFunc != nil {
+		if _, defaultHandler, err := h.Deps.AuthHandlersFunc(ctx); err == nil && defaultHandler != "" {
+			effectiveHandler = defaultHandler
+		}
+	}
+
+	var (
+		rawProfile string
+		resolved   bool
+	)
+	switch {
+	case explicitProfile != "":
+		rawProfile = explicitProfile
+		resolved = true
+	default:
+		if mdProfile, ok := incomingMetadataAuthProfile(ctx); ok {
+			rawProfile = mdProfile
+			resolved = true
+		} else if execProfile, ok := h.Deps.activeExecutionProfile(); ok {
+			rawProfile = execProfile
+			resolved = true
+		} else if h.Deps.ProfileResolverFunc != nil {
+			rawProfile = h.Deps.ProfileResolverFunc(effectiveHandler)
+			resolved = effectiveHandler != "" || rawProfile != ""
+		}
+	}
+
+	if resolved {
+		profile := auth.NormalizeProfileName(rawProfile)
+		if profile != "" {
+			if err := auth.ValidateProfileName(profile); err != nil {
+				return ctx, effectiveHandler, err
+			}
+		}
+		// Mark profile as resolved even when normalized to "" (built-in/default)
+		// so downstream handlers do not fall back to HostConfig activeProfile.
+		ctx = auth.WithProfile(ctx, profile)
+		ctx = auth.WithProfileResolved(ctx)
+	}
+
+	if h.Deps.HostConfig != nil && config.FromContext(ctx) == nil {
+		ctx = config.WithConfig(ctx, h.Deps.HostConfig)
+	}
+	return ctx, effectiveHandler, nil
+}
+
 // GetAuthIdentity implements HostService.GetAuthIdentity
 func (h *HostServiceServer) GetAuthIdentity(ctx context.Context, req *proto.GetAuthIdentityRequest) (*proto.GetAuthIdentityResponse, error) {
 	if h.Deps.AuthIdentityFunc == nil {
@@ -461,23 +576,14 @@ func (h *HostServiceServer) GetAuthIdentity(ctx context.Context, req *proto.GetA
 		}, nil
 	}
 
-	if h.Deps.ProfileResolverFunc != nil {
-		profile := auth.NormalizeProfileName(h.Deps.ProfileResolverFunc(req.HandlerName))
-		if profile != "" {
-			if err := auth.ValidateProfileName(profile); err != nil {
-				return &proto.GetAuthIdentityResponse{
-					Error: fmt.Sprintf("invalid profile: %v", err),
-				}, nil
-			}
-		}
-		ctx = auth.WithProfile(ctx, profile)
-		ctx = auth.WithProfileResolved(ctx)
-	}
-	if h.Deps.HostConfig != nil && config.FromContext(ctx) == nil {
-		ctx = config.WithConfig(ctx, h.Deps.HostConfig)
+	ctx, handlerName, err := h.resolveHostAuthCallback(ctx, req.HandlerName, "")
+	if err != nil {
+		return &proto.GetAuthIdentityResponse{
+			Error: fmt.Sprintf("invalid profile: %v", err),
+		}, nil
 	}
 
-	claims, err := h.Deps.AuthIdentityFunc(ctx, req.HandlerName, req.Scope)
+	claims, err := h.Deps.AuthIdentityFunc(ctx, handlerName, req.Scope)
 	if err != nil {
 		return &proto.GetAuthIdentityResponse{
 			Error: fmt.Sprintf("get auth identity: %v", err),
@@ -547,28 +653,11 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 		}, nil
 	}
 
-	// Inject profile into context so downstream token acquisition uses the
-	// correct profile-scoped credentials.
-	profile := req.Profile
-	resolved := req.Profile != ""
-	if profile == "" && h.Deps.ProfileResolverFunc != nil {
-		profile = h.Deps.ProfileResolverFunc(req.HandlerName)
-		resolved = true
-	}
-	if resolved {
-		profile = auth.NormalizeProfileName(profile)
-		if profile != "" {
-			if err := auth.ValidateProfileName(profile); err != nil {
-				return &proto.GetAuthTokenResponse{
-					Error: fmt.Sprintf("invalid profile from plugin: %v", err),
-				}, nil
-			}
-		}
-		// Mark profile as resolved even when normalized to "" (built-in/default).
-		// This prevents downstream GetToken from re-resolving the active profile
-		// from HostConfig, which would override an explicit built-in selection.
-		ctx = auth.WithProfile(ctx, profile)
-		ctx = auth.WithProfileResolved(ctx)
+	ctx, handlerName, profileErr := h.resolveHostAuthCallback(ctx, req.HandlerName, req.Profile)
+	if profileErr != nil {
+		return &proto.GetAuthTokenResponse{
+			Error: fmt.Sprintf("invalid profile from plugin: %v", profileErr),
+		}, nil
 	}
 
 	if placeholder {
@@ -582,23 +671,19 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 		}, nil
 	}
 
-	if h.Deps.HostConfig != nil && config.FromContext(ctx) == nil {
-		ctx = config.WithConfig(ctx, h.Deps.HostConfig)
-	}
-
 	var (
 		resp *proto.GetAuthTokenResponse
 		err  error
 	)
 	switch {
 	case h.Deps.AuthTokenWithHostnameFunc != nil:
-		resp, err = h.Deps.AuthTokenWithHostnameFunc(ctx, req.HandlerName, req.Scope, req.Hostname, req.MinValidForSeconds, req.ForceRefresh)
+		resp, err = h.Deps.AuthTokenWithHostnameFunc(ctx, handlerName, req.Scope, req.Hostname, req.MinValidForSeconds, req.ForceRefresh)
 	case req.Hostname != "":
 		return &proto.GetAuthTokenResponse{
 			Error: "auth token service does not support hostname selection",
 		}, nil
 	default:
-		resp, err = h.Deps.AuthTokenFunc(ctx, req.HandlerName, req.Scope, req.MinValidForSeconds, req.ForceRefresh)
+		resp, err = h.Deps.AuthTokenFunc(ctx, handlerName, req.Scope, req.MinValidForSeconds, req.ForceRefresh)
 	}
 	if err != nil {
 		return &proto.GetAuthTokenResponse{
@@ -626,7 +711,14 @@ func (h *HostServiceServer) GetAuthGroups(ctx context.Context, req *proto.GetAut
 		}, nil
 	}
 
-	groups, err := h.Deps.AuthGroupsFunc(ctx, req.HandlerName)
+	ctx, handlerName, profileErr := h.resolveHostAuthCallback(ctx, req.HandlerName, req.Profile)
+	if profileErr != nil {
+		return &proto.GetAuthGroupsResponse{
+			Error: fmt.Sprintf("invalid profile: %v", profileErr),
+		}, nil
+	}
+
+	groups, err := h.Deps.AuthGroupsFunc(ctx, handlerName)
 	if err != nil {
 		return &proto.GetAuthGroupsResponse{
 			Error: fmt.Sprintf("get auth groups: %v", err),
@@ -878,8 +970,13 @@ func (c *HostServiceClient) ListSecrets(ctx context.Context, pattern string) ([]
 	return resp.Names, nil
 }
 
-// GetAuthIdentity retrieves identity claims from the host's auth registry.
+// GetAuthIdentity retrieves identity claims from the host's auth registry,
+// forwarding the execution auth profile (including explicit default selection)
+// via gRPC metadata.
 func (c *HostServiceClient) GetAuthIdentity(ctx context.Context, handler, scope string) (*proto.Claims, error) {
+	if encoded, ok := encodeContextAuthProfile(ctx); ok {
+		ctx = metadata.AppendToOutgoingContext(ctx, authProfileMetadataKey, encoded)
+	}
 	resp, err := c.client.GetAuthIdentity(ctx, &proto.GetAuthIdentityRequest{
 		HandlerName: handler,
 		Scope:       scope,
@@ -924,11 +1021,13 @@ func (c *HostServiceClient) GetAuthToken(ctx context.Context, handler, scope str
 
 // GetAuthTokenWithOptions retrieves a valid access token from the host's auth
 // registry using structured options, including optional per-instance Hostname
-// and Profile override (falling back to auth.ProfileFromContext(ctx)).
+// and Profile override (falling back to the context auth profile).
 func (c *HostServiceClient) GetAuthTokenWithOptions(ctx context.Context, opts AuthTokenRequest) (*proto.GetAuthTokenResponse, error) {
 	profile := opts.Profile
 	if profile == "" {
-		profile = auth.ProfileFromContext(ctx)
+		if encoded, ok := encodeContextAuthProfile(ctx); ok {
+			profile = encoded
+		}
 	}
 	resp, err := c.client.GetAuthToken(ctx, &proto.GetAuthTokenRequest{
 		HandlerName:        opts.Handler,
@@ -948,10 +1047,12 @@ func (c *HostServiceClient) GetAuthTokenWithOptions(ctx context.Context, opts Au
 }
 
 // GetAuthGroups retrieves group memberships for the authenticated user from
-// the host's auth registry.
+// the host's auth registry, forwarding the context auth profile.
 func (c *HostServiceClient) GetAuthGroups(ctx context.Context, handler string) ([]string, error) {
+	profile, _ := encodeContextAuthProfile(ctx)
 	resp, err := c.client.GetAuthGroups(ctx, &proto.GetAuthGroupsRequest{
 		HandlerName: handler,
+		Profile:     profile,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("host GetAuthGroups: %w", err)

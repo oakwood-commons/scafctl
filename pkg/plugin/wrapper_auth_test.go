@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -1039,6 +1040,18 @@ func (c *concurrentWireServiceClient) DetectAvailableFlows(ctx context.Context, 
 	return c.server.DetectAvailableFlows(ctx, req)
 }
 
+func (c *concurrentWireServiceClient) Logout(ctx context.Context, req *proto.LogoutRequest, _ ...grpc.CallOption) (*proto.LogoutResponse, error) {
+	return c.server.Logout(ctx, req)
+}
+
+func (c *concurrentWireServiceClient) ListCachedTokens(ctx context.Context, req *proto.ListCachedTokensRequest, _ ...grpc.CallOption) (*proto.ListCachedTokensResponse, error) {
+	return c.server.ListCachedTokens(ctx, req)
+}
+
+func (c *concurrentWireServiceClient) PurgeExpiredTokens(ctx context.Context, req *proto.PurgeExpiredTokensRequest, _ ...grpc.CallOption) (*proto.PurgeExpiredTokensResponse, error) {
+	return c.server.PurgeExpiredTokens(ctx, req)
+}
+
 func TestAuthHandlerWrapper_ServerModeProtectsCredentialsAndConfigLessCtxPreservesStartup(t *testing.T) {
 	t.Parallel()
 
@@ -1201,5 +1214,389 @@ func TestAuthHandlerWrapper_ServerModeProtectsCredentialsAndConfigLessCtxPreserv
 		execReq, err := buildExecuteProviderRequest(execCtx, "http", []byte(`{"url":"https://example.com"}`))
 		require.NoError(t, err)
 		assert.Equal(t, auth.DefaultProfileName, execReq.AuthProfile, "explicit built-in profile must serialize as default on ExecuteProviderRequest")
+	})
+}
+
+// blockingStatefulAuthPlugin simulates a legacy stateful auth plugin that
+// ignores per-request Settings and reads only the state stored during
+// ConfigureAuthHandler. Optional hooks block an in-flight RPC so tests can
+// deterministically interleave concurrent profile switches.
+type blockingStatefulAuthPlugin struct {
+	mu                sync.Mutex
+	configuredProfile string
+	configuredClient  string
+	configuredTenant  string
+	loggedOutProfiles []string
+
+	onEnterWorkToken chan struct{}
+	unblockWorkToken chan struct{}
+	sameProfBarrier  chan struct{}
+}
+
+func (p *blockingStatefulAuthPlugin) GetAuthHandlers(_ context.Context) ([]AuthHandlerInfo, error) {
+	return []AuthHandlerInfo{{Name: "entra", DisplayName: "Entra"}}, nil
+}
+
+func (p *blockingStatefulAuthPlugin) ConfigureAuthHandler(_ context.Context, handlerName string, cfg ProviderConfig) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.configuredProfile = cfg.Profile
+	p.configuredClient = ""
+	p.configuredTenant = ""
+	if raw, ok := cfg.Settings[handlerName]; ok && len(raw) > 0 {
+		var m map[string]string
+		_ = json.Unmarshal(raw, &m)
+		p.configuredClient = m["clientId"]
+		p.configuredTenant = m["tenantId"]
+	}
+	return nil
+}
+
+func (p *blockingStatefulAuthPlugin) snapshotState() (profile, clientID, tenantID string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.configuredProfile, p.configuredClient, p.configuredTenant
+}
+
+func (p *blockingStatefulAuthPlugin) Login(_ context.Context, _ string, _ LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+	prof, clientID, _ := p.snapshotState()
+	return &LoginResponse{Claims: &auth.Claims{Subject: prof + ":" + clientID}, ExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+
+func (p *blockingStatefulAuthPlugin) Logout(_ context.Context, _ string, _ LogoutRequest) error {
+	prof, clientID, _ := p.snapshotState()
+	p.mu.Lock()
+	p.loggedOutProfiles = append(p.loggedOutProfiles, prof+":"+clientID)
+	p.mu.Unlock()
+	return nil
+}
+
+func (p *blockingStatefulAuthPlugin) GetStatus(_ context.Context, _ string, _ StatusRequest) (*auth.Status, error) {
+	_, clientID, tenantID := p.snapshotState()
+	return &auth.Status{Authenticated: true, ClientID: clientID, TenantID: tenantID}, nil
+}
+
+func (p *blockingStatefulAuthPlugin) GetToken(ctx context.Context, _ string, _ TokenRequest) (*TokenResponse, error) {
+	profBefore, clientBefore, tenantBefore := p.snapshotState()
+	if profBefore == "work" && p.onEnterWorkToken != nil {
+		select {
+		case p.onEnterWorkToken <- struct{}{}:
+		default:
+		}
+		select {
+		case <-p.unblockWorkToken:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if p.sameProfBarrier != nil {
+		p.sameProfBarrier <- struct{}{}
+		<-p.unblockWorkToken
+	}
+	profAfter, clientAfter, tenantAfter := p.snapshotState()
+	return &TokenResponse{
+		AccessToken: fmt.Sprintf("%s:%s:%s|%s:%s:%s", profBefore, clientBefore, tenantBefore, profAfter, clientAfter, tenantAfter),
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}, nil
+}
+
+func (p *blockingStatefulAuthPlugin) ListCachedTokens(_ context.Context, _ string) ([]*auth.CachedTokenInfo, error) {
+	prof, clientID, _ := p.snapshotState()
+	return []*auth.CachedTokenInfo{{Flow: auth.Flow(prof + ":" + clientID)}}, nil
+}
+
+func (p *blockingStatefulAuthPlugin) PurgeExpiredTokens(_ context.Context, _ string) (int, error) {
+	prof, _, _ := p.snapshotState()
+	if prof == "prod" {
+		return 2, nil
+	}
+	return 1, nil
+}
+
+func (p *blockingStatefulAuthPlugin) DetectAvailableFlows(_ context.Context, _ string) ([]FlowAvailability, error) {
+	return nil, nil
+}
+
+func (p *blockingStatefulAuthPlugin) StopAuthHandler(_ context.Context, _ string) error {
+	return nil
+}
+
+func TestAuthHandlerWrapper_StatefulPluginConfigurationStability(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ClientID: "default-client",
+				TenantID: "default-tenant",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {ClientID: "work-client", TenantID: "work-tenant"},
+					"prod": {ClientID: "prod-client", TenantID: "prod-tenant"},
+				},
+			},
+		},
+	}
+	baseCtx := config.WithConfig(context.Background(), appCfg)
+	workCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, "work"))
+	prodCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, "prod"))
+
+	t.Run("cross-profile call waits until in-flight stateful RPC finishes", func(t *testing.T) {
+		t.Parallel()
+		enteredWork := make(chan struct{}, 1)
+		unblockWork := make(chan struct{})
+		stateful := &blockingStatefulAuthPlugin{
+			onEnterWorkToken: enteredWork,
+			unblockWorkToken: unblockWork,
+		}
+		grpcServer := &AuthHandlerGRPCServer{Impl: stateful}
+		wireSvc := &concurrentWireServiceClient{server: grpcServer}
+		wrapper := NewAuthHandlerWrapper(NewAuthHandlerClientFromPlugin(NewAuthHandlerGRPCClient(wireSvc)), AuthHandlerInfo{Name: "entra"})
+
+		type tokenResult struct {
+			tok *auth.Token
+			err error
+		}
+		workDone := make(chan tokenResult, 1)
+		go func() {
+			tok, err := wrapper.GetToken(workCtx, auth.TokenOptions{Scope: "api://app/.default"})
+			workDone <- tokenResult{tok: tok, err: err}
+		}()
+
+		<-enteredWork
+
+		// Launch concurrent prod GetToken and Logout while work GetToken is mid-flight.
+		prodDone := make(chan tokenResult, 1)
+		go func() {
+			tok, err := wrapper.GetToken(prodCtx, auth.TokenOptions{Scope: "api://app/.default"})
+			prodDone <- tokenResult{tok: tok, err: err}
+		}()
+		logoutDone := make(chan error, 1)
+		go func() {
+			logoutDone <- wrapper.Logout(prodCtx)
+		}()
+
+		// Wait until at least one writer registers on wrapper.writersWaiting so we
+		// prove prod is actively blocked on the in-flight work RPC rather than racing past it.
+		require.Eventually(t, func() bool {
+			wrapper.configMu.Lock()
+			defer wrapper.configMu.Unlock()
+			return wrapper.writersWaiting >= 1
+		}, 2*time.Second, 5*time.Millisecond)
+
+		// Cancel a third caller waiting on another profile and verify prompt cancellation.
+		cancelCtx, cancel := context.WithTimeout(prodCtx, 25*time.Millisecond)
+		defer cancel()
+		_, cancelErr := wrapper.ListCachedTokens(cancelCtx)
+		require.ErrorIs(t, cancelErr, context.DeadlineExceeded)
+
+		// Release the blocked work RPC; its configured state must still be work!
+		close(unblockWork)
+
+		workRes := <-workDone
+		require.NoError(t, workRes.err)
+		assert.Equal(t, "work:work-client:work-tenant|work:work-client:work-tenant", workRes.tok.AccessToken)
+
+		prodRes := <-prodDone
+		require.NoError(t, prodRes.err)
+		assert.Equal(t, "prod:prod-client:prod-tenant|prod:prod-client:prod-tenant", prodRes.tok.AccessToken)
+
+		require.NoError(t, <-logoutDone)
+		assert.Equal(t, []string{"prod:prod-client"}, stateful.loggedOutProfiles)
+
+		tokens, err := wrapper.ListCachedTokens(workCtx)
+		require.NoError(t, err)
+		require.Len(t, tokens, 1)
+		assert.Equal(t, auth.Flow("work:work-client"), tokens[0].Flow)
+
+		purged, err := wrapper.PurgeExpiredTokens(prodCtx)
+		require.NoError(t, err)
+		assert.Equal(t, 2, purged)
+	})
+
+	t.Run("same-profile calls execute concurrently without serializing", func(t *testing.T) {
+		t.Parallel()
+		barrier := make(chan struct{}, 2)
+		unblock := make(chan struct{})
+		stateful := &blockingStatefulAuthPlugin{
+			sameProfBarrier:  barrier,
+			unblockWorkToken: unblock,
+		}
+		grpcServer := &AuthHandlerGRPCServer{Impl: stateful}
+		wireSvc := &concurrentWireServiceClient{server: grpcServer}
+		wrapper := NewAuthHandlerWrapper(NewAuthHandlerClientFromPlugin(NewAuthHandlerGRPCClient(wireSvc)), AuthHandlerInfo{Name: "entra"})
+
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				tok, err := wrapper.GetToken(workCtx, auth.TokenOptions{})
+				require.NoError(t, err)
+				assert.Equal(t, "work:work-client:work-tenant|work:work-client:work-tenant", tok.AccessToken)
+			}()
+		}
+
+		// Both same-profile calls must reach GetToken concurrently before either finishes.
+		for range 2 {
+			select {
+			case <-barrier:
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for concurrent same-profile RPCs to overlap")
+			}
+		}
+		close(unblock)
+		wg.Wait()
+	})
+}
+
+type inProcHostServiceAdapter struct {
+	proto.HostServiceClient
+	server *HostServiceServer
+}
+
+func (a *inProcHostServiceAdapter) GetAuthIdentity(ctx context.Context, req *proto.GetAuthIdentityRequest, _ ...grpc.CallOption) (*proto.GetAuthIdentityResponse, error) {
+	return a.server.GetAuthIdentity(ctx, req)
+}
+
+func (a *inProcHostServiceAdapter) GetAuthToken(ctx context.Context, req *proto.GetAuthTokenRequest, _ ...grpc.CallOption) (*proto.GetAuthTokenResponse, error) {
+	return a.server.GetAuthToken(ctx, req)
+}
+
+func (a *inProcHostServiceAdapter) GetAuthGroups(ctx context.Context, req *proto.GetAuthGroupsRequest, _ ...grpc.CallOption) (*proto.GetAuthGroupsResponse, error) {
+	return a.server.GetAuthGroups(ctx, req)
+}
+
+func TestHostService_GetAuthIdentityAndDefaultHandlerResolution(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ActiveProfile: "work",
+				ClientID:      "default-client",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work":    {ClientID: "work-client"},
+					"staging": {ClientID: "staging-client"},
+				},
+			},
+		},
+	}
+
+	t.Run("GetAuthIdentity and GetAuthGroups forward staging and explicit default over ProfileResolverFunc", func(t *testing.T) {
+		t.Parallel()
+		var gotIdentityProfile string
+		var gotIdentityResolved bool
+		var gotGroupsProfile string
+		var gotGroupsResolved bool
+
+		slot := newBrokerTrackerSlot()
+		srv := &HostServiceServer{
+			Deps: HostServiceDeps{
+				HostConfig:  appCfg,
+				trackerSlot: slot,
+				AuthHandlersFunc: func(_ context.Context) ([]string, string, error) {
+					return []string{"entra"}, "entra", nil
+				},
+				ProfileResolverFunc: func(handlerName string) string {
+					return auth.ResolveActiveProfile(config.WithConfig(context.Background(), appCfg), handlerName)
+				},
+				AuthIdentityFunc: func(ctx context.Context, _, _ string) (*proto.Claims, error) {
+					gotIdentityProfile = auth.ProfileFromContext(ctx)
+					gotIdentityResolved = auth.IsProfileResolved(ctx)
+					return &proto.Claims{Subject: auth.DisplayProfileName(gotIdentityProfile)}, nil
+				},
+				AuthGroupsFunc: func(ctx context.Context, _ string) ([]string, error) {
+					gotGroupsProfile = auth.ProfileFromContext(ctx)
+					gotGroupsResolved = auth.IsProfileResolved(ctx)
+					return []string{auth.DisplayProfileName(gotGroupsProfile)}, nil
+				},
+			},
+		}
+		hostClient := &HostServiceClient{client: &inProcHostServiceAdapter{server: srv}}
+
+		// 1. HostServiceClient with staging profile in context overrides activeProfile "work".
+		stagingCtx := auth.WithProfile(context.Background(), "staging")
+		claims, err := hostClient.GetAuthIdentity(stagingCtx, "entra", "")
+		require.NoError(t, err)
+		assert.Equal(t, "staging", claims.Subject)
+		assert.Equal(t, "staging", gotIdentityProfile)
+		assert.True(t, gotIdentityResolved)
+
+		groups, err := hostClient.GetAuthGroups(stagingCtx, "entra")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"staging"}, groups)
+		assert.Equal(t, "staging", gotGroupsProfile)
+		assert.True(t, gotGroupsResolved)
+
+		// 2. HostServiceClient with explicit default profile overrides activeProfile "work".
+		defaultPluginCtx := auth.WithProfile(context.Background(), auth.DefaultProfileName)
+		claims, err = hostClient.GetAuthIdentity(defaultPluginCtx, "entra", "")
+		require.NoError(t, err)
+		assert.Equal(t, auth.BuiltinProfileName, claims.Subject)
+		assert.Empty(t, gotIdentityProfile)
+		assert.True(t, gotIdentityResolved)
+
+		// 3. External SDK v0.19.0 plugin sending bare GetAuthIdentityRequest (no metadata)
+		// during Client.ExecuteProvider still inherits the provider execution's staging
+		// and explicit default profile via brokerTrackerSlot!
+		providerClient := &Client{
+			trackerSlot: slot,
+			plugin: &MockProviderPlugin{
+				execFunc: func(_ context.Context, _ string, _ map[string]any) (*provider.Output, error) {
+					resp, rpcErr := srv.GetAuthIdentity(context.Background(), &proto.GetAuthIdentityRequest{HandlerName: "entra"})
+					if rpcErr != nil {
+						return nil, rpcErr
+					}
+					return &provider.Output{Data: map[string]any{"subject": resp.Claims.Subject}}, nil
+				},
+			},
+		}
+
+		outStaging, err := providerClient.ExecuteProvider(auth.WithProfileResolved(auth.WithProfile(context.Background(), "staging")), "http", nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"subject": "staging"}, outStaging.Data)
+
+		outDefault, err := providerClient.ExecuteProvider(auth.WithProfileResolved(auth.WithProfile(context.Background(), "")), "http", nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"subject": auth.BuiltinProfileName}, outDefault.Data)
+	})
+
+	t.Run("empty HandlerName resolves default handler before profile resolution while preserving allowlist", func(t *testing.T) {
+		t.Parallel()
+		reg := auth.NewRegistry()
+		mockEntra := auth.NewMockHandler("entra")
+		mockEntra.StatusResult = &auth.Status{
+			Authenticated: true,
+			Claims:        &auth.Claims{Email: "work@example.com"},
+		}
+		require.NoError(t, reg.Register(mockEntra))
+
+		hostCtx := config.WithConfig(context.Background(), appCfg)
+		deps := HostDepsFromAuthRegistry(reg)
+		deps.HostConfig = appCfg
+		deps.ProfileResolverFunc = func(handlerName string) string {
+			return auth.ResolveActiveProfile(hostCtx, handlerName)
+		}
+		srv := &HostServiceServer{Deps: *deps}
+
+		idResp, err := srv.GetAuthIdentity(context.Background(), &proto.GetAuthIdentityRequest{HandlerName: ""})
+		require.NoError(t, err)
+		assert.Empty(t, idResp.Error)
+		assert.Equal(t, "work", mockEntra.LastContextProfile, "empty HandlerName must select default handler entra before resolving activeProfile work")
+
+		mockEntra.GetTokenResult = &auth.Token{AccessToken: "work-tok", TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)}
+		tokResp, err := srv.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{HandlerName: ""})
+		require.NoError(t, err)
+		assert.Empty(t, tokResp.Error)
+		assert.Equal(t, "work", mockEntra.LastContextProfile)
+
+		// Allowlist must still reject empty HandlerName before default-handler fallback.
+		restrictedDeps := *deps
+		restrictedDeps.AllowedAuthHandlers = []string{"entra"}
+		restrictedSrv := &HostServiceServer{Deps: restrictedDeps}
+		deniedResp, err := restrictedSrv.GetAuthIdentity(context.Background(), &proto.GetAuthIdentityRequest{HandlerName: ""})
+		require.NoError(t, err)
+		assert.Contains(t, deniedResp.Error, "access denied")
 	})
 }
