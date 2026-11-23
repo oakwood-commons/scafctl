@@ -1912,6 +1912,7 @@ func (c *LocalCatalog) artifactInfo(tag string, desc ocispec.Descriptor, annotat
 		Size:        desc.Size,
 		Annotations: annotations,
 		Catalog:     LocalCatalogName,
+		Canonical:   remote,
 	}
 }
 

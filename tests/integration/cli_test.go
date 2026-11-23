@@ -8446,6 +8446,144 @@ func TestIntegration_CatalogKind_PushPullRoundTrip(t *testing.T) {
 	assert.Contains(t, stdout, "resolver-demo")
 }
 
+// catalogListRow is the subset of a 'catalog list -o json' row the provenance
+// tests assert on.
+type catalogListRow struct {
+	Name      string   `json:"name"`
+	Tag       string   `json:"tag"`
+	Catalog   string   `json:"catalog"`
+	Registry  string   `json:"registry"`
+	Location  string   `json:"location"`
+	Locations []string `json:"locations"`
+	Stale     bool     `json:"stale"`
+	Digest    string   `json:"digest"`
+}
+
+// provenanceSolutionName is the example solution the provenance tests build,
+// push, and list.
+const provenanceSolutionName = "resolver-demo"
+
+// listCatalogRows runs 'catalog list --name resolver-demo -o json' with extra
+// args and returns the rows.
+func listCatalogRows(t *testing.T, env map[string]string, args ...string) []catalogListRow {
+	t.Helper()
+	cmdArgs := append([]string{"catalog", "list", "--name", provenanceSolutionName, "-o", "json"}, args...)
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, cmdArgs...)
+	require.Equal(t, 0, exitCode, "catalog list failed: out: %s err: %s", stdout, stderr)
+	var rows []catalogListRow
+	require.NoError(t, json.Unmarshal([]byte(stdout), &rows), "invalid JSON: %s", stdout)
+	return rows
+}
+
+// catalogEnvWithRemote returns an isolated env whose config registers an
+// insecure OCI catalog named alias pointing at url.
+func catalogEnvWithRemote(t *testing.T, alias, url string) map[string]string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "scafctl")
+	require.NoError(t, os.MkdirAll(configDir, 0o755))
+	configContent := fmt.Sprintf(`catalogs:
+  - name: local
+    type: filesystem
+  - name: %s
+    type: oci
+    url: oci://%s
+    insecure: true
+settings:
+  disableOfficialCatalog: true
+`, alias, url)
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configContent), 0o600))
+	return map[string]string{
+		"XDG_DATA_HOME":   tmpDir,
+		"XDG_CACHE_HOME":  tmpDir,
+		"XDG_CONFIG_HOME": tmpDir,
+	}
+}
+
+// TestIntegration_CatalogList_ProvenanceBuilt verifies a locally built
+// artifact reports catalog "local", no registry, and location "local".
+func TestIntegration_CatalogList_ProvenanceBuilt(t *testing.T) {
+	t.Parallel()
+	env := isolatedCatalogEnv(t)
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+
+	for _, args := range [][]string{nil, {"--catalog", "local"}} {
+		rows := listCatalogRows(t, env, args...)
+		require.Len(t, rows, 1, "args %v", args)
+		assert.Equal(t, "local", rows[0].Catalog)
+		assert.Empty(t, rows[0].Registry)
+		assert.Equal(t, "local", rows[0].Location)
+		assert.Equal(t, []string{"local"}, rows[0].Locations)
+		assert.False(t, rows[0].Stale)
+	}
+}
+
+// TestIntegration_CatalogList_ProvenancePulledAndStale pulls an artifact from
+// a configured catalog, checks it is attributed to that catalog's alias and
+// merges with the remote row, then re-publishes the tag remotely and checks the
+// cached copy is reported as stale next to the new remote row.
+func TestIntegration_CatalogList_ProvenancePulledAndStale(t *testing.T) {
+	t.Parallel()
+	const alias = "acme"
+	registryAddr, _ := startOCIRegistry(t)
+	remote := registryAddr + "/scafctl"
+
+	pushEnv := isolatedCatalogEnv(t)
+	_, stderr, exitCode := runScafctlWithEnv(t, pushEnv, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+	stdout, stderr, exitCode := runScafctlWithEnv(t, pushEnv, "catalog", "push", "solution", "resolver-demo@1.0.0",
+		"--catalog", remote, "--insecure")
+	require.Equal(t, 0, exitCode, "push failed: out: %s err: %s", stdout, stderr)
+
+	pullEnv := catalogEnvWithRemote(t, alias, remote)
+	stdout, stderr, exitCode = runScafctlWithEnv(t, pullEnv, "catalog", "pull", "solution", "resolver-demo@1.0.0",
+		"--catalog", alias, "--insecure")
+	require.Equal(t, 0, exitCode, "pull failed: out: %s err: %s", stdout, stderr)
+
+	// Local-only view: the cached copy is attributed to the alias of the
+	// registry it came from, without querying the remote.
+	rows := listCatalogRows(t, pullEnv, "--catalog", "local")
+	require.Len(t, rows, 1)
+	assert.Equal(t, alias, rows[0].Catalog)
+	assert.Equal(t, remote, rows[0].Registry)
+	assert.Equal(t, "local", rows[0].Location)
+	assert.False(t, rows[0].Stale)
+
+	// With the remote listed, the cached copy merges with its remote row.
+	rows = listCatalogRows(t, pullEnv, "--catalog", alias, "--insecure")
+	require.Len(t, rows, 1, "cached copy must merge with the remote row: %+v", rows)
+	assert.Equal(t, alias, rows[0].Catalog)
+	assert.Equal(t, remote, rows[0].Registry)
+	assert.Equal(t, "local, remote", rows[0].Location)
+	assert.False(t, rows[0].Stale)
+	cachedDigest := rows[0].Digest
+
+	// Re-publish the same tag with different content (a different build
+	// published under the original name@version).
+	_, stderr, exitCode = runScafctlWithEnv(t, pushEnv, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.1")
+	require.Equal(t, 0, exitCode, "build failed: %s", stderr)
+	stdout, stderr, exitCode = runScafctlWithEnv(t, pushEnv, "catalog", "push", "solution", "resolver-demo@1.0.1",
+		"--as", "resolver-demo@1.0.0", "--catalog", remote, "--insecure", "--force")
+	require.Equal(t, 0, exitCode, "re-publish failed: out: %s err: %s", stdout, stderr)
+
+	rows = listCatalogRows(t, pullEnv, "--catalog", alias, "--insecure")
+	require.Len(t, rows, 2, "a stale cached copy must be split from the remote row: %+v", rows)
+	byLocation := map[string]catalogListRow{}
+	for _, r := range rows {
+		byLocation[r.Location] = r
+	}
+	stale, ok := byLocation["local (stale)"]
+	require.True(t, ok, "expected a stale local row: %+v", rows)
+	assert.True(t, stale.Stale)
+	assert.Equal(t, cachedDigest, stale.Digest)
+	fresh, ok := byLocation["remote"]
+	require.True(t, ok, "expected a remote row: %+v", rows)
+	assert.False(t, fresh.Stale)
+	assert.NotEqual(t, cachedDigest, fresh.Digest, "remote row must carry the re-published digest")
+}
+
 func TestIntegration_CatalogKind_PushDryRun(t *testing.T) {
 	t.Parallel()
 	registryAddr, _ := startOCIRegistry(t)

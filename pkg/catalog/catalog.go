@@ -254,9 +254,19 @@ type ArtifactInfo struct {
 	// catalog (e.g. "ghcr.io/org/plugins" for remote catalogs). Unlike
 	// Catalog, it is derived from the actual registry location rather than the
 	// config alias, so it survives renames and is portable across machines.
-	// Populated only by remote catalogs; empty for local catalogs (whose
-	// filesystem path is machine-specific and not portable).
+	// Populated by remote catalogs and by the local catalog for cached copies
+	// of remote artifacts (from their provenance annotation); empty for
+	// artifacts built locally.
 	Canonical string `json:"canonical,omitempty" yaml:"canonical,omitempty" doc:"Stable machine-independent source catalog identity"`
+
+	// Locations records where this artifact's content exists after rows from
+	// several catalogs are merged by DeduplicateArtifacts. When empty, the
+	// location is derived from Catalog (see ResolvedLocations).
+	Locations []ArtifactLocation `json:"locations,omitempty" yaml:"locations,omitempty" doc:"Where the artifact content exists (local, remote)" maxItems:"2"`
+
+	// Stale is true on a cached local copy whose digest differs from the copy
+	// currently published under the same tag in its source registry.
+	Stale bool `json:"stale,omitempty" yaml:"stale,omitempty" doc:"True when a cached local copy differs from the remote copy under the same tag"`
 }
 
 // ContentDigestInfo extends ArtifactInfo with the content-layer digest for a
