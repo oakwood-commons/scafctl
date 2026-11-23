@@ -40,13 +40,13 @@ func acquireInProcessKeyLock(ctx context.Context, key string) (func(), error) {
 	}
 }
 
-func (h *Handler) refreshLockScope(profile string) (scopeKey, lockFilePath string) {
-	handlerProfile := h.cfg.Name + "|" + profile
-	fullScope := h.secretKeyPrefix + handlerProfile
+func (h *Handler) scopedLockIdentity(kind, profile string) (scopeKey, lockFilePath string) {
+	handlerProfile := kind + "|" + h.cfg.Name + "|" + profile
+	fullScope := kind + "|" + h.secretKeyPrefix + h.cfg.Name + "|" + profile
 	if dp, ok := h.secretStore.(secretsDirProvider); ok {
 		if dir := dp.SecretsDir(); dir != "" {
 			cleanDir := filepath.Clean(dir)
-			lockName := fmt.Sprintf(".oauth2-lock-%016x", xxhash.Sum64String(handlerProfile))
+			lockName := fmt.Sprintf(".oauth2-%s-%016x", kind, xxhash.Sum64String(handlerProfile))
 			return "dir:" + cleanDir + "|" + fullScope, filepath.Join(cleanDir, lockName)
 		}
 	}
@@ -59,11 +59,8 @@ func (h *Handler) refreshLockScope(profile string) (scopeKey, lockFilePath strin
 	return fmt.Sprintf("inst:%p|%s", h, fullScope), ""
 }
 
-// acquireRefreshLock serializes single-use refresh-token reload, exchange, and
-// rotation persistence across goroutines, Handler instances sharing a store,
-// and separate OS processes sharing a filesystem secrets directory.
-func (h *Handler) acquireRefreshLock(ctx context.Context, profile string) (func(), error) {
-	scopeKey, lockPath := h.refreshLockScope(profile)
+func (h *Handler) acquireScopedLock(ctx context.Context, kind, profile string) (func(), error) {
+	scopeKey, lockPath := h.scopedLockIdentity(kind, profile)
 	unlockMem, err := acquireInProcessKeyLock(ctx, scopeKey)
 	if err != nil {
 		return nil, err
@@ -80,6 +77,20 @@ func (h *Handler) acquireRefreshLock(ctx context.Context, profile string) (func(
 		unlockFileFn()
 		unlockMem()
 	}, nil
+}
+
+// acquireRefreshLock serializes single-use refresh-token reload, exchange, and
+// rotation persistence across goroutines, Handler instances sharing a store,
+// and separate OS processes sharing a filesystem secrets directory.
+func (h *Handler) acquireRefreshLock(ctx context.Context, profile string) (func(), error) {
+	return h.acquireScopedLock(ctx, "refresh", profile)
+}
+
+// acquireSessionCommitLock serializes fast local session/credential commits
+// across Login, patLogin, Logout, and post-HTTP refresh persistence without
+// ever being held across network I/O.
+func (h *Handler) acquireSessionCommitLock(ctx context.Context, profile string) (func(), error) {
+	return h.acquireScopedLock(ctx, "commit", profile)
 }
 
 func acquireFileRefreshLock(ctx context.Context, lockPath string) (func(), error) {

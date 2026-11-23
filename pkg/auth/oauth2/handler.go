@@ -11,6 +11,7 @@ package oauth2
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -133,6 +134,7 @@ type persistedRefreshToken struct {
 	Value       string    `json:"v"`
 	Flow        auth.Flow `json:"flow,omitempty"`
 	Fingerprint string    `json:"fingerprint"`
+	Epoch       string    `json:"epoch,omitempty"`
 }
 
 type persistedPATSession struct {
@@ -959,42 +961,55 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		claims = h.fallbackClaims(ctx, tokenResp.AccessToken, flow)
 	}
 
+	unlockCommit, commitLockErr := h.acquireSessionCommitLock(ctx, profile)
+	if commitLockErr != nil {
+		settleCallback(false)
+		h.recordFailedLogin(ctx, gen)
+		return nil, auth.NewError(h.cfg.Name, "login", commitLockErr)
+	}
 	pubMu := h.profilePublishLock(profile)
 	pubMu.Lock()
 	if h.currentSessionGen(profile) != gen {
 		pubMu.Unlock()
+		unlockCommit()
 		settleCallback(false)
 		return nil, auth.NewError(h.cfg.Name, "login", auth.ErrNotAuthenticated)
 	}
+	h.resetProfileSessionMemoryLocked(profile)
 	if derived != nil {
 		// Use the primary token's expiry for the derived token since the exchange
 		// response does not carry its own expiry.
 		if storeErr := h.storeDerivedToken(ctx, derived, expiresAt, flow, scopes); storeErr != nil {
 			pubMu.Unlock()
+			unlockCommit()
 			settleCallback(false)
 			h.recordFailedLogin(ctx, gen)
 			return nil, auth.NewError(h.cfg.Name, "store_derived_token", storeErr)
 		}
 	} else if clearDerivedErr := h.clearDerivedStateErr(ctx); clearDerivedErr != nil {
 		pubMu.Unlock()
+		unlockCommit()
 		settleCallback(false)
 		h.recordFailedLogin(ctx, gen)
 		return nil, auth.NewError(h.cfg.Name, "clear_derived_token", clearDerivedErr)
 	}
 	if storeErr := h.storeTokens(ctx, tokenResp, claims, expiresAt, flow, scopes); storeErr != nil {
 		pubMu.Unlock()
+		unlockCommit()
 		settleCallback(false)
 		h.recordFailedLogin(ctx, gen)
 		return nil, auth.NewError(h.cfg.Name, "store_tokens", storeErr)
 	}
 	if clearErr := h.clearSessionState(ctx); clearErr != nil {
 		pubMu.Unlock()
+		unlockCommit()
 		settleCallback(false)
 		h.recordFailedLogin(ctx, gen)
 		return nil, auth.NewError(h.cfg.Name, "session_state", clearErr)
 	}
 	h.setActiveFlow(ctx, flow)
 	pubMu.Unlock()
+	unlockCommit()
 
 	settleCallback(true)
 	return &auth.Result{Claims: claims, ExpiresAt: expiresAt}, nil
@@ -1042,6 +1057,12 @@ func (h *Handler) patLogin(ctx context.Context, scopes []string, gen uint64) (*a
 	}
 
 	profile := auth.ProfileFromContext(ctx)
+	unlockCommit, commitLockErr := h.acquireSessionCommitLock(ctx, profile)
+	if commitLockErr != nil {
+		return nil, auth.NewError(h.cfg.Name, "login", commitLockErr)
+	}
+	defer unlockCommit()
+
 	pubMu := h.profilePublishLock(profile)
 	pubMu.Lock()
 	defer pubMu.Unlock()
@@ -1070,8 +1091,34 @@ func (h *Handler) patLogin(ctx context.Context, scopes []string, gen uint64) (*a
 	if clearErr := h.clearSessionState(ctx); clearErr != nil {
 		return nil, auth.NewError(h.cfg.Name, "session_state", clearErr)
 	}
+	h.resetProfileSessionMemoryLocked(profile)
 	h.setActivePAT(ctx, username)
 	return &auth.Result{Claims: claims, ExpiresAt: time.Time{}}, nil
+}
+
+func (h *Handler) resetProfileSessionMemoryLocked(profile string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.activeFlows != nil {
+		delete(h.activeFlows, profile)
+	}
+	if h.patUsernames != nil {
+		delete(h.patUsernames, profile)
+	}
+	if h.derivedUsers != nil {
+		delete(h.derivedUsers, profile)
+	}
+	profilePrefix := profile + "|"
+	for k := range h.memCache {
+		if strings.HasPrefix(k, profilePrefix) {
+			delete(h.memCache, k)
+		}
+	}
+	for k := range h.memDerived {
+		if strings.HasPrefix(k, profilePrefix) {
+			delete(h.memDerived, k)
+		}
+	}
 }
 
 // Logout clears all stored tokens for this handler and records an explicit
@@ -1080,6 +1127,10 @@ func (h *Handler) patLogin(ctx context.Context, scopes []string, gen uint64) (*a
 func (h *Handler) Logout(ctx context.Context) error {
 	ctx = h.resolveContextProfile(ctx)
 	profile := auth.ProfileFromContext(ctx)
+
+	if unlockCommit, lockErr := h.acquireSessionCommitLock(context.WithoutCancel(ctx), profile); lockErr == nil {
+		defer unlockCommit()
+	}
 
 	pubMu := h.profilePublishLock(profile)
 	pubMu.Lock()
@@ -1578,7 +1629,7 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 
 func (h *Handler) refreshWithSingleflight(ctx context.Context, flow auth.Flow, scope string, opts auth.TokenOptions, gen uint64) (*auth.Token, error) {
 	profile := auth.ProfileFromContext(ctx)
-	sfKey := fmt.Sprintf("refresh|%s|%s|%s|min=%d|force=%t|gen=%d", profile, flow, scope, opts.MinValidFor, opts.ForceRefresh, gen)
+	sfKey := fmt.Sprintf("refresh|%s|%s|min=%d|force=%t|gen=%d", profile, scope, opts.MinValidFor, opts.ForceRefresh, gen)
 	return h.doSingleflightToken(ctx, sfKey, func(sfCtx context.Context) (*auth.Token, error) {
 		// Serialize refresh-token consumption across goroutines, Handler instances
 		// sharing a store, and separate CLI processes sharing a secrets directory so
@@ -1596,74 +1647,121 @@ func (h *Handler) refreshWithSingleflight(ctx context.Context, flow auth.Flow, s
 			sfCtx = withSelectedDynamicClient(sfCtx, dcrClient)
 		}
 
-		if !opts.ForceRefresh {
-			if h.cfg.TokenExchange != nil {
-				if derived, loadErr := h.loadDerivedTokenForFlow(sfCtx, flow); loadErr == nil && derived != nil && (derived.Scope == "" || derived.Scope == scope) && derived.IsValidFor(opts.MinValidFor) {
-					return derived, nil
-				}
-			} else if cached := h.lookupCachedToken(sfCtx, flow, scope, opts.MinValidFor); cached != nil {
-				return cached, nil
-			}
-		}
-
-		refreshToken, hasRefresh, getErr := h.loadRefreshToken(sfCtx)
+		// Reload the stored refresh envelope and its originating flow together
+		// under the refresh lock BEFORE cache checks so any waiting request
+		// observes flow/token replacements committed while it waited.
+		storedEnv, hasRefresh, getErr := h.loadRefreshTokenEnvelope(sfCtx)
 		if getErr != nil {
 			return nil, getErr
 		}
 		if !hasRefresh {
 			return nil, auth.ErrNotAuthenticated
 		}
+		activeFlow := flow
+		if storedEnv.Flow != "" {
+			activeFlow = storedEnv.Flow
+		}
 
-		tokenResp, refreshErr := h.refreshAccessToken(sfCtx, flow, refreshToken, scope)
+		if !opts.ForceRefresh {
+			if h.cfg.TokenExchange != nil {
+				if derived, loadErr := h.loadDerivedTokenForFlow(sfCtx, activeFlow); loadErr == nil && derived != nil && (derived.Scope == "" || derived.Scope == scope) && derived.IsValidFor(opts.MinValidFor) {
+					return derived, nil
+				}
+			} else if cached := h.lookupCachedToken(sfCtx, activeFlow, scope, opts.MinValidFor); cached != nil {
+				return cached, nil
+			}
+		}
+
+		tokenResp, refreshErr := h.refreshAccessToken(sfCtx, activeFlow, storedEnv.Value, scope)
 		if refreshErr != nil {
 			return nil, refreshErr
 		}
-		token := h.tokenRespToToken(tokenResp, flow, scope)
+		token := h.tokenRespToToken(tokenResp, activeFlow, scope)
 
-		// Persist any rotated refresh_token immediately under publish lock before
-		// running optional post-grant token exchange so single-use refresh tokens
-		// are never lost even if a downstream exchange fails transiently.
+		// Persist any rotated refresh_token immediately under the store-scoped
+		// session commit lock + publish lock before running optional post-grant
+		// token exchange, verifying that no Login/patLogin/Logout replaced or
+		// cleared the refresh envelope while refreshAccessToken was in flight.
+		unlockCommit, commitErr := h.acquireSessionCommitLock(sfCtx, profile)
+		if commitErr != nil {
+			return nil, commitErr
+		}
 		pubMu := h.profilePublishLock(profile)
 		pubMu.Lock()
 		if activeErr := h.ensureSessionActiveLocked(sfCtx, profile, gen); activeErr != nil {
 			pubMu.Unlock()
+			unlockCommit()
 			return nil, activeErr
 		}
+		currentEnv, stillHas, checkErr := h.loadRefreshTokenEnvelope(sfCtx)
+		if checkErr != nil {
+			pubMu.Unlock()
+			unlockCommit()
+			return nil, checkErr
+		}
+		if !stillHas || !sameRefreshTokenEnvelope(currentEnv, storedEnv) {
+			pubMu.Unlock()
+			unlockCommit()
+			return nil, auth.NewError(h.cfg.Name, "refresh_token", auth.ErrNotAuthenticated)
+		}
+		expectedEnv := storedEnv
 		if tokenResp.RefreshToken != "" {
-			if setErr := h.storeRefreshTokenForFlow(sfCtx, flow, tokenResp.RefreshToken); setErr != nil {
+			newEnv, setErr := h.storeRefreshTokenEnvelope(sfCtx, activeFlow, tokenResp.RefreshToken)
+			if setErr != nil {
 				pubMu.Unlock()
+				unlockCommit()
 				return nil, fmt.Errorf("persist rotated refresh token: %w", setErr)
 			}
+			expectedEnv = newEnv
 		}
 		if h.cfg.TokenExchange == nil {
-			h.saveCachedToken(sfCtx, flow, scope, token)
-			h.setActiveFlow(sfCtx, flow)
+			h.saveCachedToken(sfCtx, activeFlow, scope, token)
+			h.setActiveFlow(sfCtx, activeFlow)
 			pubMu.Unlock()
+			unlockCommit()
 			return token, nil
 		}
 		pubMu.Unlock()
+		unlockCommit()
 
 		derived, exchangeErr := h.executeTokenExchange(sfCtx, tokenResp.AccessToken)
 		if exchangeErr != nil {
 			return nil, auth.NewError(h.cfg.Name, "token_exchange", exchangeErr)
 		}
 
+		unlockCommit2, commitErr2 := h.acquireSessionCommitLock(sfCtx, profile)
+		if commitErr2 != nil {
+			return nil, commitErr2
+		}
 		pubMu.Lock()
 		if activeErr := h.ensureSessionActiveLocked(sfCtx, profile, gen); activeErr != nil {
 			pubMu.Unlock()
+			unlockCommit2()
 			return nil, activeErr
 		}
-		h.saveCachedToken(sfCtx, flow, scope, token)
-		h.setActiveFlow(sfCtx, flow)
-		_ = h.storeDerivedToken(sfCtx, derived, token.ExpiresAt, flow, scopeSliceFromString(scope))
+		currentEnv2, stillHas2, checkErr2 := h.loadRefreshTokenEnvelope(sfCtx)
+		if checkErr2 != nil {
+			pubMu.Unlock()
+			unlockCommit2()
+			return nil, checkErr2
+		}
+		if !stillHas2 || !sameRefreshTokenEnvelope(currentEnv2, expectedEnv) {
+			pubMu.Unlock()
+			unlockCommit2()
+			return nil, auth.NewError(h.cfg.Name, "refresh_token", auth.ErrNotAuthenticated)
+		}
+		h.saveCachedToken(sfCtx, activeFlow, scope, token)
+		h.setActiveFlow(sfCtx, activeFlow)
+		_ = h.storeDerivedToken(sfCtx, derived, token.ExpiresAt, activeFlow, scopeSliceFromString(scope))
 		pubMu.Unlock()
+		unlockCommit2()
 
 		return &auth.Token{
 			AccessToken: derived.Token,
 			TokenType:   defaultTokenType,
 			ExpiresAt:   token.ExpiresAt,
 			Scope:       scope,
-			Flow:        flow,
+			Flow:        activeFlow,
 		}, nil
 	})
 }
@@ -3123,54 +3221,80 @@ func (h *Handler) refreshFingerprint(ctx context.Context, flow auth.Flow) string
 	}, "|"))
 }
 
+func newSessionEpoch() string {
+	var buf [8]byte
+	_, _ = rand.Read(buf[:])
+	return hex.EncodeToString(buf[:])
+}
+
+func sameRefreshTokenEnvelope(a, b *persistedRefreshToken) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Value == b.Value && a.Flow == b.Flow && a.Fingerprint == b.Fingerprint && a.Epoch == b.Epoch
+}
+
 func (h *Handler) storeRefreshToken(ctx context.Context, refreshToken string) error {
 	return h.storeRefreshTokenForFlow(ctx, h.resolveDefaultFlow(), refreshToken)
 }
 
 func (h *Handler) storeRefreshTokenForFlow(ctx context.Context, flow auth.Flow, refreshToken string) error {
+	_, err := h.storeRefreshTokenEnvelope(ctx, flow, refreshToken)
+	return err
+}
+
+func (h *Handler) storeRefreshTokenEnvelope(ctx context.Context, flow auth.Flow, refreshToken string) (*persistedRefreshToken, error) {
 	fp := h.refreshFingerprint(ctx, flow)
 	if fp == "" {
-		return fmt.Errorf("cannot compute refresh token fingerprint without valid client configuration")
+		return nil, fmt.Errorf("cannot compute refresh token fingerprint without valid client configuration")
 	}
-	data, err := json.Marshal(persistedRefreshToken{
+	env := &persistedRefreshToken{
 		Value:       refreshToken,
 		Flow:        flow,
 		Fingerprint: fp,
-	})
-	if err != nil {
-		return fmt.Errorf("marshal refresh token: %w", err)
+		Epoch:       newSessionEpoch(),
 	}
-	return h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix), data)
-}
-
-func (h *Handler) loadRefreshToken(ctx context.Context) (string, bool, error) {
-	val, _, ok, err := h.loadRefreshTokenWithFlow(ctx)
-	return val, ok, err
+	data, err := json.Marshal(env)
+	if err != nil {
+		return nil, fmt.Errorf("marshal refresh token: %w", err)
+	}
+	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix), data); err != nil {
+		return nil, err
+	}
+	return env, nil
 }
 
 func (h *Handler) loadRefreshTokenWithFlow(ctx context.Context) (string, auth.Flow, bool, error) {
+	env, ok, err := h.loadRefreshTokenEnvelope(ctx)
+	if err != nil || !ok {
+		return "", "", false, err
+	}
+	return env.Value, env.Flow, true, nil
+}
+
+func (h *Handler) loadRefreshTokenEnvelope(ctx context.Context) (*persistedRefreshToken, bool, error) {
 	if h.secretStore == nil {
-		return "", "", false, nil
+		return nil, false, nil
 	}
 	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix))
 	if err != nil {
 		if errors.Is(err, secrets.ErrNotFound) {
-			return "", "", false, nil
+			return nil, false, nil
 		}
-		return "", "", false, err
+		return nil, false, err
 	}
 	if len(data) == 0 {
-		return "", "", false, nil
+		return nil, false, nil
 	}
 	var stored persistedRefreshToken
 	if unmarshalErr := json.Unmarshal(data, &stored); unmarshalErr != nil {
-		return "", "", false, fmt.Errorf("unmarshal refresh token: %w", unmarshalErr)
+		return nil, false, fmt.Errorf("unmarshal refresh token: %w", unmarshalErr)
 	}
 	expectedFP := h.refreshFingerprint(ctx, stored.Flow)
 	if stored.Value == "" || stored.Fingerprint == "" || expectedFP == "" || stored.Fingerprint != expectedFP {
-		return "", "", false, nil
+		return nil, false, nil
 	}
-	return stored.Value, stored.Flow, true, nil
+	return &stored, true, nil
 }
 
 func (h *Handler) clearDerivedStateErr(ctx context.Context) error {
@@ -3321,24 +3445,50 @@ func (h *Handler) loadMetadata(ctx context.Context) (*auth.HandlerMetadata, erro
 // ---------- refresh ----------
 
 func (h *Handler) refreshAccessToken(ctx context.Context, flow auth.Flow, refreshToken, scope string) (*tokenResponse, error) {
-	clientID, clientSecret, err := h.resolveClientCredentials(ctx)
-	if err != nil {
-		return nil, err
-	}
 	data := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
 	}
 	var basicAuth *basicAuthCredentials
-	if flow == auth.FlowWorkloadIdentity && h.cfg.WorkloadIdentityGrantType == config.WorkloadIdentityGrantTokenExchange {
-		if clientID != "" {
-			if clientSecret != "" {
-				basicAuth = &basicAuthCredentials{username: clientID, password: clientSecret}
-			} else {
-				data.Set("client_id", clientID)
+	if flow == auth.FlowWorkloadIdentity {
+		grantType := h.cfg.WorkloadIdentityGrantType
+		if grantType == "" {
+			grantType = config.WorkloadIdentityGrantClientCredentials
+		}
+		switch grantType {
+		case config.WorkloadIdentityGrantClientCredentials:
+			jwt, jwtErr := h.resolveFederatedToken(ctx)
+			if jwtErr != nil {
+				return nil, jwtErr
 			}
+			clientID := h.effectiveClientID(ctx)
+			if clientID == "" {
+				return nil, fmt.Errorf("clientID is required for workload_identity refresh with client_credentials grant")
+			}
+			data.Set("client_id", clientID)
+			data.Set("client_assertion_type", jwtBearerAssertionType)
+			data.Set("client_assertion", jwt)
+		case config.WorkloadIdentityGrantTokenExchange:
+			clientID, clientSecret, credErr := h.resolveClientCredentials(ctx)
+			if credErr != nil {
+				return nil, credErr
+			}
+			if clientID != "" {
+				if clientSecret != "" {
+					basicAuth = &basicAuthCredentials{username: clientID, password: clientSecret}
+				} else {
+					data.Set("client_id", clientID)
+				}
+			}
+		default:
+			return nil, fmt.Errorf("unknown workloadIdentityGrantType %q (valid: %s, %s)",
+				grantType, config.WorkloadIdentityGrantClientCredentials, config.WorkloadIdentityGrantTokenExchange)
 		}
 	} else {
+		clientID, clientSecret, err := h.resolveClientCredentials(ctx)
+		if err != nil {
+			return nil, err
+		}
 		data.Set("client_id", clientID)
 		if clientSecret != "" {
 			data.Set("client_secret", clientSecret)

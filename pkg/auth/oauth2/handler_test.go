@@ -4,6 +4,8 @@
 package oauth2
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -13,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -3891,6 +3894,423 @@ func TestHandler_WorkloadIdentityTokenExchange_RefreshReusesHTTPBasicAuth(t *tes
 	require.NoError(t, err)
 	assert.Equal(t, "wif-te-refreshed", tok.AccessToken)
 	assert.Equal(t, int32(1), refreshCount.Load())
+}
+
+func TestHandler_InFlightRefresh_FencedByReLogin_And_WaitingRefreshObservesChangedFlow(t *testing.T) {
+	t.Parallel()
+
+	t.Run("blocked refresh completing after cross-flow re-login cannot overwrite credentials or active flow", func(t *testing.T) {
+		t.Parallel()
+		enteredRefresh := make(chan struct{})
+		releaseRefresh := make(chan struct{})
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			switch r.FormValue("grant_type") {
+			case "refresh_token":
+				close(enteredRefresh)
+				<-releaseRefresh
+				writeJSON(w, tokenResponse{
+					AccessToken:  "stale-interactive-access",
+					TokenType:    "Bearer",
+					ExpiresIn:    3600,
+					RefreshToken: "stale-rotated-interactive-refresh",
+				})
+			case "client_credentials":
+				writeJSON(w, tokenResponse{
+					AccessToken: "fresh-cc-access",
+					TokenType:   "Bearer",
+					ExpiresIn:   3600,
+				})
+			default:
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		}))
+		defer srv.Close()
+
+		store := secrets.NewMockStore()
+		ctx := context.Background()
+		cfg := config.CustomOAuth2Config{
+			Name:         "race-relogin-fence",
+			TokenURL:     srv.URL + "/token",
+			AuthorizeURL: srv.URL + "/authorize",
+			ClientID:     "cid",
+			ClientSecret: "csec",
+			DefaultFlow:  "interactive",
+		}
+		h, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		require.NoError(t, h.storeRefreshTokenForFlow(ctx, auth.FlowInteractive, "initial-interactive-refresh"))
+
+		refErrCh := make(chan error, 1)
+		go func() {
+			_, rErr := h.GetToken(ctx, auth.TokenOptions{ForceRefresh: true})
+			refErrCh <- rErr
+		}()
+
+		<-enteredRefresh
+		// Re-login with client_credentials while interactive refresh is blocked at token endpoint.
+		_, loginErr := h.Login(ctx, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+		require.NoError(t, loginErr)
+
+		close(releaseRefresh)
+		refErr := <-refErrCh
+		require.ErrorIs(t, refErr, auth.ErrNotAuthenticated, "stale refresh pre-dating re-login must be fenced")
+
+		// Verify stale refresh did not restore refresh_token or overwrite ActiveFlow / cached token.
+		_, refreshGetErr := store.Get(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix))
+		assert.ErrorIs(t, refreshGetErr, secrets.ErrNotFound, "blocked refresh must not resurrect refresh_token after client_credentials re-login")
+		assert.Equal(t, auth.FlowClientCredentials, h.ActiveFlow(ctx))
+
+		tok, tokErr := h.GetToken(ctx, auth.TokenOptions{})
+		require.NoError(t, tokErr)
+		assert.Equal(t, "fresh-cc-access", tok.AccessToken)
+		assert.Equal(t, auth.FlowClientCredentials, tok.Flow)
+	})
+
+	t.Run("waiting refresh observes changed flow and uses new WIF authentication", func(t *testing.T) {
+		t.Parallel()
+		var firstRefreshEntered atomic.Bool
+		enteredFirst := make(chan struct{})
+		releaseFirst := make(chan struct{})
+		var wifRefreshSeen atomic.Int32
+
+		dir := t.TempDir()
+		jwtPath := filepath.Join(dir, "wif-jwt")
+		require.NoError(t, os.WriteFile(jwtPath, []byte("wif-assertion-current"), 0o600))
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			switch r.FormValue("grant_type") {
+			case "client_credentials":
+				assert.Equal(t, jwtBearerAssertionType, r.FormValue("client_assertion_type"))
+				writeJSON(w, tokenResponse{
+					AccessToken:  "wif-login-short",
+					TokenType:    "Bearer",
+					ExpiresIn:    1,
+					RefreshToken: "wif-refresh-token-1",
+				})
+			case "refresh_token":
+				switch r.FormValue("refresh_token") {
+				case "old-interactive-refresh":
+					if firstRefreshEntered.CompareAndSwap(false, true) {
+						close(enteredFirst)
+					}
+					<-releaseFirst
+					writeJSON(w, tokenResponse{
+						AccessToken:  "old-interactive-access",
+						TokenType:    "Bearer",
+						ExpiresIn:    3600,
+						RefreshToken: "old-interactive-refresh-2",
+					})
+				case "wif-refresh-token-1":
+					// Must arrive with WIF RFC 7523 assertion, NOT old interactive form credentials!
+					if r.FormValue("client_assertion_type") != jwtBearerAssertionType || r.FormValue("client_assertion") != "wif-assertion-current" {
+						w.WriteHeader(http.StatusUnauthorized)
+						writeJSON(w, map[string]any{"error": "invalid_client", "error_description": "expected WIF client_assertion"})
+						return
+					}
+					wifRefreshSeen.Add(1)
+					writeJSON(w, tokenResponse{
+						AccessToken:  "wif-refreshed-by-waiter",
+						TokenType:    "Bearer",
+						ExpiresIn:    3600,
+						RefreshToken: "wif-refresh-token-2",
+					})
+				default:
+					w.WriteHeader(http.StatusBadRequest)
+				}
+			}
+		}))
+		defer srv.Close()
+
+		store := secrets.NewMockStore()
+		ctx := context.Background()
+		cfg := config.CustomOAuth2Config{
+			Name:               "waiter-flow-switch",
+			TokenURL:           srv.URL + "/token",
+			AuthorizeURL:       srv.URL + "/authorize",
+			ClientID:           "hybrid-cid",
+			FederatedTokenFile: jwtPath,
+			DefaultFlow:        "interactive",
+		}
+		h1, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		h2, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		require.NoError(t, h1.storeRefreshTokenForFlow(ctx, auth.FlowInteractive, "old-interactive-refresh"))
+
+		// 1. h1 starts refreshing old-interactive-refresh and blocks holding refreshLock.
+		h1Done := make(chan error, 1)
+		go func() {
+			_, e := h1.GetToken(ctx, auth.TokenOptions{ForceRefresh: true})
+			h1Done <- e
+		}()
+		<-enteredFirst
+
+		// 2. h2 calls GetToken while stored flow is still FlowInteractive, so h2 enters
+		// refreshWithSingleflight with flow=FlowInteractive and blocks on refreshLock.
+		type tokRes struct {
+			tok *auth.Token
+			err error
+		}
+		h2Done := make(chan tokRes, 1)
+		go func() {
+			tok, e := h2.GetToken(ctx, auth.TokenOptions{ForceRefresh: true})
+			h2Done <- tokRes{tok: tok, err: e}
+		}()
+		time.Sleep(25 * time.Millisecond)
+
+		// 3. Re-login on h1 with FlowWorkloadIdentity, replacing stored refresh token with wif-refresh-token-1.
+		_, loginErr := h1.Login(ctx, auth.LoginOptions{Flow: auth.FlowWorkloadIdentity})
+		require.NoError(t, loginErr)
+
+		// 4. Release h1's stale refresh (fenced) -> h2 acquires refreshLock, observes changed flow,
+		// and refreshes wif-refresh-token-1 using WIF client_assertion!
+		close(releaseFirst)
+		require.ErrorIs(t, <-h1Done, auth.ErrNotAuthenticated)
+
+		res2 := <-h2Done
+		require.NoError(t, res2.err)
+		assert.Equal(t, "wif-refreshed-by-waiter", res2.tok.AccessToken)
+		assert.Equal(t, auth.FlowWorkloadIdentity, res2.tok.Flow)
+		assert.Equal(t, int32(1), wifRefreshSeen.Load())
+	})
+}
+
+func TestHandler_WorkloadIdentityRFC7523_RefreshSendsRotatedClientAssertion(t *testing.T) {
+	t.Parallel()
+
+	var refreshAssertions []string
+	var mu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		if r.FormValue("client_assertion_type") != jwtBearerAssertionType {
+			w.WriteHeader(http.StatusUnauthorized)
+			writeJSON(w, map[string]any{"error": "invalid_client", "error_description": "missing client_assertion_type"})
+			return
+		}
+		if r.FormValue("client_secret") != "" {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, map[string]any{"error": "invalid_request", "error_description": "unexpected client_secret in RFC 7523 mode"})
+			return
+		}
+		assertion := r.FormValue("client_assertion")
+		switch r.FormValue("grant_type") {
+		case "client_credentials":
+			assert.Equal(t, "projected-jwt-v1", assertion)
+			writeJSON(w, tokenResponse{
+				AccessToken:  "rfc7523-initial-access",
+				TokenType:    "Bearer",
+				ExpiresIn:    1,
+				RefreshToken: "rfc7523-refresh-1",
+			})
+		case "refresh_token":
+			mu.Lock()
+			refreshAssertions = append(refreshAssertions, assertion)
+			mu.Unlock()
+			assert.Equal(t, "rfc7523-refresh-1", r.FormValue("refresh_token"))
+			writeJSON(w, tokenResponse{
+				AccessToken: "rfc7523-refreshed-with-" + assertion,
+				TokenType:   "Bearer",
+				ExpiresIn:   3600,
+			})
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	jwtPath := filepath.Join(dir, "projected-sa-token")
+	require.NoError(t, os.WriteFile(jwtPath, []byte("projected-jwt-v1\n"), 0o600))
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	h, err := New(config.CustomOAuth2Config{
+		Name:               "wif-rfc7523-refresh",
+		TokenURL:           srv.URL + "/token",
+		ClientID:           "wif-assertion-client",
+		ClientSecret:       "env://UNUSED_SECRET_THAT_IS_NOT_SET_IN_RFC7523_MODE",
+		FederatedTokenFile: jwtPath,
+		DefaultFlow:        "workload_identity",
+	}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	_, err = h.Login(ctx, auth.LoginOptions{Flow: auth.FlowWorkloadIdentity})
+	require.NoError(t, err)
+
+	// Rotate projected JWT file before refresh: refreshAccessToken must re-read jwtPath
+	// and send the rotated assertion without attempting to resolve the unused ClientSecret.
+	require.NoError(t, os.WriteFile(jwtPath, []byte("projected-jwt-v2\n"), 0o600))
+
+	tok, err := h.GetToken(ctx, auth.TokenOptions{MinValidFor: 5 * time.Minute})
+	require.NoError(t, err)
+	assert.Equal(t, "rfc7523-refreshed-with-projected-jwt-v2", tok.AccessToken)
+
+	mu.Lock()
+	assert.Equal(t, []string{"projected-jwt-v2"}, refreshAssertions)
+	mu.Unlock()
+}
+
+func newSubprocessSharedStore(dir string) (secrets.Store, error) {
+	kr := secrets.NewMockKeyring()
+	_ = kr.Set(
+		secrets.KeyringService,
+		secrets.KeyringMasterKeyAccount,
+		base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x5a}, 32)),
+	)
+	return secrets.New(secrets.WithSecretsDir(dir), secrets.WithKeyring(kr), secrets.WithLogger(logr.Discard()))
+}
+
+func TestHelperProcess_OAuth2RefreshLock(t *testing.T) {
+	mode := os.Getenv("GO_WANT_OAUTH2_LOCK_HELPER")
+	if mode == "" {
+		return
+	}
+	dir := os.Getenv("OAUTH2_HELPER_SECRETS_DIR")
+	tokenURL := os.Getenv("OAUTH2_HELPER_TOKEN_URL")
+	handlerName := os.Getenv("OAUTH2_HELPER_HANDLER_NAME")
+
+	store, err := newSubprocessSharedStore(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store init: %v\n", err)
+		os.Exit(2)
+	}
+	h, err := New(config.CustomOAuth2Config{
+		Name:        handlerName,
+		TokenURL:    tokenURL,
+		ClientID:    "cid",
+		DefaultFlow: "interactive",
+	}, WithSecretStore(store), WithLogger(logr.Discard()))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "handler init: %v\n", err)
+		os.Exit(2)
+	}
+
+	switch mode {
+	case "hold":
+		unlock, lockErr := h.acquireRefreshLock(context.Background(), "")
+		if lockErr != nil {
+			fmt.Fprintf(os.Stderr, "acquire lock: %v\n", lockErr)
+			os.Exit(2)
+		}
+		_, _ = fmt.Fprintln(os.Stdout, "LOCKED")
+		buf := make([]byte, 1)
+		_, _ = os.Stdin.Read(buf)
+		unlock()
+		os.Exit(0)
+	case "refresh":
+		tok, tokErr := h.GetToken(context.Background(), auth.TokenOptions{Scope: "child-scope", ForceRefresh: true})
+		if tokErr != nil {
+			fmt.Fprintf(os.Stderr, "child GetToken: %v\n", tokErr)
+			os.Exit(2)
+		}
+		_, _ = fmt.Fprintln(os.Stdout, tok.AccessToken)
+		os.Exit(0)
+	default:
+		os.Exit(2)
+	}
+}
+
+func TestHandler_SubprocessRefreshLock_FileContentionCancelAndSingleUseRotation(t *testing.T) {
+	t.Parallel()
+
+	var refreshSeq atomic.Int32
+	used := sync.Map{}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		submitted := r.FormValue("refresh_token")
+		if _, dup := used.LoadOrStore(submitted, true); dup {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, map[string]any{"error": "invalid_grant", "error_description": "refresh token reused across processes"})
+			return
+		}
+		time.Sleep(40 * time.Millisecond)
+		n := refreshSeq.Add(1)
+		writeJSON(w, tokenResponse{
+			AccessToken:  fmt.Sprintf("proc-access-%d", n),
+			TokenType:    "Bearer",
+			ExpiresIn:    3600,
+			RefreshToken: fmt.Sprintf("proc-refresh-%d", n),
+		})
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	const handlerName = "subproc-refresh"
+	store, err := newSubprocessSharedStore(dir)
+	require.NoError(t, err)
+
+	h, err := New(config.CustomOAuth2Config{
+		Name:        handlerName,
+		TokenURL:    srv.URL + "/token",
+		ClientID:    "cid",
+		DefaultFlow: "interactive",
+	}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, h.storeRefreshTokenForFlow(ctx, auth.FlowInteractive, "proc-refresh-0"))
+
+	// 1. Hold the OS file lock in a separate child process, verify parent GetToken
+	// cancels with DeadlineExceeded while held, and succeeds once child releases it.
+	holdCmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHelperProcess_OAuth2RefreshLock$")
+	holdCmd.Env = append(os.Environ(),
+		"GO_WANT_OAUTH2_LOCK_HELPER=hold",
+		"OAUTH2_HELPER_SECRETS_DIR="+dir,
+		"OAUTH2_HELPER_TOKEN_URL="+srv.URL+"/token",
+		"OAUTH2_HELPER_HANDLER_NAME="+handlerName,
+	)
+	stdinPipe, err := holdCmd.StdinPipe()
+	require.NoError(t, err)
+	stdoutPipe, err := holdCmd.StdoutPipe()
+	require.NoError(t, err)
+	var holdStderr bytes.Buffer
+	holdCmd.Stderr = &holdStderr
+	require.NoError(t, holdCmd.Start())
+
+	line, err := bufio.NewReader(stdoutPipe).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "LOCKED\n", line)
+
+	cancelCtx, cancel := context.WithTimeout(ctx, 80*time.Millisecond)
+	_, lockedErr := h.acquireRefreshLock(cancelCtx, "")
+	cancel()
+	require.ErrorIs(t, lockedErr, context.DeadlineExceeded, "parent process must block on child OS file lock and honor cancellation")
+
+	require.NoError(t, stdinPipe.Close())
+	require.NoError(t, holdCmd.Wait(), "hold helper stderr: %s", holdStderr.String())
+
+	// Reacquisition after child releases OS file lock succeeds cleanly.
+	tokAfterRelease, err := h.GetToken(ctx, auth.TokenOptions{Scope: "after-release", ForceRefresh: true})
+	require.NoError(t, err)
+	assert.Equal(t, "proc-access-1", tokAfterRelease.AccessToken)
+
+	// 2. Concurrent refresh across parent OS process and child OS process sharing dir:
+	// single-use proc-refresh-1 must rotate cleanly without invalid_grant.
+	refCmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHelperProcess_OAuth2RefreshLock$")
+	refCmd.Env = append(os.Environ(),
+		"GO_WANT_OAUTH2_LOCK_HELPER=refresh",
+		"OAUTH2_HELPER_SECRETS_DIR="+dir,
+		"OAUTH2_HELPER_TOKEN_URL="+srv.URL+"/token",
+		"OAUTH2_HELPER_HANDLER_NAME="+handlerName,
+	)
+	var childOut, childErr bytes.Buffer
+	refCmd.Stdout = &childOut
+	refCmd.Stderr = &childErr
+	require.NoError(t, refCmd.Start())
+
+	parentTok, parentErr := h.GetToken(ctx, auth.TokenOptions{Scope: "parent-scope", ForceRefresh: true})
+	childWaitErr := refCmd.Wait()
+	require.NoError(t, childWaitErr, "child refresh stderr: %s", childErr.String())
+	require.NoError(t, parentErr)
+	assert.NotEmpty(t, parentTok.AccessToken)
+	assert.Contains(t, strings.TrimSpace(childOut.String()), "proc-access-")
+	assert.Equal(t, int32(3), refreshSeq.Load())
 }
 
 func BenchmarkHandler_PAT_GetToken(b *testing.B) {
