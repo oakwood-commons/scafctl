@@ -15,10 +15,11 @@ import (
 
 // fakePluginSource returns a fixed result (or error) and counts calls.
 type fakePluginSource struct {
-	name  string
-	info  ArtifactInfo
-	err   error
-	calls int
+	name      string
+	info      ArtifactInfo
+	platforms []string
+	err       error
+	calls     int
 }
 
 func (s *fakePluginSource) Name() string { return s.name }
@@ -29,6 +30,14 @@ func (s *fakePluginSource) FetchByPlatform(_ context.Context, _ Reference, _ str
 		return nil, ArtifactInfo{}, s.err
 	}
 	return []byte(s.name), s.info, nil
+}
+
+func (s *fakePluginSource) ListPlatforms(_ context.Context, _ Reference) ([]string, error) {
+	s.calls++
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.platforms, nil
 }
 
 func (s *fakePluginSource) ResolveContentDigest(_ context.Context, _ Reference, _, _ string) (ContentDigestInfo, error) {
@@ -52,7 +61,7 @@ func notFoundSource(name string) *fakePluginSource {
 }
 
 func okSource(name string) *fakePluginSource {
-	return &fakePluginSource{name: name, info: ArtifactInfo{Catalog: name}}
+	return &fakePluginSource{name: name, info: ArtifactInfo{Catalog: name}, platforms: []string{name}}
 }
 
 // chainOps exercises every chain operation and returns the serving catalog.
@@ -60,6 +69,13 @@ var chainOps = map[string]func(c *pluginSourceChain) (string, error){
 	"FetchByPlatform": func(c *pluginSourceChain) (string, error) {
 		_, info, err := c.FetchByPlatform(context.Background(), testRef("p", "1.0.0"), "linux/amd64")
 		return info.Catalog, err
+	},
+	"ListPlatforms": func(c *pluginSourceChain) (string, error) {
+		platforms, err := c.ListPlatforms(context.Background(), testRef("p", "1.0.0"))
+		if len(platforms) > 0 {
+			return platforms[0], err
+		}
+		return "", err
 	},
 	"ResolveContentDigest": func(c *pluginSourceChain) (string, error) {
 		info, err := c.ResolveContentDigest(context.Background(), testRef("p", "1.0.0"), "linux/amd64", MediaTypeProviderBinary)
@@ -189,10 +205,14 @@ func TestPluginFetcher_UnknownCatalog(t *testing.T) {
 
 	_, err = f.Find(ctx, ArtifactQuery{Name: "p", Kind: ArtifactKindProvider}, scope)
 	require.ErrorContains(t, err, `catalog "nope" not configured`)
+	require.ErrorIs(t, err, ErrCatalogNotConfigured)
 	_, err = f.ResolvePlugin(ctx, "p", ArtifactKindProvider, "", scope)
 	require.ErrorContains(t, err, `catalog "nope" not configured`)
 	_, _, err = f.FetchPlugin(ctx, "p", ArtifactKindProvider, "1.0.0", "linux/amd64", scope)
 	require.ErrorContains(t, err, `catalog "nope" not configured`)
+	_, err = f.ListPlatforms(ctx, "p", ArtifactKindProvider, "1.0.0", scope)
+	require.ErrorContains(t, err, `catalog "nope" not configured`)
+	require.ErrorIs(t, err, ErrCatalogNotConfigured)
 	_, err = f.ResolveContentDigest(ctx, "p", ArtifactKindProvider, "1.0.0", "linux/amd64", MediaTypeProviderBinary, scope)
 	require.ErrorContains(t, err, `catalog "nope" not configured`)
 }
@@ -204,6 +224,8 @@ func TestPluginFetcher_InvalidVersion(t *testing.T) {
 	ctx := t.Context()
 
 	_, _, err = f.FetchPlugin(ctx, "p", ArtifactKindProvider, "not a version", "linux/amd64")
+	require.ErrorContains(t, err, "invalid plugin reference")
+	_, err = f.ListPlatforms(ctx, "p", ArtifactKindProvider, "not a version")
 	require.ErrorContains(t, err, "invalid plugin reference")
 	_, err = f.ResolveContentDigest(ctx, "p", ArtifactKindProvider, "not a version", "linux/amd64", MediaTypeProviderBinary)
 	require.ErrorContains(t, err, "invalid plugin reference")
@@ -312,6 +334,8 @@ func TestLocalPlugin_RemoteRefIsNotFound(t *testing.T) {
 	ref.Remote = fx.remote.canonicalID()
 	_, _, err = lp.FetchByPlatform(ctx, ref, "linux/amd64")
 	require.ErrorIs(t, err, ErrArtifactNotFound)
+	_, err = lp.ListPlatforms(ctx, ref)
+	require.ErrorIs(t, err, ErrArtifactNotFound)
 	_, err = lp.ResolveContentDigest(ctx, ref, "linux/amd64", MediaTypeProviderBinary)
 	require.ErrorIs(t, err, ErrArtifactNotFound)
 }
@@ -371,4 +395,39 @@ func TestPluginFetcher_ResolveContentDigest(t *testing.T) {
 
 	_, err = fx.fetcher.ResolveContentDigest(ctx, cachedPlatformName, ArtifactKindProvider, "9.9.9", "linux/amd64", MediaTypeProviderBinary)
 	require.ErrorIs(t, err, ErrArtifactNotFound)
+}
+
+func TestPluginFetcher_ListPlatforms(t *testing.T) {
+	t.Parallel()
+	fx := newPluginV2Fixture(t)
+	ctx := t.Context()
+
+	platforms, err := fx.fetcher.ListPlatforms(ctx, cachedPlatformName, ArtifactKindProvider, "1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"linux/amd64"}, platforms)
+
+	platforms, err = fx.fetcher.ListPlatforms(ctx, cachedPlatformName, ArtifactKindProvider, "2.0.0", WithCatalog(fx.remote.Name()))
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"linux/amd64", "darwin/arm64"}, platforms)
+
+	_, err = fx.fetcher.ListPlatforms(ctx, cachedPlatformName, ArtifactKindProvider, "2.0.0", WithCatalog(fx.local.Name()))
+	require.ErrorIs(t, err, ErrArtifactNotFound, "pulled copy is not served as a local build")
+
+	_, err = fx.fetcher.ListPlatforms(ctx, cachedPlatformName, ArtifactKindProvider, "9.9.9")
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+}
+
+func BenchmarkPluginFetcher_ListPlatforms(b *testing.B) {
+	f, err := NewPluginFetcher(logr.Discard(), nil, okSource("a"))
+	require.NoError(b, err)
+	ctx := b.Context()
+	scope := WithCatalog("a")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := f.ListPlatforms(ctx, "p", ArtifactKindProvider, "1.0.0", scope); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

@@ -4,15 +4,18 @@
 package integration
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -49,6 +52,10 @@ import (
 var binaryPath string
 
 func TestMain(m *testing.M) {
+	if os.Getenv("SCAFCTL_TEST_EMBEDDER_HELPER") == "1" {
+		runEmbedderHelperProcess()
+	}
+
 	// Build the binary once for all tests.
 	// Use a project-local directory instead of os.TempDir() to avoid
 	// Windows Defender false positives on freshly-built Go binaries in temp.
@@ -9580,6 +9587,270 @@ func TestIntegration_PackageSolution_RerunAfterFailedVerify(t *testing.T) {
 		"a failed verify must not produce a cache hit on rerun")
 }
 
+// startShortNamePluginOCIRegistry starts an HTTPS OCI v2 registry serving a
+// multi-platform provider ("directory@0.1.5" for linux/amd64 and darwin/arm64)
+// without serving the binary layer blobs (500 on binary blob GET), proving
+// package solution resolves short-name plugins across the catalog chain from
+// manifest metadata alone.
+func startShortNamePluginOCIRegistry(t *testing.T) (host, linuxDigest, darwinDigest string) {
+	t.Helper()
+
+	sha256Digest := func(b []byte) string {
+		sum := sha256.Sum256(b)
+		return "sha256:" + hex.EncodeToString(sum[:])
+	}
+
+	linuxBin := []byte("fake-directory-linux-amd64")
+	darwinBin := []byte("fake-directory-darwin-arm64")
+	linuxDigest = sha256Digest(linuxBin)
+	darwinDigest = sha256Digest(darwinBin)
+
+	cfgBytes := []byte(`{}`)
+	cfgDigest := sha256Digest(cfgBytes)
+
+	buildManifest := func(plat, layerDigest string, layerSize int) ([]byte, string) {
+		doc := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.scafctl.provider.config.v1+json","digest":%q,"size":%d},"layers":[{"mediaType":"application/vnd.scafctl.provider.v1+binary","digest":%q,"size":%d}],"annotations":{"dev.scafctl.artifact.name":"directory","dev.scafctl.artifact.type":"provider","org.opencontainers.image.version":"0.1.5","dev.scafctl.artifact.platform":%q}}`,
+			cfgDigest, len(cfgBytes), layerDigest, layerSize, plat)
+		b := []byte(doc)
+		return b, sha256Digest(b)
+	}
+
+	linuxManifest, linuxManifestDigest := buildManifest("linux/amd64", linuxDigest, len(linuxBin))
+	darwinManifest, darwinManifestDigest := buildManifest("darwin/arm64", darwinDigest, len(darwinBin))
+
+	indexDoc := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":%q,"size":%d,"platform":{"os":"linux","architecture":"amd64"}},{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":%q,"size":%d,"platform":{"os":"darwin","architecture":"arm64"}}],"annotations":{"dev.scafctl.artifact.name":"directory","dev.scafctl.artifact.type":"provider","org.opencontainers.image.version":"0.1.5"}}`,
+		linuxManifestDigest, len(linuxManifest), darwinManifestDigest, len(darwinManifest))
+	indexBytes := []byte(indexDoc)
+	indexDigest := sha256Digest(indexBytes)
+
+	manifests := map[string]struct {
+		mediaType string
+		data      []byte
+	}{
+		"0.1.5":              {"application/vnd.oci.image.index.v1+json", indexBytes},
+		indexDigest:          {"application/vnd.oci.image.index.v1+json", indexBytes},
+		linuxManifestDigest:  {"application/vnd.oci.image.manifest.v1+json", linuxManifest},
+		darwinManifestDigest: {"application/vnd.oci.image.manifest.v1+json", darwinManifest},
+	}
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v2/" || r.URL.Path == "/v2":
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/v2/scafctl/providers/directory/tags/list":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"scafctl/providers/directory","tags":["0.1.5"]}`))
+		case strings.HasPrefix(r.URL.Path, "/v2/scafctl/providers/directory/manifests/"):
+			ref := strings.TrimPrefix(r.URL.Path, "/v2/scafctl/providers/directory/manifests/")
+			m, ok := manifests[ref]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			dgst := ref
+			if ref == "0.1.5" {
+				dgst = indexDigest
+			}
+			w.Header().Set("Content-Type", m.mediaType)
+			w.Header().Set("Docker-Content-Digest", dgst)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(m.data)))
+			if r.Method == http.MethodGet {
+				_, _ = w.Write(m.data)
+			}
+		case strings.HasPrefix(r.URL.Path, "/v2/scafctl/providers/directory/blobs/"):
+			dgst := strings.TrimPrefix(r.URL.Path, "/v2/scafctl/providers/directory/blobs/")
+			if m, ok := manifests[dgst]; ok {
+				w.Header().Set("Docker-Content-Digest", dgst)
+				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(m.data)))
+				if r.Method == http.MethodGet {
+					_, _ = w.Write(m.data)
+				}
+				return
+			}
+			// Binary blobs are intentionally not served to assert zero blob downloads.
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	return strings.TrimPrefix(srv.URL, "https://"), linuxDigest, darwinDigest
+}
+
+// TestIntegration_PackageSolution_ShortNamePluginCatalogChain verifies that
+// `scafctl package solution` resolves short-name `bundle.plugins` entries
+// across the configured plugin catalog chain without requiring a prior
+// `scafctl catalog pull` into the local catalog.
+func TestIntegration_PackageSolution_ShortNamePluginCatalogChain(t *testing.T) {
+	t.Parallel()
+	if (runtime.GOOS != "linux" || runtime.GOARCH != "amd64") && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
+		t.Skip("fixture publishes linux/amd64 and darwin/arm64")
+	}
+
+	host, linuxDigest, darwinDigest := startShortNamePluginOCIRegistry(t)
+
+	solDir := t.TempDir()
+	solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: short-plugin-demo
+  version: 0.1.0
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: ^0.1.0
+spec:
+  resolvers:
+    files:
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              path: "."
+`
+	require.NoError(t, os.WriteFile(filepath.Join(solDir, "solution.yaml"), []byte(solYAML), 0o600))
+
+	xdgRoot := t.TempDir()
+	cfgDir := filepath.Join(xdgRoot, "config", "scafctl")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+	cfgYAML := fmt.Sprintf(`catalogs:
+  - name: local
+    type: filesystem
+  - name: test-remote
+    type: oci
+    url: oci://%s/scafctl
+    insecure: true
+settings:
+  disableOfficialCatalog: true
+`, host)
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfgYAML), 0o600))
+
+	env := map[string]string{
+		"XDG_CONFIG_HOME": filepath.Join(xdgRoot, "config"),
+		"XDG_DATA_HOME":   filepath.Join(xdgRoot, "data"),
+		"XDG_CACHE_HOME":  filepath.Join(xdgRoot, "cache"),
+	}
+
+	stdout, stderr, exitCode := runScafctlWithEnvInDir(t, solDir, env,
+		"package", "solution", "-f", "solution.yaml", "--version", "0.1.0", "--skip-tests")
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	lockBytes, err := os.ReadFile(filepath.Join(solDir, "solution.lock"))
+	require.NoError(t, err)
+	lockStr := string(lockBytes)
+	assert.Contains(t, lockStr, "name: directory")
+	assert.Contains(t, lockStr, "version: 0.1.5")
+	assert.Contains(t, lockStr, "resolvedFrom: test-remote")
+	assert.Contains(t, lockStr, "resolvedCanonical: "+host+"/scafctl")
+	assert.Contains(t, lockStr, linuxDigest)
+	assert.Contains(t, lockStr, darwinDigest)
+}
+
+// runEmbedderHelperProcess executes the CLI in a fresh child process with
+// RootOptions.BinaryName = "mycli" before paths.SetAppName's sync.Once fires.
+func runEmbedderHelperProcess() {
+	var cliArgs []string
+	for i, arg := range os.Args {
+		if arg == "--" {
+			cliArgs = os.Args[i+1:]
+			break
+		}
+	}
+	code := func() int {
+		scafctl.RegisterDefaults()
+		rootCmd, cleanup := scafctl.Root(&scafctl.RootOptions{
+			BinaryName: "mycli",
+		})
+		defer cleanup()
+		rootCmd.SetArgs(cliArgs)
+		if err := rootCmd.Execute(); err != nil {
+			return exitcode.GetCode(err)
+		}
+		return 0
+	}()
+	os.Exit(code)
+}
+
+// TestIntegration_PackageSolution_ShortNamePlugin_EmbedderBinaryName verifies
+// short-name `bundle.plugins` resolution across the configured catalog chain
+// when invoked via an embedder binary name (`mycli`), honoring `mycli`'s XDG
+// config and data paths without any hardcoded `scafctl` assumptions.
+func TestIntegration_PackageSolution_ShortNamePlugin_EmbedderBinaryName(t *testing.T) {
+	t.Parallel()
+	if (runtime.GOOS != "linux" || runtime.GOARCH != "amd64") && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64") {
+		t.Skip("fixture publishes linux/amd64 and darwin/arm64")
+	}
+
+	host, linuxDigest, darwinDigest := startShortNamePluginOCIRegistry(t)
+
+	solDir := t.TempDir()
+	solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: embedder-short-plugin
+  version: 0.1.0
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: ^0.1.0
+spec:
+  resolvers:
+    files:
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              path: "."
+`
+	require.NoError(t, os.WriteFile(filepath.Join(solDir, "solution.yaml"), []byte(solYAML), 0o600))
+
+	xdgRoot := t.TempDir()
+	// Place config ONLY under mycli/config.yaml so a hardcoded "scafctl" lookup would miss it.
+	cfgDir := filepath.Join(xdgRoot, "config", "mycli")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+	cfgYAML := fmt.Sprintf(`catalogs:
+  - name: local
+    type: filesystem
+  - name: embedder-remote
+    type: oci
+    url: oci://%s/scafctl
+    insecure: true
+settings:
+  disableOfficialCatalog: true
+`, host)
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(cfgYAML), 0o600))
+
+	testBin, err := os.Executable()
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, testBin,
+		"--",
+		"package", "solution", "-f", "solution.yaml", "--version", "0.1.0", "--skip-tests")
+	cmd.Dir = solDir
+	cmd.Env = append(os.Environ(),
+		"SCAFCTL_TEST_EMBEDDER_HELPER=1",
+		"XDG_CONFIG_HOME="+filepath.Join(xdgRoot, "config"),
+		"XDG_DATA_HOME="+filepath.Join(xdgRoot, "data"),
+		"XDG_CACHE_HOME="+filepath.Join(xdgRoot, "cache"),
+	)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "mycli package solution failed: %s", string(out))
+
+	lockBytes, err := os.ReadFile(filepath.Join(solDir, "solution.lock"))
+	require.NoError(t, err)
+	lockStr := string(lockBytes)
+	assert.Contains(t, lockStr, "resolvedFrom: embedder-remote")
+	assert.Contains(t, lockStr, "resolvedCanonical: "+host+"/scafctl")
+	assert.Contains(t, lockStr, linuxDigest)
+	assert.Contains(t, lockStr, darwinDigest)
+	assert.DirExists(t, filepath.Join(xdgRoot, "data", "mycli", "catalog"))
+}
+
 func TestIntegration_BundleExtract_AfterBuild(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
@@ -11397,32 +11668,74 @@ func TestIntegration_MCPServeInfo(t *testing.T) {
 	assert.True(t, toolNames["list_context_variables"], "expected list_context_variables tool")
 }
 
-func TestIntegration_MCPServeProtocol(t *testing.T) {
-	t.Parallel()
+// runMCPServeSession starts `scafctl mcp serve` over pipes, sends the JSON-RPC
+// lines on stdin, and keeps stdin open until the JSON-RPC response with id ==
+// waitForID is read from stdout (preventing stdin EOF from canceling queued
+// stdio worker requests before their response is flushed).
+func runMCPServeSession(t *testing.T, extraEnv map[string]string, messages []string, waitForID int) string {
+	t.Helper()
 
-	// Test the MCP JSON-RPC protocol by piping an initialize message via stdin.
-	// We build a simple stdin payload and verify the server responds correctly.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
 	cmd.Dir = findProjectRoot()
+	baseEnv := os.Environ()
+	env := make([]string, 0, len(baseEnv)+len(extraEnv))
+	for _, kv := range baseEnv {
+		key, _, _ := strings.Cut(kv, "=")
+		if _, overridden := extraEnv[key]; !overridden {
+			env = append(env, kv)
+		}
+	}
+	for k, v := range extraEnv {
+		env = append(env, k+"="+v)
+	}
+	cmd.Env = env
 
-	initMsg := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
-	cmd.Stdin = strings.NewReader(initMsg + "\n")
-
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
+	stdinPipe, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	stdoutPipe, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 
-	err := cmd.Run()
-	// The server may exit with an error when stdin closes, that's OK
-	_ = err
+	require.NoError(t, cmd.Start())
 
-	output := outBuf.String()
-	require.NotEmpty(t, output, "expected JSON-RPC response on stdout")
+	_, writeErr := io.WriteString(stdinPipe, strings.Join(messages, "\n")+"\n")
+	require.NoError(t, writeErr)
 
-	// Parse the first JSON-RPC response
+	var targetResp string
+	var rawLines []string
+	scanner := bufio.NewScanner(stdoutPipe)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		rawLines = append(rawLines, line)
+		var envelope struct {
+			ID *int `json:"id"`
+		}
+		if json.Unmarshal([]byte(line), &envelope) == nil && envelope.ID != nil && *envelope.ID == waitForID {
+			targetResp = line
+			break
+		}
+	}
+	scanErr := scanner.Err()
+	_ = stdinPipe.Close()
+	_, _ = io.Copy(io.Discard, stdoutPipe)
+	_ = cmd.Wait()
+
+	require.NoError(t, scanErr, "mcp serve stdout scan failed; stderr: %s", errBuf.String())
+	require.NotEmpty(t, targetResp, "expected JSON-RPC response for id %d; got lines: %v; stderr: %s", waitForID, rawLines, errBuf.String())
+	return targetResp
+}
+
+func TestIntegration_MCPServeProtocol(t *testing.T) {
+	t.Parallel()
+
+	initMsg := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`
+	output := runMCPServeSession(t, nil, []string{initMsg}, 1)
+
 	var resp struct {
 		JSONRPC string `json:"jsonrpc"`
 		ID      int    `json:"id"`
@@ -14963,35 +15276,12 @@ func TestIntegration_MCPServe_GetProviderSchema_Builtin(t *testing.T) {
 	t.Parallel()
 	// Verify the MCP get_provider_schema tool returns full schema for
 	// builtin providers via JSON-RPC protocol.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
-	cmd.Dir = findProjectRoot()
-
-	messages := strings.Join([]string{
+	messages := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_provider_schema","arguments":{"name":"cel"}}}`,
-	}, "\n")
-	cmd.Stdin = strings.NewReader(messages + "\n")
-
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-
-	_ = cmd.Run()
-
-	output := outBuf.String()
-	// Find the tools/call response (id:2)
-	var schemaResp string
-	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, `"id":2`) {
-			schemaResp = line
-			break
-		}
 	}
-	require.NotEmpty(t, schemaResp, "expected tools/call response for id 2")
+	schemaResp := runMCPServeSession(t, nil, messages, 2)
 	assert.Contains(t, schemaResp, "cel")
 	assert.Contains(t, schemaResp, "expression")
 	assert.NotContains(t, schemaResp, "NOT_FOUND")
@@ -15002,34 +15292,12 @@ func TestIntegration_MCPServe_GetProviderSchema_OfficialFallback(t *testing.T) {
 	// When an official plugin provider can't be fetched (no fetcher in test
 	// env), get_provider_schema should return a helpful NOT_FOUND response
 	// with guidance rather than crashing.
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
-	cmd.Dir = findProjectRoot()
-
-	messages := strings.Join([]string{
+	messages := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_provider_schema","arguments":{"name":"exec"}}}`,
-	}, "\n")
-	cmd.Stdin = strings.NewReader(messages + "\n")
-
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-
-	_ = cmd.Run()
-
-	output := outBuf.String()
-	var schemaResp string
-	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, `"id":2`) {
-			schemaResp = line
-			break
-		}
 	}
-	require.NotEmpty(t, schemaResp, "expected tools/call response for id 2")
+	schemaResp := runMCPServeSession(t, nil, messages, 2)
 	// Should mention exec and provide useful context (either schema if cached,
 	// or NOT_FOUND with guidance about the plugin).
 	assert.Contains(t, schemaResp, "exec")
@@ -15040,8 +15308,6 @@ func TestIntegration_MCPServe_GetProviderSchema_CachedDescriptor(t *testing.T) {
 	// Pre-populate the provider schema cache with a fake descriptor.
 	// When the plugin binary is unavailable, get_provider_schema should
 	// return the cached descriptor with "source": "cached".
-	cacheDir := t.TempDir()
-
 	// Write a minimal cached descriptor entry (use current time so TTL check passes).
 	// Note: the Descriptor struct tags the input schema as "schema" (not "inputSchema").
 	cacheEntry := fmt.Sprintf(`{
@@ -15060,51 +15326,19 @@ func TestIntegration_MCPServe_GetProviderSchema_CachedDescriptor(t *testing.T) {
 			}
 		}
 	}`, time.Now().UTC().Format(time.RFC3339))
-	err := os.MkdirAll(cacheDir, 0o755)
-	require.NoError(t, err)
-	err = os.WriteFile(filepath.Join(cacheDir, "fake-cached-provider.json"), []byte(cacheEntry), 0o600)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
-	cmd.Dir = findProjectRoot()
-	cmd.Env = append(os.Environ(), "XDG_CACHE_HOME="+filepath.Dir(cacheDir))
 
 	// The cache expects the path: $XDG_CACHE_HOME/scafctl/provider-schemas/
-	// So we need to create the proper directory structure
-	properCacheDir := filepath.Join(t.TempDir(), "scafctl", "provider-schemas")
-	err = os.MkdirAll(properCacheDir, 0o755)
-	require.NoError(t, err)
-	err = os.WriteFile(filepath.Join(properCacheDir, "fake-cached-provider.json"), []byte(cacheEntry), 0o600)
-	require.NoError(t, err)
+	xdgCacheHome := t.TempDir()
+	properCacheDir := filepath.Join(xdgCacheHome, "scafctl", "provider-schemas")
+	require.NoError(t, os.MkdirAll(properCacheDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(properCacheDir, "fake-cached-provider.json"), []byte(cacheEntry), 0o600))
 
-	xdgCacheHome := filepath.Dir(filepath.Dir(properCacheDir)) // parent of scafctl/
-	cmd.Env = append(os.Environ(), "XDG_CACHE_HOME="+xdgCacheHome)
-
-	messages := strings.Join([]string{
+	messages := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_provider_schema","arguments":{"name":"fake-cached-provider"}}}`,
-	}, "\n")
-	cmd.Stdin = strings.NewReader(messages + "\n")
-
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-
-	_ = cmd.Run()
-
-	output := outBuf.String()
-	var schemaResp string
-	for _, line := range strings.Split(output, "\n") {
-		if strings.Contains(line, `"id":2`) {
-			schemaResp = line
-			break
-		}
 	}
-	require.NotEmpty(t, schemaResp, "expected tools/call response for id 2")
+	schemaResp := runMCPServeSession(t, map[string]string{"XDG_CACHE_HOME": xdgCacheHome}, messages, 2)
 	assert.Contains(t, schemaResp, "fake-cached-provider")
 	assert.Contains(t, schemaResp, "cached")
 	assert.Contains(t, schemaResp, "input1")

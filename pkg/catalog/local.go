@@ -1048,6 +1048,7 @@ func (c *LocalCatalog) ResolveContentDigest(ctx context.Context, ref Reference, 
 	}
 
 	info.Size = layer.Size
+	info.ManifestDigest = manifestDesc.Digest.String()
 	return ContentDigestInfo{
 		ArtifactInfo:  info,
 		ContentDigest: layer.Digest.String(),

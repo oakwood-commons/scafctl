@@ -226,7 +226,7 @@ type PluginSource struct {
 	Registry string `json:"registry,omitempty" yaml:"registry,omitempty" doc:"OCI registry (and namespace) for the plugin source" example:"ghcr.io/oakwood-commons" maxLength:"255" required:"false"`
 
 	// Artifact is the OCI artifact (leaf) name within the registry.
-	Artifact string `json:"artifact" yaml:"artifact" doc:"OCI artifact name for the plugin source" example:"scafctl-exec-provider" maxLength:"100"`
+	Artifact string `json:"artifact,omitempty" yaml:"artifact,omitempty" doc:"OCI artifact name for the plugin source (defaults to name when omitted)" example:"scafctl-exec-provider" maxLength:"100" required:"false"`
 
 	// Built selects the locally built copy of the plugin from the local catalog.
 	Built bool `json:"built,omitempty" yaml:"built,omitempty" doc:"Resolve the plugin from the locally built copy in the local catalog" required:"false"`

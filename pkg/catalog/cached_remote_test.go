@@ -474,7 +474,153 @@ func TestCachedRemoteCatalog_FetchByPlatform_CachedCopyImageRef(t *testing.T) {
 func TestCachedRemoteCatalog_FromCachedFetch_NoManifestDigest(t *testing.T) {
 	t.Parallel()
 	f := newCachedRemoteFixture(t)
-	info := f.cat.fromCachedFetch(testRef(cachedTestName, "1.0.0"), ArtifactInfo{})
+	info := f.cat.fromCachedFetch(testRef(cachedTestName, "1.0.0"), ArtifactInfo{Digest: "sha256:layer-only"})
 	assert.Empty(t, info.ImageRef, "no manifest digest leaves nothing to verify, which enforcement rejects")
 	assert.Equal(t, f.cat.canonicalID(), info.Canonical)
+}
+
+func TestCachedRemoteCatalog_FindAndResolveDigest_ImageRefParity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		fixture  func(*testing.T) cachedRemoteFixture
+		artifact string
+		version  string
+		platform string
+	}{
+		{name: "multi-platform index", fixture: newCachedPlatformFixture, artifact: cachedPlatformName, version: "2.0.0", platform: "darwin/arm64"},
+		{name: "single-platform manifest", fixture: newCachedRemoteFixture, artifact: cachedTestName, version: "1.0.0", platform: "linux/amd64"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := tt.fixture(t)
+			ctx := t.Context()
+			ref := testRef(tt.artifact, tt.version)
+			query := ArtifactQuery{Name: tt.artifact, Kind: ArtifactKindProvider, Version: tt.version}
+
+			liveFind, err := f.cat.RemoteCatalog.Find(ctx, query)
+			require.NoError(t, err)
+			require.NotEmpty(t, liveFind.ImageRef, "live RemoteCatalog.Find must populate ImageRef")
+			require.NotEmpty(t, liveFind.ManifestDigest, "live RemoteCatalog.Find must populate ManifestDigest")
+
+			liveDigest, err := f.cat.RemoteCatalog.ResolveContentDigest(ctx, ref, tt.platform, MediaTypeProviderBinary)
+			require.NoError(t, err)
+			require.NotEmpty(t, liveDigest.ImageRef)
+			require.NotEmpty(t, liveDigest.ManifestDigest)
+
+			// Close remote so CachedRemoteCatalog can only serve from LocalCatalog.
+			f.ts.Close()
+
+			cachedFind, err := f.cat.Find(ctx, query)
+			require.NoError(t, err)
+			assert.Equal(t, liveFind.ImageRef, cachedFind.ImageRef)
+			assert.Equal(t, liveFind.ManifestDigest, cachedFind.ManifestDigest)
+
+			cachedDigest, err := f.cat.ResolveContentDigest(ctx, ref, tt.platform, MediaTypeProviderBinary)
+			require.NoError(t, err)
+			assert.Equal(t, liveDigest.ImageRef, cachedDigest.ImageRef)
+			assert.Equal(t, liveDigest.ManifestDigest, cachedDigest.ManifestDigest)
+			assert.Equal(t, liveDigest.ContentDigest, cachedDigest.ContentDigest)
+		})
+	}
+}
+
+func TestCachedRemoteCatalog_ListPlatforms_RemoteReachable(t *testing.T) {
+	t.Parallel()
+	f := newCachedPlatformFixture(t)
+	ctx := t.Context()
+
+	// Add a newer version on the remote with an extra platform so we can tell
+	// whether unpinned ListPlatforms asked the remote instead of the 2.0.0 cache.
+	storeMultiPlatformInFake(t, f.cat.RemoteCatalog, testRef(cachedPlatformName, "4.0.0"), []PlatformBinary{
+		{Platform: "linux/amd64", Data: []byte("linux-4.0.0")},
+		{Platform: "darwin/arm64", Data: []byte("darwin-4.0.0")},
+		{Platform: "windows/amd64", Data: []byte("windows-4.0.0")},
+	})
+
+	platforms, err := f.cat.ListPlatforms(ctx, testRef(cachedPlatformName, "2.0.0"))
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"linux/amd64", "darwin/arm64"}, platforms)
+
+	platforms, err = f.cat.ListPlatforms(ctx, testRef(cachedPlatformName, "3.0.0"))
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"linux/amd64", "darwin/arm64"}, platforms)
+
+	platforms, err = f.cat.ListPlatforms(ctx, testRef(cachedPlatformName, ""))
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"linux/amd64", "darwin/arm64", "windows/amd64"}, platforms)
+
+	single := newCachedRemoteFixture(t)
+	platforms, err = single.cat.ListPlatforms(ctx, testRef(cachedTestName, "1.0.0"))
+	require.NoError(t, err)
+	assert.Nil(t, platforms, "single-platform cached copy returns nil")
+}
+
+func TestCachedRemoteCatalog_ListPlatforms_RemoteUnreachable(t *testing.T) {
+	t.Parallel()
+	f := newCachedPlatformFixture(t)
+	f.ts.Close()
+	ctx := t.Context()
+
+	t.Run("pinned served from cache", func(t *testing.T) {
+		t.Parallel()
+		platforms, err := f.cat.ListPlatforms(ctx, testRef(cachedPlatformName, "2.0.0"))
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"linux/amd64", "darwin/arm64"}, platforms)
+	})
+
+	t.Run("unpinned falls back to newest cached copy", func(t *testing.T) {
+		t.Parallel()
+		platforms, err := f.cat.ListPlatforms(ctx, testRef(cachedPlatformName, ""))
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"linux/amd64", "darwin/arm64"}, platforms)
+	})
+
+	t.Run("pinned not cached reports unreachable", func(t *testing.T) {
+		t.Parallel()
+		_, err := f.cat.ListPlatforms(ctx, testRef(cachedPlatformName, "3.0.0"))
+		_, unreachable := IsCatalogUnreachable(err)
+		assert.True(t, unreachable, "want unreachable error, got %v", err)
+	})
+
+	t.Run("unpinned not cached reports unreachable", func(t *testing.T) {
+		t.Parallel()
+		_, err := f.cat.ListPlatforms(ctx, testRef("never-cached", ""))
+		_, unreachable := IsCatalogUnreachable(err)
+		assert.True(t, unreachable, "want unreachable error, got %v", err)
+	})
+}
+
+func BenchmarkCachedRemoteCatalog_ResolveContentDigest_Cached(b *testing.B) {
+	remote, ts := newTestRemoteCatalog(b)
+	b.Cleanup(ts.Close)
+	local, err := NewLocalCatalogAt(b.TempDir(), remote.logger)
+	require.NoError(b, err)
+
+	ctx := b.Context()
+	ref := testRef(cachedPlatformName, "2.0.0")
+	_, err = local.StoreMultiPlatform(ctx, Reference{
+		Kind:    ArtifactKindProvider,
+		Name:    cachedPlatformName,
+		Version: ref.Version,
+		Remote:  remote.canonicalID(),
+	}, []PlatformBinary{
+		{Platform: "linux/amd64", Data: []byte("linux-2.0.0")},
+		{Platform: "darwin/arm64", Data: []byte("darwin-2.0.0")},
+	}, map[string]string{AnnotationSourceCanonical: remote.canonicalID()}, false)
+	require.NoError(b, err)
+	ts.Close()
+
+	cat, err := NewCachedRemoteCatalog(local, remote)
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := cat.ResolveContentDigest(ctx, ref, "linux/amd64", MediaTypeProviderBinary); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

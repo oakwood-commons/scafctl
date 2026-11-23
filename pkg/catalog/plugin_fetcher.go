@@ -56,12 +56,17 @@ func applyOptions(opts []Option) fetcherOptions {
 	return o
 }
 
+// ErrCatalogNotConfigured is returned when WithCatalog names a catalog that is
+// not in the PluginFetcher's configured sources.
+var ErrCatalogNotConfigured = errors.New("catalog not configured")
+
 // PluginSource is the subset of catalog behavior plugin fetching needs. Find
 // resolves exact versions, semver constraints and "latest" alike, so there is
 // no separate Resolve.
 type PluginSource interface {
 	Name() string
 	FetchByPlatform(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error)
+	ListPlatforms(ctx context.Context, ref Reference) ([]string, error)
 	ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error)
 	Find(ctx context.Context, query ArtifactQuery) (ArtifactInfo, error)
 }
@@ -152,7 +157,7 @@ func (f *PluginFetcher) targetCatalog(name string) (PluginSource, error) {
 	}
 	src, ok := f.byCatalog[name]
 	if !ok {
-		return nil, fmt.Errorf("catalog %q not configured", name)
+		return nil, fmt.Errorf("catalog %q not configured: %w", name, ErrCatalogNotConfigured)
 	}
 	return src, nil
 }
@@ -226,6 +231,28 @@ func (f *PluginFetcher) FetchPlugin(ctx context.Context, name string, kind Artif
 		"catalog", info.Catalog)
 
 	return data, info, nil
+}
+
+// ListPlatforms returns the platforms available for a multi-platform plugin
+// artifact, or nil if the artifact is single-platform, respecting WithCatalog.
+func (f *PluginFetcher) ListPlatforms(ctx context.Context, name string, kind ArtifactKind, version string, opts ...Option) ([]string, error) {
+	o := applyOptions(opts)
+	target, err := f.targetCatalog(o.catalog)
+	if err != nil {
+		return nil, err
+	}
+
+	ref, err := buildPluginRef(name, kind, version)
+	if err != nil {
+		return nil, err
+	}
+
+	platforms, err := target.ListPlatforms(ctx, ref)
+	if err != nil {
+		return nil, fmt.Errorf("listing platforms for %s (%s): %w", name, kind, err)
+	}
+
+	return platforms, nil
 }
 
 // ResolveContentDigest resolves the content-layer digest for a plugin binary
@@ -304,6 +331,13 @@ func (l *localPlugin) FetchByPlatform(ctx context.Context, ref Reference, platfo
 	return l.source.FetchByPlatform(ctx, sanitizeRefForBuilt(ref), platform)
 }
 
+func (l *localPlugin) ListPlatforms(ctx context.Context, ref Reference) ([]string, error) {
+	if ref.Remote != "" {
+		return nil, &ArtifactNotFoundError{Reference: ref, Catalog: l.Name()}
+	}
+	return l.source.ListPlatforms(ctx, sanitizeRefForBuilt(ref))
+}
+
 func (l *localPlugin) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
 	if ref.Remote != "" {
 		return ContentDigestInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: l.Name()}
@@ -344,6 +378,12 @@ func (c *pluginSourceChain) FetchByPlatform(ctx context.Context, ref Reference, 
 		return fetchResult{data: data, info: info}, err
 	})
 	return r.data, r.info, err
+}
+
+func (c *pluginSourceChain) ListPlatforms(ctx context.Context, ref Reference) ([]string, error) {
+	return walkPluginSources(c, ref.String(), func(src PluginSource) ([]string, error) {
+		return src.ListPlatforms(ctx, ref)
+	})
 }
 
 func (c *pluginSourceChain) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {

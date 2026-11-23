@@ -190,6 +190,13 @@ func (s mockPluginSource) FetchByPlatform(ctx context.Context, ref catalog.Refer
 	return s.m.FetchByPlatform(ctx, ref, platform)
 }
 
+func (s mockPluginSource) ListPlatforms(ctx context.Context, ref catalog.Reference) ([]string, error) {
+	if _, ok := s.m.artifacts[ref.String()]; !ok {
+		return nil, &catalog.ArtifactNotFoundError{Reference: ref, Catalog: s.m.name}
+	}
+	return s.m.ListPlatforms(ctx, ref)
+}
+
 func (s mockPluginSource) ResolveContentDigest(_ context.Context, ref catalog.Reference, _, _ string) (catalog.ContentDigestInfo, error) {
 	a, ok := s.m.artifacts[ref.String()]
 	if !ok {

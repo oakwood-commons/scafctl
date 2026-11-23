@@ -21,6 +21,7 @@ type mockCatalog struct {
 	fetchWithLayerFunc  func(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error)
 	resolveFunc         func(ctx context.Context, ref Reference) (ArtifactInfo, error)
 	listFunc            func(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error)
+	listPlatformsFunc   func(ctx context.Context, ref Reference) ([]string, error)
 	existsFunc          func(ctx context.Context, ref Reference) (bool, error)
 	deleteFunc          func(ctx context.Context, ref Reference) error
 }
@@ -74,6 +75,11 @@ func WithStoreFunc(fn func(ctx context.Context, ref Reference, content, bundleDa
 // WithListFunc sets the List implementation.
 func WithListFunc(fn func(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error)) MockOption {
 	return func(m *mockCatalog) { m.listFunc = fn }
+}
+
+// WithListPlatformsFunc sets the ListPlatforms implementation.
+func WithListPlatformsFunc(fn func(ctx context.Context, ref Reference) ([]string, error)) MockOption {
+	return func(m *mockCatalog) { m.listPlatformsFunc = fn }
 }
 
 // WithExistsFunc sets the Exists implementation.
@@ -201,11 +207,30 @@ func (m *mockCatalog) Delete(ctx context.Context, ref Reference) error {
 	return nil
 }
 
+// mockPluginSource extends mockCatalog with ListPlatforms so NewMockPluginSource
+// satisfies PluginSource while NewMockCatalog stays a plain (non-PlatformAwareCatalog)
+// Catalog for ChainCatalog tests.
+type mockPluginSource struct {
+	*mockCatalog
+}
+
 // NewMockPluginSource creates a PluginSource for testing with the given name
 // and options, suitable for NewPluginFetcher. It is also a Catalog.
 func NewMockPluginSource(name string, opts ...MockOption) PluginSource {
 	m, _ := NewMockCatalog(name, opts...).(*mockCatalog)
-	return m
+	return &mockPluginSource{mockCatalog: m}
+}
+
+// ListPlatforms implements PluginSource. Returns nil (single-platform) unless
+// overridden via WithListPlatformsFunc, after verifying the artifact exists.
+func (m *mockPluginSource) ListPlatforms(ctx context.Context, ref Reference) ([]string, error) {
+	if m.listPlatformsFunc != nil {
+		return m.listPlatformsFunc(ctx, ref)
+	}
+	if _, err := m.Resolve(ctx, ref); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 // FetchByPlatform implements PluginSource by delegating to Fetch; the mock

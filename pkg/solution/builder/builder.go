@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
-	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -187,18 +186,29 @@ func validateProviderCoverage(sol *solution.Solution, builtins []string, officia
 // buildLockSignatureVerifier returns a VerifySignature callback for the bundler
 // when a signature policy is active. It checks the context for an explicit
 // policy override first, then falls back to the app configuration
-// (config.Plugins.Signatures). Returns nil when signatures are disabled,
-// which causes VendorAllPlugins to skip verification.
-func buildLockSignatureVerifier(ctx context.Context, lgr logr.Logger) func(context.Context, string) (*bundler.LockPluginSignature, error) {
+// (config.Plugins.Signatures). Returns (nil, nil) when signatures are disabled,
+// which causes VendorAllPlugins to skip verification, or an error when an
+// active policy fails validation.
+func buildLockSignatureVerifier(ctx context.Context, lgr logr.Logger) (func(context.Context, string) (*bundler.LockPluginSignature, error), error) {
 	policy := plugin.SignaturePolicyFromContext(ctx)
 	if policy == nil {
 		policy = signaturePolicyFromAppConfig(config.FromContext(ctx), lgr)
 	}
 	if !policy.IsEnabled() {
-		return nil
+		return nil, nil
+	}
+	if err := policy.Validate(); err != nil {
+		return nil, fmt.Errorf("plugin signature policy: %w", err)
 	}
 	verifier := plugin.NewSignatureVerifier()
 	return func(ctx context.Context, imageRef string) (*bundler.LockPluginSignature, error) {
+		if imageRef == "" {
+			err := fmt.Errorf("plugin has no published origin (as for a local build): %w", plugin.ErrSignatureUnverifiable)
+			if handleErr := plugin.HandleVerificationError(policy, err, lgr); handleErr != nil {
+				return nil, handleErr
+			}
+			return nil, nil
+		}
 		result, err := verifier.VerifySignature(ctx, imageRef, policy)
 		if err != nil {
 			if handleErr := plugin.HandleVerificationError(policy, err, lgr,
@@ -215,7 +225,7 @@ func buildLockSignatureVerifier(ctx context.Context, lgr logr.Logger) func(conte
 			Identity: result.Identity,
 			SignedAt: result.SignedAt,
 		}, nil
-	}
+	}, nil
 }
 
 // signaturePolicyFromAppConfig derives a SignaturePolicy from the app
@@ -233,63 +243,4 @@ func signaturePolicyFromAppConfig(appCfg *config.Config, lgr logr.Logger) *plugi
 		return nil
 	}
 	return policy
-}
-
-// buildSourcedCatalogs constructs one remote catalog per URL-bearing configured
-// catalog, keyed by the lowercased catalog alias. It mirrors
-// catalogindex.FromConfig's remote enumeration exactly -- only URL-bearing
-// (remote/OCI) catalogs, keyed by strings.ToLower(catCfg.Name) -- so the
-// alias->origin map (used to bind a sourced plugin's origin to an alias)
-// and this alias->catalog map (used to resolve that alias to a live catalog)
-// stay in lockstep. Filesystem catalogs are skipped: they have no registry
-// origin and cannot serve a fully-qualified source.
-//
-// Each catalog is built via catalog.BuildRemoteCatalogFromConfig, which wires
-// config-matched auth (the catalog's authProvider handler + authScope) when
-// available and otherwise falls back to anonymous/Docker credentials. A single
-// shared CredentialStore is threaded through all catalogs. A catalog that fails
-// to build is skipped with a debug log rather than failing the whole build --
-// an unrelated misconfigured catalog must not block vendoring a plugin sourced
-// from a different, healthy catalog.
-//
-// Returns nil when the config is absent or no remote catalogs are configured,
-// so a sourced plugin fails with "no catalog available for alias".
-func buildSourcedCatalogs(ctx context.Context, lgr logr.Logger) map[string]bundler.ArtifactResolver {
-	cfg := config.FromContext(ctx)
-	if cfg == nil {
-		return nil
-	}
-
-	authReg := auth.RegistryFromContext(ctx)
-	credStore, credErr := catalog.NewCredentialStore(lgr)
-	if credErr != nil {
-		// Non-fatal: BuildRemoteCatalogFromConfig tolerates a nil store and
-		// falls back to anonymous access.
-		lgr.V(1).Info("credential store unavailable for sourced plugin catalogs", "error", credErr)
-	}
-
-	out := make(map[string]bundler.ArtifactResolver)
-	for _, catCfg := range cfg.Catalogs {
-		if catCfg.URL == "" {
-			continue // filesystem catalog: no registry origin
-		}
-		alias := strings.ToLower(catCfg.Name)
-		if _, exists := out[alias]; exists {
-			// Mirror catalogindex.FromConfig's "first alias wins" behavior so
-			// the two maps agree on which catalog an alias binds to.
-			continue
-		}
-		rc, buildErr := catalog.BuildRemoteCatalogFromConfig(catCfg, credStore, authReg, lgr)
-		if buildErr != nil {
-			lgr.V(1).Info("skipping catalog for sourced plugin vendoring",
-				"catalog", catCfg.Name, "error", buildErr)
-			continue
-		}
-		out[alias] = rc
-	}
-
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }

@@ -203,14 +203,15 @@ plugins:
 
 ### How Verification Works
 
-When a plugin binary is fetched from a catalog with signature verification enabled:
+When a plugin is fetched at runtime or pinned during `scafctl package solution`
+with signature verification enabled:
 
-1. The OCI artifact digest is resolved from the catalog
+1. The OCI artifact digest and image reference are resolved from the catalog
 2. scafctl queries the Rekor transparency log for a cosign signature
 3. The signing certificate is validated against Fulcio CA roots
 4. The certificate's OIDC issuer and identity are matched against the policy
-5. On success, the verification result is logged (issuer, identity, timestamp)
-6. On failure, the mode determines the outcome (warn or fail)
+5. On success, the verification result is logged (and recorded under `signature` in `solution.lock` at package time)
+6. On failure -- including locally built plugins that have no registry image reference -- `warn` mode logs a warning and continues, while `enforce` mode fails closed
 
 ### Build Tag Requirement
 
@@ -307,8 +308,9 @@ Field reference:
 
 | Field | Required | Description |
 | ------- | ---------- | ------------- |
-| `source.registry` | Yes (when `source` is set) | OCI registry and namespace the plugin is fetched from. Must map to a **configured catalog** (see below). |
-| `source.artifact` | No | Artifact leaf name within the registry. Defaults to `name` when omitted. |
+| `source.registry` | One of `registry` or `built` | OCI registry and namespace the plugin is fetched from. Must map to a **configured catalog** (mutually exclusive with `source.built`). |
+| `source.built` | One of `registry` or `built` | When `true`, resolves the plugin strictly from a locally built copy in the `local` catalog (mutually exclusive with `source.registry`). |
+| `source.artifact` | No | Artifact leaf name within the catalog. Defaults to `name` when omitted. |
 
 Behavior:
 
@@ -358,7 +360,7 @@ regardless of catalog chain order or local catalog aliases. The fields common to
 | `version` | the exact resolved semver (e.g. `1.5.3`) | pins the moving constraint to one version |
 | `constraint` | the requested constraint as written (e.g. `^1.5.0`) | refreshed on every build; used to decide whether the pin still satisfies the request |
 | `digest` / `digests` | SHA-256 content digest(s) | supply-chain verification on every fetch |
-| `resolvedCanonical` | the machine-independent canonical origin it was fetched from (e.g. `ghcr.io/org/plugins`) | **recorded for every plugin**; survives catalog **renames** and is portable across machines |
+| `resolvedCanonical` | the machine-independent canonical origin it was fetched from (e.g. `ghcr.io/org/plugins`), or empty for locally built copies | recorded for every remote-origin plugin; survives catalog **renames** and is portable across machines |
 | `resolvedFrom` | the local catalog **alias** the origin mapped to | human-facing; may differ per machine |
 
 A plugin declared with an explicit `source` block additionally stores a `source`
@@ -366,11 +368,13 @@ block in its lock entry:
 
 | Lock field | Value | Purpose |
 | ------------ | ------- | --------- |
-| `source.registry` | the canonical registry origin from `source.registry` | marks the entry as *sourced* and binds its lock identity to that origin |
+| `source.registry` | the canonical registry origin from `source.registry` | marks the entry as registry-sourced and binds its lock identity to that origin |
+| `source.built` | `true` when declared with `source.built: true` | marks the entry as resolved from a locally built plugin |
 
-Do not confuse the two: `resolvedCanonical` is present on **every** entry and is
-how scafctl records where a plugin was fetched from, while the `source` block is
-present **only** on entries whose `bundle.plugins` declaration used `source`.
+Do not confuse the two: `resolvedCanonical` records the remote registry origin a
+plugin was fetched from (even for short-name declarations), while the `source`
+block is present **only** on entries whose `bundle.plugins` declaration used
+`source`.
 
 The **solution-local alias** (`name` in `bundle.plugins`) is deliberately *not*
 stored -- the lock records the resolved `(canonical origin, artifact leaf, kind)`
@@ -378,15 +382,21 @@ identity instead. Two aliases that point at the same origin+artifact therefore
 dedupe to a single lock entry, and renaming the alias in the solution does not
 churn the lock.
 
-A **sourced** lock entry is matched back to its dependency by the
-`(source.registry, artifact leaf, kind)` tuple; a **short-name** entry is matched
-by `(artifact leaf, kind)` against entries with no `source` block. Either way,
-because the canonical origin is stored, a teammate on a different machine who has
-the same registry configured under a *different* catalog alias still replays the
-identical pin. On the next build the pinned `version` is replayed as long as it
-still satisfies the current `constraint`; if you tighten or bump the constraint
-past the pin, that one entry is re-resolved and re-pinned while everything else
-stays frozen.
+A **registry-sourced** lock entry is matched back to its dependency by the
+`(source.registry, artifact leaf, kind)` tuple; a **built** entry matches
+`(source.built, artifact leaf, kind)`; a **short-name** entry matches
+`(artifact leaf, kind)` against entries with no `source` block. During
+`scafctl package solution`:
+
+- Locally built plugins (`source.built: true` or a local build shadowing a
+  short-name plugin) are always re-resolved from the `local` catalog so
+  in-place `--force` rebuilds pick up the current digest.
+- Remote lock entries (registry-sourced or short-name) replay their pinned
+  `version`, origin, and content digests as long as the pinned version still
+  satisfies `constraint` and the recorded `resolvedCanonical` still maps to a
+  configured catalog. When a signature policy is active, the pinned artifact is
+  reverified against the current policy before replay (`enforce` fails closed if
+  the pinned artifact does not satisfy the active trust policy).
 
 This is what makes a plugin deterministic: the origin (`resolvedCanonical`, plus
 `source.registry` when sourced), the artifact (`name`), the exact `version`, and

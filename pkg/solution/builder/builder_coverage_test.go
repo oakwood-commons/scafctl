@@ -30,56 +30,6 @@ func TestBuildResult_ZeroValue(t *testing.T) {
 	assert.Nil(t, r.Discovery)
 }
 
-// ── buildSourcedCatalogs tests ────────────────────────────────────────────────
-
-func TestBuildSourcedCatalogs_NilConfig(t *testing.T) {
-	t.Parallel()
-	got := buildSourcedCatalogs(context.Background(), logr.Discard())
-	assert.Nil(t, got)
-}
-
-func TestBuildSourcedCatalogs_NoRemoteCatalogs(t *testing.T) {
-	t.Parallel()
-	cfg := &config.Config{
-		Catalogs: []config.CatalogConfig{
-			{Name: "local", Type: config.CatalogTypeFilesystem, Path: "./local"},
-		},
-	}
-	ctx := config.WithConfig(context.Background(), cfg)
-	got := buildSourcedCatalogs(ctx, logr.Discard())
-	assert.Nil(t, got, "filesystem catalogs have no registry origin and must be skipped")
-}
-
-func TestBuildSourcedCatalogs_BuildsKeyedByLowercasedAlias(t *testing.T) {
-	t.Parallel()
-	cfg := &config.Config{
-		Catalogs: []config.CatalogConfig{
-			{Name: "MyOrg", Type: config.CatalogTypeOCI, URL: "oci://ghcr.io/myorg"},
-		},
-	}
-	ctx := config.WithConfig(context.Background(), cfg)
-	got := buildSourcedCatalogs(ctx, logr.Discard())
-	require.Len(t, got, 1)
-	cat, ok := got["myorg"]
-	require.True(t, ok, "catalog must be keyed by the lowercased alias")
-	assert.NotNil(t, cat)
-}
-
-func TestBuildSourcedCatalogs_FirstAliasWins(t *testing.T) {
-	t.Parallel()
-	cfg := &config.Config{
-		Catalogs: []config.CatalogConfig{
-			{Name: "dup", Type: config.CatalogTypeOCI, URL: "oci://ghcr.io/first"},
-			{Name: "DUP", Type: config.CatalogTypeOCI, URL: "oci://ghcr.io/second"},
-		},
-	}
-	ctx := config.WithConfig(context.Background(), cfg)
-	got := buildSourcedCatalogs(ctx, logr.Discard())
-	require.Len(t, got, 1, "duplicate lowercased aliases collapse to one entry")
-	_, ok := got["dup"]
-	assert.True(t, ok)
-}
-
 // ── ParseByteSize additional edge cases ───────────────────────────────────────
 
 func TestParseByteSize_Whitespace(t *testing.T) {
@@ -274,7 +224,8 @@ func TestValidateProviderCoverage_TransformPhase(t *testing.T) {
 
 func TestBuildLockSignatureVerifier_NilPolicy(t *testing.T) {
 	ctx := context.Background()
-	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NoError(t, err)
 	assert.Nil(t, fn, "should return nil when no policy in context or config")
 }
 
@@ -286,8 +237,21 @@ func TestBuildLockSignatureVerifier_ConfigFallback(t *testing.T) {
 	appCfg.Plugins.Signatures.TrustedIdentities = []string{"https://github.com/org/*"}
 	ctx := config.WithConfig(context.Background(), appCfg)
 
-	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NoError(t, err)
 	require.NotNil(t, fn, "should derive policy from config when context has no policy")
+}
+
+func TestBuildLockSignatureVerifier_InvalidPolicyErrors(t *testing.T) {
+	t.Parallel()
+	appCfg := &config.Config{}
+	appCfg.Plugins.Signatures.Mode = "enforce"
+	// TrustedIssuers and TrustedIdentities intentionally omitted.
+	ctx := config.WithConfig(context.Background(), appCfg)
+
+	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	assert.Nil(t, fn)
+	require.ErrorContains(t, err, "plugin signature policy")
 }
 
 func TestBuildLockSignatureVerifier_ConfigFallback_Off(t *testing.T) {
@@ -296,7 +260,8 @@ func TestBuildLockSignatureVerifier_ConfigFallback_Off(t *testing.T) {
 	appCfg.Plugins.Signatures.Mode = "off"
 	ctx := config.WithConfig(context.Background(), appCfg)
 
-	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NoError(t, err)
 	assert.Nil(t, fn, "should return nil when config mode is off")
 }
 
@@ -309,7 +274,8 @@ func TestBuildLockSignatureVerifier_ContextOverridesConfig(t *testing.T) {
 	ctx := config.WithConfig(context.Background(), appCfg)
 	ctx = plugin.WithSignaturePolicy(ctx, &plugin.SignaturePolicy{Mode: plugin.SignatureModeOff})
 
-	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NoError(t, err)
 	assert.Nil(t, fn, "context policy should take precedence over config")
 }
 
@@ -317,7 +283,8 @@ func TestBuildLockSignatureVerifier_OffPolicy(t *testing.T) {
 	ctx := plugin.WithSignaturePolicy(context.Background(), &plugin.SignaturePolicy{
 		Mode: plugin.SignatureModeOff,
 	})
-	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NoError(t, err)
 	assert.Nil(t, fn, "should return nil when policy mode is off")
 }
 
@@ -327,7 +294,8 @@ func TestBuildLockSignatureVerifier_EnforceReturnsError(t *testing.T) {
 		TrustedIssuers:    []string{"https://issuer.example.com"},
 		TrustedIdentities: []string{"https://github.com/org/*"},
 	})
-	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NoError(t, err)
 	require.NotNil(t, fn, "should return a callback when policy is active")
 
 	// The stub verifier returns ErrCosignNotAvailable, which should be
@@ -343,12 +311,45 @@ func TestBuildLockSignatureVerifier_WarnReturnsNil(t *testing.T) {
 		TrustedIssuers:    []string{"https://issuer.example.com"},
 		TrustedIdentities: []string{"https://github.com/org/*"},
 	})
-	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NoError(t, err)
 	require.NotNil(t, fn, "should return a callback when policy is active")
 
 	// The stub verifier returns ErrCosignNotAvailable; in warn mode,
 	// the callback logs and returns nil.
 	result, err := fn(ctx, "ghcr.io/org/plugin@sha256:abc123")
+	assert.Nil(t, result)
+	assert.NoError(t, err)
+}
+
+func TestBuildLockSignatureVerifier_EmptyImageRef_EnforceFailsClosed(t *testing.T) {
+	t.Parallel()
+	ctx := plugin.WithSignaturePolicy(context.Background(), &plugin.SignaturePolicy{
+		Mode:              plugin.SignatureModeEnforce,
+		TrustedIssuers:    []string{"https://issuer.example.com"},
+		TrustedIdentities: []string{"https://github.com/org/*"},
+	})
+	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, fn)
+
+	result, err := fn(ctx, "")
+	assert.Nil(t, result)
+	require.ErrorIs(t, err, plugin.ErrSignatureUnverifiable)
+}
+
+func TestBuildLockSignatureVerifier_EmptyImageRef_WarnContinues(t *testing.T) {
+	t.Parallel()
+	ctx := plugin.WithSignaturePolicy(context.Background(), &plugin.SignaturePolicy{
+		Mode:              plugin.SignatureModeWarn,
+		TrustedIssuers:    []string{"https://issuer.example.com"},
+		TrustedIdentities: []string{"https://github.com/org/*"},
+	})
+	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, fn)
+
+	result, err := fn(ctx, "")
 	assert.Nil(t, result)
 	assert.NoError(t, err)
 }

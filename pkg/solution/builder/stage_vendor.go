@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -30,12 +31,24 @@ func (p *Packager) readLock(_ context.Context, st *pipelineState) (bool, error) 
 // resolvePlugins pins bundle.plugins to exact versions and digests.
 func (p *Packager) resolvePlugins(ctx context.Context, st *pipelineState) (bool, error) {
 	lgr := *logger.FromContext(ctx)
+	pluginFetcher, err := catalog.BuildPluginFetcher(
+		config.FromContext(ctx),
+		auth.RegistryFromContext(ctx),
+		lgr,
+		catalog.WithLocalCatalog(p.catalog),
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to build plugin catalog chain: %w", err)
+	}
+	verifySig, err := buildLockSignatureVerifier(ctx, lgr)
+	if err != nil {
+		return false, fmt.Errorf("failed to vendor plugin dependencies: %w", err)
+	}
 	res, err := bundler.VendorAllPlugins(ctx, p.src.Solution.Bundle.Plugins, st.existingLock, bundler.VendorAllPluginsOptions{
-		CatalogResolver: catalogindex.FromConfig(config.FromContext(ctx)),
-		Remotes:         buildSourcedCatalogs(ctx, lgr),
-		Local:           p.catalog,
+		CatalogResolver: catalogindex.FromCatalogs(pluginFetcher.Catalogs()),
+		PluginFetcher:   pluginFetcher,
 		Platform:        runtime.GOOS + "/" + runtime.GOARCH,
-		VerifySignature: buildLockSignatureVerifier(ctx, lgr),
+		VerifySignature: verifySig,
 	})
 	if err != nil {
 		return false, fmt.Errorf("failed to vendor plugin dependencies: %w", err)
@@ -55,7 +68,7 @@ func (p *Packager) resolveCatalogDeps(ctx context.Context, st *pipelineState) (b
 	//   - Only the local catalog is searched (no remotes are added), so
 	//     SetCacheRemoteArtifacts below is a no-op and results depend on what
 	//     happens to be pulled/built on this machine. Plugins, by contrast,
-	//     resolve against buildSourcedCatalogs.
+	//     resolve against catalog.BuildPluginFetcher.
 	//   - Refs carry no origin. Exact/no-version refs fail on mixed origins via
 	//     checkAmbiguity, but semver-range refs (bundler.parseAndResolveRef)
 	//     pick the highest version across all origins with no ambiguity check.
