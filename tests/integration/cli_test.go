@@ -12369,16 +12369,48 @@ func TestIntegration_GetExamples_Get_NonSolutionByPath(t *testing.T) {
 
 func TestIntegration_GetExamples_Get_MultipleMatchesListed(t *testing.T) {
 	t.Parallel()
-	// "hello-world" is a basename shared by several examples. Rather than error,
-	// the command lists the matching examples (with their paths) so the user can
-	// pick one, and exits 0.
+	// "hello-world" matches four examples across basenames and directory slugs.
+	// Rather than error, the command lists all candidates with both name and
+	// path handles so the user can pick one, and exits 0.
 	stdout, stderr, exitCode := runScafctl(t, "get", "examples", "hello-world")
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stderr, "examples match")
-	// The matches are rendered as a list including their disambiguating paths.
+	assert.Contains(t, stderr, "4 examples match")
 	combined := stdout + stderr
-	assert.Contains(t, combined, "actions/hello-world.yaml")
-	assert.Contains(t, combined, "resolvers/hello-world.yaml")
+	for _, want := range []string{
+		"hello-world-action",
+		"hello-world-catalog",
+		"hello-world-resolver",
+		"hello-world-solution",
+		"actions/hello-world.yaml",
+		"catalog/hello-world/solution.yaml",
+		"resolvers/hello-world.yaml",
+		"solutions/hello-world/solution.yaml",
+	} {
+		assert.Contains(t, combined, want)
+	}
+}
+
+func TestIntegration_GetExamples_Get_BySlug(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "state-fingerprint")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "kind: Solution")
+	assert.Contains(t, stdout, "name: state-fingerprint-showcase")
+}
+
+func TestIntegration_GetExamples_Get_ByPartialMatch(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "fingerprint")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "kind: Solution")
+	assert.Contains(t, stdout, "name: state-fingerprint-showcase")
+}
+
+func TestIntegration_GetExamples_Get_ExtensionQueryRejected(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "get", "examples", ".yaml")
+	assert.Equal(t, 4, exitCode)
+	assert.Contains(t, stderr, "Example not found")
 }
 
 func TestIntegration_GetExamples_Get_UniqueNameShowsContent(t *testing.T) {

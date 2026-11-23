@@ -48,6 +48,12 @@ var EmbeddedExamples = examplefiles.FS
 // live under examples/ are intentionally excluded from the listing.
 const solutionKind = "Solution"
 
+// genericSolutionBasename is the conventional filename (without YAML extension)
+// used by directory-backed examples (<category>/<slug>/solution.yaml). When an
+// example file uses this generic name inside a subdirectory, its lookup slug is
+// derived from the enclosing directory name rather than "solution".
+const genericSolutionBasename = "solution"
+
 // Example represents a runnable example solution in the listing. Fields are
 // sourced from the solution's own metadata block (not the filename), so the
 // listing reflects what the author declared.
@@ -182,19 +188,21 @@ func Scan(category string) ([]Example, error) {
 }
 
 // MatchExamples resolves a user-supplied query to the example(s) it identifies.
-// The query may be an exact embedded path, a metadata.name, or a file basename.
-// It returns:
+// Queries are evaluated in four deterministic priority tiers so an exact
+// identifier always wins before partial fallback:
 //
-//   - exactly one Example when the query names a single example (by exact path,
-//     or a unique name/basename),
-//   - more than one Example when a name/basename matches several (the caller
-//     should present them as a list to choose from),
-//   - ErrExampleNotFound when nothing matches,
-//   - ErrPathTraversal when the query is an unsafe path.
+//  1. Exact embedded path (including non-solution embedded files such as
+//     kind: Config that Scan excludes; those return a single Example carrying
+//     the Path).
+//  2. Exact metadata.name (case-insensitive).
+//  3. Exact folder/file slug (case-insensitive): filename without .yaml/.yml,
+//     or path.Base(dir) when the file is <dir>/solution.yaml (also matches an
+//     exact <category>/<slug> relative path without extension).
+//  4. Case-insensitive substring over metadata.name and extension-stripped
+//     path (with trailing /solution stripped when the query contains no '/').
 //
-// Exact-path matches also resolve non-solution embedded files (e.g. kind:
-// Config) that the solution-only listing excludes; those are returned as a
-// single Example carrying just the Path.
+// It returns ErrExampleNotFound when nothing matches and ErrPathTraversal when
+// the query is an unsafe path.
 func MatchExamples(query string) ([]Example, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -207,12 +215,19 @@ func MatchExamples(query string) ([]Example, error) {
 		return nil, ErrPathTraversal
 	}
 	normalized := path.Clean(slashed)
+	if normalized == "." {
+		return nil, fmt.Errorf("%w: %q", ErrExampleNotFound, query)
+	}
 
 	items, err := Scan("")
 	if err != nil {
 		return nil, err
 	}
 
+	return matchExamples(items, query, normalized, exampleFileExists)
+}
+
+func matchExamples(items []Example, query, normalized string, fileExists func(string) bool) ([]Example, error) {
 	// 1. Exact path match wins immediately (paths are unique): a listed solution
 	//    is returned with full metadata...
 	for _, it := range items {
@@ -222,23 +237,95 @@ func MatchExamples(query string) ([]Example, error) {
 	}
 	// ...and any other embedded example file by exact path (non-solution kinds
 	// the listing excludes) is still fetchable.
-	if exampleFileExists(normalized) {
+	if fileExists != nil && fileExists(normalized) {
 		return []Example{{Name: normalized, Path: normalized}}, nil
 	}
 
-	// 2. Match by metadata.name or file basename (may match several).
+	// 2. Exact metadata.name (case-insensitive).
 	var matches []Example
 	for _, it := range items {
-		base := strings.TrimSuffix(path.Base(it.Path), path.Ext(it.Path))
-		if it.Name == query || base == query || base == normalized {
+		if it.Name != "" && (strings.EqualFold(it.Name, query) || strings.EqualFold(it.Name, normalized)) {
+			matches = append(matches, it)
+		}
+	}
+	if len(matches) > 0 {
+		sortExamplesByPath(matches)
+		return matches, nil
+	}
+
+	// 3. Exact slug / basename (case-insensitive). Directory-backed examples
+	//    named <dir>/solution.yaml use path.Base(dir) as their slug.
+	slugQuery := stripYAMLExt(normalized)
+	if slugQuery != "" && slugQuery != "." {
+		hasSlash := strings.Contains(slugQuery, "/")
+		for _, it := range items {
+			canonical := canonicalExamplePath(it.Path)
+			if hasSlash {
+				if strings.EqualFold(canonical, slugQuery) || strings.EqualFold(stripYAMLExt(it.Path), slugQuery) {
+					matches = append(matches, it)
+				}
+			} else if strings.EqualFold(path.Base(canonical), slugQuery) {
+				matches = append(matches, it)
+			}
+		}
+		if len(matches) > 0 {
+			sortExamplesByPath(matches)
+			return matches, nil
+		}
+	}
+
+	// 4. Case-insensitive substring fallback over Name and extension-stripped
+	//    Path (stripping trailing /solution when the query contains no '/').
+	subQuery := strings.ToLower(slugQuery)
+	if subQuery == "" || subQuery == "." {
+		return nil, fmt.Errorf("%w: %q", ErrExampleNotFound, query)
+	}
+	queryHasSlash := strings.Contains(subQuery, "/")
+	for _, it := range items {
+		normPath := stripYAMLExt(it.Path)
+		if !queryHasSlash {
+			normPath = canonicalExamplePath(it.Path)
+		}
+		if strings.Contains(strings.ToLower(it.Name), subQuery) ||
+			strings.Contains(strings.ToLower(normPath), subQuery) {
 			matches = append(matches, it)
 		}
 	}
 	if len(matches) == 0 {
 		return nil, fmt.Errorf("%w: %q", ErrExampleNotFound, query)
 	}
-	sort.Slice(matches, func(i, j int) bool { return matches[i].Path < matches[j].Path })
+	sortExamplesByPath(matches)
 	return matches, nil
+}
+
+func sortExamplesByPath(matches []Example) {
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Path < matches[j].Path })
+}
+
+// stripYAMLExt removes a trailing .yaml or .yml extension (case-insensitive).
+func stripYAMLExt(p string) string {
+	lower := strings.ToLower(p)
+	switch {
+	case strings.HasSuffix(lower, ".yaml"):
+		return p[:len(p)-len(".yaml")]
+	case strings.HasSuffix(lower, ".yml"):
+		return p[:len(p)-len(".yml")]
+	default:
+		return p
+	}
+}
+
+// canonicalExamplePath strips .yaml/.yml from relPath, and when the resulting
+// basename is "solution" inside a subdirectory (<dir>/solution.yaml), returns
+// <dir> so directory-backed solutions are keyed by their folder slug.
+func canonicalExamplePath(relPath string) string {
+	stripped := stripYAMLExt(relPath)
+	if strings.EqualFold(path.Base(stripped), genericSolutionBasename) {
+		if dir := path.Dir(stripped); dir != "." && dir != "" {
+			return dir
+		}
+	}
+	return stripped
 }
 
 // ResolveExample resolves a query to a single example path. It is a thin wrapper
@@ -321,7 +408,7 @@ func hasDotDotSegment(p string) bool {
 
 // exampleFileExists reports whether relPath names a regular file in the
 // embedded examples filesystem. relPath must already be traversal-checked and
-// path.Clean'd (forward slashes). It is used by ResolveExample to allow
+// path.Clean'd (forward slashes). It is used by MatchExamples to allow
 // exact-path fetching of any embedded example file, including non-solution
 // files that the solution-only listing excludes.
 func exampleFileExists(relPath string) bool {
