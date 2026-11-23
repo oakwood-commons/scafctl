@@ -35,6 +35,182 @@ import (
 // a dedicated profile field (such as GetAuthIdentityRequest in SDK v0.19.0).
 const authProfileMetadataKey = "x-plugin-auth-profile"
 
+// authLineageMetadataKey carries active AuthHandlerWrapper call-lineage tokens
+// across AuthHandlerService and HostService gRPC hops so reentrant callbacks
+// can share compatible active slots despite queued writers and fail fast on
+// incompatible reconfigurations.
+const authLineageMetadataKey = "x-plugin-auth-lineage"
+
+type callbackLineageCtxKey struct{}
+
+func lineageFromContext(ctx context.Context) []string {
+	ids, _ := ctx.Value(callbackLineageCtxKey{}).([]string)
+	return ids
+}
+
+func withCallbackLineage(ctx context.Context, ids ...string) context.Context {
+	existing := lineageFromContext(ctx)
+	merged := make([]string, 0, len(existing)+len(ids))
+	seen := make(map[string]struct{}, len(existing)+len(ids))
+	for _, id := range existing {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			merged = append(merged, id)
+		}
+	}
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			merged = append(merged, id)
+		}
+	}
+	if len(merged) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, callbackLineageCtxKey{}, merged)
+}
+
+func appendOutgoingLineageMetadata(ctx context.Context) context.Context {
+	ids := lineageFromContext(ctx)
+	if len(ids) == 0 {
+		return ctx
+	}
+	pairs := make([]string, 0, len(ids)*2)
+	for _, id := range ids {
+		pairs = append(pairs, authLineageMetadataKey, id)
+	}
+	return metadata.AppendToOutgoingContext(ctx, pairs...)
+}
+
+func incomingMetadataLineage(ctx context.Context) []string {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if vals := md.Get(authLineageMetadataKey); len(vals) > 0 {
+			return append([]string(nil), vals...)
+		}
+	}
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		if vals := md.Get(authLineageMetadataKey); len(vals) > 0 {
+			return append([]string(nil), vals...)
+		}
+	}
+	return nil
+}
+
+func extractIncomingLineageToContext(ctx context.Context) context.Context {
+	if vals := incomingMetadataLineage(ctx); len(vals) > 0 {
+		return withCallbackLineage(ctx, vals...)
+	}
+	return ctx
+}
+
+type authCallbackFrame struct {
+	handler    string
+	profile    string
+	hasProfile bool
+	ids        []string
+}
+
+// authCallbackLineage tracks in-flight AuthHandlerWrapper call stacks per
+// AuthHandlerClient so HostService callbacks from SDK plugin binaries that do
+// not echo custom gRPC metadata still carry ancestor call lineage and the
+// active handler profile.
+type authCallbackLineage struct {
+	mu     sync.Mutex
+	nextID uint64
+	stacks map[uint64]authCallbackFrame
+}
+
+func newAuthCallbackLineage() *authCallbackLineage {
+	return &authCallbackLineage{stacks: make(map[uint64]authCallbackFrame)}
+}
+
+func (l *authCallbackLineage) push(handler, profile string, hasProfile bool, ids []string) func() {
+	if l == nil || len(ids) == 0 {
+		return func() {}
+	}
+	cp := append([]string(nil), ids...)
+	l.mu.Lock()
+	l.nextID++
+	id := l.nextID
+	if l.stacks == nil {
+		l.stacks = make(map[uint64]authCallbackFrame)
+	}
+	l.stacks[id] = authCallbackFrame{
+		handler:    handler,
+		profile:    profile,
+		hasProfile: hasProfile,
+		ids:        cp,
+	}
+	l.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			l.mu.Lock()
+			delete(l.stacks, id)
+			l.mu.Unlock()
+		})
+	}
+}
+
+func (l *authCallbackLineage) snapshot() []string {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.stacks) == 0 {
+		return nil
+	}
+	var out []string
+	seen := make(map[string]struct{})
+	for _, frame := range l.stacks {
+		for _, id := range frame.ids {
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
+func (l *authCallbackLineage) activeProfile(handlerName string) (string, bool) {
+	if l == nil || handlerName == "" {
+		return "", false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var (
+		matched string
+		found   bool
+	)
+	for _, frame := range l.stacks {
+		if frame.handler != handlerName || !frame.hasProfile {
+			continue
+		}
+		encoded := frame.profile
+		if encoded == "" {
+			encoded = auth.DefaultProfileName
+		}
+		if !found {
+			matched = encoded
+			found = true
+			continue
+		}
+		if matched != encoded {
+			return "", false
+		}
+	}
+	return matched, found
+}
+
 // secretNameMaxLen is the maximum allowed length for a secret name.
 const secretNameMaxLen = 256
 
@@ -119,6 +295,9 @@ type HostServiceDeps struct {
 	// trackerSlot associates incoming HostService GetSecret and GetAuthToken
 	// callbacks with the active execution's redaction tracker per plugin client.
 	trackerSlot *brokerTrackerSlot
+	// callbackLineage associates incoming HostService callbacks on an
+	// AuthHandlerClient with its active AuthHandlerWrapper call frames.
+	callbackLineage *authCallbackLineage
 }
 
 type brokerTrackerSlot struct {
@@ -127,6 +306,7 @@ type brokerTrackerSlot struct {
 	activePlaceholder    bool
 	activeAuthProfile    string
 	activeHasAuthProfile bool
+	activeLineage        []string
 	activeList           []*redact.Tracker
 	activeCount          int
 	waitCh               chan struct{}
@@ -166,8 +346,9 @@ func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker
 	}
 	placeholder := spec.IsPlaceholderCredentialResolver(ctx)
 	execProfile, hasExecProfile := encodeContextAuthProfile(ctx)
+	execLineage := lineageFromContext(ctx)
 	if tracker == nil {
-		if !placeholder && !hasExecProfile {
+		if !placeholder && !hasExecProfile && len(execLineage) == 0 {
 			return func() {}, nil
 		}
 		tracker = redact.NewTracker()
@@ -175,11 +356,12 @@ func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker
 	root := tracker.Root()
 	for {
 		s.mu.Lock()
-		if s.activeCount == 0 || (s.activeRoot == root && s.activePlaceholder == placeholder && s.activeAuthProfile == execProfile && s.activeHasAuthProfile == hasExecProfile) {
+		if s.activeCount == 0 || (s.activeRoot == root && s.activePlaceholder == placeholder && s.activeAuthProfile == execProfile && s.activeHasAuthProfile == hasExecProfile && stringSlicesEqual(s.activeLineage, execLineage)) {
 			s.activeRoot = root
 			s.activePlaceholder = placeholder
 			s.activeAuthProfile = execProfile
 			s.activeHasAuthProfile = hasExecProfile
+			s.activeLineage = append([]string(nil), execLineage...)
 			s.activeCount++
 			s.activeList = append(s.activeList, tracker)
 			if s.waitCh == nil {
@@ -203,6 +385,7 @@ func (s *brokerTrackerSlot) acquire(ctx context.Context, tracker *redact.Tracker
 						s.activePlaceholder = false
 						s.activeAuthProfile = ""
 						s.activeHasAuthProfile = false
+						s.activeLineage = nil
 						if s.waitCh != nil {
 							close(s.waitCh)
 							s.waitCh = nil
@@ -248,11 +431,52 @@ func (d *HostServiceDeps) isPlaceholderMode() bool {
 	return d != nil && d.trackerSlot.isPlaceholder()
 }
 
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *brokerTrackerSlot) activeLineageSnapshot() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeCount == 0 || len(s.activeLineage) == 0 {
+		return nil
+	}
+	return append([]string(nil), s.activeLineage...)
+}
+
 func (d *HostServiceDeps) activeExecutionProfile() (string, bool) {
 	if d == nil {
 		return "", false
 	}
 	return d.trackerSlot.activeProfile()
+}
+
+func (d *HostServiceDeps) activeCallbackLineage() []string {
+	if d == nil {
+		return nil
+	}
+	if ids := d.callbackLineage.snapshot(); len(ids) > 0 {
+		return ids
+	}
+	return d.trackerSlot.activeLineageSnapshot()
+}
+
+func (d *HostServiceDeps) activeCallbackProfile(handlerName string) (string, bool) {
+	if d == nil {
+		return "", false
+	}
+	return d.callbackLineage.activeProfile(handlerName)
 }
 
 func (s *brokerTrackerSlot) track(secret string) {
@@ -510,11 +734,22 @@ func (h *HostServiceServer) ListSecrets(ctx context.Context, req *proto.ListSecr
 //  2. Incoming gRPC metadata (for RPCs without a proto profile field)
 //  3. Active provider execution profile captured on trackerSlot
 //  4. Host ProfileResolverFunc(effectiveHandler)
+func (h *HostServiceServer) restoreCallbackLineage(ctx context.Context) context.Context {
+	if mdIDs := incomingMetadataLineage(ctx); len(mdIDs) > 0 {
+		return withCallbackLineage(ctx, mdIDs...)
+	}
+	if brokerIDs := h.Deps.activeCallbackLineage(); len(brokerIDs) > 0 {
+		return withCallbackLineage(ctx, brokerIDs...)
+	}
+	return ctx
+}
+
 func (h *HostServiceServer) resolveHostAuthCallback(
 	ctx context.Context,
 	requestedHandler string,
 	explicitProfile string,
 ) (context.Context, string, error) {
+	ctx = h.restoreCallbackLineage(ctx)
 	effectiveHandler := requestedHandler
 	if effectiveHandler == "" && h.Deps.AuthHandlersFunc != nil {
 		if _, defaultHandler, err := h.Deps.AuthHandlersFunc(ctx); err == nil && defaultHandler != "" {
@@ -536,6 +771,9 @@ func (h *HostServiceServer) resolveHostAuthCallback(
 			resolved = true
 		} else if execProfile, ok := h.Deps.activeExecutionProfile(); ok {
 			rawProfile = execProfile
+			resolved = true
+		} else if cbProfile, ok := h.Deps.activeCallbackProfile(effectiveHandler); ok {
+			rawProfile = cbProfile
 			resolved = true
 		} else if h.Deps.ProfileResolverFunc != nil {
 			rawProfile = h.Deps.ProfileResolverFunc(effectiveHandler)
@@ -974,6 +1212,7 @@ func (c *HostServiceClient) ListSecrets(ctx context.Context, pattern string) ([]
 // forwarding the execution auth profile (including explicit default selection)
 // via gRPC metadata.
 func (c *HostServiceClient) GetAuthIdentity(ctx context.Context, handler, scope string) (*proto.Claims, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	if encoded, ok := encodeContextAuthProfile(ctx); ok {
 		ctx = metadata.AppendToOutgoingContext(ctx, authProfileMetadataKey, encoded)
 	}
@@ -1023,6 +1262,7 @@ func (c *HostServiceClient) GetAuthToken(ctx context.Context, handler, scope str
 // registry using structured options, including optional per-instance Hostname
 // and Profile override (falling back to the context auth profile).
 func (c *HostServiceClient) GetAuthTokenWithOptions(ctx context.Context, opts AuthTokenRequest) (*proto.GetAuthTokenResponse, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	profile := opts.Profile
 	if profile == "" {
 		if encoded, ok := encodeContextAuthProfile(ctx); ok {
@@ -1049,6 +1289,7 @@ func (c *HostServiceClient) GetAuthTokenWithOptions(ctx context.Context, opts Au
 // GetAuthGroups retrieves group memberships for the authenticated user from
 // the host's auth registry, forwarding the context auth profile.
 func (c *HostServiceClient) GetAuthGroups(ctx context.Context, handler string) ([]string, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	profile, _ := encodeContextAuthProfile(ctx)
 	resp, err := c.client.GetAuthGroups(ctx, &proto.GetAuthGroupsRequest{
 		HandlerName: handler,
@@ -1138,7 +1379,8 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 		// One broker per deps: the login wrapper and the HostServiceServer
 		// for the same plugin client share this instance (the pointer
 		// survives the struct copies WithSecretScope makes).
-		PromptBroker: &AuthPromptBroker{},
+		PromptBroker:    &AuthPromptBroker{},
+		callbackLineage: newAuthCallbackLineage(),
 		AuthTokenFunc: func(ctx context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) {
 			return tokenWithHostname(ctx, handler, scope, "", minValidFor, forceRefresh), nil
 		},
@@ -1301,6 +1543,7 @@ func providerPluginHostDeps(src *HostServiceDeps) *HostServiceDeps {
 	}
 	cp := *src
 	cp.ReadOnlySecrets = true
+	cp.callbackLineage = nil
 
 	denied := make([]string, 0, len(src.DeniedSecretPrefixes)+len(src.providerDeniedPrefixes)+2)
 	add := func(p string) {

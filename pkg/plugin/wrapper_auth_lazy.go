@@ -149,16 +149,24 @@ func configureLazyWrapper(ctx context.Context, client *AuthHandlerClient, info A
 			BaseSettings:      cloneSettingsMap(pluginCfg.Settings),
 		})
 		wrapper.configMu.Lock()
+		wrapper.reconfiguring = true
 		hostCfg := *pluginCfg
 		hostCfg.Settings = maps.Clone(pluginCfg.Settings)
 		hostCfg.HostServiceID = client.HostServiceID()
 		injectAuthHandlerSettings(ctx, info.Name, &hostCfg)
-		if cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg); cfgErr != nil {
+		cfgCtx, endCfgLineage := wrapper.startLineageLocked(ctx, hostCfg.Profile, true)
+		wrapper.configMu.Unlock()
+		cfgErr := client.ConfigureAuthHandler(cfgCtx, info.Name, hostCfg)
+		wrapper.configMu.Lock()
+		endCfgLineage()
+		wrapper.reconfiguring = false
+		if cfgErr != nil {
 			lgr.Info("failed to configure lazy auth handler",
 				"handler", info.Name, "error", cfgErr)
 		} else {
 			wrapper.recordConfiguredLocked(hostCfg.Profile, hostCfg.Settings[info.Name])
 		}
+		wrapper.broadcastLocked()
 		wrapper.configMu.Unlock()
 	}
 

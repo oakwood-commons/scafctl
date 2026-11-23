@@ -1096,15 +1096,31 @@ func TestAuthHandlerWrapper_ServerModeProtectsCredentialsAndConfigLessCtxPreserv
 		t.Parallel()
 		var gotTokenReq *proto.GetTokenRequest
 		mockSvc := &mockAuthHandlerServiceClient{
-			activateServerModeResp: &proto.ActivateServerModeResponse{},
-			getTokenResp:           &proto.GetTokenResponse{AccessToken: "srv-tok", TokenType: "Bearer"},
+			activateServerModeResp:   &proto.ActivateServerModeResponse{},
+			configureAuthHandlerResp: &proto.ConfigureAuthHandlerResponse{ProtocolVersion: PluginProtocolVersion},
+			getTokenResp:             &proto.GetTokenResponse{AccessToken: "srv-tok", TokenType: "Bearer"},
 		}
 		grpcClient := &AuthHandlerGRPCClient{client: mockSvc, hostServiceID: 77}
 		wrapper := NewAuthHandlerWrapper(NewAuthHandlerClientFromPlugin(grpcClient), AuthHandlerInfo{Name: "entra"})
 
-		require.NoError(t, wrapper.ActivateServerMode(context.Background(), json.RawMessage(`{"clientId":"ConfidentialSrv"}`)))
-
+		// Nil or empty/null settings is a CLI-mode no-op and must not mark wrapper as serverMode.
+		require.NoError(t, wrapper.ActivateServerMode(context.Background(), nil))
+		require.NoError(t, wrapper.ActivateServerMode(context.Background(), json.RawMessage{}))
+		require.NoError(t, wrapper.ActivateServerMode(context.Background(), json.RawMessage("null")))
 		reqCtx := config.WithConfig(context.Background(), appCfg)
+		_, err := wrapper.GetToken(reqCtx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
+		require.NoError(t, err)
+		require.NotNil(t, mockSvc.lastConfigureReq, "nil ActivateServerMode must leave CLI reconfiguration enabled")
+		require.NotNil(t, mockSvc.capturedGetTokenReq)
+		assert.NotEmpty(t, mockSvc.capturedGetTokenReq.Settings, "nil ActivateServerMode must preserve per-RPC settings")
+		require.NoError(t, wrapper.ApplyOverrides(reqCtx, map[string]string{"clientId": "cli-override"}))
+
+		// Non-nil settings enables serverMode; subsequent nil call leaves serverMode unchanged.
+		mockSvc.lastConfigureReq = nil
+		mockSvc.capturedGetTokenReq = nil
+		require.NoError(t, wrapper.ActivateServerMode(context.Background(), json.RawMessage(`{"clientId":"ConfidentialSrv"}`)))
+		require.NoError(t, wrapper.ActivateServerMode(context.Background(), nil))
+
 		tok, err := wrapper.GetToken(reqCtx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
 		require.NoError(t, err)
 		assert.Equal(t, "srv-tok", tok.AccessToken)
@@ -1598,5 +1614,309 @@ func TestHostService_GetAuthIdentityAndDefaultHandlerResolution(t *testing.T) {
 		deniedResp, err := restrictedSrv.GetAuthIdentity(context.Background(), &proto.GetAuthIdentityRequest{HandlerName: ""})
 		require.NoError(t, err)
 		assert.Contains(t, deniedResp.Error, "access denied")
+	})
+}
+
+type callbackAwareStatefulPlugin struct {
+	mu                sync.Mutex
+	configuredProfile string
+	configuredClient  string
+	onOuterToken      func(ctx context.Context) (string, error)
+}
+
+func (p *callbackAwareStatefulPlugin) GetAuthHandlers(_ context.Context) ([]AuthHandlerInfo, error) {
+	return []AuthHandlerInfo{{Name: "entra", DisplayName: "Entra"}}, nil
+}
+
+func (p *callbackAwareStatefulPlugin) ConfigureAuthHandler(_ context.Context, handlerName string, cfg ProviderConfig) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.configuredProfile = cfg.Profile
+	p.configuredClient = ""
+	if raw, ok := cfg.Settings[handlerName]; ok && len(raw) > 0 {
+		var m map[string]string
+		_ = json.Unmarshal(raw, &m)
+		p.configuredClient = m["clientId"]
+	}
+	return nil
+}
+
+func (p *callbackAwareStatefulPlugin) snapshot() (string, string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.configuredProfile, p.configuredClient
+}
+
+func (p *callbackAwareStatefulPlugin) Login(_ context.Context, _ string, _ LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+	return &LoginResponse{Claims: &auth.Claims{Subject: "ok"}, ExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+
+func (p *callbackAwareStatefulPlugin) Logout(_ context.Context, _ string, _ LogoutRequest) error {
+	return nil
+}
+
+func (p *callbackAwareStatefulPlugin) GetStatus(_ context.Context, _ string, _ StatusRequest) (*auth.Status, error) {
+	prof, clientID := p.snapshot()
+	return &auth.Status{
+		Authenticated: true,
+		Claims:        &auth.Claims{Subject: prof + ":" + clientID},
+		ClientID:      clientID,
+	}, nil
+}
+
+func (p *callbackAwareStatefulPlugin) GetToken(ctx context.Context, _ string, req TokenRequest) (*TokenResponse, error) {
+	prof, clientID := p.snapshot()
+	if req.Scope == "outer" && p.onOuterToken != nil {
+		nestedVal, err := p.onOuterToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+		profAfter, clientAfter := p.snapshot()
+		return &TokenResponse{
+			AccessToken: fmt.Sprintf("%s:%s->%s|%s:%s", prof, clientID, nestedVal, profAfter, clientAfter),
+			TokenType:   "Bearer",
+			ExpiresAt:   time.Now().Add(time.Hour),
+		}, nil
+	}
+	return &TokenResponse{
+		AccessToken: fmt.Sprintf("nested:%s:%s", prof, clientID),
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}, nil
+}
+
+func (p *callbackAwareStatefulPlugin) ListCachedTokens(_ context.Context, _ string) ([]*auth.CachedTokenInfo, error) {
+	return nil, nil
+}
+
+func (p *callbackAwareStatefulPlugin) PurgeExpiredTokens(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+
+func (p *callbackAwareStatefulPlugin) DetectAvailableFlows(_ context.Context, _ string) ([]FlowAvailability, error) {
+	return nil, nil
+}
+
+func (p *callbackAwareStatefulPlugin) StopAuthHandler(_ context.Context, _ string) error {
+	return nil
+}
+
+func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ActiveProfile: "work",
+				ClientID:      "default-client",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {ClientID: "work-client"},
+					"prod": {ClientID: "prod-client"},
+				},
+			},
+		},
+	}
+	baseCtx := config.WithConfig(context.Background(), appCfg)
+	workCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, "work"))
+	prodCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, "prod"))
+
+	newCallbackHarness := func(t *testing.T, outerFn func(ctx context.Context, hostClient *HostServiceClient, hostSrv *HostServiceServer, wrapper *AuthHandlerWrapper) (string, error)) (*AuthHandlerWrapper, *HostServiceClient, *HostServiceServer) {
+		t.Helper()
+		reg := auth.NewRegistry()
+		deps := HostDepsFromAuthRegistry(reg)
+		deps.HostConfig = appCfg
+		deps.ProfileResolverFunc = func(handlerName string) string {
+			return auth.ResolveActiveProfile(baseCtx, handlerName)
+		}
+		hostSrv := &HostServiceServer{Deps: *deps}
+		hostClient := &HostServiceClient{client: &inProcHostServiceAdapter{server: hostSrv}}
+
+		var wrapper *AuthHandlerWrapper
+		pluginImpl := &callbackAwareStatefulPlugin{}
+		pluginImpl.onOuterToken = func(ctx context.Context) (string, error) {
+			return outerFn(ctx, hostClient, hostSrv, wrapper)
+		}
+		grpcServer := &AuthHandlerGRPCServer{Impl: pluginImpl}
+		wireSvc := &concurrentWireServiceClient{server: grpcServer}
+		authClient := &AuthHandlerClient{
+			plugin:   NewAuthHandlerGRPCClient(wireSvc),
+			hostDeps: deps,
+		}
+		wrapper = NewAuthHandlerWrapper(authClient, AuthHandlerInfo{Name: "entra"})
+		wrapper.setHostConfig(hostConfig{AppConfig: appCfg})
+		require.NoError(t, reg.Register(wrapper))
+		return wrapper, hostClient, hostSrv
+	}
+
+	t.Run("compatible nested HostService callback succeeds via gRPC metadata while writer is queued", func(t *testing.T) {
+		t.Parallel()
+		enteredOuter := make(chan struct{}, 1)
+		proceedCallback := make(chan struct{})
+
+		wrapper, _, _ := newCallbackHarness(t, func(ctx context.Context, hostClient *HostServiceClient, _ *HostServiceServer, _ *AuthHandlerWrapper) (string, error) {
+			enteredOuter <- struct{}{}
+			<-proceedCallback
+			tokResp, err := hostClient.GetAuthTokenWithOptions(ctx, AuthTokenRequest{
+				Handler: "entra",
+				Scope:   "inner",
+			})
+			if err != nil {
+				return "", err
+			}
+			claims, err := hostClient.GetAuthIdentity(ctx, "entra", "")
+			if err != nil {
+				return "", err
+			}
+			return tokResp.AccessToken + "+" + claims.Subject, nil
+		})
+
+		type result struct {
+			tok *auth.Token
+			err error
+		}
+		workDone := make(chan result, 1)
+		go func() {
+			tok, err := wrapper.GetToken(workCtx, auth.TokenOptions{Scope: "outer"})
+			workDone <- result{tok: tok, err: err}
+		}()
+
+		<-enteredOuter
+
+		prodDone := make(chan result, 1)
+		go func() {
+			tok, err := wrapper.GetToken(prodCtx, auth.TokenOptions{Scope: "prod-scope"})
+			prodDone <- result{tok: tok, err: err}
+		}()
+
+		require.Eventually(t, func() bool {
+			wrapper.configMu.Lock()
+			defer wrapper.configMu.Unlock()
+			return wrapper.writersWaiting >= 1
+		}, 2*time.Second, 5*time.Millisecond)
+
+		// Unblock nested callback while prod writer is actively waiting; must not deadlock!
+		close(proceedCallback)
+
+		select {
+		case wRes := <-workDone:
+			require.NoError(t, wRes.err)
+			assert.Equal(t, "work:work-client->nested:work:work-client+work:work-client|work:work-client", wRes.tok.AccessToken)
+		case <-time.After(2 * time.Second):
+			t.Fatal("deadlock: compatible nested callback blocked behind queued prod writer")
+		}
+
+		select {
+		case pRes := <-prodDone:
+			require.NoError(t, pRes.err)
+			assert.Equal(t, "nested:prod:prod-client", pRes.tok.AccessToken)
+		case <-time.After(2 * time.Second):
+			t.Fatal("queued prod writer did not complete after outer work RPC finished")
+		}
+	})
+
+	t.Run("compatible nested callback without gRPC metadata succeeds via broker lineage fallback", func(t *testing.T) {
+		t.Parallel()
+		enteredOuter := make(chan struct{}, 1)
+		proceedCallback := make(chan struct{})
+
+		// Run outer call on prodCtx (non-active profile, since ActiveProfile is "work")
+		// while workCtx queues as a writer, proving bare SDK callbacks inherit both
+		// ancestor call lineage AND the active handler profile ("prod").
+		wrapper, _, _ := newCallbackHarness(t, func(_ context.Context, _ *HostServiceClient, hostSrv *HostServiceServer, _ *AuthHandlerWrapper) (string, error) {
+			enteredOuter <- struct{}{}
+			<-proceedCallback
+			// Bare context.Background() simulates an SDK v0.19.0 plugin binary that does not forward incoming gRPC metadata.
+			resp, err := hostSrv.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{
+				HandlerName: "entra",
+				Scope:       "inner",
+			})
+			if err != nil {
+				return "", err
+			}
+			if resp.Error != "" {
+				return "", fmt.Errorf("%s", resp.Error)
+			}
+			idResp, err := hostSrv.GetAuthIdentity(context.Background(), &proto.GetAuthIdentityRequest{
+				HandlerName: "entra",
+			})
+			if err != nil {
+				return "", err
+			}
+			if idResp.Error != "" {
+				return "", fmt.Errorf("%s", idResp.Error)
+			}
+			return resp.AccessToken + "+" + idResp.Claims.Subject, nil
+		})
+
+		type result struct {
+			tok *auth.Token
+			err error
+		}
+		prodDone := make(chan result, 1)
+		go func() {
+			tok, err := wrapper.GetToken(prodCtx, auth.TokenOptions{Scope: "outer"})
+			prodDone <- result{tok: tok, err: err}
+		}()
+
+		<-enteredOuter
+
+		workDone := make(chan error, 1)
+		go func() {
+			_, err := wrapper.GetToken(workCtx, auth.TokenOptions{Scope: "work-scope"})
+			workDone <- err
+		}()
+
+		require.Eventually(t, func() bool {
+			wrapper.configMu.Lock()
+			defer wrapper.configMu.Unlock()
+			return wrapper.writersWaiting >= 1
+		}, 2*time.Second, 5*time.Millisecond)
+
+		close(proceedCallback)
+
+		select {
+		case pRes := <-prodDone:
+			require.NoError(t, pRes.err)
+			assert.Equal(t, "prod:prod-client->nested:prod:prod-client+prod:prod-client|prod:prod-client", pRes.tok.AccessToken)
+		case <-time.After(2 * time.Second):
+			t.Fatal("deadlock on bare SDK nested callback while writer is queued")
+		}
+		require.NoError(t, <-workDone)
+	})
+
+	t.Run("incompatible nested profile switch and nested ApplyOverrides fail fast without deadlocking", func(t *testing.T) {
+		t.Parallel()
+		wrapper, _, _ := newCallbackHarness(t, func(ctx context.Context, hostClient *HostServiceClient, _ *HostServiceServer, w *AuthHandlerWrapper) (string, error) {
+			_, switchErr := hostClient.GetAuthTokenWithOptions(ctx, AuthTokenRequest{
+				Handler: "entra",
+				Scope:   "inner",
+				Profile: "prod",
+			})
+			if switchErr == nil {
+				return "", fmt.Errorf("expected nested profile switch to fail")
+			}
+			overrideErr := w.ApplyOverrides(ctx, map[string]string{"clientId": "override-in-callback"})
+			if overrideErr == nil {
+				return "", fmt.Errorf("expected nested ApplyOverrides to fail")
+			}
+			return switchErr.Error() + " / " + overrideErr.Error(), nil
+		})
+
+		done := make(chan struct{})
+		var tok *auth.Token
+		var callErr error
+		go func() {
+			tok, callErr = wrapper.GetToken(workCtx, auth.TokenOptions{Scope: "outer"})
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			require.NoError(t, callErr)
+			assert.Contains(t, tok.AccessToken, "cannot reconfigure from profile \"work\" to \"prod\" inside a nested callback")
+			assert.Contains(t, tok.AccessToken, "cannot reconfigure inside a nested callback")
+		case <-time.After(2 * time.Second):
+			t.Fatal("deadlock: incompatible nested callback waited on its own parent")
+		}
 	})
 }

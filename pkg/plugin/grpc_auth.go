@@ -176,7 +176,7 @@ func cloneSettingsMap(in map[string]json.RawMessage) map[string]json.RawMessage 
 
 // Login implements the Login RPC with server-side streaming.
 func (s *AuthHandlerGRPCServer) Login(req *proto.LoginRequest, stream grpc.ServerStreamingServer[proto.LoginStreamMessage]) error {
-	ctx := stream.Context()
+	ctx := extractIncomingLineageToContext(stream.Context())
 	ctx, err := withNormalizedProfile(ctx, req.Profile)
 	if err != nil {
 		return stream.Send(&proto.LoginStreamMessage{
@@ -249,6 +249,7 @@ func (s *AuthHandlerGRPCServer) Login(req *proto.LoginRequest, stream grpc.Serve
 
 // Logout implements the Logout RPC.
 func (s *AuthHandlerGRPCServer) Logout(ctx context.Context, req *proto.LogoutRequest) (*proto.LogoutResponse, error) {
+	ctx = extractIncomingLineageToContext(ctx)
 	ctx, err := withNormalizedProfile(ctx, req.Profile)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
@@ -261,6 +262,7 @@ func (s *AuthHandlerGRPCServer) Logout(ctx context.Context, req *proto.LogoutReq
 
 // GetStatus implements the GetStatus RPC.
 func (s *AuthHandlerGRPCServer) GetStatus(ctx context.Context, req *proto.GetStatusRequest) (*proto.GetStatusResponse, error) {
+	ctx = extractIncomingLineageToContext(ctx)
 	ctx, err := withNormalizedProfile(ctx, req.Profile)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
@@ -282,6 +284,7 @@ func (s *AuthHandlerGRPCServer) GetStatus(ctx context.Context, req *proto.GetSta
 
 // GetToken implements the GetToken RPC.
 func (s *AuthHandlerGRPCServer) GetToken(ctx context.Context, req *proto.GetTokenRequest) (*proto.GetTokenResponse, error) {
+	ctx = extractIncomingLineageToContext(ctx)
 	ctx, err := withNormalizedProfile(ctx, req.Profile)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
@@ -310,6 +313,7 @@ func (s *AuthHandlerGRPCServer) GetToken(ctx context.Context, req *proto.GetToke
 
 // ListCachedTokens implements the ListCachedTokens RPC.
 func (s *AuthHandlerGRPCServer) ListCachedTokens(ctx context.Context, req *proto.ListCachedTokensRequest) (*proto.ListCachedTokensResponse, error) {
+	ctx = extractIncomingLineageToContext(ctx)
 	ctx, err := withNormalizedProfile(ctx, req.Profile)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
@@ -329,6 +333,7 @@ func (s *AuthHandlerGRPCServer) ListCachedTokens(ctx context.Context, req *proto
 
 // PurgeExpiredTokens implements the PurgeExpiredTokens RPC.
 func (s *AuthHandlerGRPCServer) PurgeExpiredTokens(ctx context.Context, req *proto.PurgeExpiredTokensRequest) (*proto.PurgeExpiredTokensResponse, error) {
+	ctx = extractIncomingLineageToContext(ctx)
 	ctx, err := withNormalizedProfile(ctx, req.Profile)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
@@ -345,6 +350,7 @@ func (s *AuthHandlerGRPCServer) PurgeExpiredTokens(ctx context.Context, req *pro
 
 // DetectAvailableFlows implements the DetectAvailableFlows RPC.
 func (s *AuthHandlerGRPCServer) DetectAvailableFlows(ctx context.Context, req *proto.DetectAvailableFlowsRequest) (*proto.DetectAvailableFlowsResponse, error) {
+	ctx = extractIncomingLineageToContext(ctx)
 	ctx, err := withNormalizedProfile(ctx, req.Profile)
 	if err != nil {
 		//nolint:nilerr // Error is communicated via response, not gRPC error
@@ -376,6 +382,7 @@ func (s *AuthHandlerGRPCServer) DetectAvailableFlows(ctx context.Context, req *p
 
 // ConfigureAuthHandler implements the ConfigureAuthHandler RPC.
 func (s *AuthHandlerGRPCServer) ConfigureAuthHandler(ctx context.Context, req *proto.ConfigureAuthHandlerRequest) (*proto.ConfigureAuthHandlerResponse, error) {
+	ctx = extractIncomingLineageToContext(ctx)
 	ctx, err := withNormalizedProfile(ctx, req.Profile)
 	if err != nil {
 		//nolint:nilerr // Error is communicated via response, not gRPC error
@@ -478,6 +485,7 @@ func callbackPortToProto(port int) int32 {
 
 // Login implements AuthHandlerPlugin.Login with streaming device code support.
 func (c *AuthHandlerGRPCClient) Login(ctx context.Context, handlerName string, req LoginRequest, deviceCodeCb func(DeviceCodePrompt)) (*LoginResponse, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	settingsBytes, err := encodeRequestSettings(ctx, req.Settings)
 	if err != nil {
 		return nil, err
@@ -529,12 +537,14 @@ func (c *AuthHandlerGRPCClient) Login(ctx context.Context, handlerName string, r
 
 // Logout implements AuthHandlerPlugin.Logout.
 func (c *AuthHandlerGRPCClient) Logout(ctx context.Context, handlerName string, req LogoutRequest) error {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	_, err := c.client.Logout(ctx, &proto.LogoutRequest{HandlerName: handlerName, Hostname: req.Hostname, Profile: auth.ProfileFromContext(ctx)})
 	return err
 }
 
 // GetStatus implements AuthHandlerPlugin.GetStatus.
 func (c *AuthHandlerGRPCClient) GetStatus(ctx context.Context, handlerName string, req StatusRequest) (*auth.Status, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	settingsBytes, err := encodeRequestSettings(ctx, req.Settings)
 	if err != nil {
 		return nil, err
@@ -553,6 +563,7 @@ func (c *AuthHandlerGRPCClient) GetStatus(ctx context.Context, handlerName strin
 
 // GetToken implements AuthHandlerPlugin.GetToken.
 func (c *AuthHandlerGRPCClient) GetToken(ctx context.Context, handlerName string, req TokenRequest) (*TokenResponse, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	settingsBytes, err := encodeRequestSettings(ctx, req.Settings)
 	if err != nil {
 		return nil, err
@@ -577,6 +588,7 @@ func (c *AuthHandlerGRPCClient) GetToken(ctx context.Context, handlerName string
 
 // ListCachedTokens implements AuthHandlerPlugin.ListCachedTokens.
 func (c *AuthHandlerGRPCClient) ListCachedTokens(ctx context.Context, handlerName string) ([]*auth.CachedTokenInfo, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	resp, err := c.client.ListCachedTokens(ctx, &proto.ListCachedTokensRequest{HandlerName: handlerName, Profile: auth.ProfileFromContext(ctx)})
 	if err != nil {
 		return nil, err
@@ -590,6 +602,7 @@ func (c *AuthHandlerGRPCClient) ListCachedTokens(ctx context.Context, handlerNam
 
 // PurgeExpiredTokens implements AuthHandlerPlugin.PurgeExpiredTokens.
 func (c *AuthHandlerGRPCClient) PurgeExpiredTokens(ctx context.Context, handlerName string) (int, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	resp, err := c.client.PurgeExpiredTokens(ctx, &proto.PurgeExpiredTokensRequest{HandlerName: handlerName, Profile: auth.ProfileFromContext(ctx)})
 	if err != nil {
 		return 0, err
@@ -599,6 +612,7 @@ func (c *AuthHandlerGRPCClient) PurgeExpiredTokens(ctx context.Context, handlerN
 
 // ConfigureAuthHandler implements AuthHandlerPlugin.ConfigureAuthHandler.
 func (c *AuthHandlerGRPCClient) ConfigureAuthHandler(ctx context.Context, handlerName string, cfg ProviderConfig) error {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	protoSettings := make(map[string][]byte, len(cfg.Settings))
 	for k, v := range cfg.Settings {
 		protoSettings[k] = []byte(v)
@@ -677,6 +691,7 @@ func authCallbackPagesFromProto(p *proto.AuthCallbackPages) *AuthCallbackPages {
 
 // DetectAvailableFlows implements AuthHandlerPlugin.DetectAvailableFlows.
 func (c *AuthHandlerGRPCClient) DetectAvailableFlows(ctx context.Context, handlerName string) ([]FlowAvailability, error) {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	settingsBytes, err := encodeRequestSettings(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -735,6 +750,7 @@ func (c *AuthHandlerGRPCClient) StopAuthHandler(ctx context.Context, handlerName
 // is nil the plugin stays in CLI mode. When non-nil the bytes are passed as-is
 // to the plugin's ActivateServerMode RPC which unmarshals and validates them.
 func (c *AuthHandlerGRPCClient) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
+	ctx = appendOutgoingLineageMetadata(ctx)
 	resp, err := c.client.ActivateServerMode(ctx, &proto.ActivateServerModeRequest{
 		Settings: settings,
 	})

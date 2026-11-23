@@ -6,6 +6,8 @@ package plugin
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,9 +108,9 @@ type AuthHandlerWrapper struct {
 	mu                    sync.RWMutex
 
 	// configMu guards overrides, serverMode, configured*, and the active-call
-	// gate (inFlight, inFlightProfile, reconfiguring, writersWaiting, waitCh)
-	// so stateful plugin configuration stays stable across each RPC while calls
-	// sharing the same profile and settings execute concurrently.
+	// gate (inFlight, inFlightProfile, activeCalls, reconfiguring, writersWaiting,
+	// waitCh) so stateful plugin configuration stays stable across each RPC while
+	// calls sharing the same profile and settings execute concurrently.
 	configMu              sync.Mutex
 	overrides             map[string]map[string]string
 	serverMode            bool
@@ -117,6 +119,7 @@ type AuthHandlerWrapper struct {
 	configuredSettingsRaw []byte
 	inFlight              int
 	inFlightProfile       string
+	activeCalls           map[string]struct{}
 	reconfiguring         bool
 	writersWaiting        int
 	waitCh                chan struct{}
@@ -501,11 +504,13 @@ func (w *AuthHandlerWrapper) ApplyOverrides(ctx context.Context, overrides map[s
 	}
 
 	cfg := w.buildProviderConfig(hc, profile, rawForConfigure)
+	cfgCtx, endCfgLineage := w.startLineageLocked(ctx, profile, true)
 	w.configMu.Unlock()
 
-	cfgErr := w.client.ConfigureAuthHandler(ctx, w.handlerName, cfg)
+	cfgErr := w.client.ConfigureAuthHandler(cfgCtx, w.handlerName, cfg)
 
 	w.configMu.Lock()
+	endCfgLineage()
 	w.reconfiguring = false
 	if cfgErr != nil {
 		restoreProfileOverrides(w.overrides, profile, prevProfileOverrides, hadPrev)
@@ -584,7 +589,7 @@ func (w *AuthHandlerWrapper) beginCall(ctx context.Context) (context.Context, ma
 	hc := w.getHostConfig()
 
 	var perCallSettings map[string]json.RawMessage
-	release, err := w.acquireCallSlot(ctx, hc, profile, &perCallSettings)
+	ctx, release, err := w.acquireCallSlot(ctx, hc, profile, &perCallSettings)
 	if err != nil {
 		return ctx, nil, nil, err
 	}
@@ -600,53 +605,79 @@ func (w *AuthHandlerWrapper) acquireCallSlot(
 	hc hostConfig,
 	profile string,
 	perCallSettings *map[string]json.RawMessage,
-) (func(), error) {
+) (context.Context, func(), error) {
+	lineage := lineageFromContext(ctx)
 	w.configMu.Lock()
 	for {
 		// In server mode (scafctl serve), ActivateServerMode owns the plugin's
 		// confidential credentials; never clobber them with CLI settings.
 		if w.serverMode && !w.reconfiguring {
+			callCtx, endLineage := w.startLineageLocked(ctx, "", false)
 			w.configMu.Unlock()
-			return func() {}, nil
+			var once sync.Once
+			return callCtx, func() {
+				once.Do(func() {
+					w.configMu.Lock()
+					endLineage()
+					w.configMu.Unlock()
+				})
+			}, nil
 		}
 
+		isReentrant := w.hasActiveParentLocked(lineage)
 		rawForConfigure, rpcSettings, hasConfigSource, err := w.resolveHandlerSettingsLocked(ctx, hc, profile)
 		if err != nil {
 			w.configMu.Unlock()
-			return nil, err
+			return ctx, nil, err
 		}
 
 		needsReconfig := w.needsConfigureLocked(profile, rawForConfigure, hasConfigSource)
-		if !needsReconfig && !w.reconfiguring && w.writersWaiting == 0 && (w.inFlight == 0 || w.inFlightProfile == profile) {
+		if !needsReconfig && !w.reconfiguring && (w.writersWaiting == 0 || isReentrant) && (w.inFlight == 0 || w.inFlightProfile == profile) {
 			*perCallSettings = rpcSettings
 			w.inFlight++
 			w.inFlightProfile = profile
+			callCtx, endLineage := w.startLineageLocked(ctx, profile, true)
 			w.configMu.Unlock()
-			return w.releaseCallSlotOnce(), nil
+			return callCtx, w.releaseCallSlotOnce(endLineage), nil
+		}
+
+		if isReentrant {
+			activeProf := w.inFlightProfile
+			if w.reconfiguring && activeProf == "" {
+				activeProf = w.configuredProfile
+			}
+			w.configMu.Unlock()
+			return ctx, nil, fmt.Errorf(
+				"plugin auth handler %s cannot reconfigure from profile %q to %q inside a nested callback",
+				w.handlerName, auth.DisplayProfileName(activeProf), auth.DisplayProfileName(profile),
+			)
 		}
 
 		if needsReconfig && !w.reconfiguring && w.inFlight == 0 {
 			w.reconfiguring = true
 			cfg := w.buildProviderConfig(hc, profile, rawForConfigure)
+			cfgCtx, endCfgLineage := w.startLineageLocked(ctx, profile, true)
 			w.configMu.Unlock()
 
-			cfgErr := w.client.ConfigureAuthHandler(ctx, w.handlerName, cfg)
+			cfgErr := w.client.ConfigureAuthHandler(cfgCtx, w.handlerName, cfg)
 
 			w.configMu.Lock()
+			endCfgLineage()
 			w.reconfiguring = false
 			if cfgErr != nil {
 				w.broadcastLocked()
 				w.configMu.Unlock()
-				return nil, fmt.Errorf("plugin auth handler %s configure for profile %q: %w",
+				return ctx, nil, fmt.Errorf("plugin auth handler %s configure for profile %q: %w",
 					w.handlerName, auth.DisplayProfileName(profile), cfgErr)
 			}
 			w.recordConfiguredLocked(profile, rawForConfigure)
 			*perCallSettings = rpcSettings
 			w.inFlight++
 			w.inFlightProfile = profile
+			callCtx, endLineage := w.startLineageLocked(ctx, profile, true)
 			w.broadcastLocked()
 			w.configMu.Unlock()
-			return w.releaseCallSlotOnce(), nil
+			return callCtx, w.releaseCallSlotOnce(endLineage), nil
 		}
 
 		countedWriter := needsReconfig || (w.inFlight > 0 && w.inFlightProfile != profile)
@@ -669,7 +700,44 @@ func (w *AuthHandlerWrapper) acquireCallSlot(
 				w.broadcastLocked()
 			}
 			w.configMu.Unlock()
-			return nil, ctx.Err()
+			return ctx, nil, ctx.Err()
+		}
+	}
+}
+
+func newCallLineageID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+func (w *AuthHandlerWrapper) hasActiveParentLocked(lineage []string) bool {
+	if len(lineage) == 0 || len(w.activeCalls) == 0 {
+		return false
+	}
+	for _, id := range lineage {
+		if _, ok := w.activeCalls[id]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *AuthHandlerWrapper) startLineageLocked(ctx context.Context, profile string, hasProfile bool) (context.Context, func()) {
+	callID := newCallLineageID()
+	if w.activeCalls == nil {
+		w.activeCalls = make(map[string]struct{})
+	}
+	w.activeCalls[callID] = struct{}{}
+	nextCtx := withCallbackLineage(ctx, callID)
+	var popBroker func()
+	if w.client != nil {
+		popBroker = w.client.authCallbackLineage().push(w.handlerName, profile, hasProfile, lineageFromContext(nextCtx))
+	}
+	return nextCtx, func() {
+		delete(w.activeCalls, callID)
+		if popBroker != nil {
+			popBroker()
 		}
 	}
 }
@@ -691,11 +759,14 @@ func (w *AuthHandlerWrapper) needsConfigureLocked(profile string, rawForConfigur
 	return w.configuredProfile != profile || !bytes.Equal(w.configuredSettingsRaw, normalizedRaw)
 }
 
-func (w *AuthHandlerWrapper) releaseCallSlotOnce() func() {
+func (w *AuthHandlerWrapper) releaseCallSlotOnce(endLineage func()) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			w.configMu.Lock()
+			if endLineage != nil {
+				endLineage()
+			}
 			w.inFlight--
 			if w.inFlight == 0 {
 				w.inFlightProfile = ""
@@ -707,7 +778,11 @@ func (w *AuthHandlerWrapper) releaseCallSlotOnce() func() {
 }
 
 func (w *AuthHandlerWrapper) acquireExclusiveReconfigLocked(ctx context.Context) error {
+	lineage := lineageFromContext(ctx)
 	for w.reconfiguring || w.inFlight > 0 {
+		if w.hasActiveParentLocked(lineage) {
+			return fmt.Errorf("plugin auth handler %s cannot reconfigure inside a nested callback", w.handlerName)
+		}
 		w.writersWaiting++
 		waitCh := w.waitChanLocked()
 		w.configMu.Unlock()
@@ -952,8 +1027,12 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 			hostCfg.Settings = maps.Clone(cfg.Settings)
 			hostCfg.HostServiceID = client.HostServiceID()
 			injectAuthHandlerSettings(ctx, info.Name, &hostCfg)
-			cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg)
 			wrapper.configMu.Lock()
+			cfgCtx, endCfgLineage := wrapper.startLineageLocked(ctx, hostCfg.Profile, true)
+			wrapper.configMu.Unlock()
+			cfgErr := client.ConfigureAuthHandler(cfgCtx, info.Name, hostCfg)
+			wrapper.configMu.Lock()
+			endCfgLineage()
 			wrapper.reconfiguring = false
 			if cfgErr != nil {
 				lgr.Info("failed to configure auth handler plugin",
@@ -1196,13 +1275,16 @@ func (w *AuthHandlerWrapper) ActivateServerMode(ctx context.Context, settings js
 		w.configMu.Unlock()
 		return err
 	}
+	srvCtx, endSrvLineage := w.startLineageLocked(ctx, "", false)
 	w.configMu.Unlock()
 
-	err := w.client.ActivateServerMode(ctx, settings)
+	err := w.client.ActivateServerMode(srvCtx, settings)
 
+	trimmed := bytes.TrimSpace(settings)
 	w.configMu.Lock()
+	endSrvLineage()
 	w.reconfiguring = false
-	if err == nil {
+	if err == nil && len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
 		w.serverMode = true
 	}
 	w.broadcastLocked()

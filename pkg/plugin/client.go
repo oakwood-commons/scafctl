@@ -316,18 +316,20 @@ func (o *clientOptions) applySecretScope() {
 	o.hostDeps = &scoped
 }
 
-// isolatePromptBroker gives this client its own AuthPromptBroker. Deps are
-// commonly shared across every auth client (and WithSecretScope only
-// shallow-copies them), so a shared broker would let plugin B answer a
-// prompt window opened for plugin A's login. The copy keeps the value passed
-// to WithHostDeps unmodified; the per-client broker is shared by this
-// client's login wrapper and HostService server.
+// isolatePromptBroker gives this client its own AuthPromptBroker and callback
+// lineage tracker. Deps are commonly shared across every auth client (and
+// WithSecretScope only shallow-copies them), so a shared broker would let
+// plugin B answer a prompt window opened for plugin A's login or confuse
+// reentrant callback lineage across plugins.
 func (o *clientOptions) isolatePromptBroker() {
-	if o.hostDeps == nil || o.hostDeps.PromptBroker == nil {
+	if o.hostDeps == nil {
 		return
 	}
 	isolated := *o.hostDeps
-	isolated.PromptBroker = &AuthPromptBroker{}
+	if o.hostDeps.PromptBroker != nil {
+		isolated.PromptBroker = &AuthPromptBroker{}
+	}
+	isolated.callbackLineage = newAuthCallbackLineage()
 	o.hostDeps = &isolated
 }
 
@@ -743,6 +745,15 @@ func (c *AuthHandlerClient) authPromptBroker() *AuthPromptBroker {
 		return nil
 	}
 	return c.hostDeps.PromptBroker
+}
+
+// authCallbackLineage returns the shared callback lineage tracker for this
+// client's HostService, or nil when no host deps are wired.
+func (c *AuthHandlerClient) authCallbackLineage() *authCallbackLineage {
+	if c == nil || c.hostDeps == nil {
+		return nil
+	}
+	return c.hostDeps.callbackLineage
 }
 
 func (c *AuthHandlerClient) ActivateServerMode(ctx context.Context, settings []byte) error {
