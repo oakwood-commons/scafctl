@@ -126,7 +126,7 @@ func (p *MyProvider) Execute(ctx context.Context, input any) (*provider.Output, 
 In `pkg/provider/builtin/builtin.go`:
 
 ```go
-import "github.com/abaker/scafctl/pkg/provider/builtin/myprovider"
+import "github.com/oakwood-commons/scafctl/pkg/provider/builtin/myprovider"
 
 func init() {
     Register(myprovider.NewDefault())
