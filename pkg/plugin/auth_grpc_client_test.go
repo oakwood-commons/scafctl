@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
+	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
@@ -28,7 +30,8 @@ import (
 type mockAuthHandlerServiceClient struct {
 	proto.AuthHandlerServiceClient
 
-	capturedGetTokenReq *proto.GetTokenRequest
+	capturedGetTokenReq  *proto.GetTokenRequest
+	capturedGetGroupsReq *proto.GetGroupsRequest
 
 	getAuthHandlersResp      *proto.GetAuthHandlersResponse
 	getAuthHandlersErr       error
@@ -52,6 +55,9 @@ type mockAuthHandlerServiceClient struct {
 	detectAvailableFlowsErr  error
 	activateServerModeResp   *proto.ActivateServerModeResponse
 	activateServerModeErr    error
+	getGroupsResp            *proto.GetGroupsResponse
+	getGroupsErr             error
+	getGroupsFunc            func(ctx context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error)
 }
 
 func (m *mockAuthHandlerServiceClient) GetAuthHandlers(_ context.Context, _ *proto.GetAuthHandlersRequest, _ ...grpc.CallOption) (*proto.GetAuthHandlersResponse, error) {
@@ -101,6 +107,14 @@ func (m *mockAuthHandlerServiceClient) DetectAvailableFlows(_ context.Context, _
 
 func (m *mockAuthHandlerServiceClient) ActivateServerMode(_ context.Context, req *proto.ActivateServerModeRequest, _ ...grpc.CallOption) (*proto.ActivateServerModeResponse, error) {
 	return m.activateServerModeResp, m.activateServerModeErr
+}
+
+func (m *mockAuthHandlerServiceClient) GetGroups(ctx context.Context, req *proto.GetGroupsRequest, _ ...grpc.CallOption) (*proto.GetGroupsResponse, error) {
+	m.capturedGetGroupsReq = req
+	if m.getGroupsFunc != nil {
+		return m.getGroupsFunc(ctx, req)
+	}
+	return m.getGroupsResp, m.getGroupsErr
 }
 
 // --- Mock login stream ---
@@ -576,6 +590,51 @@ func TestAuthHandlerGRPCClient_GetToken_ForwardsServerFields(t *testing.T) {
 	assert.Equal(t, "jwt-assertion-value", mock.capturedGetTokenReq.Assertion)
 }
 
+func TestAuthHandlerGRPCClient_GetToken_ForwardsProfileAndSettings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("forwards profile and fallback TokenRequest.Settings", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockAuthHandlerServiceClient{
+			getTokenResp: &proto.GetTokenResponse{AccessToken: "tok", TokenType: "Bearer"},
+		}
+		client := &AuthHandlerGRPCClient{client: mock}
+
+		ctx := auth.WithProfile(context.Background(), "work")
+		_, err := client.GetToken(ctx, "entra", TokenRequest{
+			Settings: map[string]json.RawMessage{"clientId": json.RawMessage(`"work-client"`)},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, mock.capturedGetTokenReq)
+		assert.Equal(t, "work", mock.capturedGetTokenReq.Profile)
+		assert.JSONEq(t, `{"clientId":"work-client"}`, string(mock.capturedGetTokenReq.Settings))
+	})
+
+	t.Run("honors resolved empty host profile over sdkauth.WithProfile", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockAuthHandlerServiceClient{
+			getTokenResp: &proto.GetTokenResponse{AccessToken: "tok", TokenType: "Bearer"},
+		}
+		client := &AuthHandlerGRPCClient{client: mock}
+
+		mixedCtx := auth.WithProfileResolved(sdkauth.WithProfile(context.Background(), "work"))
+		mixedCtx = sdkplugin.WithRequestSettings(mixedCtx, map[string]json.RawMessage{})
+		_, err := client.GetToken(mixedCtx, "entra", TokenRequest{})
+		require.NoError(t, err)
+		require.NotNil(t, mock.capturedGetTokenReq)
+		assert.Empty(t, mock.capturedGetTokenReq.Profile)
+		assert.JSONEq(t, `{}`, string(mock.capturedGetTokenReq.Settings))
+	})
+
+	t.Run("rejects invalid profile on client", func(t *testing.T) {
+		t.Parallel()
+		client := &AuthHandlerGRPCClient{client: &mockAuthHandlerServiceClient{}}
+		_, err := client.GetToken(auth.WithProfile(context.Background(), "bad profile"), "entra", TokenRequest{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid profile")
+	})
+}
+
 func TestAuthHandlerGRPCClient_ListCachedTokens_Success(t *testing.T) {
 	t.Parallel()
 
@@ -954,6 +1013,44 @@ func TestAuthHandlerGRPCServer_GetToken_Error(t *testing.T) {
 		Scope:       "read",
 	})
 	require.Error(t, err)
+}
+
+func TestAuthHandlerGRPCServer_GetToken_SettingsAndProfile(t *testing.T) {
+	t.Parallel()
+
+	var gotHostProfile, gotSDKProfile string
+	var gotCtxSettings, gotReqSettings map[string]json.RawMessage
+	mock := &MockAuthHandlerPlugin{
+		tokenFunc: func(ctx context.Context, _ string, req TokenRequest) (*TokenResponse, error) {
+			gotHostProfile = auth.ProfileFromContext(ctx)
+			gotSDKProfile = sdkauth.ProfileFromContext(ctx)
+			gotCtxSettings, _ = sdkplugin.RequestSettingsFromContext(ctx)
+			gotReqSettings = req.Settings
+			return &TokenResponse{AccessToken: "tok", TokenType: "Bearer"}, nil
+		},
+	}
+	server := &AuthHandlerGRPCServer{Impl: mock}
+
+	resp, err := server.GetToken(context.Background(), &proto.GetTokenRequest{
+		HandlerName: "entra",
+		Profile:     "work",
+		Settings:    []byte(`{"clientId":"work-client"}`),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "tok", resp.AccessToken)
+	assert.Equal(t, "work", gotHostProfile)
+	assert.Equal(t, "work", gotSDKProfile)
+	assert.JSONEq(t, `"work-client"`, string(gotCtxSettings["clientId"]))
+	assert.JSONEq(t, `"work-client"`, string(gotReqSettings["clientId"]))
+
+	_, err = server.GetToken(context.Background(), &proto.GetTokenRequest{
+		HandlerName: "entra",
+		Settings:    []byte(`{bad`),
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
 func TestAuthHandlerGRPCServer_ListCachedTokens_Error(t *testing.T) {
@@ -1979,4 +2076,244 @@ func (f *forwardingServiceClient) DetectAvailableFlows(ctx context.Context, req 
 		f.onDetect(req)
 	}
 	return f.server.DetectAvailableFlows(ctx, req)
+}
+
+// ── GetGroups client & server tests ──────────────────────────────────────────
+
+func TestAuthHandlerGRPCClient_GetGroups(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success with profile and SDK WithRequestSettings", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockAuthHandlerServiceClient{
+			getGroupsResp: &proto.GetGroupsResponse{
+				Groups: []string{"grp-a", "grp-b"},
+			},
+		}
+		client := &AuthHandlerGRPCClient{client: mock}
+
+		ctx := auth.WithProfile(context.Background(), "work")
+		ctx = sdkplugin.WithRequestSettings(ctx, map[string]json.RawMessage{
+			"tenantId": json.RawMessage(`"tenant-work"`),
+		})
+
+		groups, err := client.GetGroups(ctx, "entra")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"grp-a", "grp-b"}, groups)
+		require.NotNil(t, mock.capturedGetGroupsReq)
+		assert.Equal(t, "entra", mock.capturedGetGroupsReq.HandlerName)
+		assert.Equal(t, "work", mock.capturedGetGroupsReq.Profile)
+		assert.JSONEq(t, `{"tenantId":"tenant-work"}`, string(mock.capturedGetGroupsReq.Settings))
+	})
+
+	t.Run("nil proto groups returns non-nil empty slice", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockAuthHandlerServiceClient{
+			getGroupsResp: &proto.GetGroupsResponse{},
+		}
+		client := &AuthHandlerGRPCClient{client: mock}
+
+		groups, err := client.GetGroups(context.Background(), "entra")
+		require.NoError(t, err)
+		assert.NotNil(t, groups)
+		assert.Empty(t, groups)
+	})
+
+	t.Run("older plugin Unimplemented maps to ErrGroupsNotSupported", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockAuthHandlerServiceClient{
+			getGroupsErr: status.Error(codes.Unimplemented, "unknown method GetGroups for service plugin.AuthHandlerService"),
+		}
+		client := &AuthHandlerGRPCClient{client: mock}
+
+		groups, err := client.GetGroups(context.Background(), "entra")
+		require.Error(t, err)
+		assert.Nil(t, groups)
+		assert.ErrorIs(t, err, auth.ErrGroupsNotSupported)
+		assert.Equal(t, `auth handler "entra" does not support group membership queries (GroupsProvider not implemented)`, err.Error())
+		assert.NotContains(t, err.Error(), "rpc error")
+	})
+
+	t.Run("structured not-implemented response maps to ErrGroupsNotSupported", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockAuthHandlerServiceClient{
+			getGroupsResp: &proto.GetGroupsResponse{
+				Error: "auth handler plugin does not implement AuthGroupsProvider",
+			},
+		}
+		client := &AuthHandlerGRPCClient{client: mock}
+
+		groups, err := client.GetGroups(context.Background(), "github")
+		require.Error(t, err)
+		assert.Nil(t, groups)
+		assert.ErrorIs(t, err, auth.ErrGroupsNotSupported)
+	})
+
+	t.Run("specific handler flow error is preserved", func(t *testing.T) {
+		t.Parallel()
+		for _, msg := range []string{
+			"group membership queries are not supported for service principal flows",
+			"service principal flow does not support group membership queries",
+		} {
+			mock := &mockAuthHandlerServiceClient{
+				getGroupsResp: &proto.GetGroupsResponse{Error: msg},
+			}
+			client := &AuthHandlerGRPCClient{client: mock}
+
+			groups, err := client.GetGroups(context.Background(), "entra")
+			require.Error(t, err)
+			assert.Nil(t, groups)
+			assert.False(t, auth.IsGroupsNotSupported(err))
+			assert.Equal(t, msg, err.Error())
+		}
+	})
+
+	t.Run("supports sdkauth.WithProfile fallback and rejects invalid profile on client", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockAuthHandlerServiceClient{
+			getGroupsResp: &proto.GetGroupsResponse{Groups: []string{"g-sdk"}},
+		}
+		client := &AuthHandlerGRPCClient{client: mock}
+
+		sdkCtx := sdkauth.WithProfile(context.Background(), "staging")
+		sdkCtx = sdkplugin.WithRequestSettings(sdkCtx, map[string]json.RawMessage{})
+		groups, err := client.GetGroups(sdkCtx, "entra")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"g-sdk"}, groups)
+		assert.Equal(t, "staging", mock.capturedGetGroupsReq.Profile)
+		assert.JSONEq(t, `{}`, string(mock.capturedGetGroupsReq.Settings))
+
+		mixedCtx := auth.WithProfileResolved(sdkauth.WithProfile(context.Background(), "work"))
+		_, err = client.GetGroups(mixedCtx, "entra")
+		require.NoError(t, err)
+		assert.Empty(t, mock.capturedGetGroupsReq.Profile, "explicitly resolved empty host profile must override sdkauth.WithProfile")
+
+		_, err = client.GetGroups(auth.WithProfile(context.Background(), "bad profile"), "entra")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid profile")
+	})
+
+	t.Run("transport error wraps with get groups RPC failed", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockAuthHandlerServiceClient{
+			getGroupsErr: status.Error(codes.Unavailable, "connection closed"),
+		}
+		client := &AuthHandlerGRPCClient{client: mock}
+
+		groups, err := client.GetGroups(context.Background(), "entra")
+		require.Error(t, err)
+		assert.Nil(t, groups)
+		assert.Contains(t, err.Error(), "get groups RPC failed")
+	})
+}
+
+func TestAuthHandlerGRPCServer_GetGroups(t *testing.T) {
+	t.Parallel()
+
+	t.Run("forwards profile and request settings to AuthGroupsProvider", func(t *testing.T) {
+		t.Parallel()
+		var gotHandler, gotHostProfile, gotSDKProfile string
+		var gotSettings map[string]json.RawMessage
+
+		impl := &mockGroupsAuthHandlerPlugin{
+			MockAuthHandlerPlugin: &MockAuthHandlerPlugin{},
+			groupsFunc: func(ctx context.Context, handlerName string) ([]string, error) {
+				gotHandler = handlerName
+				gotHostProfile = auth.ProfileFromContext(ctx)
+				gotSDKProfile = sdkauth.ProfileFromContext(ctx)
+				gotSettings, _ = sdkplugin.RequestSettingsFromContext(ctx)
+				return []string{"g1", "g2"}, nil
+			},
+		}
+		srv := &AuthHandlerGRPCServer{Impl: impl}
+
+		resp, err := srv.GetGroups(context.Background(), &proto.GetGroupsRequest{
+			HandlerName: "entra",
+			Profile:     "work",
+			Settings:    []byte(`{"tenantId":"tenant-work","clientId":"client-work"}`),
+		})
+		require.NoError(t, err)
+		assert.Empty(t, resp.Error)
+		assert.Equal(t, []string{"g1", "g2"}, resp.Groups)
+		assert.Equal(t, "entra", gotHandler)
+		assert.Equal(t, "work", gotHostProfile)
+		assert.Equal(t, "work", gotSDKProfile)
+		assert.JSONEq(t, `"tenant-work"`, string(gotSettings["tenantId"]))
+		assert.JSONEq(t, `"client-work"`, string(gotSettings["clientId"]))
+	})
+
+	t.Run("plugin without AuthGroupsProvider returns Unimplemented", func(t *testing.T) {
+		t.Parallel()
+		srv := &AuthHandlerGRPCServer{Impl: &MockAuthHandlerPlugin{}}
+
+		resp, err := srv.GetGroups(context.Background(), &proto.GetGroupsRequest{HandlerName: "github"})
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.Unimplemented, st.Code())
+	})
+
+	t.Run("invalid profile returns InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		impl := &mockGroupsAuthHandlerPlugin{MockAuthHandlerPlugin: &MockAuthHandlerPlugin{}}
+		srv := &AuthHandlerGRPCServer{Impl: impl}
+
+		resp, err := srv.GetGroups(context.Background(), &proto.GetGroupsRequest{
+			HandlerName: "entra",
+			Profile:     "bad profile",
+		})
+		require.Error(t, err)
+		assert.Nil(t, resp)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+	})
+
+	t.Run("malformed settings JSON returns structured error", func(t *testing.T) {
+		t.Parallel()
+		impl := &mockGroupsAuthHandlerPlugin{MockAuthHandlerPlugin: &MockAuthHandlerPlugin{}}
+		srv := &AuthHandlerGRPCServer{Impl: impl}
+
+		resp, err := srv.GetGroups(context.Background(), &proto.GetGroupsRequest{
+			HandlerName: "entra",
+			Settings:    []byte(`{not-json`),
+		})
+		require.NoError(t, err)
+		assert.Contains(t, resp.Error, "failed to decode request settings")
+	})
+
+	t.Run("implementation error returned in response", func(t *testing.T) {
+		t.Parallel()
+		impl := &mockGroupsAuthHandlerPlugin{
+			MockAuthHandlerPlugin: &MockAuthHandlerPlugin{},
+			groupsFunc: func(_ context.Context, _ string) ([]string, error) {
+				return nil, errors.New("graph API timeout")
+			},
+		}
+		srv := &AuthHandlerGRPCServer{Impl: impl}
+
+		resp, err := srv.GetGroups(context.Background(), &proto.GetGroupsRequest{HandlerName: "entra"})
+		require.NoError(t, err)
+		assert.Equal(t, "graph API timeout", resp.Error)
+	})
+}
+
+func BenchmarkAuthHandlerWrapper_GetGroups(b *testing.B) {
+	mock := &mockAuthHandlerServiceClient{
+		getGroupsResp: &proto.GetGroupsResponse{
+			Groups: []string{"00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"},
+		},
+	}
+	wrapper := NewAuthHandlerWrapper(
+		&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mock}},
+		AuthHandlerInfo{Name: "entra"},
+	)
+	ctx := auth.WithProfile(context.Background(), "work")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = wrapper.GetGroups(ctx)
+	}
 }

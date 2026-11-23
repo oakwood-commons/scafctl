@@ -2890,7 +2890,7 @@ payload.iat_human     2026-02-19T21:13:20Z
 
 The header section tells you the signing algorithm (`alg`), key ID (`kid`), and token type (`typ`) -- useful for confirming which key was used and troubleshooting signature or algorithm policy issues.
 
-Unix timestamp fields (`exp`, `iat`, `nbf`, `auth_time`) are automatically augmented with a `_human` counterpart in RFC 3339 format.
+Unix timestamp fields (`exp`, `iat`, `nbf`, `auth_time`) are automatically augmented with a `_human` counterpart in RFC 3339 format. When an access token contains a `_claim_names.groups` overage indicator (emitted by Microsoft Entra when a user belongs to more than 200 groups), `--decode` queries the handler's `GroupsProvider` automatically and populates `payload.groups_overage`, `payload.groups_resolved`, and `payload.groups_resolved_count` (or `payload.groups_resolved_error` if unsupported).
 
 This is the single fastest way to check:
 

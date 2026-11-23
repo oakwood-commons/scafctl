@@ -735,6 +735,18 @@ func (c *AuthHandlerClient) StopAuthHandler(ctx context.Context, handlerName str
 	return c.plugin.StopAuthHandler(ctx, handlerName)
 }
 
+// GetGroups delegates group membership resolution to the plugin when supported.
+func (c *AuthHandlerClient) GetGroups(ctx context.Context, handlerName string) ([]string, error) {
+	if c == nil || c.plugin == nil {
+		return nil, fmt.Errorf("auth handler plugin client is not initialized")
+	}
+	gp, ok := c.plugin.(AuthGroupsProvider)
+	if !ok {
+		return nil, auth.NewGroupsNotSupportedError(handlerName)
+	}
+	return gp.GetGroups(ctx, handlerName)
+}
+
 // HostServiceID returns the broker service ID of the HostService callback server.
 // Returns 0 if no HostService was registered.
 func (c *AuthHandlerClient) HostServiceID() uint32 {

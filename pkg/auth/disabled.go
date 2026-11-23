@@ -65,10 +65,17 @@ func (d *disabledHandler) InjectAuth(_ context.Context, _ *http.Request, _ Token
 	return d.err()
 }
 
+func (d *disabledHandler) GetGroups(_ context.Context) ([]string, error) {
+	return nil, d.err()
+}
+
 // IsDisabled reports whether the given handler is a disabled wrapper.
 func IsDisabled(h Handler) bool {
 	_, ok := h.(*disabledHandler)
 	return ok
 }
 
-var _ Handler = (*disabledHandler)(nil)
+var (
+	_ Handler        = (*disabledHandler)(nil)
+	_ GroupsProvider = (*disabledHandler)(nil)
+)

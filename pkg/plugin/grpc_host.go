@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
+	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	hostnameresolver "github.com/oakwood-commons/scafctl/pkg/auth/hostname"
@@ -360,6 +362,9 @@ func encodeContextAuthProfile(ctx context.Context) (string, bool) {
 	}
 	if auth.IsProfileResolved(ctx) {
 		return auth.DefaultProfileName, true
+	}
+	if p := sdkauth.ProfileFromContext(ctx); p != "" {
+		return p, true
 	}
 	return "", false
 }
@@ -1326,7 +1331,9 @@ func (c *HostServiceClient) GetAuthTokenWithOptions(ctx context.Context, opts Au
 }
 
 // GetAuthGroups retrieves group memberships for the authenticated user from
-// the host's auth registry, forwarding the context auth profile.
+// the host's auth registry, forwarding the context auth profile. Older hosts
+// that do not implement GetAuthGroups (gRPC Unimplemented) return an empty
+// slice and nil error.
 func (c *HostServiceClient) GetAuthGroups(ctx context.Context, handler string) ([]string, error) {
 	ctx = appendOutgoingLineageMetadata(ctx)
 	profile, _ := encodeContextAuthProfile(ctx)
@@ -1335,10 +1342,16 @@ func (c *HostServiceClient) GetAuthGroups(ctx context.Context, handler string) (
 		Profile:     profile,
 	})
 	if err != nil {
+		if sdkplugin.IsUnimplemented(err) {
+			return []string{}, nil
+		}
 		return nil, fmt.Errorf("host GetAuthGroups: %w", err)
 	}
 	if resp.Error != "" {
 		return nil, fmt.Errorf("host GetAuthGroups: %s", resp.Error)
+	}
+	if resp.Groups == nil {
+		return []string{}, nil
 	}
 	return resp.Groups, nil
 }
@@ -1499,6 +1512,9 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 			return claimsToProto(st.Claims), nil
 		},
 		AuthGroupsFunc: func(ctx context.Context, handler string) ([]string, error) {
+			if auth.RegistryFromContext(ctx) == nil {
+				ctx = auth.WithRegistry(ctx, authReg)
+			}
 			// Resolve empty handler name to the default handler (the first in
 			// authReg.List(), which is sorted, i.e. first alphabetically).
 			if handler == "" {
@@ -1508,19 +1524,27 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 				}
 				handler = handlers[0]
 			}
-			h, err := authReg.Get(handler)
+			h, err := authReg.GetContext(ctx, handler)
 			if err != nil {
 				return nil, fmt.Errorf("auth handler %q: %w", handler, err)
+			}
+			if rc, ok := h.(reentrantInitChecker); ok {
+				if err := rc.checkReentrantInit(ctx); err != nil {
+					return nil, fmt.Errorf("get groups from %q: %w", handler, err)
+				}
 			}
 			// Group membership is served via the optional GroupsProvider
 			// interface (a separate paginated callback), not the claim set,
 			// because Entra emits a _claim_names.groups overage past 200 groups.
 			gp, ok := h.(auth.GroupsProvider)
 			if !ok {
-				return nil, fmt.Errorf("auth handler %q does not support group membership queries (GroupsProvider not implemented)", handler)
+				return nil, auth.NewGroupsNotSupportedError(handler)
 			}
 			groups, err := gp.GetGroups(ctx)
 			if err != nil {
+				if auth.IsGroupsNotSupported(err) {
+					return nil, err
+				}
 				return nil, fmt.Errorf("get groups from %q: %w", handler, err)
 			}
 			return groups, nil

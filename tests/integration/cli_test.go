@@ -17959,3 +17959,122 @@ settings:
 	assert.Contains(t, tokDefault, "subproc-tok::default-subproc-client:default-subproc-tenant:api://test/.default")
 	assert.NotContains(t, tokDefault, "work-subproc-client")
 }
+
+func TestIntegration_AuthGroupsProvider_SubprocessCLI(t *testing.T) {
+	projectRoot := findProjectRoot()
+	pluginDir := t.TempDir()
+	pluginBin := filepath.Join(pluginDir, "scafctl-plugin-auth-entra")
+	if runtime.GOOS == "windows" {
+		pluginBin += ".exe"
+	}
+
+	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelBuild()
+
+	buildCmd := exec.CommandContext(buildCtx, "go", "build", "-o", pluginBin, "./tests/integration/testdata/authgroupsplugin") //nolint:gosec // test-controlled build path
+	buildCmd.Dir = projectRoot
+	buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	buildOut, buildErr := buildCmd.CombinedOutput()
+	require.NoError(t, buildErr, "build authgroupsplugin: %s", string(buildOut))
+
+	xdgDir := t.TempDir()
+	cfgPath := filepath.Join(xdgDir, "config.yaml")
+	// Configure activeProfile: work with NO top-level clientId so --profile default
+	// exercises the "{}" per-RPC settings reset over real gRPC!
+	cfgContent := `auth:
+  entra:
+    activeProfile: work
+    profiles:
+      work:
+        clientId: work-profile-client
+        tenantId: work-profile-tenant
+settings:
+  requireSecureKeyring: false
+`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgContent), 0o600))
+
+	t.Run("subprocess AuthGroupsProvider resolves overage groups for work and default profiles under mycli embedder", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdgDir, "cfg-gp"))
+		t.Setenv("XDG_DATA_HOME", filepath.Join(xdgDir, "data-gp"))
+		t.Setenv("XDG_CACHE_HOME", filepath.Join(xdgDir, "cache-gp"))
+		t.Setenv("MYCLI_SECRETS_KEY", "test-passphrase-for-isolated-keyring")
+		t.Setenv("SCAFCTL_TEST_GROUPS_UNIMPLEMENTED", "")
+
+		// 1. --profile work forwards profile="work" and work-profile-client settings.
+		var outWork, errWork bytes.Buffer
+		rootWork, cleanupWork := scafctl.Root(&scafctl.RootOptions{
+			BinaryName:     "mycli",
+			ConfigPath:     cfgPath,
+			AuthPluginDirs: []string{pluginDir},
+			IOStreams:      &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &outWork, ErrOut: &errWork},
+		})
+		rootWork.SetArgs([]string{"auth", "token", "entra", "--scope", "https://graph.microsoft.com/.default", "--profile", "work", "--decode", "-o", "json"})
+		require.NoError(t, rootWork.Execute(), "stderr: %s", errWork.String())
+		cleanupWork()
+
+		assert.Contains(t, errWork.String(), "Groups overage detected")
+		var decodedWork map[string]any
+		require.NoError(t, json.Unmarshal(outWork.Bytes(), &decodedWork), "stdout must be valid JSON")
+		payloadWork := decodedWork["payload"].(map[string]any)
+		assert.Equal(t, "work", payloadWork["token_profile"])
+		assert.Equal(t, "work-profile-client", payloadWork["token_client_id"])
+		assert.Equal(t, "work-profile-client", payloadWork["token_ctx_client"])
+		assert.Equal(t, true, payloadWork["groups_overage"])
+		assert.Equal(t, float64(3), payloadWork["groups_resolved_count"])
+		assert.Equal(t, []any{
+			"00000000-0000-0000-0000-000000000001",
+			"profile:work",
+			"client:work-profile-client",
+		}, payloadWork["groups_resolved"])
+
+		// 2. --profile default sends "{}" per-RPC settings on both GetToken and GetGroups so configure-time work-profile-client is NOT leaked.
+		var outDef, errDef bytes.Buffer
+		rootDef, cleanupDef := scafctl.Root(&scafctl.RootOptions{
+			BinaryName:     "mycli",
+			ConfigPath:     cfgPath,
+			AuthPluginDirs: []string{pluginDir},
+			IOStreams:      &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &outDef, ErrOut: &errDef},
+		})
+		rootDef.SetArgs([]string{"auth", "token", "entra", "--scope", "https://graph.microsoft.com/.default", "--profile", "default", "--decode", "-o", "json"})
+		require.NoError(t, rootDef.Execute(), "stderr: %s", errDef.String())
+		cleanupDef()
+
+		var decodedDef map[string]any
+		require.NoError(t, json.Unmarshal(outDef.Bytes(), &decodedDef))
+		payloadDef := decodedDef["payload"].(map[string]any)
+		assert.Equal(t, "", payloadDef["token_profile"])
+		assert.Equal(t, "default-client", payloadDef["token_client_id"])
+		assert.Equal(t, "default-client", payloadDef["token_ctx_client"])
+		assert.Equal(t, []any{
+			"00000000-0000-0000-0000-000000000001",
+			"profile:",
+			"client:default-client",
+		}, payloadDef["groups_resolved"])
+	})
+
+	t.Run("subprocess without AuthGroupsProvider returns Unimplemented mapped to canonical groups_resolved_error", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdgDir, "cfg-unimpl"))
+		t.Setenv("XDG_DATA_HOME", filepath.Join(xdgDir, "data-unimpl"))
+		t.Setenv("XDG_CACHE_HOME", filepath.Join(xdgDir, "cache-unimpl"))
+		t.Setenv("SCAFCTL_SECRETS_KEY", "test-passphrase-for-isolated-keyring")
+		t.Setenv("SCAFCTL_TEST_GROUPS_UNIMPLEMENTED", "1")
+
+		var outBuf, errBuf bytes.Buffer
+		rootCmd, cleanup := scafctl.Root(&scafctl.RootOptions{
+			ConfigPath:     cfgPath,
+			AuthPluginDirs: []string{pluginDir},
+			IOStreams:      &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &outBuf, ErrOut: &errBuf},
+		})
+		defer cleanup()
+
+		rootCmd.SetArgs([]string{"auth", "token", "entra", "--scope", "https://graph.microsoft.com/.default", "--decode", "-o", "json"})
+		require.NoError(t, rootCmd.Execute(), "stderr: %s", errBuf.String())
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &decoded))
+		payload := decoded["payload"].(map[string]any)
+		assert.Equal(t, true, payload["groups_overage"])
+		assert.Equal(t, "handler does not support group membership queries (GroupsProvider not implemented)", payload["groups_resolved_error"])
+		assert.NotContains(t, payload, "groups_resolved")
+	})
+}

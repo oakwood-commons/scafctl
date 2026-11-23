@@ -21,11 +21,12 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ auth.Handler      = (*LazyAuthHandlerWrapper)(nil)
-	_ auth.TokenLister  = (*LazyAuthHandlerWrapper)(nil)
-	_ auth.TokenPurger  = (*LazyAuthHandlerWrapper)(nil)
-	_ auth.FlowDetector = (*LazyAuthHandlerWrapper)(nil)
-	_ auth.Configurer   = (*LazyAuthHandlerWrapper)(nil)
+	_ auth.Handler        = (*LazyAuthHandlerWrapper)(nil)
+	_ auth.TokenLister    = (*LazyAuthHandlerWrapper)(nil)
+	_ auth.TokenPurger    = (*LazyAuthHandlerWrapper)(nil)
+	_ auth.FlowDetector   = (*LazyAuthHandlerWrapper)(nil)
+	_ auth.Configurer     = (*LazyAuthHandlerWrapper)(nil)
+	_ auth.GroupsProvider = (*LazyAuthHandlerWrapper)(nil)
 )
 
 // lazyInitTimeout is the maximum time allowed for plugin initialization
@@ -137,7 +138,8 @@ func configureLazyWrapper(ctx context.Context, client *AuthHandlerClient, info A
 	// no hardcoded domains and rely on this until
 	// auth.handlers.<name>.trustedVerificationDomains is set.
 	var cfgDomains, handlerDomains []string
-	if appCfg := config.FromContext(ctx); appCfg != nil {
+	appCfg := config.FromContext(ctx)
+	if appCfg != nil {
 		cfgDomains = appCfg.Auth.TrustedVerificationDomains
 		handlerDomains = appCfg.Auth.Handlers[cfg.Name].TrustedVerificationDomains
 	}
@@ -154,7 +156,7 @@ func configureLazyWrapper(ctx context.Context, client *AuthHandlerClient, info A
 			BinaryName:        pluginCfg.BinaryName,
 			Profile:           pluginCfg.Profile,
 			GlobalProfile:     auth.GlobalProfileFromContext(ctx),
-			AppConfig:         config.FromContext(ctx),
+			AppConfig:         appCfg,
 			AuthCallbackPages: pluginCfg.AuthCallbackPages,
 			BaseSettings:      cloneSettingsMap(pluginCfg.Settings),
 		})
@@ -178,6 +180,11 @@ func configureLazyWrapper(ctx context.Context, client *AuthHandlerClient, info A
 		}
 		wrapper.broadcastLocked()
 		wrapper.configMu.Unlock()
+	} else if appCfg != nil || auth.GlobalProfileFromContext(ctx) != "" {
+		wrapper.setHostConfig(hostConfig{
+			GlobalProfile: auth.GlobalProfileFromContext(ctx),
+			AppConfig:     appCfg,
+		})
 	}
 
 	return wrapper
@@ -457,6 +464,17 @@ func (l *LazyAuthHandlerWrapper) DetectAvailableFlows(ctx context.Context) ([]au
 		return nil, err
 	}
 	return w.DetectAvailableFlows(ctx)
+}
+
+// --- auth.GroupsProvider ---
+
+// GetGroups implements auth.GroupsProvider.
+func (l *LazyAuthHandlerWrapper) GetGroups(ctx context.Context) ([]string, error) {
+	w, err := l.init(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return w.GetGroups(ctx)
 }
 
 func (l *LazyAuthHandlerWrapper) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {

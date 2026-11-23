@@ -216,7 +216,9 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 ```
 
 Unix timestamp fields (`exp`, `iat`, `nbf`, `auth_time`) automatically get a
-`_human` companion in RFC 3339 format.
+`_human` companion in RFC 3339 format. Tokens with a `_claim_names.groups`
+overage automatically resolve `payload.groups_resolved` via `GroupsProvider`
+when supported by the handler.
 
 ### Copy to clipboard (no terminal echo)
 

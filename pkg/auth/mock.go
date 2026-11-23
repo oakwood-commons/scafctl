@@ -222,3 +222,37 @@ func (m *MockConfigurerHandler) ApplyOverrides(_ context.Context, overrides map[
 }
 
 var _ Configurer = (*MockConfigurerHandler)(nil)
+
+// MockGroupsHandler embeds MockHandler and adds GroupsProvider support.
+type MockGroupsHandler struct {
+	*MockHandler
+	GroupsResult   []string
+	GroupsErr      error
+	GetGroupsCalls int
+}
+
+// NewMockGroupsHandler creates a mock handler that implements GroupsProvider.
+func NewMockGroupsHandler(name string) *MockGroupsHandler {
+	return &MockGroupsHandler{
+		MockHandler: NewMockHandler(name),
+	}
+}
+
+// GetGroups implements GroupsProvider.
+func (m *MockGroupsHandler) GetGroups(ctx context.Context) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.LastContextProfile = ProfileFromContext(ctx)
+	m.GetGroupsCalls++
+	return m.GroupsResult, m.GroupsErr
+}
+
+// Reset clears recorded call counts on both MockGroupsHandler and the embedded MockHandler.
+func (m *MockGroupsHandler) Reset() {
+	m.MockHandler.Reset()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.GetGroupsCalls = 0
+}
+
+var _ GroupsProvider = (*MockGroupsHandler)(nil)

@@ -22,6 +22,7 @@ var (
 	ErrAlreadyAuthenticated   = errors.New("already authenticated")
 	ErrGrantInvalid           = errors.New("invalid grant: the refresh token is invalid or has been revoked")
 	ErrCapabilityNotSupported = errors.New("capability not supported by this auth handler")
+	ErrGroupsNotSupported     = errors.New("handler does not support group membership queries (GroupsProvider not implemented)")
 	ErrClaimsChallenge        = errors.New("claims challenge: re-authentication required by Conditional Access policy")
 )
 
@@ -83,6 +84,34 @@ func IsUserCancelled(err error) bool {
 // IsCapabilityNotSupported returns true if the error indicates a capability is not supported.
 func IsCapabilityNotSupported(err error) bool {
 	return errors.Is(err, ErrCapabilityNotSupported)
+}
+
+// GroupsNotSupportedError wraps ErrGroupsNotSupported for a specific auth handler.
+type GroupsNotSupportedError struct {
+	Handler string `json:"handler,omitempty" yaml:"handler,omitempty" doc:"Name of the auth handler" example:"github" maxLength:"64"`
+}
+
+// Error implements the error interface.
+func (e *GroupsNotSupportedError) Error() string {
+	if e != nil && e.Handler != "" {
+		return fmt.Sprintf("auth handler %q does not support group membership queries (GroupsProvider not implemented)", e.Handler)
+	}
+	return ErrGroupsNotSupported.Error()
+}
+
+// Unwrap returns ErrGroupsNotSupported so errors.Is(err, ErrGroupsNotSupported) succeeds.
+func (e *GroupsNotSupportedError) Unwrap() error {
+	return ErrGroupsNotSupported
+}
+
+// NewGroupsNotSupportedError returns an error indicating handler does not support group membership queries.
+func NewGroupsNotSupportedError(handler string) error {
+	return &GroupsNotSupportedError{Handler: handler}
+}
+
+// IsGroupsNotSupported returns true if the error indicates group membership queries are not supported.
+func IsGroupsNotSupported(err error) bool {
+	return errors.Is(err, ErrGroupsNotSupported)
 }
 
 // IsGrantInvalid returns true if the error indicates the grant (refresh token) is invalid or revoked.

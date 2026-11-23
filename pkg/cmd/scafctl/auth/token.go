@@ -304,7 +304,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				// Resolve full group membership when the token contains a groups overage.
 				// Entra emits _claim_names.groups instead of a groups claim when the user
 				// belongs to more than 200 groups. We detect this and call the handler's
-				// GroupsProvider to fetch the complete list via Microsoft Graph.
+				// GroupsProvider to fetch the complete membership list.
 				if hasGroupsOverage(decoded) {
 					payload, ok := decoded["payload"].(map[string]any)
 					if !ok {
@@ -313,16 +313,23 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 					}
 					payload["groups_overage"] = true
 					if gp, ok := handler.(auth.GroupsProvider); ok {
-						w.Warningf("Groups overage detected: fetching full group membership via Microsoft Graph...")
+						w.WarnStderrf("Groups overage detected: fetching full group membership...")
 						groups, grpErr := gp.GetGroups(ctx)
 						if grpErr != nil {
-							payload["groups_resolved_error"] = grpErr.Error()
+							if auth.IsGroupsNotSupported(grpErr) {
+								payload["groups_resolved_error"] = auth.ErrGroupsNotSupported.Error()
+							} else {
+								payload["groups_resolved_error"] = grpErr.Error()
+							}
 						} else {
+							if groups == nil {
+								groups = []string{}
+							}
 							payload["groups_resolved"] = groups
 							payload["groups_resolved_count"] = len(groups)
 						}
 					} else {
-						payload["groups_resolved_error"] = "handler does not support group membership queries (GroupsProvider not implemented)"
+						payload["groups_resolved_error"] = auth.ErrGroupsNotSupported.Error()
 					}
 				}
 
@@ -379,7 +386,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd.Flags().BoolVar(&force, "force", false, "Force acquiring a new token, ignoring any cached token (alias for --force-refresh)")
 	cmd.Flags().BoolVar(&rawToken, "raw", false, "Print only the raw access token value (useful for scripting)")
 	cmd.Flags().BoolVar(&clip, "clip", false, "Copy the token to the clipboard instead of printing it")
-	cmd.Flags().BoolVar(&decode, "decode", false, "Decode and display JWT header and claims from the access token (no signature validation); use -o json for full structured output")
+	cmd.Flags().BoolVar(&decode, "decode", false, "Decode and display JWT header and claims from the access token (no signature validation; resolves _claim_names.groups overage when supported); use -o json for full structured output")
 	cmd.Flags().BoolVar(&curl, "curl", false, "Emit a ready-to-run curl command with the token injected")
 	cmd.Flags().StringVar(&curlURL, "curl-url", "", "URL to embed in the --curl output (default: '<URL>' placeholder)")
 	cmd.Flags().BoolVar(&exportToken, "export", false, fmt.Sprintf("Output a shell export statement: eval $(%s auth token ... --export)", cliParams.BinaryName))

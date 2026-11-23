@@ -154,8 +154,21 @@ token, err := auth.GetCachedOrAcquireToken(
 
 ## Sentinel Errors
 
-| Error                       | When                                       |
-|-----------------------------|--------------------------------------------|\n| `ErrNotAuthenticated`       | No cached credentials available             |\n| `ErrAuthenticationFailed`   | Login or token acquisition failed           |\n| `ErrTokenExpired`           | Cached token past expiry                    |\n| `ErrInvalidScope`           | Empty or missing scope                      |\n| `ErrConsentRequired`        | User interaction needed                     |\n| `ErrHandlerNotFound`        | Handler not in registry                     |\n| `ErrFlowNotSupported`       | Handler doesn't support requested flow      |\n| `ErrUserCancelled`          | User aborted interactive flow               |\n| `ErrTimeout`                | Operation timed out                         |\n| `ErrAlreadyAuthenticated`   | Already logged in                           |\n| `ErrGrantInvalid`           | Refresh token or grant revoked              |\n| `ErrCapabilityNotSupported` | Handler lacks required capability           |
+| Error                       | When                                        |
+|-----------------------------|---------------------------------------------|
+| `ErrNotAuthenticated`       | No cached credentials available             |
+| `ErrAuthenticationFailed`   | Login or token acquisition failed           |
+| `ErrTokenExpired`           | Cached token past expiry                    |
+| `ErrInvalidScope`           | Empty or missing scope                      |
+| `ErrConsentRequired`        | User interaction needed                     |
+| `ErrHandlerNotFound`        | Handler not in registry                     |
+| `ErrFlowNotSupported`       | Handler doesn't support requested flow      |
+| `ErrUserCancelled`          | User aborted interactive flow               |
+| `ErrTimeout`                | Operation timed out                         |
+| `ErrAlreadyAuthenticated`   | Already logged in                           |
+| `ErrGrantInvalid`           | Refresh token or grant revoked              |
+| `ErrCapabilityNotSupported` | Handler lacks required capability           |
+| `ErrGroupsNotSupported`     | Handler does not support group queries      |
 
 Provider-specific sentinel errors follow the same pattern:
 
@@ -165,7 +178,7 @@ Provider-specific sentinel errors follow the same pattern:
 
 ## Testing
 
-Use `MockHandler` for unit testing code that depends on auth:
+Use `MockHandler` (or `MockGroupsHandler` when testing `GroupsProvider` consumers) for unit testing code that depends on auth:
 
 ```go
 mock := auth.NewMockHandler("mock")

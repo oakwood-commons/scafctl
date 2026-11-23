@@ -36,6 +36,19 @@ func TestDisabledHandler_InjectAuth(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrHandlerDisabled))
 }
 
+func TestDisabledHandler_GetGroups(t *testing.T) {
+	original := NewMockHandler("entra")
+	d := newDisabledHandler(original, "server mode disabled")
+
+	groups, err := d.GetGroups(context.Background())
+
+	require.Error(t, err)
+	assert.Nil(t, groups)
+	assert.ErrorIs(t, err, ErrHandlerDisabled)
+	assert.Contains(t, err.Error(), "entra")
+	assert.Contains(t, err.Error(), "server mode disabled")
+}
+
 func TestDisabledHandler_Login(t *testing.T) {
 	original := NewMockHandler("entra")
 	d := newDisabledHandler(original, "reason")

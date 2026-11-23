@@ -82,6 +82,8 @@ type AuthHandlerPlugin interface {
 }
 ```
 
+Auth handler plugins may also implement optional SDK interfaces such as `AuthGroupsProvider` (`GetGroups(ctx, handlerName)`) to support group membership queries via `AuthHandlerWrapper.GetGroups` and `HostService.GetAuthGroups` (plugins that do not implement it return gRPC `Unimplemented`, mapped on the host to `auth.ErrGroupsNotSupported`).
+
 After plugin load, scafctl calls `ConfigureAuthHandler` once per handler. The
 request uses the `ProviderConfig` fields (`quiet`, `no_color`, `binary_name`,
 `profile`, `settings`, `host_service_id`, `protocol_version`,
@@ -107,6 +109,8 @@ accessed via the GRPCBroker using the service ID from `ProviderConfig.HostServic
 | `GetAuthIdentity` | Retrieve identity claims from the host's auth registry |
 | `ListAuthHandlers` | List available auth handlers (filtered by AllowedAuthHandlers) |
 | `GetAuthToken` | Retrieve a valid access token from the host's auth registry |
+| `GetAuthGroups` | Retrieve group memberships for the authenticated user via `auth.GroupsProvider` |
+| `PromptAuthResponse` | Prompt the user for a pasted OAuth redirect URL during an active login |
 
 Secret names are scoped by a plugin-specific prefix. Auth handler access is
 restricted to the set declared in `AllowedAuthHandlers`.
@@ -197,7 +201,7 @@ can clean up with `KillAll` on shutdown.
 2. **Handshake**: Protocol version and magic cookie are validated
 3. **GetAuthHandlers**: Plugin advertises handler names, flows, and capabilities
 4. **ConfigureAuthHandler**: Host sends config + protocol version + HostService ID + host capabilities + callback pages
-5. **Authentication**: `Login`, `Logout`, `GetStatus`, `GetToken` on user request
+5. **Authentication**: `Login`, `Logout`, `GetStatus`, `GetToken`, and optional `GetGroups` on user or provider request
 6. **Shutdown**: `StopAuthHandler` for graceful cleanup, then `Kill()` the process
 
 ## Example Plugin

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
+	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -2294,5 +2296,531 @@ func TestAuthHandlerWrapper_ReentrantCallbackLineage(t *testing.T) {
 		assert.True(t, lateWrapper.serverMode, "ActivateServerMode must propagate serverMode to wrappers registered mid-RPC")
 		lateWrapper.reconfiguring = false
 		lateWrapper.configMu.Unlock()
+	})
+}
+
+func TestAuthHandlerWrapper_ApplyOverrides_PreservedInGetTokenAndGetGroups(t *testing.T) {
+	t.Parallel()
+
+	var capturedGroupsReq *proto.GetGroupsRequest
+	mockClient := &mockAuthHandlerServiceClient{
+		configureAuthHandlerResp: &proto.ConfigureAuthHandlerResponse{ProtocolVersion: PluginProtocolVersion},
+		getTokenResp:             &proto.GetTokenResponse{AccessToken: "tok", TokenType: "Bearer"},
+		getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+			capturedGroupsReq = req
+			return &proto.GetGroupsResponse{Groups: []string{"g1"}}, nil
+		},
+	}
+	wrapper := NewAuthHandlerWrapper(
+		&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+		AuthHandlerInfo{Name: "entra"},
+	)
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ClientID:      "config-top-client",
+				ActiveProfile: "work",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {ClientID: "config-work-client"},
+				},
+			},
+		},
+	}
+	baseCtx := config.WithConfig(context.Background(), appCfg)
+
+	// Simulate `scafctl auth login entra --client-id cli-override-client` on activeProfile="work",
+	// followed immediately by post-login GetToken / GetGroups on the same wrapper instance.
+	require.NoError(t, wrapper.ApplyOverrides(baseCtx, map[string]string{
+		"clientId": "cli-override-client",
+		"tenantId": "cli-override-tenant",
+	}))
+
+	_, err := wrapper.GetToken(baseCtx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
+	require.NoError(t, err)
+	require.NotNil(t, mockClient.capturedGetTokenReq)
+	assert.Equal(t, "work", mockClient.capturedGetTokenReq.Profile)
+	var tokSettings map[string]any
+	require.NoError(t, json.Unmarshal(mockClient.capturedGetTokenReq.Settings, &tokSettings))
+	assert.Equal(t, "cli-override-client", tokSettings["clientId"])
+	assert.Equal(t, "cli-override-tenant", tokSettings["tenantId"])
+
+	_, err = wrapper.GetGroups(baseCtx)
+	require.NoError(t, err)
+	require.NotNil(t, capturedGroupsReq)
+	assert.Equal(t, "work", capturedGroupsReq.Profile)
+	var grpSettings map[string]any
+	require.NoError(t, json.Unmarshal(capturedGroupsReq.Settings, &grpSettings))
+	assert.Equal(t, "cli-override-client", grpSettings["clientId"])
+	assert.Equal(t, "cli-override-tenant", grpSettings["tenantId"])
+
+	// Switching to the built-in/default profile must NOT leak the "work" overrides.
+	defaultCtx := auth.WithProfileResolved(baseCtx)
+	_, err = wrapper.GetToken(defaultCtx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, mockClient.capturedGetTokenReq.Profile)
+	tokSettings = nil
+	require.NoError(t, json.Unmarshal(mockClient.capturedGetTokenReq.Settings, &tokSettings))
+	assert.Equal(t, "config-top-client", tokSettings["clientId"])
+	assert.NotContains(t, tokSettings, "tenantId")
+
+	// Even when appCfg is nil, WithGlobalProfile ("--auth-profile work") keys CLI overrides consistently
+	// across ApplyOverrides, GetToken, and GetGroups, and switching to default emits "{}" to reset them.
+	noCfgWrapper := NewAuthHandlerWrapper(
+		&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+		AuthHandlerInfo{Name: "entra"},
+	)
+	globalWorkCtx := auth.WithGlobalProfile(context.Background(), "work")
+	require.NoError(t, noCfgWrapper.ApplyOverrides(globalWorkCtx, map[string]string{"clientId": "work-only"}))
+
+	_, err = noCfgWrapper.GetToken(globalWorkCtx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "work", mockClient.capturedGetTokenReq.Profile)
+	assert.JSONEq(t, `{"clientId":"work-only"}`, string(mockClient.capturedGetTokenReq.Settings))
+
+	capturedGroupsReq = nil
+	_, err = noCfgWrapper.GetGroups(globalWorkCtx)
+	require.NoError(t, err)
+	require.NotNil(t, capturedGroupsReq)
+	assert.Equal(t, "work", capturedGroupsReq.Profile)
+	assert.JSONEq(t, `{"clientId":"work-only"}`, string(capturedGroupsReq.Settings))
+
+	_, err = noCfgWrapper.GetToken(auth.WithGlobalProfile(context.Background(), "default"), auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, mockClient.capturedGetTokenReq.Profile)
+	assert.JSONEq(t, `{}`, string(mockClient.capturedGetTokenReq.Settings))
+
+	// Uninitialized client guards on GetToken and ApplyOverrides must not panic.
+	uninitWrapper := NewAuthHandlerWrapper(&AuthHandlerClient{}, AuthHandlerInfo{Name: "entra"})
+	_, err = uninitWrapper.GetToken(context.Background(), auth.TokenOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client is not initialized")
+	err = uninitWrapper.ApplyOverrides(context.Background(), map[string]string{"clientId": "x"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "client is not initialized")
+}
+
+func TestConfigureAndRegisterAuthHandlers_PreservesEmbedderSettingsAcrossPerRequestCalls(t *testing.T) {
+	t.Parallel()
+
+	var capturedGroupsReq *proto.GetGroupsRequest
+	mockSvc := &mockAuthHandlerServiceClient{
+		configureAuthHandlerResp: &proto.ConfigureAuthHandlerResponse{ProtocolVersion: PluginProtocolVersion},
+		getTokenResp:             &proto.GetTokenResponse{AccessToken: "tok", TokenType: "Bearer"},
+		getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+			capturedGroupsReq = req
+			return &proto.GetGroupsResponse{Groups: []string{"g-embedder"}}, nil
+		},
+	}
+
+	reg := auth.NewRegistry()
+	// Non-nil but empty AppConfig.Auth.Entra alongside caller-supplied ProviderConfig.Settings["entra"].
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), appCfg)
+
+	registered := configureAndRegisterAuthHandlers(
+		ctx,
+		reg,
+		&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockSvc}},
+		[]AuthHandlerInfo{{Name: "entra", DisplayName: "Microsoft Entra ID"}},
+		&ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"entra": json.RawMessage(`{"clientId":"embedder-client","accountId":9007199254740993}`),
+			},
+		},
+	)
+	require.Equal(t, []string{"entra"}, registered)
+	require.NotNil(t, mockSvc.lastConfigureReq)
+	assert.Contains(t, string(mockSvc.lastConfigureReq.Settings["entra"]), `"accountId":9007199254740993`)
+
+	h, err := reg.Get("entra")
+	require.NoError(t, err)
+
+	_, err = h.GetToken(ctx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
+	require.NoError(t, err)
+	require.NotNil(t, mockSvc.capturedGetTokenReq)
+	assert.Contains(t, string(mockSvc.capturedGetTokenReq.Settings), `"clientId":"embedder-client"`)
+	assert.Contains(t, string(mockSvc.capturedGetTokenReq.Settings), `"accountId":9007199254740993`,
+		"large integer tokens beyond float64 precision must remain exact during merge")
+
+	gp, ok := h.(auth.GroupsProvider)
+	require.True(t, ok)
+	groups, err := gp.GetGroups(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"g-embedder"}, groups)
+	require.NotNil(t, capturedGroupsReq)
+	assert.Contains(t, string(capturedGroupsReq.Settings), `"clientId":"embedder-client"`)
+	assert.Contains(t, string(capturedGroupsReq.Settings), `"accountId":9007199254740993`)
+
+	// Applying string CLI overrides must also preserve 64-bit integer precision on untouched keys.
+	cfgr, ok := h.(auth.Configurer)
+	require.True(t, ok)
+	require.NoError(t, cfgr.ApplyOverrides(ctx, map[string]string{"tenantId": "override-tenant"}))
+	assert.Contains(t, string(mockSvc.lastConfigureReq.Settings["entra"]), `"accountId":9007199254740993`)
+	assert.Contains(t, string(mockSvc.lastConfigureReq.Settings["entra"]), `"tenantId":"override-tenant"`)
+
+	_, err = h.GetToken(ctx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
+	require.NoError(t, err)
+	assert.Contains(t, string(mockSvc.capturedGetTokenReq.Settings), `"accountId":9007199254740993`)
+	assert.Contains(t, string(mockSvc.capturedGetTokenReq.Settings), `"tenantId":"override-tenant"`)
+}
+
+type mockGroupsAuthHandlerPlugin struct {
+	*MockAuthHandlerPlugin
+	groupsFunc func(ctx context.Context, handlerName string) ([]string, error)
+}
+
+func (m *mockGroupsAuthHandlerPlugin) GetGroups(ctx context.Context, handlerName string) ([]string, error) {
+	if m.groupsFunc != nil {
+		return m.groupsFunc(ctx, handlerName)
+	}
+	return []string{}, nil
+}
+
+var _ AuthGroupsProvider = (*mockGroupsAuthHandlerPlugin)(nil)
+
+func TestAuthHandlerWrapper_GetGroups_ForwardsProfileAndSettings(t *testing.T) {
+	t.Parallel()
+
+	var capturedReq *proto.GetGroupsRequest
+	mockClient := &mockAuthHandlerServiceClient{
+		getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+			capturedReq = req
+			return &proto.GetGroupsResponse{
+				Groups: []string{"grp-1", "grp-2"},
+			}, nil
+		},
+	}
+
+	wrapper := NewAuthHandlerWrapper(
+		&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+		AuthHandlerInfo{Name: "entra", DisplayName: "Microsoft Entra ID"},
+	)
+
+	var gp auth.GroupsProvider = wrapper
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ClientID: "top-client",
+				TenantID: "top-tenant",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {
+						ClientID: "work-client",
+						TenantID: "work-tenant",
+					},
+				},
+			},
+		},
+	}
+
+	ctx := config.WithConfig(context.Background(), appCfg)
+	ctx = auth.WithProfile(ctx, "work")
+
+	groups, err := gp.GetGroups(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"grp-1", "grp-2"}, groups)
+	require.NotNil(t, capturedReq)
+	assert.Equal(t, "entra", capturedReq.HandlerName)
+	assert.Equal(t, "work", capturedReq.Profile)
+
+	var settings map[string]any
+	require.NoError(t, json.Unmarshal(capturedReq.Settings, &settings))
+	assert.Equal(t, "work-client", settings["clientId"])
+	assert.Equal(t, "work-tenant", settings["tenantId"])
+	assert.Nil(t, settings["profiles"])
+	assert.Empty(t, settings["activeProfile"])
+}
+
+func TestAuthHandlerWrapper_GetGroups_ResolvesActiveProfileAndDefaultOverride(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ClientID:      "top-client",
+				TenantID:      "top-tenant",
+				ActiveProfile: "work",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {
+						ClientID: "work-client",
+						TenantID: "work-tenant",
+					},
+				},
+			},
+		},
+	}
+
+	t.Run("resolves activeProfile when unset", func(t *testing.T) {
+		t.Parallel()
+		var capturedReq *proto.GetGroupsRequest
+		mockClient := &mockAuthHandlerServiceClient{
+			getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+				capturedReq = req
+				return &proto.GetGroupsResponse{Groups: []string{"g-work"}}, nil
+			},
+		}
+		wrapper := NewAuthHandlerWrapper(
+			&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+			AuthHandlerInfo{Name: "entra"},
+		)
+
+		groups, err := wrapper.GetGroups(config.WithConfig(context.Background(), appCfg))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"g-work"}, groups)
+		require.NotNil(t, capturedReq)
+		assert.Equal(t, "work", capturedReq.Profile)
+		var settings map[string]any
+		require.NoError(t, json.Unmarshal(capturedReq.Settings, &settings))
+		assert.Equal(t, "work-client", settings["clientId"])
+	})
+
+	t.Run("explicit default profile skips activeProfile and overrides sdkauth.WithProfile across GetToken and GetGroups", func(t *testing.T) {
+		t.Parallel()
+		var capturedGroupsReq *proto.GetGroupsRequest
+		mockClient := &mockAuthHandlerServiceClient{
+			getTokenResp: &proto.GetTokenResponse{AccessToken: "tok-default", TokenType: "Bearer"},
+			getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+				capturedGroupsReq = req
+				return &proto.GetGroupsResponse{Groups: []string{"g-default"}}, nil
+			},
+		}
+		wrapper := NewAuthHandlerWrapper(
+			&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+			AuthHandlerInfo{Name: "entra"},
+		)
+
+		// Mixed context: sdkauth carries "work", while host explicitly resolved built-in/default ("").
+		ctx := auth.WithProfileResolved(sdkauth.WithProfile(config.WithConfig(context.Background(), appCfg), "work"))
+
+		tok, err := wrapper.GetToken(ctx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
+		require.NoError(t, err)
+		assert.Equal(t, "tok-default", tok.AccessToken)
+		require.NotNil(t, mockClient.capturedGetTokenReq)
+		assert.Empty(t, mockClient.capturedGetTokenReq.Profile)
+
+		groups, err := wrapper.GetGroups(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"g-default"}, groups)
+		require.NotNil(t, capturedGroupsReq)
+		assert.Empty(t, capturedGroupsReq.Profile)
+
+		assert.JSONEq(t, string(capturedGroupsReq.Settings), string(mockClient.capturedGetTokenReq.Settings),
+			"GetToken and GetGroups must forward identical effective profile settings")
+		var settings map[string]any
+		require.NoError(t, json.Unmarshal(mockClient.capturedGetTokenReq.Settings, &settings))
+		assert.Equal(t, "top-client", settings["clientId"])
+	})
+
+	t.Run("falls back to registered AppConfig when call ctx lacks config", func(t *testing.T) {
+		t.Parallel()
+		var capturedReq *proto.GetGroupsRequest
+		mockClient := &mockAuthHandlerServiceClient{
+			getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+				capturedReq = req
+				return &proto.GetGroupsResponse{Groups: []string{"g-fallback"}}, nil
+			},
+		}
+		reg := auth.NewRegistry()
+		baseCtx := config.WithConfig(context.Background(), appCfg)
+		configureAndRegisterAuthHandlers(
+			baseCtx,
+			reg,
+			&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+			[]AuthHandlerInfo{{Name: "entra"}},
+			nil,
+		)
+		h, err := reg.Get("entra")
+		require.NoError(t, err)
+		gp, ok := h.(auth.GroupsProvider)
+		require.True(t, ok)
+
+		groups, err := gp.GetGroups(auth.WithProfile(context.Background(), "work"))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"g-fallback"}, groups)
+		require.NotNil(t, capturedReq)
+		assert.Equal(t, "work", capturedReq.Profile)
+		var settings map[string]any
+		require.NoError(t, json.Unmarshal(capturedReq.Settings, &settings))
+		assert.Equal(t, "work-client", settings["clientId"])
+	})
+}
+
+func TestAuthHandlerWrapper_GetGroups_UnsupportedAndErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil client returns error", func(t *testing.T) {
+		t.Parallel()
+		wrapper := NewAuthHandlerWrapper(nil, AuthHandlerInfo{Name: "entra"})
+		groups, err := wrapper.GetGroups(context.Background())
+		require.Error(t, err)
+		assert.Nil(t, groups)
+		assert.Contains(t, err.Error(), "client is not initialized")
+	})
+
+	t.Run("in-memory plugin without AuthGroupsProvider returns ErrGroupsNotSupported", func(t *testing.T) {
+		t.Parallel()
+		wrapper := NewAuthHandlerWrapper(&AuthHandlerClient{plugin: &MockAuthHandlerPlugin{}}, AuthHandlerInfo{Name: "github"})
+		groups, err := wrapper.GetGroups(context.Background())
+		require.Error(t, err)
+		assert.Nil(t, groups)
+		assert.ErrorIs(t, err, auth.ErrGroupsNotSupported)
+		assert.Equal(t, `auth handler "github" does not support group membership queries (GroupsProvider not implemented)`, err.Error())
+	})
+
+	t.Run("uninitialized AuthHandlerClient returns clean error", func(t *testing.T) {
+		t.Parallel()
+		var nilClient *AuthHandlerClient
+		_, err := nilClient.GetGroups(context.Background(), "entra")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not initialized")
+
+		emptyClient := &AuthHandlerClient{}
+		_, err = emptyClient.GetGroups(context.Background(), "entra")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not initialized")
+	})
+
+	t.Run("invalid profile on context is rejected before gRPC call", func(t *testing.T) {
+		t.Parallel()
+		called := false
+		mockClient := &mockAuthHandlerServiceClient{
+			getGroupsFunc: func(_ context.Context, _ *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+				called = true
+				return &proto.GetGroupsResponse{}, nil
+			},
+		}
+		wrapper := NewAuthHandlerWrapper(
+			&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+			AuthHandlerInfo{Name: "entra"},
+		)
+
+		groups, err := wrapper.GetGroups(auth.WithProfile(context.Background(), "../bad"))
+		require.Error(t, err)
+		assert.Nil(t, groups)
+		assert.False(t, called, "must reject invalid profile before invoking plugin RPC")
+		assert.Contains(t, err.Error(), "invalid profile")
+	})
+
+	t.Run("switching to unconfigured default or empty profile sends empty JSON object to reset configure settings", func(t *testing.T) {
+		t.Parallel()
+		appCfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{
+					ActiveProfile: "work",
+					Profiles: map[string]*config.EntraProfileConfig{
+						"work": {
+							ClientID: "work-client",
+							TenantID: "work-tenant",
+						},
+						"personal": {},
+					},
+				},
+			},
+		}
+
+		var capturedReq *proto.GetGroupsRequest
+		mockClient := &mockAuthHandlerServiceClient{
+			getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+				capturedReq = req
+				return &proto.GetGroupsResponse{Groups: []string{"g-reset"}}, nil
+			},
+		}
+		wrapper := NewAuthHandlerWrapper(
+			&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+			AuthHandlerInfo{Name: "entra"},
+		)
+
+		// Explicit default profile (no top-level clientId/tenantId) must send "{}" rather than nil.
+		defaultCtx := auth.WithProfileResolved(config.WithConfig(context.Background(), appCfg))
+		groups, err := wrapper.GetGroups(defaultCtx)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"g-reset"}, groups)
+		require.NotNil(t, capturedReq)
+		assert.Empty(t, capturedReq.Profile)
+		assert.JSONEq(t, `{}`, string(capturedReq.Settings))
+
+		// Empty named profile ("personal") must also send "{}" rather than nil.
+		capturedReq = nil
+		personalCtx := auth.WithProfile(config.WithConfig(context.Background(), appCfg), "personal")
+		_, err = wrapper.GetGroups(personalCtx)
+		require.NoError(t, err)
+		require.NotNil(t, capturedReq)
+		assert.Equal(t, "personal", capturedReq.Profile)
+		assert.JSONEq(t, `{}`, string(capturedReq.Settings))
+	})
+
+	t.Run("preserves explicit caller-attached SDK RequestSettingsFromContext", func(t *testing.T) {
+		t.Parallel()
+		appCfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{ClientID: "config-client"},
+			},
+		}
+		var capturedReq *proto.GetGroupsRequest
+		mockClient := &mockAuthHandlerServiceClient{
+			getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+				capturedReq = req
+				return &proto.GetGroupsResponse{Groups: []string{"g-explicit"}}, nil
+			},
+		}
+		wrapper := NewAuthHandlerWrapper(
+			&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+			AuthHandlerInfo{Name: "entra"},
+		)
+
+		ctx := config.WithConfig(context.Background(), appCfg)
+		ctx = sdkplugin.WithRequestSettings(ctx, map[string]json.RawMessage{
+			"clientId": json.RawMessage(`"caller-override-client"`),
+		})
+		_, err := wrapper.GetGroups(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, capturedReq)
+		assert.JSONEq(t, `{"clientId":"caller-override-client"}`, string(capturedReq.Settings))
+	})
+
+	t.Run("forwards github, gcp, and generic handler settings", func(t *testing.T) {
+		t.Parallel()
+		appCfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				GitHub: &config.GitHubAuthConfig{Hostname: "github.example.com"},
+				GCP:    &config.GCPAuthConfig{Project: "proj-1"},
+				Handlers: map[string]config.HandlerConfig{
+					"custom-idp": {Settings: map[string]any{"issuer": "https://idp.example.com"}},
+				},
+			},
+		}
+
+		for _, tc := range []struct {
+			handler   string
+			wantField string
+			wantVal   string
+		}{
+			{"github", "hostname", "github.example.com"},
+			{"gcp", "project", "proj-1"},
+			{"custom-idp", "issuer", "https://idp.example.com"},
+		} {
+			var capturedReq *proto.GetGroupsRequest
+			mockClient := &mockAuthHandlerServiceClient{
+				getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+					capturedReq = req
+					return &proto.GetGroupsResponse{Groups: []string{"g1"}}, nil
+				},
+			}
+			w := NewAuthHandlerWrapper(
+				&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
+				AuthHandlerInfo{Name: tc.handler},
+			)
+			_, err := w.GetGroups(config.WithConfig(context.Background(), appCfg))
+			require.NoError(t, err)
+			require.NotNil(t, capturedReq)
+			var m map[string]any
+			require.NoError(t, json.Unmarshal(capturedReq.Settings, &m))
+			assert.Equal(t, tc.wantVal, m[tc.wantField])
+		}
 	})
 }

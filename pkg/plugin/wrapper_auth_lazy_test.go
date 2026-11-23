@@ -426,6 +426,151 @@ func TestLazyAuthHandlerWrapper_ActivateServerMode_DelegatesToWrapper(t *testing
 	require.NoError(t, err)
 }
 
+func TestLazyAuthHandlerWrapper_GetGroups_DelegatesAndPropagatesErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("delegates GetGroups after lazy init", func(t *testing.T) {
+		t.Parallel()
+		var capturedReq *proto.GetGroupsRequest
+		mock := &mockAuthHandlerServiceClient{
+			getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+				capturedReq = req
+				return &proto.GetGroupsResponse{Groups: []string{"lazy-grp-1"}}, nil
+			},
+		}
+		wrapper := NewAuthHandlerWrapper(
+			&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mock}},
+			AuthHandlerInfo{Name: "entra", DisplayName: "Microsoft Entra ID"},
+		)
+		initCalls := 0
+		lazy := &LazyAuthHandlerWrapper{
+			name:        "entra",
+			displayName: "entra",
+			initFn: func(_ context.Context) (*AuthHandlerWrapper, error) {
+				initCalls++
+				return wrapper, nil
+			},
+		}
+
+		var gp auth.GroupsProvider = lazy
+		groups, err := gp.GetGroups(auth.WithProfile(context.Background(), "work"))
+		require.NoError(t, err)
+		assert.Equal(t, 1, initCalls)
+		assert.Equal(t, []string{"lazy-grp-1"}, groups)
+		require.NotNil(t, capturedReq)
+		assert.Equal(t, "entra", capturedReq.HandlerName)
+		assert.Equal(t, "work", capturedReq.Profile)
+	})
+
+	t.Run("propagates init error", func(t *testing.T) {
+		t.Parallel()
+		lazy := &LazyAuthHandlerWrapper{
+			name:        "broken",
+			displayName: "broken",
+			initFn: func(_ context.Context) (*AuthHandlerWrapper, error) {
+				return nil, errors.New("binary missing")
+			},
+		}
+
+		groups, err := lazy.GetGroups(context.Background())
+		require.Error(t, err)
+		assert.Nil(t, groups)
+		assert.Contains(t, err.Error(), "binary missing")
+	})
+
+	t.Run("configureLazyWrapper retains AppConfig across both PluginCfg branches for GetGroups fallback", func(t *testing.T) {
+		t.Parallel()
+		appCfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{
+					ClientID: "top-client",
+					Profiles: map[string]*config.EntraProfileConfig{
+						"work": {ClientID: "lazy-work-client"},
+					},
+				},
+			},
+		}
+
+		for _, withPluginCfg := range []bool{true, false} {
+			var capturedReq *proto.GetGroupsRequest
+			mockSvc := &mockAuthHandlerServiceClient{
+				configureAuthHandlerResp: &proto.ConfigureAuthHandlerResponse{},
+				getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+					capturedReq = req
+					return &proto.GetGroupsResponse{Groups: []string{"g-lazy-cfg"}}, nil
+				},
+			}
+			ahClient := &AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockSvc}}
+			var lazyCfg LazyAuthHandlerConfig
+			lazyCfg.Name = "entra"
+			if withPluginCfg {
+				lazyCfg.PluginCfg = &ProviderConfig{BinaryName: "mycli"}
+			}
+
+			initCtx := config.WithConfig(context.Background(), appCfg)
+			wrapper := configureLazyWrapper(initCtx, ahClient, AuthHandlerInfo{Name: "entra"}, lazyCfg)
+
+			// Call GetGroups with a background context lacking config.FromContext.
+			groups, err := wrapper.GetGroups(auth.WithProfile(context.Background(), "work"))
+			require.NoError(t, err)
+			assert.Equal(t, []string{"g-lazy-cfg"}, groups)
+			require.NotNil(t, capturedReq)
+			assert.Equal(t, "work", capturedReq.Profile)
+			var m map[string]any
+			require.NoError(t, json.Unmarshal(capturedReq.Settings, &m))
+			assert.Equal(t, "lazy-work-client", m["clientId"])
+		}
+	})
+
+	t.Run("configureLazyWrapper preserves caller-supplied ProviderConfig.Settings across GetToken and GetGroups when AppConfig.Auth.Entra is empty", func(t *testing.T) {
+		t.Parallel()
+		emptyEntraAppCfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{},
+			},
+		}
+		embedderCfg := &ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"entra": json.RawMessage(`{"clientId":"embedder-lazy-client"}`),
+			},
+		}
+
+		for _, useFn := range []bool{false, true} {
+			var capturedGroupsReq *proto.GetGroupsRequest
+			mockSvc := &mockAuthHandlerServiceClient{
+				configureAuthHandlerResp: &proto.ConfigureAuthHandlerResponse{},
+				getTokenResp:             &proto.GetTokenResponse{AccessToken: "tok-lazy", TokenType: "Bearer"},
+				getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+					capturedGroupsReq = req
+					return &proto.GetGroupsResponse{Groups: []string{"g-lazy-embedder"}}, nil
+				},
+			}
+			ahClient := &AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockSvc}}
+			lazyCfg := LazyAuthHandlerConfig{Name: "entra"}
+			if useFn {
+				lazyCfg.PluginCfgFn = func() *ProviderConfig { return embedderCfg }
+			} else {
+				lazyCfg.PluginCfg = embedderCfg
+			}
+
+			initCtx := config.WithConfig(context.Background(), emptyEntraAppCfg)
+			wrapper := configureLazyWrapper(initCtx, ahClient, AuthHandlerInfo{Name: "entra"}, lazyCfg)
+
+			_, err := wrapper.GetToken(initCtx, auth.TokenOptions{})
+			require.NoError(t, err)
+			require.NotNil(t, mockSvc.capturedGetTokenReq)
+			assert.JSONEq(t, `{"clientId":"embedder-lazy-client"}`, string(mockSvc.capturedGetTokenReq.Settings))
+
+			groups, err := wrapper.GetGroups(initCtx)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"g-lazy-embedder"}, groups)
+			require.NotNil(t, capturedGroupsReq)
+			assert.JSONEq(t, `{"clientId":"embedder-lazy-client"}`, string(capturedGroupsReq.Settings))
+		}
+	})
+}
+
 func TestLazyAuthHandlerWrapper_PluginCfgFn_DeferredAndPreservedOnApplyOverrides(t *testing.T) {
 	cfgFnCalls := 0
 	pages := &AuthCallbackPages{

@@ -8,8 +8,10 @@ import "context"
 // GroupsProvider is an optional interface that auth handlers can implement
 // to return the authenticated user's group memberships as a slice of ObjectIDs.
 //
-// Handlers that do not implement this interface do not support group membership
-// queries. Callers should type-assert to this interface before invoking GetGroups.
+// Callers should type-assert to GroupsProvider and also inspect the returned
+// error with IsGroupsNotSupported(err) (and errors.Is(err, ErrHandlerDisabled)):
+// plugin and disabled handler wrappers satisfy GroupsProvider at compile time
+// and report unsupported handlers at runtime via ErrGroupsNotSupported.
 type GroupsProvider interface {
 	// GetGroups returns the ObjectIDs of all groups the authenticated user belongs to.
 	// Implementations must handle pagination transparently, so all memberships —

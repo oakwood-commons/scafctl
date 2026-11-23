@@ -152,8 +152,10 @@ type mockHostServiceClient struct {
 	listAuthHandlersErr  error
 	getAuthTokenResp     *proto.GetAuthTokenResponse
 	getAuthTokenErr      error
+	lastGetAuthTokenReq  *proto.GetAuthTokenRequest
 	getAuthGroupsResp    *proto.GetAuthGroupsResponse
 	getAuthGroupsErr     error
+	lastGetAuthGroupsReq *proto.GetAuthGroupsRequest
 }
 
 func (m *mockHostServiceClient) GetSecret(_ context.Context, _ *proto.GetSecretRequest, _ ...grpc.CallOption) (*proto.GetSecretResponse, error) {
@@ -180,11 +182,13 @@ func (m *mockHostServiceClient) ListAuthHandlers(_ context.Context, _ *proto.Lis
 	return m.listAuthHandlersResp, m.listAuthHandlersErr
 }
 
-func (m *mockHostServiceClient) GetAuthToken(_ context.Context, _ *proto.GetAuthTokenRequest, _ ...grpc.CallOption) (*proto.GetAuthTokenResponse, error) {
+func (m *mockHostServiceClient) GetAuthToken(_ context.Context, req *proto.GetAuthTokenRequest, _ ...grpc.CallOption) (*proto.GetAuthTokenResponse, error) {
+	m.lastGetAuthTokenReq = req
 	return m.getAuthTokenResp, m.getAuthTokenErr
 }
 
-func (m *mockHostServiceClient) GetAuthGroups(_ context.Context, _ *proto.GetAuthGroupsRequest, _ ...grpc.CallOption) (*proto.GetAuthGroupsResponse, error) {
+func (m *mockHostServiceClient) GetAuthGroups(_ context.Context, req *proto.GetAuthGroupsRequest, _ ...grpc.CallOption) (*proto.GetAuthGroupsResponse, error) {
+	m.lastGetAuthGroupsReq = req
 	return m.getAuthGroupsResp, m.getAuthGroupsErr
 }
 
