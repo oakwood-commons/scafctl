@@ -2364,14 +2364,30 @@ func TestAuthHandlerWrapper_ApplyOverrides_PreservedInGetTokenAndGetGroups(t *te
 	assert.Equal(t, "config-top-client", tokSettings["clientId"])
 	assert.NotContains(t, tokSettings, "tenantId")
 
-	// Even when appCfg is nil, switching away from an overridden profile emits "{}" to reset configure-time overrides.
+	// Even when appCfg is nil, WithGlobalProfile ("--auth-profile work") keys CLI overrides consistently
+	// across ApplyOverrides, GetToken, and GetGroups, and switching to default emits "{}" to reset them.
 	noCfgWrapper := NewAuthHandlerWrapper(
 		&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockClient}},
 		AuthHandlerInfo{Name: "entra"},
 	)
-	require.NoError(t, noCfgWrapper.ApplyOverrides(auth.WithProfile(context.Background(), "work"), map[string]string{"clientId": "work-only"}))
-	_, err = noCfgWrapper.GetToken(auth.WithProfileResolved(context.Background()), auth.TokenOptions{})
+	globalWorkCtx := auth.WithGlobalProfile(context.Background(), "work")
+	require.NoError(t, noCfgWrapper.ApplyOverrides(globalWorkCtx, map[string]string{"clientId": "work-only"}))
+
+	_, err = noCfgWrapper.GetToken(globalWorkCtx, auth.TokenOptions{})
 	require.NoError(t, err)
+	assert.Equal(t, "work", mockClient.capturedGetTokenReq.Profile)
+	assert.JSONEq(t, `{"clientId":"work-only"}`, string(mockClient.capturedGetTokenReq.Settings))
+
+	capturedGroupsReq = nil
+	_, err = noCfgWrapper.GetGroups(globalWorkCtx)
+	require.NoError(t, err)
+	require.NotNil(t, capturedGroupsReq)
+	assert.Equal(t, "work", capturedGroupsReq.Profile)
+	assert.JSONEq(t, `{"clientId":"work-only"}`, string(capturedGroupsReq.Settings))
+
+	_, err = noCfgWrapper.GetToken(auth.WithGlobalProfile(context.Background(), "default"), auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, mockClient.capturedGetTokenReq.Profile)
 	assert.JSONEq(t, `{}`, string(mockClient.capturedGetTokenReq.Settings))
 
 	// Uninitialized client guards on GetToken and ApplyOverrides must not panic.
@@ -2382,6 +2398,63 @@ func TestAuthHandlerWrapper_ApplyOverrides_PreservedInGetTokenAndGetGroups(t *te
 	err = uninitWrapper.ApplyOverrides(context.Background(), map[string]string{"clientId": "x"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "client is not initialized")
+}
+
+func TestConfigureAndRegisterAuthHandlers_PreservesEmbedderSettingsAcrossPerRequestCalls(t *testing.T) {
+	t.Parallel()
+
+	var capturedGroupsReq *proto.GetGroupsRequest
+	mockSvc := &mockAuthHandlerServiceClient{
+		configureAuthHandlerResp: &proto.ConfigureAuthHandlerResponse{ProtocolVersion: PluginProtocolVersion},
+		getTokenResp:             &proto.GetTokenResponse{AccessToken: "tok", TokenType: "Bearer"},
+		getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+			capturedGroupsReq = req
+			return &proto.GetGroupsResponse{Groups: []string{"g-embedder"}}, nil
+		},
+	}
+
+	reg := auth.NewRegistry()
+	// Non-nil but empty AppConfig.Auth.Entra alongside caller-supplied ProviderConfig.Settings["entra"].
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), appCfg)
+
+	registered := configureAndRegisterAuthHandlers(
+		ctx,
+		reg,
+		&AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockSvc}},
+		[]AuthHandlerInfo{{Name: "entra", DisplayName: "Microsoft Entra ID"}},
+		&ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"entra": json.RawMessage(`{"clientId":"embedder-client"}`),
+			},
+		},
+	)
+	require.Equal(t, []string{"entra"}, registered)
+	require.NotNil(t, mockSvc.lastConfigureReq)
+	assert.JSONEq(t, `{"clientId":"embedder-client"}`, string(mockSvc.lastConfigureReq.Settings["entra"]))
+
+	h, err := reg.Get("entra")
+	require.NoError(t, err)
+
+	_, err = h.GetToken(ctx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
+	require.NoError(t, err)
+	require.NotNil(t, mockSvc.capturedGetTokenReq)
+	assert.JSONEq(t, `{"clientId":"embedder-client"}`, string(mockSvc.capturedGetTokenReq.Settings),
+		"same-profile GetToken must preserve caller-supplied ProviderConfig.Settings instead of resetting to {}")
+
+	gp, ok := h.(auth.GroupsProvider)
+	require.True(t, ok)
+	groups, err := gp.GetGroups(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"g-embedder"}, groups)
+	require.NotNil(t, capturedGroupsReq)
+	assert.JSONEq(t, `{"clientId":"embedder-client"}`, string(capturedGroupsReq.Settings),
+		"same-profile GetGroups must preserve caller-supplied ProviderConfig.Settings instead of resetting to {}")
 }
 
 type mockGroupsAuthHandlerPlugin struct {

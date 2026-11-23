@@ -521,6 +521,54 @@ func TestLazyAuthHandlerWrapper_GetGroups_DelegatesAndPropagatesErrors(t *testin
 			assert.Equal(t, "lazy-work-client", m["clientId"])
 		}
 	})
+
+	t.Run("configureLazyWrapper preserves caller-supplied ProviderConfig.Settings across GetToken and GetGroups when AppConfig.Auth.Entra is empty", func(t *testing.T) {
+		t.Parallel()
+		emptyEntraAppCfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{},
+			},
+		}
+		embedderCfg := &ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"entra": json.RawMessage(`{"clientId":"embedder-lazy-client"}`),
+			},
+		}
+
+		for _, useFn := range []bool{false, true} {
+			var capturedGroupsReq *proto.GetGroupsRequest
+			mockSvc := &mockAuthHandlerServiceClient{
+				configureAuthHandlerResp: &proto.ConfigureAuthHandlerResponse{},
+				getTokenResp:             &proto.GetTokenResponse{AccessToken: "tok-lazy", TokenType: "Bearer"},
+				getGroupsFunc: func(_ context.Context, req *proto.GetGroupsRequest) (*proto.GetGroupsResponse, error) {
+					capturedGroupsReq = req
+					return &proto.GetGroupsResponse{Groups: []string{"g-lazy-embedder"}}, nil
+				},
+			}
+			ahClient := &AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mockSvc}}
+			lazyCfg := LazyAuthHandlerConfig{Name: "entra"}
+			if useFn {
+				lazyCfg.PluginCfgFn = func() *ProviderConfig { return embedderCfg }
+			} else {
+				lazyCfg.PluginCfg = embedderCfg
+			}
+
+			initCtx := config.WithConfig(context.Background(), emptyEntraAppCfg)
+			wrapper := configureLazyWrapper(initCtx, ahClient, AuthHandlerInfo{Name: "entra"}, lazyCfg)
+
+			_, err := wrapper.GetToken(initCtx, auth.TokenOptions{})
+			require.NoError(t, err)
+			require.NotNil(t, mockSvc.capturedGetTokenReq)
+			assert.JSONEq(t, `{"clientId":"embedder-lazy-client"}`, string(mockSvc.capturedGetTokenReq.Settings))
+
+			groups, err := wrapper.GetGroups(initCtx)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"g-lazy-embedder"}, groups)
+			require.NotNil(t, capturedGroupsReq)
+			assert.JSONEq(t, `{"clientId":"embedder-lazy-client"}`, string(capturedGroupsReq.Settings))
+		}
+	})
 }
 
 func TestLazyAuthHandlerWrapper_PluginCfgFn_DeferredAndPreservedOnApplyOverrides(t *testing.T) {
