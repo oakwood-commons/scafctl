@@ -29,5 +29,5 @@ curl -H "Authorization: Bearer <user-token>" \
 
 ## See Also
 
-- [Token Delegation Tutorial](../../../docs/tutorials/token-delegation-tutorial.md)
+- [API Mode Authentication](../../../docs/tutorials/api-authentication.md)
 - [API Token Delegation Design](../../../docs/design/api-token-delegation.md)

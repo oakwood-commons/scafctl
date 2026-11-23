@@ -5,6 +5,8 @@ weight: 6
 
 # Token Delegation
 
+> **Superseded.** In-process token delegation (`pkg/authdelegation`, `pkg/serveridentity`) was replaced by auth-handler plugin server mode (`ActivateServerMode` RPC), configured under `apiServer.auth.handlers.<name>`. See [API Mode Authentication](../tutorials/api-authentication.md) for the current architecture and configuration schema. This document is retained for historical context only.
+
 ## Implementation Status
 
 | Feature | Status | Notes |
@@ -273,6 +275,8 @@ The `FlowRegistry` acts as a security boundary: only flows explicitly registered
 ## Configuration
 
 ### YAML Reference
+
+> **Historical note:** The `identity` block below reflects the original in-process design and is not accepted by current releases. Configure server-mode handlers under `apiServer.auth.handlers.<name>` instead (see [API Mode Authentication](../tutorials/api-authentication.md)).
 
 ~~~yaml
 apiServer:
