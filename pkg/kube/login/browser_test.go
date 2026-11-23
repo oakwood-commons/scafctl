@@ -5,6 +5,7 @@ package login
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -18,10 +19,10 @@ func TestLogin_BrowserPreferencePriority(t *testing.T) {
 	t.Parallel()
 
 	cfgCtx := config.WithConfig(context.Background(), &config.Config{
-		Auth: config.GlobalAuthConfig{Browser: "msedge"},
+		Auth: config.GlobalAuthConfig{Browser: "'msedge'"},
 	})
 
-	t.Run("Request.Browser overrides config auth.browser", func(t *testing.T) {
+	t.Run("Request.Browser overrides config auth.browser and normalizes quotes", func(t *testing.T) {
 		t.Parallel()
 		handler := &stubAuth{name: "oidc", token: &auth.Token{AccessToken: "tok"}}
 		kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true, ContextName: "prod"}}
@@ -29,7 +30,7 @@ func TestLogin_BrowserPreferencePriority(t *testing.T) {
 		_, err := Login(cfgCtx, Deps{Handler: handler, Kubeconfig: kc}, Request{
 			Server:      "https://api.example.com:6443",
 			ClusterName: "prod",
-			Browser:     "firefox",
+			Browser:     "'firefox'",
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "firefox", handler.loginOpts.Browser)
@@ -56,17 +57,24 @@ func TestLogin_BrowserPreferencePriority(t *testing.T) {
 		assert.Equal(t, "msedge", runnerOpts.Browser)
 	})
 
-	t.Run("invalid Request.Browser fails closed before login", func(t *testing.T) {
+	t.Run("invalid Request.Browser fails closed before normalization or login", func(t *testing.T) {
 		t.Parallel()
-		handler := &stubAuth{name: "oidc", token: &auth.Token{AccessToken: "tok"}}
-		kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true, ContextName: "prod"}}
+		for _, bad := range []string{
+			"--headless",
+			"msedge\n",
+			"   ",
+			"  " + strings.Repeat("a", config.MaxAuthBrowserLength),
+		} {
+			handler := &stubAuth{name: "oidc", token: &auth.Token{AccessToken: "tok"}}
+			kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true, ContextName: "prod"}}
 
-		_, err := Login(context.Background(), Deps{Handler: handler, Kubeconfig: kc}, Request{
-			Server:      "https://api.example.com:6443",
-			ClusterName: "prod",
-			Browser:     "--headless",
-		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid browser preference")
+			_, err := Login(cfgCtx, Deps{Handler: handler, Kubeconfig: kc}, Request{
+				Server:      "https://api.example.com:6443",
+				ClusterName: "prod",
+				Browser:     bad,
+			})
+			require.Error(t, err, "expected Login to reject %q", bad)
+			assert.Contains(t, err.Error(), "invalid browser preference")
+		}
 	})
 }

@@ -359,10 +359,12 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 			}
 			mgr := config.NewManager(configPath, configOpts...)
 			cfg, err := mgr.Load()
-			if err != nil {
+			configLoadErr := err
+			if configLoadErr != nil {
 				// Use stderr directly since writer isn't set up yet
-				_, _ = ioStreams.ErrOut.Write([]byte("Warning: failed to load config: " + err.Error() + "\n"))
-				// Continue with defaults
+				_, _ = ioStreams.ErrOut.Write([]byte("Warning: failed to load config: " + configLoadErr.Error() + "\n"))
+				// Continue with defaults so config repair/inspection commands stay runnable;
+				// commands that require valid configuration check config.LoadErrorFromContext(ctx).
 				cfg = &config.Config{}
 			}
 
@@ -490,6 +492,9 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 			ctx = writer.WithWriter(ctx, w)
 			ctx = input.WithInput(ctx, in)
 			ctx = config.WithConfig(ctx, cfg)
+			if configLoadErr != nil {
+				ctx = config.WithLoadError(ctx, configLoadErr)
+			}
 			ctx = catalogindex.WithIndex(ctx, catalogindex.FromConfig(cfg))
 			ctx = config.WithManagerOptions(ctx, configOpts)
 			if len(opts.ConfigDefaults) > 0 {

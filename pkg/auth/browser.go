@@ -51,23 +51,33 @@ func emitBrowserWarning(ctx context.Context, msg string) {
 	}
 }
 
-// ResolveBrowserPreference resolves the effective host-side browser preference
-// using the priority chain:
-//  1. Explicit flag or caller value (when non-empty)
-//  2. Persistent config value (auth.browser from config.FromContext(ctx))
+// ResolveBrowserPreference selects, validates, and normalizes the effective
+// host-side browser preference using the priority chain:
+//  1. Explicit flag or caller value (any non-empty string; only "" means unset)
+//  2. Persistent config value (auth.browser from config.FromContext(ctx); only "" means unset)
 //  3. Empty string (allowing oauth-helpers to check $BROWSER, then OS default)
-func ResolveBrowserPreference(ctx context.Context, flagValue string) string {
-	if trimmed := strings.TrimSpace(flagValue); trimmed != "" {
-		return trimmed
+//
+// The selected raw value is validated before normalization so control
+// characters, whitespace-only values, and overlong padded inputs fail closed
+// rather than being stripped or falling through. Matching outer single or
+// double quotes are stripped during normalization so downstream launchers and
+// plugin RPCs receive the canonical browser token.
+func ResolveBrowserPreference(ctx context.Context, flagValue string) (string, error) {
+	if flagValue != "" {
+		if err := config.ValidateBrowser(flagValue); err != nil {
+			return "", err
+		}
+		return config.NormalizeBrowser(flagValue), nil
 	}
 	if ctx != nil {
-		if cfg := config.FromContext(ctx); cfg != nil {
-			if trimmed := strings.TrimSpace(cfg.Auth.Browser); trimmed != "" {
-				return trimmed
+		if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.Browser != "" {
+			if err := config.ValidateBrowser(cfg.Auth.Browser); err != nil {
+				return "", err
 			}
+			return config.NormalizeBrowser(cfg.Auth.Browser), nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // ValidateBrowserFlag validates an explicit --browser CLI flag value.
@@ -89,8 +99,8 @@ func ValidateBrowserFlag(raw string) error {
 // warnings through the context's warning sink or writer.FromContext(ctx).
 // Invalid browser preference values fail closed before touching OS launchers.
 func OpenBrowser(ctx context.Context, rawURL, preference string) error {
-	effective := ResolveBrowserPreference(ctx, preference)
-	if err := config.ValidateBrowser(effective); err != nil {
+	effective, err := ResolveBrowserPreference(ctx, preference)
+	if err != nil {
 		return fmt.Errorf("invalid browser preference: %w", err)
 	}
 	return oauth.OpenBrowserWithPreference(
@@ -134,7 +144,10 @@ func WarnIfBrowserUnavailable(ctx context.Context, preference string) {
 }
 
 func warnIfBrowserUnavailableWithOps(ctx context.Context, preference string, ops browserProbeOps) {
-	effective := cleanBrowserSpec(ResolveBrowserPreference(ctx, preference))
+	effective, err := ResolveBrowserPreference(ctx, preference)
+	if err != nil {
+		return
+	}
 	if effective != "" {
 		if isSystemDefaultBrowser(effective) {
 			return
@@ -174,12 +187,12 @@ func warnIfBrowserUnavailableWithOps(ctx context.Context, preference string, ops
 	}
 }
 
-func cleanBrowserSpec(raw string) string {
+// cleanBrowserEnvEntry mirrors oauth-helpers' $BROWSER entry cleaner (trimming
+// whitespace and unwrapping double quotes only) so host preflight warnings stay
+// aligned with what oauth-helpers launches for $BROWSER entries.
+func cleanBrowserEnvEntry(raw string) string {
 	s := strings.TrimSpace(raw)
-	switch {
-	case len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"':
-		s = strings.TrimSpace(s[1 : len(s)-1])
-	case len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'':
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
 		s = strings.TrimSpace(s[1 : len(s)-1])
 	}
 	return s
@@ -197,7 +210,7 @@ func splitBrowserEnvList(goos, raw string) []string {
 	parts := strings.Split(raw, sep)
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
-		if cleaned := cleanBrowserSpec(p); cleaned != "" {
+		if cleaned := cleanBrowserEnvEntry(p); cleaned != "" {
 			out = append(out, cleaned)
 		}
 	}

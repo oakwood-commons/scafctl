@@ -212,20 +212,29 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			// Validate browser preference up front before handler lookup.
+			// Validate browser flag and loaded configuration up front before handler lookup.
+			var effectiveBrowser string
 			if cmd.Flags().Changed("browser") {
 				if err := auth.ValidateBrowserFlag(browser); err != nil {
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
-			} else if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.Browser != "" {
-				if err := config.ValidateBrowser(cfg.Auth.Browser); err != nil {
+			}
+			if loadErr := config.LoadErrorFromContext(ctx); loadErr != nil {
+				w.Errorf("%v", loadErr)
+				return exitcode.WithCode(loadErr, exitcode.ConfigError)
+			}
+			if cmd.Flags().Changed("browser") {
+				effectiveBrowser = config.NormalizeBrowser(browser)
+			} else {
+				var err error
+				effectiveBrowser, err = auth.ResolveBrowserPreference(ctx, "")
+				if err != nil {
 					err = fmt.Errorf("invalid auth.browser configuration: %w", err)
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.ConfigError)
 				}
 			}
-			effectiveBrowser := auth.ResolveBrowserPreference(ctx, browser)
 
 			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile
 			// Track whether profile was explicitly set (even if normalized to empty/default).

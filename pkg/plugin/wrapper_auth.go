@@ -181,8 +181,8 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 	lgr := logger.FromContext(ctx)
 	lgr.V(1).Info("login via plugin auth handler", "handler", w.handlerName)
 
-	effectiveBrowser := auth.ResolveBrowserPreference(ctx, opts.Browser)
-	if err := config.ValidateBrowser(effectiveBrowser); err != nil {
+	effectiveBrowser, err := auth.ResolveBrowserPreference(ctx, opts.Browser)
+	if err != nil {
 		return nil, fmt.Errorf("plugin auth handler %s login: invalid browser preference: %w", w.handlerName, err)
 	}
 	if w.willOpenBrowserOnLogin(ctx, opts.Flow, effectiveBrowser) {

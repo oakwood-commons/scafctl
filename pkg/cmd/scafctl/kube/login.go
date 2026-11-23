@@ -111,13 +111,23 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				cluster = args[0]
 			}
 
+			var effectiveBrowser string
 			if cmd.Flags().Changed("browser") {
 				if err := auth.ValidateBrowserFlag(browser); err != nil {
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
-			} else if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.Browser != "" {
-				if err := config.ValidateBrowser(cfg.Auth.Browser); err != nil {
+			}
+			if loadErr := config.LoadErrorFromContext(ctx); loadErr != nil {
+				w.Errorf("%v", loadErr)
+				return exitcode.WithCode(loadErr, exitcode.ConfigError)
+			}
+			if cmd.Flags().Changed("browser") {
+				effectiveBrowser = config.NormalizeBrowser(browser)
+			} else {
+				var err error
+				effectiveBrowser, err = auth.ResolveBrowserPreference(ctx, "")
+				if err != nil {
 					err = fmt.Errorf("invalid auth.browser configuration: %w", err)
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.ConfigError)
@@ -172,7 +182,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				Namespace:         namespace,
 				KubeconfigPath:    kubeconfigPath,
 				Profile:           profile,
-				Browser:           auth.ResolveBrowserPreference(ctx, browser),
+				Browser:           effectiveBrowser,
 				SetCurrentContext: setCurrent,
 				InsecureSkipTLS:   insecure,
 				Verify:            verify,

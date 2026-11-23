@@ -6,6 +6,7 @@ package plugin
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestAuthHandlerWrapper_Login_ForwardsBrowserAndWarnsOnlyOnInteractiveFlow(t
 
 		_, err := wrapper.Login(ctx, auth.LoginOptions{
 			Flow:    auth.FlowInteractive,
-			Browser: "nonexistent-browser-for-plugin-test",
+			Browser: "'nonexistent-browser-for-plugin-test'",
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "nonexistent-browser-for-plugin-test", gotReq.Browser)
@@ -136,29 +137,39 @@ func TestAuthHandlerWrapper_Login_ForwardsBrowserAndWarnsOnlyOnInteractiveFlow(t
 		assert.Empty(t, outBuf.String(), "empty flow auto-resolving to device_code must not emit browser warning")
 	})
 
-	t.Run("invalid browser preference fails closed before plugin RPC", func(t *testing.T) {
+	t.Run("invalid browser preference fails closed before normalization or plugin RPC", func(t *testing.T) {
 		t.Parallel()
 
-		rpcCalled := false
-		mock := &MockAuthHandlerPlugin{
-			loginFunc: func(_ context.Context, _ string, _ LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
-				rpcCalled = true
-				return &LoginResponse{}, nil
-			},
-		}
-		wrapper := &AuthHandlerWrapper{
-			client:      &AuthHandlerClient{plugin: mock, name: "test-plugin"},
-			handlerName: "entra",
-			info:        AuthHandlerInfo{Name: "entra"},
-		}
+		for _, bad := range []string{
+			"--headless",
+			"msedge\n",
+			"   ",
+			"  " + strings.Repeat("a", config.MaxAuthBrowserLength),
+		} {
+			rpcCalled := false
+			mock := &MockAuthHandlerPlugin{
+				loginFunc: func(_ context.Context, _ string, _ LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+					rpcCalled = true
+					return &LoginResponse{}, nil
+				},
+			}
+			wrapper := &AuthHandlerWrapper{
+				client:      &AuthHandlerClient{plugin: mock, name: "test-plugin"},
+				handlerName: "entra",
+				info:        AuthHandlerInfo{Name: "entra"},
+			}
 
-		_, err := wrapper.Login(context.Background(), auth.LoginOptions{
-			Flow:    auth.FlowInteractive,
-			Browser: "--headless",
-		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid browser preference")
-		assert.False(t, rpcCalled)
+			cfgCtx := config.WithConfig(context.Background(), &config.Config{
+				Auth: config.GlobalAuthConfig{Browser: "msedge"},
+			})
+			_, err := wrapper.Login(cfgCtx, auth.LoginOptions{
+				Flow:    auth.FlowInteractive,
+				Browser: bad,
+			})
+			require.Error(t, err, "expected wrapper.Login to reject %q", bad)
+			assert.Contains(t, err.Error(), "invalid browser preference")
+			assert.False(t, rpcCalled)
+		}
 	})
 }
 
@@ -218,7 +229,7 @@ func TestAuthHandlerGRPCServer_Login_ForwardsAndValidatesBrowser(t *testing.T) {
 		HandlerName: "entra",
 		TenantId:    "tid-123",
 		Flow:        string(auth.FlowInteractive),
-		Browser:     "msedge",
+		Browser:     "'msedge'",
 	}, stream)
 	require.NoError(t, err)
 	assert.True(t, implCalled)

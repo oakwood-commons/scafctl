@@ -51,7 +51,7 @@ func TestHandler_Login_InteractiveBrowserFallbackPrintsURLAndWarns(t *testing.T)
 	go func() {
 		_, lErr := h.Login(ctx, auth.LoginOptions{
 			Flow:    auth.FlowInteractive,
-			Browser: "missing-browser-xyz",
+			Browser: "'missing-browser-xyz'",
 			Timeout: 5 * time.Second,
 			DeviceCodeCallback: func(_, verificationURI, _ string) {
 				select {
@@ -151,13 +151,21 @@ func TestHandler_Login_InvalidBrowserFailsClosedAndCancelledSuppressesManualURL(
 	}, WithSecretStore(store), WithHTTPClient(srv.Client()))
 	require.NoError(t, err)
 
-	// Invalid browser preference fails closed immediately without starting callback server.
-	_, err = h.Login(context.Background(), auth.LoginOptions{
-		Flow:    auth.FlowInteractive,
-		Browser: "--headless",
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid browser preference")
+	// Invalid browser preferences (including trailing control chars, whitespace-only,
+	// and overlong padded values) fail closed before normalization or callback server startup.
+	for _, bad := range []string{
+		"--headless",
+		"msedge\n",
+		"   ",
+		"  " + strings.Repeat("a", config.MaxAuthBrowserLength),
+	} {
+		_, err = h.Login(context.Background(), auth.LoginOptions{
+			Flow:    auth.FlowInteractive,
+			Browser: bad,
+		})
+		require.Error(t, err, "expected Login to reject %q", bad)
+		assert.Contains(t, err.Error(), "invalid browser preference")
+	}
 
 	// Cancelled context during launchBrowser must not emit manual URL or DeviceCodeCallback.
 	ctx, cancel := context.WithCancel(context.Background())

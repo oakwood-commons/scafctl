@@ -138,11 +138,31 @@ func (a *GlobalAuthConfig) Validate() error {
 	return nil
 }
 
-// ValidateBrowser validates a browser preference string (such as auth.browser
-// or --browser). An empty string is valid (unset). Non-empty values must fit
-// within MaxAuthBrowserLength, contain valid UTF-8 with no control characters,
-// not be whitespace-only, and not start with '-' so config or flag values
-// cannot inject command-line options into browser launchers.
+// NormalizeBrowser returns the canonical browser preference token after
+// trimming surrounding whitespace and unwrapping a single pair of matching
+// outer double or single quotes. Callers must validate raw inputs with
+// ValidateBrowser first so control characters, whitespace-only values, and
+// overlong strings are rejected before normalization.
+func NormalizeBrowser(browser string) string {
+	if browser == "" {
+		return ""
+	}
+	s := strings.TrimSpace(browser)
+	switch {
+	case len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"':
+		s = strings.TrimSpace(s[1 : len(s)-1])
+	case len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'':
+		s = strings.TrimSpace(s[1 : len(s)-1])
+	}
+	return s
+}
+
+// ValidateBrowser validates a raw browser preference string (such as
+// auth.browser or --browser). Only the exact empty string is valid as unset.
+// Non-empty values must fit within MaxAuthBrowserLength before trimming,
+// contain valid UTF-8 with no control characters, not be whitespace-only, have
+// balanced outer quotes if quoted, and not start with '-' so config or flag
+// values cannot inject command-line options into browser launchers.
 func ValidateBrowser(browser string) error {
 	if browser == "" {
 		return nil
@@ -164,10 +184,16 @@ func ValidateBrowser(browser string) error {
 	}
 	unquoted := trimmed
 	switch {
-	case len(unquoted) >= 2 && unquoted[0] == '"' && unquoted[len(unquoted)-1] == '"':
-		unquoted = strings.TrimSpace(unquoted[1 : len(unquoted)-1])
-	case len(unquoted) >= 2 && unquoted[0] == '\'' && unquoted[len(unquoted)-1] == '\'':
-		unquoted = strings.TrimSpace(unquoted[1 : len(unquoted)-1])
+	case trimmed[0] == '"' || trimmed[len(trimmed)-1] == '"':
+		if len(trimmed) < 2 || trimmed[0] != '"' || trimmed[len(trimmed)-1] != '"' {
+			return errors.New("must not contain double quotes")
+		}
+		unquoted = strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+	case trimmed[0] == '\'' || trimmed[len(trimmed)-1] == '\'':
+		if len(trimmed) < 2 || trimmed[0] != '\'' || trimmed[len(trimmed)-1] != '\'' {
+			return errors.New("must not have unmatched single quotes")
+		}
+		unquoted = strings.TrimSpace(trimmed[1 : len(trimmed)-1])
 	}
 	if unquoted == "" {
 		return errors.New("must not be empty")
@@ -175,11 +201,10 @@ func ValidateBrowser(browser string) error {
 	if strings.ContainsRune(unquoted, '"') {
 		return errors.New("must not contain double quotes")
 	}
-	strippedQuotes := strings.TrimLeft(unquoted, "' ")
-	if strippedQuotes == "" {
-		return errors.New("must not be empty")
+	if strings.HasPrefix(unquoted, "'") || strings.HasSuffix(unquoted, "'") {
+		return errors.New("must not contain nested or unmatched single quotes")
 	}
-	if strings.HasPrefix(trimmed, "-") || strings.HasPrefix(unquoted, "-") || strings.HasPrefix(strippedQuotes, "-") {
+	if strings.HasPrefix(trimmed, "-") || strings.HasPrefix(unquoted, "-") {
 		return fmt.Errorf("must not start with '-' (got %q)", browser)
 	}
 	return nil

@@ -42,8 +42,12 @@ func TestRunInteractiveTUI_WiresOpenURLWithBrowserPreferenceAndFlushesWarnings(t
 	w := writer.New(ioStreams, settings.NewCliParams())
 
 	openBrowser = func(ctx context.Context, rawURL, pref string) error {
+		var err error
 		capturedURL = rawURL
-		capturedBrowser = auth.ResolveBrowserPreference(ctx, pref)
+		capturedBrowser, err = auth.ResolveBrowserPreference(ctx, pref)
+		if err != nil {
+			return err
+		}
 		// Simulate a browser fallback warning emitted while Bubble Tea owns the terminal.
 		auth.WarnIfBrowserUnavailable(ctx, "definitely-missing-browser-for-tui-test")
 		return nil
@@ -165,9 +169,10 @@ func TestRunStatusTUI_DeviceCodeWiresOpenURLWithBrowserPreference(t *testing.T) 
 		capturedBrowser string
 	)
 	openBrowser = func(ctx context.Context, rawURL, pref string) error {
+		var err error
 		capturedURL = rawURL
-		capturedBrowser = auth.ResolveBrowserPreference(ctx, pref)
-		return nil
+		capturedBrowser, err = auth.ResolveBrowserPreference(ctx, pref)
+		return err
 	}
 
 	loginRelease := make(chan struct{})
@@ -211,9 +216,10 @@ func TestBuildInteractiveStatusTUI_SnapshotOpenURLActionInvokesCustomOpener(t *t
 		openedPref string
 	)
 	openBrowser = func(ctx context.Context, rawURL, pref string) error {
+		var err error
 		openedURL = rawURL
-		openedPref = auth.ResolveBrowserPreference(ctx, pref)
-		return nil
+		openedPref, err = auth.ResolveBrowserPreference(ctx, pref)
+		return err
 	}
 
 	ctx := config.WithConfig(context.Background(), &config.Config{

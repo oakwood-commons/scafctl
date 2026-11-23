@@ -359,10 +359,11 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		return nil, err
 	}
 
-	opts.Browser = auth.ResolveBrowserPreference(ctx, opts.Browser)
-	if err := config.ValidateBrowser(opts.Browser); err != nil {
+	resolvedBrowser, err := auth.ResolveBrowserPreference(ctx, opts.Browser)
+	if err != nil {
 		return nil, auth.NewError(h.cfg.Name, "login", fmt.Errorf("invalid browser preference: %w", err))
 	}
+	opts.Browser = resolvedBrowser
 
 	timeout := opts.Timeout
 	if timeout == 0 {

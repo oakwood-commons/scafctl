@@ -165,7 +165,7 @@ func (s *AuthHandlerGRPCServer) Login(req *proto.LoginRequest, stream grpc.Serve
 		Timeout:  time.Duration(req.TimeoutSeconds) * time.Second,
 		// int32 -> int is a widening conversion and always safe.
 		CallbackPort: int(req.CallbackPort),
-		Browser:      req.Browser,
+		Browser:      config.NormalizeBrowser(req.Browser),
 	}
 
 	result, err := s.Impl.Login(ctx, req.HandlerName, loginReq, deviceCodeCb)

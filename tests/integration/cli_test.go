@@ -5932,6 +5932,20 @@ func TestIntegration_LoginBrowserFlagAndConfigSet(t *testing.T) {
 
 		_, unsetErr, unsetCode := runScafctl(t, "--config", cfgPath, "config", "unset", "auth.browser")
 		assert.Equal(t, 0, unsetCode, "stderr: %s", unsetErr)
+
+		// Invalid auth.browser written directly to config file aborts auth login and kube login
+		// as a configuration error while still allowing config unset to repair the file.
+		require.NoError(t, os.WriteFile(cfgPath, []byte("version: 1\nauth:\n  browser: \"--headless\"\n"), 0o600))
+		_, badAuthLoginErr, badAuthLoginCode := runScafctl(t, "--config", cfgPath, "auth", "login", "entra")
+		assert.NotEqual(t, 0, badAuthLoginCode)
+		assert.Contains(t, badAuthLoginErr, "must not start with '-'")
+
+		_, badKubeLoginErr, badKubeLoginCode := runScafctl(t, "--config", cfgPath, "kube", "login", "prod")
+		assert.NotEqual(t, 0, badKubeLoginCode)
+		assert.Contains(t, badKubeLoginErr, "must not start with '-'")
+
+		_, repairErr, repairCode := runScafctl(t, "--config", cfgPath, "config", "unset", "auth.browser")
+		assert.Equal(t, 0, repairCode, "config unset must still repair broken config: %s", repairErr)
 	})
 }
 

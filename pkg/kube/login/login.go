@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
-	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/kube"
 	"github.com/oakwood-commons/scafctl/pkg/kubeconfig"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -271,8 +270,8 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 		binaryName = settings.CliBinaryName
 	}
 
-	resolvedBrowser := auth.ResolveBrowserPreference(ctx, req.Browser)
-	if err := config.ValidateBrowser(resolvedBrowser); err != nil {
+	resolvedBrowser, err := auth.ResolveBrowserPreference(ctx, req.Browser)
+	if err != nil {
 		return nil, fmt.Errorf("invalid browser preference: %w", err)
 	}
 

@@ -17,7 +17,7 @@ func BenchmarkResolveBrowserPreference(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_ = ResolveBrowserPreference(ctx, "")
+		_, _ = ResolveBrowserPreference(ctx, "")
 	}
 }
 

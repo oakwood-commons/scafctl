@@ -27,12 +27,53 @@ func TestResolveBrowserPreference(t *testing.T) {
 		Auth: config.GlobalAuthConfig{Browser: "msedge"},
 	})
 
-	assert.Equal(t, "chrome", ResolveBrowserPreference(ctxWithCfg, "chrome"), "explicit flag must override config")
-	assert.Equal(t, "default", ResolveBrowserPreference(ctxWithCfg, " default "), "explicit default keyword must override config")
-	assert.Equal(t, "msedge", ResolveBrowserPreference(ctxWithCfg, ""), "config auth.browser must apply when flag is empty")
-	assert.Equal(t, "msedge", ResolveBrowserPreference(ctxWithCfg, "   "), "config auth.browser must apply when flag is whitespace")
-	assert.Empty(t, ResolveBrowserPreference(context.Background(), ""), "empty when both flag and config are unset")
-	assert.Empty(t, ResolveBrowserPreference(context.TODO(), ""), "empty when context carries no config")
+	got, err := ResolveBrowserPreference(ctxWithCfg, "chrome")
+	require.NoError(t, err)
+	assert.Equal(t, "chrome", got, "explicit flag must override config")
+
+	got, err = ResolveBrowserPreference(ctxWithCfg, " default ")
+	require.NoError(t, err)
+	assert.Equal(t, "default", got, "explicit default keyword must override config")
+
+	got, err = ResolveBrowserPreference(ctxWithCfg, "'firefox'")
+	require.NoError(t, err)
+	assert.Equal(t, "firefox", got, "single-quoted preference must normalize to canonical token")
+
+	got, err = ResolveBrowserPreference(ctxWithCfg, "")
+	require.NoError(t, err)
+	assert.Equal(t, "msedge", got, "config auth.browser must apply when flag is empty")
+
+	got, err = ResolveBrowserPreference(config.WithConfig(context.Background(), &config.Config{
+		Auth: config.GlobalAuthConfig{Browser: "'brave'"},
+	}), "")
+	require.NoError(t, err)
+	assert.Equal(t, "brave", got, "single-quoted config auth.browser must normalize to canonical token")
+
+	got, err = ResolveBrowserPreference(context.Background(), "")
+	require.NoError(t, err)
+	assert.Empty(t, got, "empty when both flag and config are unset")
+
+	got, err = ResolveBrowserPreference(context.TODO(), "")
+	require.NoError(t, err)
+	assert.Empty(t, got, "empty when context carries no config")
+
+	// Raw caller values that are non-empty must be validated before normalization,
+	// never silently falling back to config or trimming invalid characters/length.
+	for _, rawBad := range []string{
+		"   ",
+		"msedge\n",
+		"  " + strings.Repeat("a", config.MaxAuthBrowserLength),
+		"--headless",
+	} {
+		_, err = ResolveBrowserPreference(ctxWithCfg, rawBad)
+		require.Error(t, err, "expected raw flag value %q to be rejected before normalization", rawBad)
+
+		badCfg := config.WithConfig(context.Background(), &config.Config{
+			Auth: config.GlobalAuthConfig{Browser: rawBad},
+		})
+		_, err = ResolveBrowserPreference(badCfg, "")
+		require.Error(t, err, "expected raw config value %q to be rejected before normalization", rawBad)
+	}
 }
 
 func TestValidateBrowserFlag(t *testing.T) {
@@ -53,19 +94,26 @@ func TestOpenBrowser_ValidationAndCancellation(t *testing.T) {
 	t.Parallel()
 
 	// Invalid preference fails closed before touching OS launchers or URL validation.
-	err := OpenBrowser(context.Background(), "https://login.microsoftonline.com/authorize", "--remote-debugging-port=9222")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid browser preference")
+	for _, bad := range []string{
+		"--remote-debugging-port=9222",
+		"msedge\n",
+		"   ",
+		"  " + strings.Repeat("a", config.MaxAuthBrowserLength),
+	} {
+		err := OpenBrowser(context.Background(), "https://login.microsoftonline.com/authorize", bad)
+		require.Error(t, err, "expected OpenBrowser to reject %q", bad)
+		assert.Contains(t, err.Error(), "invalid browser preference")
 
-	badCfgCtx := config.WithConfig(context.Background(), &config.Config{
-		Auth: config.GlobalAuthConfig{Browser: "--headless"},
-	})
-	err = OpenBrowser(badCfgCtx, "https://login.microsoftonline.com/authorize", "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid browser preference")
+		badCfgCtx := config.WithConfig(context.Background(), &config.Config{
+			Auth: config.GlobalAuthConfig{Browser: bad},
+		})
+		err = OpenBrowser(badCfgCtx, "https://login.microsoftonline.com/authorize", "")
+		require.Error(t, err, "expected OpenBrowser to reject config %q", bad)
+		assert.Contains(t, err.Error(), "invalid browser preference")
+	}
 
 	// Invalid URL fails before touching OS launchers.
-	err = OpenBrowser(context.Background(), "javascript:alert(1)", "msedge")
+	err := OpenBrowser(context.Background(), "javascript:alert(1)", "msedge")
 	require.Error(t, err)
 
 	// Cancelled context fails before touching OS launchers.
@@ -101,13 +149,14 @@ func TestOpenBrowser_RoutesFallbackWarningToWriterAndSink(t *testing.T) {
 	assert.Contains(t, outBuf.String(), `configured browser "nonexistent-direct-probe-browser" could not be launched`)
 	WarnIfBrowserUnavailable(ctx, "default")
 
-	// Custom warning sink overrides writer output.
+	// Custom warning sink overrides writer output, and single-quoted preferences
+	// are normalized before reaching oauth-helpers.
 	var sinkMsgs []string
 	sinkCtx := WithBrowserWarningSink(ctx, func(msg string) {
 		sinkMsgs = append(sinkMsgs, msg)
 	})
 	outBuf.Reset()
-	_ = OpenBrowser(sinkCtx, "https://example.com/oauth/authorize", "another-missing-browser")
+	_ = OpenBrowser(sinkCtx, "https://example.com/oauth/authorize", "'another-missing-browser'")
 	assert.Empty(t, outBuf.String(), "warning must go to custom sink instead of writer")
 	require.Len(t, sinkMsgs, 1)
 	assert.Contains(t, sinkMsgs[0], `configured browser "another-missing-browser" could not be launched`)
