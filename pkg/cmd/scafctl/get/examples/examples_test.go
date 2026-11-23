@@ -175,6 +175,7 @@ func TestCommandExamples_EmbedderBinaryName(t *testing.T) {
 		assert.Contains(t, cmd.Long, "mycli get examples")
 		assert.NotContains(t, cmd.Long, settings.CliBinaryName+" get examples")
 
+		cmd.SetArgs([]string{})
 		require.NoError(t, cmd.Execute())
 		assert.Contains(t, errOut.String(), "mycli get examples")
 		assert.NotContains(t, errOut.String(), settings.CliBinaryName+" get examples")
@@ -194,6 +195,7 @@ func TestCommandExamples_EmbedderBinaryName(t *testing.T) {
 		cmd := CommandExamples(cliParams, ioStreams, "get")
 		assert.Contains(t, cmd.Long, settings.CliBinaryName+" get examples")
 
+		cmd.SetArgs([]string{})
 		require.NoError(t, cmd.Execute())
 		assert.Contains(t, errOut.String(), settings.CliBinaryName+" get examples")
 
