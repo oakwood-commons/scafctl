@@ -21,6 +21,97 @@ auth:
       registryUsername: "$oauthtoken"
 ```
 
+## Quay.io / Quay-Style Registry (Interactive Browser Login)
+
+For personal developer workstations where users authenticate as themselves
+rather than with a shared robot account, configure `defaultFlow: interactive`
+against the registry's OAuth2 authorization endpoint.
+
+> [!IMPORTANT]
+> **Prerequisite -- active browser login session:** Servers whose
+> `authorizeURL` returns a bare `401 Unauthorized` response instead of
+> redirecting unauthenticated browsers to a sign-in page (including Quay.io,
+> self-hosted Quay-style registries, and similarly configured OAuth2 services)
+> require an **active web-UI login session in the browser that opens the
+> authorize URL** before you run `scafctl auth login <name>`.
+>
+> Sign in to `<registry-host>` in that browser first, then run
+> `scafctl auth login <name>`. `scafctl` opens your system default browser
+> automatically -- if your active session lives in a different browser or
+> browser profile, copy the full `authorizeURL` from the opened tab's address
+> bar into that authenticated browser. When automatic browser launch is
+> unavailable (for example, headless WSL), pass `--debug` to log the
+> `authorizeURL` in terminal output; over SSH, also forward `callbackPort`
+> (for example, `ssh -L 8400:localhost:8400 ...`) so the browser redirect
+> reaches `scafctl`'s localhost listener.
+
+Quay.io and self-hosted Quay OAuth applications use the OAuth2 implicit grant
+(`responseType: token`, which automatically disables PKCE; `tokenURL` is
+optional when `responseType: token` is set):
+
+```yaml
+# ~/.config/scafctl/config.yaml
+auth:
+  customOAuth2:
+    - name: quay
+      displayName: "Quay.io"
+      # For a self-hosted registry, replace quay.io with registry.example.com
+      authorizeURL: "https://quay.io/oauth/authorize"
+      clientID: "your-quay-app-client-id"
+      defaultFlow: interactive
+      responseType: token
+      # Match the Redirect URI registered on the Quay OAuth application
+      # (for example, http://localhost:8400)
+      callbackPort: 8400
+      scopes:
+        - "repo:read"
+      registry: "quay.io"
+      registryUsername: "$oauthtoken"
+      verifyURL: "https://quay.io/api/v1/user/"
+      identityFields:
+        username: "username"
+        email: "email"
+        name: "name"
+```
+
+For registries or OAuth2 servers that support the standard Authorization Code
+flow (`responseType: code`, the default) while still requiring an existing
+browser session on `authorizeURL`, include `tokenURL` and omit `responseType`
+(set `disablePKCE: true` only if the server rejects PKCE `code_challenge`
+parameters):
+
+```yaml
+auth:
+  customOAuth2:
+    - name: registry-sso
+      displayName: "Container Registry"
+      authorizeURL: "https://registry.example.com/oauth/authorize"
+      tokenURL: "https://registry.example.com/oauth/token"
+      clientID: "your-registry-app-client-id"
+      defaultFlow: interactive
+      callbackPort: 8400
+      scopes:
+        - "repo:read"
+      registry: "registry.example.com"
+      registryUsername: "$oauthtoken"
+```
+
+Authenticate after signing in to the registry's web UI in your browser:
+
+```bash
+# 1. Sign in to https://quay.io (or https://registry.example.com) in your browser first
+# 2. Run interactive login (automatically bridges credentials to quay.io via 'registry')
+scafctl auth login quay
+
+# Verify handler identity and bridged registry credentials
+scafctl auth status quay
+scafctl auth status
+
+# Optional: also write bridged credentials for Docker/Podman interop, or re-bridge explicitly
+scafctl auth login quay --force --write-registry-auth
+scafctl catalog login quay.io
+```
+
 ## GitLab Container Registry
 
 ```yaml
@@ -112,3 +203,7 @@ auth:
         email: "email"
         name: "name"
 ```
+
+## Related
+
+- [Authentication Tutorial](../../docs/tutorials/auth-tutorial.md) -- interactive login walkthroughs, custom OAuth2 handlers, and troubleshooting
