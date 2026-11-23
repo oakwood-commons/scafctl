@@ -1201,7 +1201,7 @@ type APIAzureOIDCConfig struct {
 }
 
 // SecretRef is a URI-style reference to a secret value.
-// Supported schemes: env:// (environment variable), file:// (file path).
+// Supported schemes: env:// (environment variable), file:// (file path), secret:// (secret store entry).
 type SecretRef string
 
 // APICompressionConfig holds response compression configuration.
@@ -1239,11 +1239,26 @@ type APITracingConfig struct {
 	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable OpenTelemetry tracing"`
 }
 
+// Workload identity grant type constants for CustomOAuth2Config.WorkloadIdentityGrantType.
+const (
+	// WorkloadIdentityGrantClientCredentials exchanges the federated JWT via
+	// RFC 7523 JWT client assertion on grant_type=client_credentials (default).
+	WorkloadIdentityGrantClientCredentials = "client_credentials"
+
+	// WorkloadIdentityGrantTokenExchange exchanges the federated JWT via
+	// RFC 8693 OAuth 2.0 Token Exchange (grant_type=urn:ietf:params:oauth:grant-type:token-exchange).
+	WorkloadIdentityGrantTokenExchange = "token_exchange"
+
+	// DefaultSubjectTokenType is the default RFC 8693 subject_token_type URI
+	// used when CustomOAuth2Config.SubjectTokenType is empty.
+	DefaultSubjectTokenType = "urn:ietf:params:oauth:token-type:jwt" //nolint:gosec // G101: RFC 8693 token type URI, not a credential
+)
+
 // DynamicClientRegistrationConfig holds configuration for RFC 7591 Dynamic Client Registration.
 type DynamicClientRegistrationConfig struct {
-	RegistrationEndpoint string         `json:"registrationEndpoint,omitempty" yaml:"registrationEndpoint,omitempty" mapstructure:"registrationEndpoint" doc:"RFC 7591 Dynamic Client Registration endpoint" maxLength:"2048"`
+	RegistrationEndpoint string         `json:"registrationEndpoint,omitempty" yaml:"registrationEndpoint,omitempty" mapstructure:"registrationEndpoint" doc:"RFC 7591 Dynamic Client Registration endpoint" maxLength:"2048" example:"https://auth.example.com/oauth2/register"`
 	ClientMetadata       map[string]any `json:"clientMetadata,omitempty" yaml:"clientMetadata,omitempty" mapstructure:"clientMetadata" doc:"Client metadata for dynamic registration"`
-	InitialAccessToken   string         `json:"initialAccessToken,omitempty" yaml:"initialAccessToken,omitempty" mapstructure:"initialAccessToken" doc:"Initial access token for dynamic registration"`
+	InitialAccessToken   string         `json:"initialAccessToken,omitempty" yaml:"initialAccessToken,omitempty" mapstructure:"initialAccessToken" doc:"Initial access token for dynamic registration (literal string or SecretRef URI: secret://, file://, env://)" maxLength:"4096" example:"secret://dcr-initial-token"` //nolint:gosec // G117: config field, not a hardcoded credential
 }
 
 // CustomOAuth2Config defines a user-configurable OAuth2 auth handler.
@@ -1258,16 +1273,27 @@ type CustomOAuth2Config struct {
 
 	// OAuth2 endpoints
 	AuthorizeURL  string `json:"authorizeURL,omitempty" yaml:"authorizeURL,omitempty" mapstructure:"authorizeURL" doc:"OAuth2 authorization endpoint (required for interactive flow)" maxLength:"2048" example:"https://quay.io/oauth/authorize"`
-	TokenURL      string `json:"tokenURL" yaml:"tokenURL" mapstructure:"tokenURL" doc:"OAuth2 token endpoint" maxLength:"2048" example:"https://quay.io/oauth/access_token"`
+	TokenURL      string `json:"tokenURL,omitempty" yaml:"tokenURL,omitempty" mapstructure:"tokenURL" doc:"OAuth2 token endpoint" maxLength:"2048" example:"https://quay.io/oauth/access_token"`
 	DeviceAuthURL string `json:"deviceAuthURL,omitempty" yaml:"deviceAuthURL,omitempty" mapstructure:"deviceAuthURL" doc:"OAuth2 device authorization endpoint (required for device_code flow)" maxLength:"2048" example:"https://sso.example.com/device/code"`
 
 	// Client credentials
-	ClientID     string `json:"clientID" yaml:"clientID" mapstructure:"clientID" doc:"OAuth2 client ID" maxLength:"256"`
-	ClientSecret string `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"OAuth2 client secret (required for client_credentials flow)" maxLength:"256"` //nolint:gosec // G117: config field, not a hardcoded credential
+	ClientID     string `json:"clientID,omitempty" yaml:"clientID,omitempty" mapstructure:"clientID" doc:"OAuth2 client ID" maxLength:"256" example:"my-app-client-id"`
+	ClientSecret string `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"OAuth2 client secret (literal string or SecretRef URI: secret://, file://, env://)" maxLength:"4096" example:"secret://my-oauth-client-secret"` //nolint:gosec // G117: config field, not a hardcoded credential
+
+	// Workload Identity Federation (RFC 7523 / RFC 8693)
+	FederatedToken            SecretRef `json:"federatedToken,omitempty" yaml:"federatedToken,omitempty" mapstructure:"federatedToken" doc:"SecretRef URI (file://, env://, or secret://) supplying a federated JWT for workload_identity flow; re-resolved on every token acquisition" maxLength:"4096" example:"file:///var/run/secrets/tokens/token"`                           //nolint:gosec // G101: SecretRef config field, not a credential
+	FederatedTokenFile        string    `json:"federatedTokenFile,omitempty" yaml:"federatedTokenFile,omitempty" mapstructure:"federatedTokenFile" doc:"Path to a projected federated JWT file for workload_identity flow (convenience alias for federatedToken: file://<path>; mutually exclusive with federatedToken)" maxLength:"4096" example:"/var/run/secrets/tokens/token"` //nolint:gosec // G101: file path config field, not a credential
+	Audience                  string    `json:"audience,omitempty" yaml:"audience,omitempty" mapstructure:"audience" doc:"Target audience parameter sent during workload_identity token exchange (optional)" maxLength:"1024" example:"api://AzureADTokenExchange"`
+	WorkloadIdentityGrantType string    `json:"workloadIdentityGrantType,omitempty" yaml:"workloadIdentityGrantType,omitempty" mapstructure:"workloadIdentityGrantType" doc:"OAuth2 grant mode for workload_identity flow: client_credentials (RFC 7523 JWT client assertion, default) or token_exchange (RFC 8693)" enum:"client_credentials,token_exchange" maxLength:"32" example:"client_credentials"`
+	SubjectTokenType          string    `json:"subjectTokenType,omitempty" yaml:"subjectTokenType,omitempty" mapstructure:"subjectTokenType" doc:"RFC 8693 subject_token_type URI for token_exchange workload identity mode (default: urn:ietf:params:oauth:token-type:jwt)" maxLength:"256" example:"urn:ietf:params:oauth:token-type:jwt"`
+
+	// Static bearer / robot token credentials (pat flow)
+	Token    SecretRef `json:"token,omitempty" yaml:"token,omitempty" mapstructure:"token" doc:"SecretRef URI (secret://, file://, or env://) supplying a pre-issued static API or registry robot token for pat flow" maxLength:"4096" example:"secret://quay-robot-token"` //nolint:gosec // G101: SecretRef config field, not a credential
+	Username string    `json:"username,omitempty" yaml:"username,omitempty" mapstructure:"username" doc:"Username (literal string or SecretRef URI: secret://, file://, env://) for pat flow; overrides registryUsername for OCI registry robot accounts" maxLength:"4096" example:"myorg+ci_robot"`
 
 	// Flow configuration
 	Scopes                 []string `json:"scopes,omitempty" yaml:"scopes,omitempty" mapstructure:"scopes" doc:"Default OAuth scopes" maxItems:"20"`
-	DefaultFlow            string   `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default OAuth2 flow (interactive, device_code, client_credentials)" enum:"interactive,device_code,client_credentials" maxLength:"32" example:"interactive"`
+	DefaultFlow            string   `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default OAuth2 flow (interactive, device_code, client_credentials, workload_identity, pat)" enum:"interactive,device_code,client_credentials,workload_identity,pat" maxLength:"32" example:"interactive"`
 	CallbackPort           int      `json:"callbackPort,omitempty" yaml:"callbackPort,omitempty" mapstructure:"callbackPort" doc:"Local callback port for interactive flow (0 = random)" minimum:"0" maximum:"65535" example:"8080"`
 	CallbackPath           string   `json:"callbackPath,omitempty" yaml:"callbackPath,omitempty" mapstructure:"callbackPath" doc:"Callback path for the redirect URI (default: /)" maxLength:"256" example:"/auth/callback"`
 	CallbackHost           string   `json:"callbackHost,omitempty" yaml:"callbackHost,omitempty" mapstructure:"callbackHost" doc:"Callback host for the redirect URI (default: localhost)" enum:"localhost,127.0.0.1,::1" maxLength:"253" example:"127.0.0.1"`

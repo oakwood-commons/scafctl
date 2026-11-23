@@ -168,32 +168,63 @@ func TestSanitizeConfig(t *testing.T) {
 		assert.Equal(t, RedactedValue, src.Headers["X-API-Key"])
 	})
 
-	t.Run("customOAuth2 client secret dropped, other fields preserved", func(t *testing.T) {
+	t.Run("customOAuth2 credentials redacted, non-secret fields preserved", func(t *testing.T) {
 		cfg := &Config{
 			Auth: GlobalAuthConfig{
 				CustomOAuth2: []CustomOAuth2Config{
 					{
-						Name:         "quay",
-						ClientID:     "visible-id",
-						ClientSecret: "should-not-appear",
+						Name:                      "quay",
+						ClientID:                  "visible-id",
+						ClientSecret:              "should-not-appear",
+						FederatedToken:            "file:///var/run/secrets/tokens/token",
+						Audience:                  "api://quay",
+						WorkloadIdentityGrantType: WorkloadIdentityGrantTokenExchange,
+						SubjectTokenType:          DefaultSubjectTokenType,
+						Token:                     "secret://quay-robot-token",
+						Username:                  "myorg+ci_robot",
 						TokenExchange: &TokenExchangeConfig{
 							URL:         "https://quay.io/api/v1/user/apptoken",
 							RequestBody: "should-not-appear-either",
 						},
+						DynamicClientRegistration: &DynamicClientRegistrationConfig{
+							RegistrationEndpoint: "https://idp.example.com/register",
+							InitialAccessToken:   "secret://dcr-init-token",
+						},
+					},
+					{
+						Name:               "wif-file",
+						ClientID:           "wif-client",
+						FederatedTokenFile: "/var/run/secrets/tokens/sa-token",
+						Username:           "secret://robot-username",
 					},
 				},
 			},
 		}
 		sanitized := SanitizeConfig(cfg)
-		require.Len(t, sanitized.Auth.CustomOAuth2, 1)
+		require.Len(t, sanitized.Auth.CustomOAuth2, 2)
+
 		oc := sanitized.Auth.CustomOAuth2[0]
 		assert.Equal(t, "quay", oc.Name)
 		assert.Equal(t, "visible-id", oc.ClientID)
-		// SanitizedCustomOAuth2 has no ClientSecret field, so nothing to check
-		// there -- what matters is that the marshaled output cannot contain it.
+		assert.Equal(t, RedactedValue, oc.ClientSecret)
+		assert.Equal(t, RedactedValue, oc.FederatedToken)
+		assert.Equal(t, RedactedValue, oc.Token)
+		assert.Equal(t, "myorg+ci_robot", oc.Username, "literal username should be preserved")
+		assert.Equal(t, "api://quay", oc.Audience)
+		assert.Equal(t, WorkloadIdentityGrantTokenExchange, oc.WorkloadIdentityGrantType)
+		assert.Equal(t, DefaultSubjectTokenType, oc.SubjectTokenType)
 		require.NotNil(t, oc.TokenExchange)
 		assert.Equal(t, "https://quay.io/api/v1/user/apptoken", oc.TokenExchange.URL)
-		// SanitizedTokenExchange omits RequestBody entirely.
+		require.NotNil(t, oc.DynamicClientRegistration)
+		assert.Equal(t, "https://idp.example.com/register", oc.DynamicClientRegistration.RegistrationEndpoint)
+		assert.Equal(t, RedactedValue, oc.DynamicClientRegistration.InitialAccessToken)
+
+		oc2 := sanitized.Auth.CustomOAuth2[1]
+		assert.Empty(t, oc2.ClientSecret)
+		assert.Empty(t, oc2.FederatedToken)
+		assert.Empty(t, oc2.Token)
+		assert.Equal(t, "/var/run/secrets/tokens/sa-token", oc2.FederatedTokenFile)
+		assert.Equal(t, RedactedValue, oc2.Username, "SecretRef username should be redacted")
 	})
 
 	t.Run("kube cluster aliases preserved verbatim", func(t *testing.T) {

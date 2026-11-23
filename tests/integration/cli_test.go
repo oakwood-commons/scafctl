@@ -7291,6 +7291,75 @@ func TestIntegration_CustomOAuth2Handler_NameConflict(t *testing.T) {
 	}
 }
 
+func TestIntegration_CustomOAuth2Handler_ZeroCeremonyPipelineWIFAndPAT(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad form", http.StatusBadRequest)
+			return
+		}
+		if r.FormValue("grant_type") == "client_credentials" &&
+			r.FormValue("client_assertion_type") == "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" &&
+			r.FormValue("client_assertion") == "projected-k8s-jwt" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"minted-pipeline-wif-token","token_type":"Bearer","expires_in":3600}`))
+			return
+		}
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	jwtPath := filepath.Join(tmpDir, "sa-token")
+	require.NoError(t, os.WriteFile(jwtPath, []byte("projected-k8s-jwt\n"), 0o600))
+
+	t.Setenv("TEST_CUSTOM_PAT_TOKEN", "static-robot-pat-123")
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "xdg-data"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmpDir, "xdg-cache"))
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := fmt.Sprintf(`httpClient:
+  allowPrivateIPs: true
+auth:
+  customOAuth2:
+    - name: ci-wif
+      displayName: "CI Workload Identity"
+      tokenURL: %q
+      clientID: "ci-workload-client"
+      federatedToken: %q
+      audience: "api://ci-target"
+      defaultFlow: workload_identity
+    - name: quay-robot
+      displayName: "Quay Robot"
+      token: "env://TEST_CUSTOM_PAT_TOKEN"
+      username: "acme+ci_robot"
+      defaultFlow: pat
+      registry: "quay.io"
+      registryUsername: "$oauthtoken"
+`, srv.URL+"/token", "file://"+jwtPath)
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
+
+	// Zero-ceremony auth status --exit-code passes for both WIF and PAT with no prior auth login.
+	stdout, stderr, exitCode := runScafctl(t, "--config", configPath, "auth", "status", "ci-wif", "--exit-code", "-o", "json")
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Contains(t, stdout, `"authenticated": true`)
+	assert.Contains(t, stdout, `"workload_identity"`)
+
+	stdout, stderr, exitCode = runScafctl(t, "--config", configPath, "auth", "status", "quay-robot", "--exit-code", "-o", "json")
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Contains(t, stdout, `"authenticated": true`)
+	assert.Contains(t, stdout, `"pat"`)
+	assert.Contains(t, stdout, `"acme+ci_robot"`)
+
+	// Zero-ceremony auth token mints WIF token and resolves PAT token directly.
+	stdout, stderr, exitCode = runScafctl(t, "--config", configPath, "auth", "token", "ci-wif", "--raw")
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Equal(t, "minted-pipeline-wif-token", strings.TrimSpace(stdout))
+
+	stdout, stderr, exitCode = runScafctl(t, "--config", configPath, "auth", "token", "quay-robot", "--raw")
+	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Equal(t, "static-robot-pat-123", strings.TrimSpace(stdout))
+}
+
 func TestIntegration_CatalogListHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "catalog", "list", "--help")

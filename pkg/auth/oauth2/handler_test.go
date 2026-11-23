@@ -10,6 +10,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -134,12 +138,16 @@ func TestHandler_SupportedFlows(t *testing.T) {
 		{name: "no flows", expected: nil},
 		{name: "interactive", override: func(c *config.CustomOAuth2Config) { c.AuthorizeURL = "https://x.com/auth" }, expected: []auth.Flow{auth.FlowInteractive}},
 		{name: "device code", override: func(c *config.CustomOAuth2Config) { c.DeviceAuthURL = "https://x.com/device" }, expected: []auth.Flow{auth.FlowDeviceCode}},
+		{name: "workload identity", override: func(c *config.CustomOAuth2Config) { c.FederatedToken = "env://OIDC_TOKEN" }, expected: []auth.Flow{auth.FlowWorkloadIdentity}},
 		{name: "client credentials", override: func(c *config.CustomOAuth2Config) { c.ClientSecret = "s" }, expected: []auth.Flow{auth.FlowClientCredentials}},
+		{name: "pat", override: func(c *config.CustomOAuth2Config) { c.Token = "secret://pat-tok" }, expected: []auth.Flow{auth.FlowPAT}},
 		{name: "all flows", override: func(c *config.CustomOAuth2Config) {
 			c.AuthorizeURL = "https://x.com/auth"
 			c.DeviceAuthURL = "https://x.com/device"
+			c.FederatedTokenFile = "/var/run/secrets/token"
 			c.ClientSecret = "s"
-		}, expected: []auth.Flow{auth.FlowInteractive, auth.FlowDeviceCode, auth.FlowClientCredentials}},
+			c.Token = "secret://pat-tok"
+		}, expected: []auth.Flow{auth.FlowInteractive, auth.FlowDeviceCode, auth.FlowWorkloadIdentity, auth.FlowClientCredentials, auth.FlowPAT}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -363,9 +371,13 @@ func TestHandler_resolveDefaultFlow(t *testing.T) {
 		}, expected: auth.FlowInteractive},
 		{name: "explicit device_code", override: func(c *config.CustomOAuth2Config) { c.DefaultFlow = "device_code"; c.DeviceAuthURL = "https://x.com/d" }, expected: auth.FlowDeviceCode},
 		{name: "explicit client_credentials", override: func(c *config.CustomOAuth2Config) { c.DefaultFlow = "client_credentials"; c.ClientSecret = "s" }, expected: auth.FlowClientCredentials},
+		{name: "explicit workload_identity", override: func(c *config.CustomOAuth2Config) { c.DefaultFlow = "workload_identity"; c.FederatedToken = "env://T" }, expected: auth.FlowWorkloadIdentity},
+		{name: "explicit pat", override: func(c *config.CustomOAuth2Config) { c.DefaultFlow = "pat"; c.Token = "secret://t" }, expected: auth.FlowPAT},
 		{name: "auto interactive", override: func(c *config.CustomOAuth2Config) { c.AuthorizeURL = "https://x.com/auth" }, expected: auth.FlowInteractive},
 		{name: "auto device", override: func(c *config.CustomOAuth2Config) { c.DeviceAuthURL = "https://x.com/d" }, expected: auth.FlowDeviceCode},
+		{name: "auto workload_identity", override: func(c *config.CustomOAuth2Config) { c.FederatedTokenFile = "/tmp/tok" }, expected: auth.FlowWorkloadIdentity},
 		{name: "auto client_credentials", override: func(c *config.CustomOAuth2Config) { c.ClientSecret = "s" }, expected: auth.FlowClientCredentials},
+		{name: "auto pat", override: func(c *config.CustomOAuth2Config) { c.Token = "secret://t" }, expected: auth.FlowPAT},
 		{name: "fallback", expected: auth.FlowInteractive},
 	}
 	for _, tc := range tests {
@@ -1322,4 +1334,904 @@ func TestDcrFingerprint(t *testing.T) {
 	// Different client metadata must change the fingerprint.
 	diffMeta := &config.DynamicClientRegistrationConfig{RegistrationEndpoint: base.RegistrationEndpoint, ClientMetadata: map[string]any{"client_name": "other"}}
 	assert.NotEqual(t, dcrFingerprint(base, "https://as.example.com/token"), dcrFingerprint(diffMeta, "https://as.example.com/token"))
+}
+
+func TestValidateConfig_PipelineFlowsAndSecretRef(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		cfg       config.CustomOAuth2Config
+		binName   string
+		wantError string
+	}{
+		{
+			name: "valid RFC 7523 workload_identity with federatedToken file",
+			cfg: config.CustomOAuth2Config{
+				Name:           "wif-k8s",
+				TokenURL:       "https://idp.example.com/oauth/token",
+				ClientID:       "wif-client",
+				FederatedToken: "file:///var/run/secrets/tokens/token",
+				DefaultFlow:    "workload_identity",
+			},
+		},
+		{
+			name: "valid RFC 8693 token_exchange without clientID",
+			cfg: config.CustomOAuth2Config{
+				Name:                      "wif-sts",
+				TokenURL:                  "https://sts.example.com/v1/token",
+				FederatedToken:            "env://ACTIONS_ID_TOKEN",
+				WorkloadIdentityGrantType: config.WorkloadIdentityGrantTokenExchange,
+				DefaultFlow:               "workload_identity",
+			},
+		},
+		{
+			name: "RFC 7523 workload_identity requires clientID",
+			cfg: config.CustomOAuth2Config{
+				Name:           "wif-missing-cid",
+				TokenURL:       "https://idp.example.com/oauth/token",
+				FederatedToken: "env://OIDC_JWT",
+				DefaultFlow:    "workload_identity",
+			},
+			wantError: "clientID is required",
+		},
+		{
+			name: "workload_identity requires federatedToken or federatedTokenFile",
+			cfg: config.CustomOAuth2Config{
+				Name:        "wif-no-tok",
+				TokenURL:    "https://idp.example.com/oauth/token",
+				ClientID:    "cid",
+				DefaultFlow: "workload_identity",
+			},
+			wantError: "federatedToken or federatedTokenFile is required",
+		},
+		{
+			name: "federatedToken and federatedTokenFile mutually exclusive",
+			cfg: config.CustomOAuth2Config{
+				Name:               "wif-both",
+				TokenURL:           "https://idp.example.com/oauth/token",
+				ClientID:           "cid",
+				FederatedToken:     "env://OIDC_JWT",
+				FederatedTokenFile: "/var/run/secrets/token",
+			},
+			wantError: "mutually exclusive",
+		},
+		{
+			name: "invalid workloadIdentityGrantType",
+			cfg: config.CustomOAuth2Config{
+				Name:                      "wif-bad-grant",
+				TokenURL:                  "https://idp.example.com/oauth/token",
+				ClientID:                  "cid",
+				FederatedToken:            "env://OIDC_JWT",
+				WorkloadIdentityGrantType: "implicit",
+			},
+			wantError: "unknown workloadIdentityGrantType",
+		},
+		{
+			name: "pure pat handler requires neither tokenURL nor clientID",
+			cfg: config.CustomOAuth2Config{
+				Name:        "quay-robot",
+				Token:       "secret://quay-robot-token",
+				Username:    "myorg+ci_robot",
+				DefaultFlow: "pat",
+				Registry:    "quay.io",
+			},
+		},
+		{
+			name: "implicit pat-only handler without defaultFlow requires neither tokenURL nor clientID",
+			cfg: config.CustomOAuth2Config{
+				Name:     "quay-robot-auto",
+				Token:    "env://QUAY_ROBOT_TOKEN",
+				Username: "myorg+ci_robot",
+			},
+		},
+		{
+			name: "pat defaultFlow requires token",
+			cfg: config.CustomOAuth2Config{
+				Name:        "pat-missing-tok",
+				DefaultFlow: "pat",
+			},
+			wantError: "token is required when defaultFlow is pat",
+		},
+		{
+			name: "rejects internal secret prefix for default scafctl binary",
+			cfg: config.CustomOAuth2Config{
+				Name:        "pat-internal",
+				Token:       "secret://scafctl.auth.oauth2.other.pat_token",
+				DefaultFlow: "pat",
+			},
+			wantError: "reserved internal secret prefix",
+		},
+		{
+			name: "rejects internal secret prefix for custom embedder binary",
+			cfg: config.CustomOAuth2Config{
+				Name:        "pat-embedder-internal",
+				Token:       "secret://mycli.auth.token",
+				DefaultFlow: "pat",
+			},
+			binName:   "mycli",
+			wantError: "reserved internal secret prefix",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var err error
+			if tc.binName != "" {
+				err = ValidateConfigFor(tc.cfg, tc.binName)
+			} else {
+				err = ValidateConfig(tc.cfg)
+			}
+			if tc.wantError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantError)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestHandler_WorkloadIdentity_RFC7523_And_RotatedFile(t *testing.T) {
+	t.Parallel()
+
+	var observedAssertions []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			require.NoError(t, r.ParseForm())
+			assert.Equal(t, "client_credentials", r.FormValue("grant_type"))
+			assert.Equal(t, "k8s-client-id", r.FormValue("client_id"))
+			assert.Equal(t, "urn:ietf:params:oauth:client-assertion-type:jwt-bearer", r.FormValue("client_assertion_type"))
+			assert.Equal(t, "api://target-service", r.FormValue("audience"))
+			assert.Equal(t, "repo:read", r.FormValue("scope"))
+
+			assertion := r.FormValue("client_assertion")
+			mu.Lock()
+			observedAssertions = append(observedAssertions, assertion)
+			callNum := len(observedAssertions)
+			mu.Unlock()
+
+			writeJSON(w, tokenResponse{
+				AccessToken: fmt.Sprintf("minted-token-%d-for-%s", callNum, assertion),
+				TokenType:   "Bearer",
+				ExpiresIn:   3600,
+				Scope:       "repo:read",
+			})
+		case "/exchange":
+			assert.Contains(t, r.Header.Get("Authorization"), "Bearer minted-token-")
+			writeJSON(w, map[string]any{"token": "derived-" + r.Header.Get("Authorization")[7:], "username": "wif-bot"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	jwtPath := filepath.Join(dir, "projected-sa-token")
+	require.NoError(t, os.WriteFile(jwtPath, []byte("  jwt-generation-1\n\n"), 0o600))
+
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.ClientID = "k8s-client-id"
+		cfg.FederatedToken = config.SecretRef("file://" + jwtPath)
+		cfg.Audience = "api://target-service"
+		cfg.Scopes = []string{"repo:read"}
+		cfg.TokenExchange = &config.TokenExchangeConfig{
+			URL:              srv.URL + "/exchange",
+			TokenJSONPath:    "token",
+			UsernameJSONPath: "username",
+		}
+	})
+
+	ctx := context.Background()
+
+	// Zero-ceremony Status succeeds before any Login call.
+	st, err := h.Status(ctx)
+	require.NoError(t, err)
+	assert.True(t, st.Authenticated)
+	assert.Equal(t, auth.FlowWorkloadIdentity, st.Flow)
+	assert.Equal(t, auth.IdentityTypeWorkloadIdentity, st.IdentityType)
+	assert.Equal(t, jwtPath, st.TokenFile)
+
+	// First GetToken mints via RFC 7523 + runs post-grant TokenExchange.
+	tok1, err := h.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "derived-minted-token-1-for-jwt-generation-1", tok1.AccessToken)
+	assert.Equal(t, "wif-bot", h.RegistryUsername())
+
+	// Second GetToken hits cache without re-posting to tokenURL.
+	tokCached, err := h.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, tok1.AccessToken, tokCached.AccessToken)
+	mu.Lock()
+	assert.Len(t, observedAssertions, 1)
+	mu.Unlock()
+
+	// Kubelet rotates projected volume token file; ForceRefresh (or expiry) re-reads it.
+	require.NoError(t, os.WriteFile(jwtPath, []byte("\tjwt-generation-2\r\n"), 0o600))
+	tok2, err := h.GetToken(ctx, auth.TokenOptions{ForceRefresh: true})
+	require.NoError(t, err)
+	assert.Equal(t, "derived-minted-token-2-for-jwt-generation-2", tok2.AccessToken)
+
+	mu.Lock()
+	assert.Equal(t, []string{"jwt-generation-1", "jwt-generation-2"}, observedAssertions)
+	mu.Unlock()
+}
+
+func TestHandler_WorkloadIdentity_RFC8693_TokenExchange(t *testing.T) {
+	t.Parallel()
+
+	t.Run("public STS exchange without clientID and custom subjectTokenType", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			assert.Equal(t, "urn:ietf:params:oauth:grant-type:token-exchange", r.FormValue("grant_type"))
+			assert.Equal(t, "oidc-jwt-value", r.FormValue("subject_token"))
+			assert.Equal(t, "urn:ietf:params:oauth:token-type:id_token", r.FormValue("subject_token_type"))
+			assert.Equal(t, "sts://vault", r.FormValue("audience"))
+			assert.Empty(t, r.FormValue("client_id"))
+			_, _, hasBasic := r.BasicAuth()
+			assert.False(t, hasBasic)
+			writeJSON(w, tokenResponse{AccessToken: "sts-access-token", TokenType: "Bearer", ExpiresIn: 1800})
+		}))
+		defer srv.Close()
+
+		store := secrets.NewMockStore()
+		require.NoError(t, store.Set(context.Background(), "ci-id-token", []byte("oidc-jwt-value\n")))
+
+		cfg := config.CustomOAuth2Config{
+			Name:                      "vault-sts",
+			TokenURL:                  srv.URL + "/token",
+			FederatedToken:            "secret://ci-id-token",
+			WorkloadIdentityGrantType: config.WorkloadIdentityGrantTokenExchange,
+			SubjectTokenType:          "urn:ietf:params:oauth:token-type:id_token",
+			Audience:                  "sts://vault",
+		}
+		require.NoError(t, ValidateConfig(cfg))
+
+		h, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		tok, err := h.GetToken(context.Background(), auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "sts-access-token", tok.AccessToken)
+		assert.Equal(t, auth.FlowWorkloadIdentity, tok.Flow)
+	})
+
+	t.Run("confidential STS exchange sends HTTP Basic auth when clientID and clientSecret are set", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			user, pass, ok := r.BasicAuth()
+			assert.True(t, ok, "expected HTTP Basic auth header")
+			assert.Equal(t, "sts-client", user)
+			assert.Equal(t, "resolved-sts-secret", pass)
+			assert.Empty(t, r.FormValue("client_id"), "client_id must not be duplicated in form when Basic auth is used")
+			assert.Equal(t, config.DefaultSubjectTokenType, r.FormValue("subject_token_type"))
+			writeJSON(w, tokenResponse{AccessToken: "sts-basic-token", TokenType: "Bearer", ExpiresIn: 1800})
+		}))
+		defer srv.Close()
+
+		dir := t.TempDir()
+		jwtFile := filepath.Join(dir, "sa-jwt")
+		require.NoError(t, os.WriteFile(jwtFile, []byte("k8s-jwt"), 0o600))
+
+		store := secrets.NewMockStore()
+		require.NoError(t, store.Set(context.Background(), "sts-client-secret", []byte("resolved-sts-secret")))
+
+		h, err := New(config.CustomOAuth2Config{
+			Name:                      "sts-basic",
+			TokenURL:                  srv.URL + "/token",
+			ClientID:                  "sts-client",
+			ClientSecret:              "secret://sts-client-secret",
+			FederatedTokenFile:        jwtFile,
+			WorkloadIdentityGrantType: config.WorkloadIdentityGrantTokenExchange,
+		}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		res, err := h.Login(context.Background(), auth.LoginOptions{})
+		require.NoError(t, err)
+		assert.False(t, res.ExpiresAt.IsZero())
+		assert.Equal(t, auth.FlowWorkloadIdentity, h.ActiveFlow(context.Background()))
+	})
+}
+
+func TestHandler_ZeroCeremony_KeylessNilSecretStore(t *testing.T) {
+	t.Parallel()
+
+	var tokenCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenCalls.Add(1)
+		require.NoError(t, r.ParseForm())
+		writeJSON(w, tokenResponse{AccessToken: "keyless-wif-token", TokenType: "Bearer", ExpiresIn: 3600})
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	jwtFile := filepath.Join(dir, "token")
+	require.NoError(t, os.WriteFile(jwtFile, []byte("ambient-ci-jwt"), 0o600))
+
+	// Construct handler via New + WithSecretStoreError simulating a keyless CI
+	// container where requireSecureKeyring prevented secret store initialization.
+	h, err := New(config.CustomOAuth2Config{
+		Name:               "keyless-ci",
+		TokenURL:           srv.URL + "/token",
+		ClientID:           "ci-client",
+		FederatedTokenFile: jwtFile,
+		Scopes:             []string{"api:read"},
+	}, WithSecretStoreError(fmt.Errorf("keyring unavailable in container")), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	assert.Nil(t, h.secretStore)
+
+	ctx := context.Background()
+
+	st, err := h.Status(ctx)
+	require.NoError(t, err)
+	assert.True(t, st.Authenticated)
+	assert.Equal(t, auth.FlowWorkloadIdentity, st.Flow)
+
+	// Repeated GetToken calls use in-memory cache rather than hammering tokenURL.
+	tok1, err := h.GetToken(ctx, auth.TokenOptions{MinValidFor: time.Minute})
+	require.NoError(t, err)
+	assert.Equal(t, "keyless-wif-token", tok1.AccessToken)
+
+	tok2, err := h.GetToken(ctx, auth.TokenOptions{MinValidFor: time.Minute})
+	require.NoError(t, err)
+	assert.Equal(t, "keyless-wif-token", tok2.AccessToken)
+	assert.Equal(t, int32(1), tokenCalls.Load(), "in-memory cache must serve second GetToken without hitting tokenURL")
+}
+
+func TestHandler_FlowPAT_LifecycleAndVerification(t *testing.T) {
+	t.Parallel()
+
+	var exchangeCalled atomic.Bool
+	var verifyStatus atomic.Int32
+	verifyStatus.Store(http.StatusOK)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/exchange":
+			exchangeCalled.Store(true)
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/verify":
+			code := int(verifyStatus.Load())
+			if code != http.StatusOK {
+				w.WriteHeader(code)
+				_, _ = w.Write([]byte(`{"error":"invalid token"}`))
+				return
+			}
+			assert.Equal(t, "Bearer quay-robot-secret-value", r.Header.Get("Authorization"))
+			writeJSON(w, map[string]any{"username": "verified-robot"})
+		default:
+			t.Fatalf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	require.NoError(t, store.Set(ctx, "quay-robot-token", []byte("quay-robot-secret-value\n")))
+	require.NoError(t, store.Set(ctx, "quay-robot-user", []byte("myorg+ci_robot")))
+
+	cfg := config.CustomOAuth2Config{
+		Name:             "quay",
+		AuthorizeURL:     "https://quay.io/oauth/authorize",
+		ResponseType:     "token",
+		ClientID:         "quay-oauth-app",
+		Token:            "secret://quay-robot-token",
+		Username:         "secret://quay-robot-user",
+		Registry:         "quay.io",
+		RegistryUsername: "$oauthtoken",
+		VerifyURL:        srv.URL + "/verify",
+		IdentityFields:   &config.IdentityFieldMapping{Username: "username"},
+		TokenExchange: &config.TokenExchangeConfig{
+			URL:           srv.URL + "/exchange",
+			TokenJSONPath: "token",
+		},
+	}
+	require.NoError(t, ValidateConfig(cfg))
+
+	h, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	// Before PAT is activated, interactive default keeps $oauthtoken.
+	assert.Equal(t, "$oauthtoken", h.RegistryUsername())
+
+	// Login with FlowPAT fails when VerifyURL returns 401 or 403, leaving Status unauthenticated.
+	verifyStatus.Store(http.StatusUnauthorized)
+	_, err = h.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "401")
+	stAfterFail, err := h.Status(ctx)
+	require.NoError(t, err)
+	assert.False(t, stAfterFail.Authenticated)
+
+	verifyStatus.Store(http.StatusForbidden)
+	_, err = h.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "403")
+
+	// Valid PAT Login succeeds, skips TokenExchange, overrides RegistryUsername,
+	// and stores pat_token outside TokenCache so PurgeExpiredTokens leaves it intact.
+	verifyStatus.Store(http.StatusOK)
+	res, err := h.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+	require.NoError(t, err)
+	assert.True(t, res.ExpiresAt.IsZero())
+	assert.False(t, exchangeCalled.Load(), "TokenExchange must be skipped on FlowPAT")
+	assert.Equal(t, "myorg+ci_robot", h.RegistryUsername(), "FlowPAT must override $oauthtoken with resolved Username")
+
+	purged, err := h.PurgeExpiredTokens(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, purged)
+	cachedList, err := h.ListCachedTokens(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, cachedList, "zero-expiry PAT must not be stored in TokenCache")
+
+	st, err := h.Status(ctx)
+	require.NoError(t, err)
+	assert.True(t, st.Authenticated, "stored PAT session with zero ExpiresAt must not report expired")
+	assert.Equal(t, auth.FlowPAT, st.Flow)
+
+	tok, err := h.GetToken(ctx, auth.TokenOptions{MinValidFor: 5 * time.Minute})
+	require.NoError(t, err)
+	assert.Equal(t, "quay-robot-secret-value", tok.AccessToken)
+	assert.Equal(t, auth.FlowPAT, tok.Flow)
+	assert.False(t, exchangeCalled.Load(), "GetToken on FlowPAT must skip TokenExchange")
+
+	// Logout clears pat_token and restores default RegistryUsername.
+	require.NoError(t, h.Logout(ctx))
+	_, patGetErr := store.Get(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix))
+	assert.ErrorIs(t, patGetErr, secrets.ErrNotFound)
+	assert.Equal(t, "$oauthtoken", h.RegistryUsername())
+}
+
+func TestHandler_PriorityOrder_And_FlowDetector(t *testing.T) {
+	t.Setenv("TEST_OAUTH2_PAT_ENV", "pat-fallback-token")
+	t.Setenv("TEST_OAUTH2_CC_SECRET_ENV", "cc-secret")
+
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+
+	dir := t.TempDir()
+	missingWIF := filepath.Join(dir, "missing-jwt")
+
+	// WIF is configured via missing file -> falls through to client_credentials -> PAT.
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.FederatedTokenFile = missingWIF
+		cfg.ClientSecret = "env://TEST_OAUTH2_CC_SECRET_ENV"
+		cfg.Token = "env://TEST_OAUTH2_PAT_ENV"
+	})
+
+	ctx := context.Background()
+	flows, err := h.DetectAvailableFlows(ctx)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(flows), 3)
+	assert.Equal(t, auth.FlowWorkloadIdentity, flows[0].Flow)
+	assert.False(t, flows[0].Available)
+	assert.Equal(t, auth.FlowClientCredentials, flows[1].Flow)
+	assert.True(t, flows[1].Available)
+	assert.Equal(t, auth.FlowPAT, flows[2].Flow)
+	assert.True(t, flows[2].Available)
+
+	tok, err := h.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "cc-access-token", tok.AccessToken)
+	assert.Equal(t, auth.FlowClientCredentials, tok.Flow)
+
+	// When defaultFlow explicitly selects pat, pat takes priority over client_credentials.
+	hPATPreferred, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.ClientSecret = "env://TEST_OAUTH2_CC_SECRET_ENV"
+		cfg.Token = "env://TEST_OAUTH2_PAT_ENV"
+		cfg.DefaultFlow = "pat"
+	})
+	tokPAT, err := hPATPreferred.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "pat-fallback-token", tokPAT.AccessToken)
+	assert.Equal(t, auth.FlowPAT, tokPAT.Flow)
+}
+
+func TestHandler_DCR_InitialAccessTokenSecretRef_And_UntrustedClientSecretLiteral(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	sensitiveFile := filepath.Join(dir, "do-not-read")
+	require.NoError(t, os.WriteFile(sensitiveFile, []byte("TOP_SECRET_LOCAL_FILE"), 0o600))
+	maliciousSecretPayload := "file://" + sensitiveFile
+
+	var receivedClientSecret string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/register":
+			assert.Equal(t, "Bearer dcr-secret-store-iat", r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(w, map[string]any{
+				"client_id":     "dcr-cid",
+				"client_secret": maliciousSecretPayload,
+			})
+		case "/token":
+			require.NoError(t, r.ParseForm())
+			receivedClientSecret = r.FormValue("client_secret")
+			writeJSON(w, tokenResponse{AccessToken: "dcr-tok", TokenType: "Bearer", ExpiresIn: 3600})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	store := secrets.NewMockStore()
+	require.NoError(t, store.Set(context.Background(), "dcr-iat", []byte("dcr-secret-store-iat")))
+
+	h, err := New(config.CustomOAuth2Config{
+		Name:        "dcr-safe",
+		TokenURL:    srv.URL + "/token",
+		DefaultFlow: "client_credentials",
+		DynamicClientRegistration: &config.DynamicClientRegistrationConfig{
+			RegistrationEndpoint: srv.URL + "/register",
+			InitialAccessToken:   "secret://dcr-iat",
+		},
+	}, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	tok, err := h.GetToken(context.Background(), auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "dcr-tok", tok.AccessToken)
+	// DCR-returned client_secret must be sent verbatim, NEVER resolved as a local file:// SecretRef!
+	assert.Equal(t, maliciousSecretPayload, receivedClientSecret)
+}
+
+func TestHandler_ConcurrentGetToken_Singleflight(t *testing.T) {
+	t.Parallel()
+
+	var tokenEndpointHits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenEndpointHits.Add(1)
+		// Small delay so all goroutines overlap on the in-flight request.
+		time.Sleep(25 * time.Millisecond)
+		writeJSON(w, tokenResponse{
+			AccessToken: "coalesced-wif-token",
+			TokenType:   "Bearer",
+			ExpiresIn:   3600,
+			Scope:       "read write",
+		})
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	jwtFile := filepath.Join(dir, "token")
+	require.NoError(t, os.WriteFile(jwtFile, []byte("concurrent-jwt"), 0o600))
+
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.FederatedTokenFile = jwtFile
+	})
+
+	const workers = 25
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	errs := make([]error, workers)
+	tokens := make([]string, workers)
+
+	start := make(chan struct{})
+	for i := range workers {
+		go func(idx int) {
+			defer wg.Done()
+			<-start
+			ctx := context.Background()
+			_, _ = h.Status(ctx)
+			_ = h.RegistryUsername()
+			tok, err := h.GetToken(ctx, auth.TokenOptions{})
+			errs[idx] = err
+			if tok != nil {
+				tokens[idx] = tok.AccessToken
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i := range workers {
+		require.NoError(t, errs[i])
+		assert.Equal(t, "coalesced-wif-token", tokens[i])
+	}
+	assert.Equal(t, int32(1), tokenEndpointHits.Load(), "singleflight must coalesce concurrent cold-cache GetToken calls into 1 HTTP request")
+}
+
+func TestHandler_HeadlessStatus_ActiveFlow_And_KeylessTokenExchange(t *testing.T) {
+	t.Parallel()
+
+	var exchangeHits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			// Return ExpiresIn: 0 to exercise fallback expiry calculation.
+			writeJSON(w, tokenResponse{AccessToken: "opaque-primary-tok", TokenType: "Bearer", ExpiresIn: 0})
+		case "/exchange":
+			exchangeHits.Add(1)
+			writeJSON(w, map[string]any{"token": "keyless-derived-tok", "username": "derived-bot"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	// 1. Keyless handler (secretStore == nil) with client_credentials + TokenExchange.
+	hKeyless, err := New(config.CustomOAuth2Config{
+		Name:         "keyless-cc",
+		TokenURL:     srv.URL + "/token",
+		ClientID:     "sp-client",
+		ClientSecret: "sp-secret",
+		Scopes:       []string{"repo:read"},
+		TokenExchange: &config.TokenExchangeConfig{
+			URL:              srv.URL + "/exchange",
+			TokenJSONPath:    "token",
+			UsernameJSONPath: "username",
+		},
+	}, WithSecretStoreError(fmt.Errorf("no keyring")), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	assert.Equal(t, auth.FlowClientCredentials, hKeyless.ActiveFlow(ctx))
+
+	stCC, err := hKeyless.Status(ctx)
+	require.NoError(t, err)
+	assert.True(t, stCC.Authenticated)
+	assert.Equal(t, auth.FlowClientCredentials, stCC.Flow)
+	assert.Equal(t, auth.IdentityTypeServicePrincipal, stCC.IdentityType)
+
+	tok1, err := hKeyless.GetToken(ctx, auth.TokenOptions{MinValidFor: time.Minute})
+	require.NoError(t, err)
+	assert.Equal(t, "keyless-derived-tok", tok1.AccessToken)
+	assert.False(t, tok1.ExpiresAt.IsZero())
+
+	// Second call hits memDerived cache without calling /exchange again.
+	tok2, err := hKeyless.GetToken(ctx, auth.TokenOptions{MinValidFor: time.Minute})
+	require.NoError(t, err)
+	assert.Equal(t, "keyless-derived-tok", tok2.AccessToken)
+	assert.Equal(t, int32(1), exchangeHits.Load())
+
+	// 2. Headless PAT Status & ForceRefresh on stored PAT session.
+	store := secrets.NewMockStore()
+	require.NoError(t, store.Set(ctx, "robot-tok", []byte("initial-pat")))
+	hPAT, err := New(config.CustomOAuth2Config{
+		Name:        "pat-headless",
+		Token:       "secret://robot-tok",
+		Username:    "org+bot",
+		DefaultFlow: "pat",
+	}, WithSecretStore(store), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	assert.Equal(t, "org+bot", hPAT.RegistryUsername())
+	stPAT, err := hPAT.Status(ctx)
+	require.NoError(t, err)
+	assert.True(t, stPAT.Authenticated)
+	assert.Equal(t, auth.FlowPAT, stPAT.Flow)
+	assert.Equal(t, "org+bot", stPAT.Claims.Username)
+
+	// Login then rotate underlying secret and ForceRefresh GetToken.
+	_, err = hPAT.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+	require.NoError(t, err)
+	require.NoError(t, store.Set(ctx, "robot-tok", []byte("rotated-pat")))
+	refreshedPAT, err := hPAT.GetToken(ctx, auth.TokenOptions{ForceRefresh: true})
+	require.NoError(t, err)
+	assert.Equal(t, "rotated-pat", refreshedPAT.AccessToken)
+}
+
+func TestHandler_DCR_PersistsAcrossProcessRestart_And_SessionLifecycle(t *testing.T) {
+	t.Parallel()
+
+	var regCalls, tokenCalls, refreshCalls atomic.Int32
+	var failRefresh, failExchange atomic.Bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/register":
+			regCalls.Add(1)
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(w, map[string]any{
+				"client_id":     "registered-dcr-id",
+				"client_secret": "registered-dcr-secret",
+			})
+		case "/token":
+			require.NoError(t, r.ParseForm())
+			switch r.FormValue("grant_type") {
+			case "client_credentials":
+				tokenCalls.Add(1)
+				assert.Equal(t, "registered-dcr-id", r.FormValue("client_id"))
+				assert.Equal(t, "registered-dcr-secret", r.FormValue("client_secret"))
+				writeJSON(w, tokenResponse{
+					AccessToken:  "dcr-access-1",
+					TokenType:    "Bearer",
+					ExpiresIn:    3600,
+					RefreshToken: "dcr-refresh-1",
+				})
+			case "refresh_token":
+				refreshCalls.Add(1)
+				if failRefresh.Load() {
+					w.WriteHeader(http.StatusBadRequest)
+					writeJSON(w, tokenEndpointError{ErrorCode: "invalid_grant", Description: "revoked"})
+					return
+				}
+				assert.Equal(t, "registered-dcr-id", r.FormValue("client_id"))
+				assert.Equal(t, "registered-dcr-secret", r.FormValue("client_secret"))
+				writeJSON(w, tokenResponse{
+					AccessToken:  "dcr-access-refreshed",
+					TokenType:    "Bearer",
+					ExpiresIn:    3600,
+					RefreshToken: "dcr-refresh-2",
+				})
+			}
+		case "/exchange":
+			if failExchange.Load() {
+				w.WriteHeader(http.StatusBadGateway)
+				_, _ = w.Write([]byte("upstream down"))
+				return
+			}
+			writeJSON(w, map[string]any{"token": "derived-" + r.Header.Get("Authorization")})
+		}
+	}))
+	defer srv.Close()
+
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	cfg := config.CustomOAuth2Config{
+		Name:        "dcr-svc",
+		TokenURL:    srv.URL + "/token",
+		DefaultFlow: "client_credentials",
+		DynamicClientRegistration: &config.DynamicClientRegistrationConfig{
+			RegistrationEndpoint: srv.URL + "/register",
+		},
+	}
+
+	// Process 1: Login registers DCR client and caches access + refresh token.
+	h1, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	_, err = h1.Login(ctx, auth.LoginOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), regCalls.Load())
+	assert.Equal(t, int32(1), tokenCalls.Load())
+
+	// Process 2: Fresh Handler sharing secretStore hits cached token without re-registering or re-minting.
+	h2, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	tokCached, err := h2.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "dcr-access-1", tokCached.AccessToken)
+	assert.Equal(t, int32(1), tokenCalls.Load(), "fresh process must hit cached token using persisted DCR client_id")
+
+	// Process 3: Demand MinValidFor > 1h so fresh Handler exercises refresh_token using persisted DCR credentials.
+	h3, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	tokRefreshed, err := h3.GetToken(ctx, auth.TokenOptions{MinValidFor: 2 * time.Hour})
+	require.NoError(t, err)
+	assert.Equal(t, "dcr-access-refreshed", tokRefreshed.AccessToken)
+	assert.Equal(t, int32(1), refreshCalls.Load())
+
+	// Revoked refresh token fails closed instead of falling back to headless minting.
+	failRefresh.Store(true)
+	_, err = h3.GetToken(ctx, auth.TokenOptions{MinValidFor: 2 * time.Hour})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid_grant")
+
+	// Logout disables headless fallback across subprocess restarts until next Login.
+	require.NoError(t, h3.Logout(ctx))
+	h4, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	stAfterLogout, err := h4.Status(ctx)
+	require.NoError(t, err)
+	assert.False(t, stAfterLogout.Authenticated)
+	_, err = h4.GetToken(ctx, auth.TokenOptions{})
+	require.ErrorIs(t, err, auth.ErrNotAuthenticated)
+
+	// Hybrid PAT + OAuth handler still validates tokenURL even when defaultFlow is pat.
+	hybridBad := config.CustomOAuth2Config{
+		Name:         "hybrid-missing-token-url",
+		AuthorizeURL: "https://idp.example.com/authorize",
+		ClientID:     "cid",
+		Token:        "secret://pat-tok",
+		DefaultFlow:  "pat",
+	}
+	require.ErrorContains(t, ValidateConfig(hybridBad), "tokenURL is required")
+
+	// TokenExchange fails closed on refresh failure (never leaks raw primary OAuth token).
+	failRefresh.Store(false)
+	failExchange.Store(true)
+	cfgEx := cfg
+	cfgEx.Name = "dcr-exchange"
+	cfgEx.TokenExchange = &config.TokenExchangeConfig{URL: srv.URL + "/exchange", TokenJSONPath: "token"}
+	hEx, err := New(cfgEx, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	_ = store.Set(ctx, secretKeyPrefix+"dcr-exchange."+secretKeyRefreshSuffix, []byte("dcr-refresh-1"))
+	_ = store.Set(ctx, secretKeyPrefix+"dcr-exchange."+dynamicClientSecretKey, store.Data[secretKeyPrefix+"dcr-svc."+dynamicClientSecretKey])
+	_, err = hEx.GetToken(ctx, auth.TokenOptions{ForceRefresh: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token_exchange")
+}
+
+func TestHandler_Status_ZeroExpiryGuards(t *testing.T) {
+	t.Parallel()
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+
+	// Non-PAT metadata with zero ExpiresAt must be treated as expired, not non-expiring.
+	metaNonPAT, _ := json.Marshal(auth.HandlerMetadata{
+		Claims:        &auth.Claims{Username: "u"},
+		ExpiresAt:     time.Time{},
+		LastLoginFlow: auth.FlowInteractive,
+	})
+	require.NoError(t, store.Set(ctx, secretKeyPrefix+"zero-nonpat."+secretKeyMetadataSuffix, metaNonPAT))
+	hNonPAT, err := New(config.CustomOAuth2Config{
+		Name:         "zero-nonpat",
+		AuthorizeURL: "https://idp.example.com/authorize",
+		TokenURL:     "https://idp.example.com/token",
+		ClientID:     "cid",
+	}, WithSecretStore(store), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	st, err := hNonPAT.Status(ctx)
+	require.NoError(t, err)
+	assert.False(t, st.Authenticated)
+	assert.Equal(t, "session expired", st.Reason)
+
+	// Stored PAT metadata with missing pat_token secret must not report Authenticated when no fallback exists.
+	metaPAT, _ := json.Marshal(auth.HandlerMetadata{
+		Claims:        &auth.Claims{Username: "bot"},
+		ExpiresAt:     time.Time{},
+		LastLoginFlow: auth.FlowPAT,
+	})
+	require.NoError(t, store.Set(ctx, secretKeyPrefix+"missing-pat."+secretKeyMetadataSuffix, metaPAT))
+	hMissingPAT, err := New(config.CustomOAuth2Config{
+		Name:        "missing-pat",
+		Token:       "env://UNSET_PAT_VAR_FOR_TEST_230",
+		DefaultFlow: "pat",
+	}, WithSecretStore(store), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+	stPAT, err := hMissingPAT.Status(ctx)
+	require.NoError(t, err)
+	assert.False(t, stPAT.Authenticated)
+}
+
+func BenchmarkHandler_WorkloadIdentity_GetToken_Cached(b *testing.B) {
+	dir := b.TempDir()
+	jwtFile := filepath.Join(dir, "token")
+	_ = os.WriteFile(jwtFile, []byte("bench-jwt"), 0o600)
+
+	srvWIF := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, tokenResponse{AccessToken: "wif-tok", TokenType: "Bearer", ExpiresIn: 3600})
+	}))
+	defer srvWIF.Close()
+
+	store := secrets.NewMockStore()
+	cfg := config.CustomOAuth2Config{
+		Name:               "bench-wif",
+		TokenURL:           srvWIF.URL + "/token",
+		ClientID:           "bc",
+		FederatedTokenFile: jwtFile,
+	}
+	h, _ := New(cfg, WithSecretStore(store), WithHTTPClient(srvWIF.Client()), WithLogger(logr.Discard()))
+	ctx := context.Background()
+	_, _ = h.GetToken(ctx, auth.TokenOptions{})
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = h.GetToken(ctx, auth.TokenOptions{})
+	}
+}
+
+func BenchmarkHandler_PAT_GetToken(b *testing.B) {
+	store := secrets.NewMockStore()
+	ctx := context.Background()
+	_ = store.Set(ctx, "bench-pat", []byte("static-pat-token"))
+	cfg := config.CustomOAuth2Config{
+		Name:        "bench-pat",
+		Token:       "secret://bench-pat",
+		Username:    "myorg+robot",
+		DefaultFlow: "pat",
+	}
+	h, _ := New(cfg, WithSecretStore(store), WithLogger(logr.Discard()))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = h.GetToken(ctx, auth.TokenOptions{})
+	}
 }

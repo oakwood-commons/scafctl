@@ -3,8 +3,9 @@
 
 // Package oauth2 implements a generic configurable OAuth2 auth handler.
 // Each CustomOAuth2Config registers as its own named auth.Handler supporting
-// authorization code + PKCE, device code (RFC 8628), and client credentials
-// (RFC 6749 §4.4).
+// authorization code + PKCE, device code (RFC 8628), client credentials
+// (RFC 6749 Section 4.4), workload identity federation (RFC 7523 & RFC 8693),
+// and pre-issued static/robot tokens (PAT).
 package oauth2
 
 import (
@@ -20,6 +21,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -31,21 +33,31 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
-	secretKeyPrefix         = "scafctl.auth.oauth2." //nolint:gosec // key prefix, not credential
-	secretKeyRefreshSuffix  = "refresh_token"        //nolint:gosec // key suffix, not credential
-	secretKeyMetadataSuffix = "metadata"             //nolint:gosec // key suffix, not credential
-	tokenCacheSuffix        = "token."               //nolint:gosec // key suffix, not credential
-	derivedTokenSuffix      = "derived_token"        //nolint:gosec // key suffix, not credential
-	derivedUsernameSuffix   = "derived_username"     //nolint:gosec // key suffix, not credential
-	defaultTimeout          = 5 * time.Minute
-	callbackShutdownTimeout = 5 * time.Second
-	defaultPollInterval     = 5
-	maxResponseBody         = 1 << 20
-	defaultTokenType        = "Bearer"
-	dynamicClientSecretKey  = "dynamic_client"
+	secretKeyPrefix             = "scafctl.auth.oauth2." //nolint:gosec // key prefix, not credential
+	secretKeyRefreshSuffix      = "refresh_token"        //nolint:gosec // key suffix, not credential
+	secretKeyMetadataSuffix     = "metadata"             //nolint:gosec // key suffix, not credential
+	secretKeyPATTokenSuffix     = "pat_token"            //nolint:gosec // key suffix, not credential
+	secretKeyPATUsernameSuffix  = "pat_username"         //nolint:gosec // key suffix, not credential
+	secretKeySessionStateSuffix = "session_state"        //nolint:gosec // key suffix, not credential
+	sessionStateLoggedOut       = "logged_out"
+	sessionStateLoginFailed     = "login_failed"
+	tokenCacheSuffix            = "token."           //nolint:gosec // key suffix, not credential
+	derivedTokenSuffix          = "derived_token"    //nolint:gosec // key suffix, not credential
+	derivedUsernameSuffix       = "derived_username" //nolint:gosec // key suffix, not credential
+	defaultTimeout              = 5 * time.Minute
+	callbackShutdownTimeout     = 5 * time.Second
+	defaultPollInterval         = 5
+	defaultImplicitExpiresIn    = 3600
+	maxResponseBody             = 1 << 20
+	defaultTokenType            = "Bearer"
+	dynamicClientSecretKey      = "dynamic_client"
+	jwtBearerAssertionType      = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" //nolint:gosec // RFC 7523 URI, not credential
+	tokenExchangeGrantType      = "urn:ietf:params:oauth:grant-type:token-exchange"        //nolint:gosec // RFC 8693 URI, not credential
+	deviceCodeGrantType         = "urn:ietf:params:oauth:grant-type:device_code"           //nolint:gosec // RFC 8628 URI, not credential
 )
 
 type dynamicClient struct {
@@ -88,24 +100,44 @@ func dcrFingerprint(dcr *config.DynamicClientRegistrationConfig, tokenURL string
 	return hex.EncodeToString(sum[:])
 }
 
+type basicAuthCredentials struct {
+	username string
+	password string
+}
+
 // Handler implements auth.Handler for generic configurable OAuth2 services.
 type Handler struct {
-	cfg             config.CustomOAuth2Config
-	secretStore     secrets.Store
-	secretErr       error
-	tokenCache      *auth.TokenCache
-	httpClient      *http.Client
-	logger          logr.Logger
-	secretKeyPrefix string
-	binaryName      string
-	pageRenderer    authpage.Renderer
-	openBrowser     func(context.Context, string) error
+	cfg                   config.CustomOAuth2Config
+	secretStore           secrets.Store
+	secretErr             error
+	secretStoreConfigured bool
+	tokenCache            *auth.TokenCache
+	httpClient            *http.Client
+	logger                logr.Logger
+	secretKeyPrefix       string
+	binaryName            string
+	pageRenderer          authpage.Renderer
+	openBrowser           func(context.Context, string) error
+
+	mu            sync.RWMutex
+	dcrClients    map[string]*dynamicClient
+	activeFlows   map[string]auth.Flow
+	lastFlow      auth.Flow
+	patUsernames  map[string]string
+	lastPATUser   string
+	sessionStates map[string]string
+	memCache      map[string]*auth.Token
+	memDerived    map[string]*auth.Token
+	sfGroup       singleflight.Group
 }
 
 // Compile-time interface assertions.
 var (
-	_ auth.TokenLister = (*Handler)(nil)
-	_ auth.TokenPurger = (*Handler)(nil)
+	_ auth.Handler      = (*Handler)(nil)
+	_ auth.TokenLister  = (*Handler)(nil)
+	_ auth.TokenPurger  = (*Handler)(nil)
+	_ auth.FlowDetector = (*Handler)(nil)
+	_ auth.FlowReporter = (*Handler)(nil)
 )
 
 // Option configures the Handler.
@@ -113,7 +145,22 @@ type Option func(*Handler)
 
 // WithSecretStore sets a custom secrets store.
 func WithSecretStore(store secrets.Store) Option {
-	return func(h *Handler) { h.secretStore = store }
+	return func(h *Handler) {
+		h.secretStore = store
+		h.secretStoreConfigured = true
+	}
+}
+
+// WithSecretStoreError configures the handler in keyless in-memory mode with
+// the given store-initialization error (for example when requireSecureKeyring
+// is true and no OS keyring is available), preventing New from falling back to
+// default file-backed secrets.New().
+func WithSecretStoreError(err error) Option {
+	return func(h *Handler) {
+		h.secretStore = nil
+		h.secretErr = err
+		h.secretStoreConfigured = true
+	}
 }
 
 // WithHTTPClient sets a custom HTTP client.
@@ -135,7 +182,8 @@ func WithSecretKeyPrefix(prefix string) Option {
 }
 
 // WithBinaryName sets the CLI binary name passed to the authentication callback
-// page renderer. When empty, defaults to settings.CliBinaryName ("scafctl").
+// page renderer and internal-secret prefix checks. When empty, defaults to
+// settings.CliBinaryName ("scafctl").
 func WithBinaryName(name string) Option {
 	return func(h *Handler) {
 		if strings.TrimSpace(name) == "" {
@@ -165,12 +213,18 @@ func New(cfg config.CustomOAuth2Config, opts ...Option) (*Handler, error) {
 		logger:          logr.Discard(),
 		secretKeyPrefix: secretKeyPrefix,
 		binaryName:      settings.CliBinaryName,
+		dcrClients:      make(map[string]*dynamicClient),
+		activeFlows:     make(map[string]auth.Flow),
+		patUsernames:    make(map[string]string),
+		sessionStates:   make(map[string]string),
+		memCache:        make(map[string]*auth.Token),
+		memDerived:      make(map[string]*auth.Token),
 	}
 	for _, opt := range opts {
 		opt(h)
 	}
 
-	if h.secretStore == nil {
+	if !h.secretStoreConfigured && h.secretStore == nil {
 		store, err := secrets.New()
 		if err != nil {
 			h.secretErr = fmt.Errorf("failed to initialize secrets store: %w", err)
@@ -188,6 +242,7 @@ func New(cfg config.CustomOAuth2Config, opts ...Option) (*Handler, error) {
 	return h, nil
 }
 
+// Name returns the unique identifier for this auth handler.
 func (h *Handler) Name() string { return h.cfg.Name }
 
 // DisplayName returns the human-readable name.
@@ -199,10 +254,57 @@ func (h *Handler) DisplayName() string {
 }
 
 // RegistryUsername returns the configured OCI registry username convention for
-// this handler (e.g. "$oauthtoken" for Quay.io). An empty string means the
-// caller should use the default convention. This implements the optional
+// this handler (e.g. "$oauthtoken" for Quay.io, or the resolved robot username
+// when FlowPAT is active and Username is set). An empty string means the caller
+// should use the default convention. This implements the optional
 // catalog.RegistryUsernameProvider interface consumed by BridgeAuthToRegistry.
-func (h *Handler) RegistryUsername() string { return h.cfg.RegistryUsername }
+func (h *Handler) RegistryUsername() string {
+	h.mu.RLock()
+	flow := h.lastFlow
+	patUser := h.lastPATUser
+	regUser := h.cfg.RegistryUsername
+	cfgUser := h.cfg.Username
+	h.mu.RUnlock()
+
+	if flow == "" {
+		flow = h.inferInitialFlow()
+	}
+	if flow == auth.FlowPAT && cfgUser != "" {
+		if patUser != "" {
+			return patUser
+		}
+		if resolved, err := h.resolvePATUsername(context.Background()); err == nil && resolved != "" {
+			return resolved
+		}
+	}
+	return regUser
+}
+
+// ActiveFlow returns the authentication flow currently in use, implementing
+// auth.FlowReporter.
+func (h *Handler) ActiveFlow(ctx context.Context) auth.Flow {
+	ctx = h.resolveContextProfile(ctx)
+	profile := auth.ProfileFromContext(ctx)
+
+	h.mu.RLock()
+	var flow auth.Flow
+	if h.activeFlows != nil {
+		flow = h.activeFlows[profile]
+	}
+	h.mu.RUnlock()
+	if flow != "" {
+		return flow
+	}
+	if h.secretStore != nil {
+		if meta, err := h.loadMetadata(ctx); err == nil && meta != nil && meta.LastLoginFlow != "" {
+			return meta.LastLoginFlow
+		}
+	}
+	if st, err := h.Status(ctx); err == nil && st.Authenticated && st.Flow != "" {
+		return st.Flow
+	}
+	return ""
+}
 
 // SupportedFlows returns the flows this handler supports based on config.
 func (h *Handler) SupportedFlows() []auth.Flow {
@@ -213,10 +315,129 @@ func (h *Handler) SupportedFlows() []auth.Flow {
 	if h.cfg.DeviceAuthURL != "" {
 		flows = append(flows, auth.FlowDeviceCode)
 	}
-	if h.cfg.ClientSecret != "" || h.dcrEnabled() {
+	if h.hasWorkloadIdentityConfig() {
+		flows = append(flows, auth.FlowWorkloadIdentity)
+	}
+	if h.hasClientCredentialsConfig() {
 		flows = append(flows, auth.FlowClientCredentials)
 	}
+	if h.cfg.Token != "" {
+		flows = append(flows, auth.FlowPAT)
+	}
 	return flows
+}
+
+// DetectAvailableFlows reports which configured non-interactive flows have
+// resolvable credentials in the current environment, enabling automatic flow
+// selection during 'auth login <name>' without '--flow'.
+func (h *Handler) DetectAvailableFlows(ctx context.Context) ([]auth.FlowAvailability, error) {
+	var out []auth.FlowAvailability
+	for _, flow := range h.nonInteractiveFlowOrder() {
+		switch flow { //nolint:exhaustive // only headless non-interactive flows are probed
+		case auth.FlowWorkloadIdentity:
+			if !h.hasWorkloadIdentityConfig() {
+				continue
+			}
+			_, err := h.resolveFederatedToken(ctx)
+			if err == nil {
+				out = append(out, auth.FlowAvailability{
+					Flow:      auth.FlowWorkloadIdentity,
+					Available: true,
+					Reason:    "federated workload identity token is resolvable",
+				})
+			} else {
+				out = append(out, auth.FlowAvailability{
+					Flow:      auth.FlowWorkloadIdentity,
+					Available: false,
+					Reason:    err.Error(),
+				})
+			}
+		case auth.FlowClientCredentials:
+			if !h.hasClientCredentialsConfig() {
+				continue
+			}
+			avail, reason := h.detectClientCredentialsAvailability(ctx)
+			out = append(out, auth.FlowAvailability{
+				Flow:      auth.FlowClientCredentials,
+				Available: avail,
+				Reason:    reason,
+			})
+		case auth.FlowPAT:
+			if h.cfg.Token == "" {
+				continue
+			}
+			_, err := h.resolvePATToken(ctx)
+			if err == nil {
+				out = append(out, auth.FlowAvailability{
+					Flow:      auth.FlowPAT,
+					Available: true,
+					Reason:    "static token credential is resolvable",
+				})
+			} else {
+				out = append(out, auth.FlowAvailability{
+					Flow:      auth.FlowPAT,
+					Available: false,
+					Reason:    err.Error(),
+				})
+			}
+		}
+	}
+	if h.cfg.AuthorizeURL != "" {
+		out = append(out, auth.FlowAvailability{
+			Flow:      auth.FlowInteractive,
+			Available: false,
+			Reason:    "interactive browser flow requires user interaction",
+		})
+	}
+	if h.cfg.DeviceAuthURL != "" {
+		out = append(out, auth.FlowAvailability{
+			Flow:      auth.FlowDeviceCode,
+			Available: false,
+			Reason:    "device code flow requires user interaction",
+		})
+	}
+	return out, nil
+}
+
+func (h *Handler) detectClientCredentialsAvailability(ctx context.Context) (bool, string) {
+	if h.cfg.ClientSecret != "" {
+		// When authorizeURL is also configured and defaultFlow is explicitly
+		// interactive or device_code, clientSecret may belong to confidential
+		// authorization-code exchange rather than headless client_credentials.
+		if h.cfg.DefaultFlow == "interactive" || h.cfg.DefaultFlow == "device_code" {
+			return false, fmt.Sprintf("defaultFlow is %s", h.cfg.DefaultFlow)
+		}
+		secret, err := config.ResolveCredentialValue(ctx, h.cfg.ClientSecret, h.secretStore, h.reservedBinaryNames()...)
+		if err != nil {
+			return false, err.Error()
+		}
+		if secret != "" {
+			return true, "clientSecret credential is resolvable"
+		}
+		return false, "clientSecret resolved to empty value"
+	}
+	if h.dcrEnabled() {
+		// Only auto-select DCR for client_credentials when explicitly configured
+		// as defaultFlow or when no interactive endpoints exist.
+		if h.cfg.DefaultFlow != "client_credentials" && (h.cfg.AuthorizeURL != "" || h.cfg.DeviceAuthURL != "") {
+			return false, "dynamic client registration shares interactive endpoints"
+		}
+		if h.cfg.DynamicClientRegistration.InitialAccessToken != "" {
+			if _, err := config.ResolveCredentialValue(ctx, h.cfg.DynamicClientRegistration.InitialAccessToken, h.secretStore, h.reservedBinaryNames()...); err != nil {
+				return false, err.Error()
+			}
+		}
+		return true, "dynamic client registration is configured"
+	}
+	return false, "clientSecret not configured"
+}
+
+func (h *Handler) hasWorkloadIdentityConfig() bool {
+	return h.cfg.FederatedToken != "" || h.cfg.FederatedTokenFile != ""
+}
+
+func (h *Handler) hasClientCredentialsConfig() bool {
+	return h.cfg.ClientSecret != "" || h.dcrEnabled()
 }
 
 // dcrEnabled reports whether this handler has RFC 7591 Dynamic Client
@@ -235,8 +456,18 @@ func (h *Handler) Capabilities() []auth.Capability {
 	}
 }
 
-func (h *Handler) storeDynamicClient(ctx context.Context, clientID, clientSecret string, expiresAt int64, fingerprint string) error {
-	client := &dynamicClient{ClientID: clientID, ClientSecret: clientSecret, ClientSecretExpiresAt: expiresAt, Fingerprint: fingerprint}
+func (h *Handler) storeDynamicClient(ctx context.Context, client *dynamicClient) error {
+	profile := auth.ProfileFromContext(ctx)
+	h.mu.Lock()
+	if h.dcrClients == nil {
+		h.dcrClients = make(map[string]*dynamicClient)
+	}
+	h.dcrClients[profile] = client
+	h.mu.Unlock()
+
+	if h.secretStore == nil {
+		return nil
+	}
 	data, err := json.Marshal(client) //nolint:gosec // marshaling to store in the secret store, not logging
 	if err != nil {
 		return fmt.Errorf("marshal dynamic client: %w", err)
@@ -245,6 +476,19 @@ func (h *Handler) storeDynamicClient(ctx context.Context, clientID, clientSecret
 }
 
 func (h *Handler) loadDynamicClient(ctx context.Context) (*dynamicClient, error) {
+	profile := auth.ProfileFromContext(ctx)
+	if h.secretStore == nil {
+		h.mu.RLock()
+		var c *dynamicClient
+		if h.dcrClients != nil {
+			c = h.dcrClients[profile]
+		}
+		h.mu.RUnlock()
+		if c == nil {
+			return nil, secrets.ErrNotFound
+		}
+		return c, nil
+	}
 	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, dynamicClientSecretKey))
 	if err != nil {
 		return nil, err
@@ -256,17 +500,47 @@ func (h *Handler) loadDynamicClient(ctx context.Context) (*dynamicClient, error)
 	return &client, nil
 }
 
+// ensureLoadedDynamicClient populates the in-memory profile DCR client from
+// secretStore when Dynamic Client Registration is configured so new CLI
+// processes reuse the registered client_id/client_secret for token cache
+// lookups and refresh_token grants.
+func (h *Handler) ensureLoadedDynamicClient(ctx context.Context) {
+	if !h.dcrEnabled() {
+		return
+	}
+	profile := auth.ProfileFromContext(ctx)
+	fingerprint := dcrFingerprint(h.cfg.DynamicClientRegistration, h.cfg.TokenURL)
+
+	h.mu.RLock()
+	var existing *dynamicClient
+	if h.dcrClients != nil {
+		existing = h.dcrClients[profile]
+	}
+	h.mu.RUnlock()
+	if existing != nil && !existing.expired() && existing.Fingerprint == fingerprint {
+		return
+	}
+
+	cachedClient, err := h.loadDynamicClient(ctx)
+	if err == nil && cachedClient != nil && !cachedClient.expired() && cachedClient.Fingerprint == fingerprint {
+		h.mu.Lock()
+		if h.dcrClients == nil {
+			h.dcrClients = make(map[string]*dynamicClient)
+		}
+		h.dcrClients[profile] = cachedClient
+		h.mu.Unlock()
+	}
+}
+
 // dynamicClientRegistration performs RFC 7591 Dynamic Client Registration if
-// configured. On success it mutates h.cfg in place with the (cached or newly
-// registered) client credentials, so both this call's caller and any later
-// calls on the same *Handler (e.g. GetToken, refresh) observe the same
-// client ID/secret and cache fingerprint. It must be called after
-// ensureSecrets, since it dereferences h.secretStore.
+// configured. On success it caches the registered client credentials in
+// h.dcrClients (and in secretStore when available) without mutating h.cfg.
 func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
 	dcr := h.cfg.DynamicClientRegistration
 	if dcr == nil || dcr.RegistrationEndpoint == "" {
 		return nil
 	}
+	profile := auth.ProfileFromContext(ctx)
 	fingerprint := dcrFingerprint(dcr, h.cfg.TokenURL)
 
 	// Check if we already have a dynamic client registered and cached for
@@ -274,8 +548,12 @@ func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
 	cachedClient, err := h.loadDynamicClient(ctx)
 	if err == nil && cachedClient != nil && !cachedClient.expired() && cachedClient.Fingerprint == fingerprint {
 		h.logger.V(1).Info("using cached dynamic client")
-		h.cfg.ClientID = cachedClient.ClientID
-		h.cfg.ClientSecret = cachedClient.ClientSecret
+		h.mu.Lock()
+		if h.dcrClients == nil {
+			h.dcrClients = make(map[string]*dynamicClient)
+		}
+		h.dcrClients[profile] = cachedClient
+		h.mu.Unlock()
 		return nil
 	}
 	if err != nil && !errors.Is(err, secrets.ErrNotFound) {
@@ -291,6 +569,15 @@ func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
 	}
 
 	h.logger.V(1).Info("performing dynamic client registration")
+
+	var initialToken string
+	if dcr.InitialAccessToken != "" {
+		var resolveErr error
+		initialToken, resolveErr = config.ResolveCredentialValue(ctx, dcr.InitialAccessToken, h.secretStore, h.reservedBinaryNames()...)
+		if resolveErr != nil {
+			return auth.NewError(h.cfg.Name, "dcr_initial_access_token", resolveErr)
+		}
+	}
 
 	// Perform dynamic client registration. RFC 7591 requires the request
 	// body to be a JSON object; marshal a nil metadata map as "{}" rather
@@ -310,11 +597,11 @@ func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if dcr.InitialAccessToken != "" {
-		req.Header.Set("Authorization", "Bearer "+dcr.InitialAccessToken)
+	if initialToken != "" {
+		req.Header.Set("Authorization", "Bearer "+initialToken)
 	}
 
-	resp, err := h.httpClient.Do(req)
+	resp, err := h.httpClient.Do(req) //nolint:gosec // URL from trusted admin config
 	if err != nil {
 		return auth.NewError(h.cfg.Name, "dcr_http", fmt.Errorf("registration request failed: %w", err))
 	}
@@ -342,22 +629,25 @@ func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
 		return auth.NewError(h.cfg.Name, "dcr_missing_field", fmt.Errorf("registration response missing client_id"))
 	}
 
-	// Store the new client credentials.
-	if err := h.storeDynamicClient(ctx, regResp.ClientID, regResp.ClientSecret, regResp.ClientSecretExpiresAt, fingerprint); err != nil {
+	newClient := &dynamicClient{
+		ClientID:              regResp.ClientID,
+		ClientSecret:          regResp.ClientSecret,
+		ClientSecretExpiresAt: regResp.ClientSecretExpiresAt,
+		Fingerprint:           fingerprint,
+	}
+	if err := h.storeDynamicClient(ctx, newClient); err != nil {
 		return auth.NewError(h.cfg.Name, "dcr_store", err)
 	}
 
-	// Apply the new client credentials to this handler.
-	h.cfg.ClientID = regResp.ClientID
-	h.cfg.ClientSecret = regResp.ClientSecret
 	return nil
 }
 
-// Login performs authentication using the configured OAuth2 flow.
+// Login performs authentication using the configured OAuth2 or credential flow.
 func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
 	if err := h.ensureSecrets(); err != nil {
 		return nil, err
 	}
+	ctx = h.resolveContextProfile(ctx)
 
 	resolvedBrowser, err := auth.ResolveBrowserPreference(ctx, opts.Browser)
 	if err != nil {
@@ -372,18 +662,40 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if err := h.dynamicClientRegistration(ctx); err != nil {
-		return nil, err
-	}
-
 	flow := opts.Flow
 	if flow == "" {
-		flow = h.resolveDefaultFlow()
+		if h.cfg.DefaultFlow == "" {
+			if avail, err := h.DetectAvailableFlows(ctx); err == nil {
+				for _, fa := range avail {
+					if fa.Available {
+						flow = fa.Flow
+						break
+					}
+				}
+			}
+		}
+		if flow == "" {
+			flow = h.resolveDefaultFlow()
+		}
 	}
 
 	scopes := opts.Scopes
 	if len(scopes) == 0 {
 		scopes = h.cfg.Scopes
+	}
+
+	if flow == auth.FlowPAT {
+		res, patErr := h.patLogin(ctx, scopes)
+		if patErr != nil {
+			h.recordFailedLogin(ctx)
+			return nil, patErr
+		}
+		return res, nil
+	}
+
+	if err := h.dynamicClientRegistration(ctx); err != nil {
+		h.recordFailedLogin(ctx)
+		return nil, err
 	}
 
 	var tokenResp *tokenResponse
@@ -412,7 +724,7 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		cbServer = nil
 	}
 
-	switch flow { //nolint:exhaustive // only generic OAuth2 flows are supported
+	switch flow { //nolint:exhaustive // only generic OAuth2 flows + WIF/PAT are supported
 	case auth.FlowInteractive:
 		callbackPort := opts.CallbackPort
 		if callbackPort == 0 {
@@ -423,21 +735,25 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		tokenResp, loginErr = h.deviceCodeLogin(ctx, opts, scopes)
 	case auth.FlowClientCredentials:
 		tokenResp, loginErr = h.clientCredentialsLogin(ctx, scopes)
+	case auth.FlowWorkloadIdentity:
+		tokenResp, loginErr = h.workloadIdentityLogin(ctx, scopes)
 	default:
 		return nil, auth.NewError(h.cfg.Name, "login",
 			fmt.Errorf("%w: %s (supported: %v)", auth.ErrFlowNotSupported, flow, h.SupportedFlows()))
 	}
 	if loginErr != nil {
 		settleCallback(false)
+		h.recordFailedLogin(ctx)
 		return nil, loginErr
 	}
 
 	// Token exchange (optional post-flow pipeline)
-	expiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	expiresAt := h.tokenExpiresAt(tokenResp)
 	if h.cfg.TokenExchange != nil {
 		derived, exchangeErr := h.executeTokenExchange(ctx, tokenResp.AccessToken)
 		if exchangeErr != nil {
 			settleCallback(false)
+			h.recordFailedLogin(ctx)
 			return nil, auth.NewError(h.cfg.Name, "token_exchange", exchangeErr)
 		}
 		// Use the primary token's expiry for the derived token since the exchange
@@ -457,19 +773,104 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		}
 	}
 	if claims == nil {
-		claims = &auth.Claims{}
+		claims = h.fallbackClaims(ctx, tokenResp.AccessToken, flow)
 	}
 
 	if storeErr := h.storeTokens(ctx, tokenResp, claims, expiresAt, flow, scopes); storeErr != nil {
 		h.logger.V(1).Info("failed to store tokens", "error", storeErr)
 	}
+	h.clearSessionState(ctx)
+	h.setActiveFlow(ctx, flow)
 
 	settleCallback(true)
 	return &auth.Result{Claims: claims, ExpiresAt: expiresAt}, nil
 }
 
-// Logout clears all stored tokens for this handler.
+// patLogin handles explicit 'auth login <name> --flow pat'. It resolves the
+// static token via SecretRef, skips TokenExchange, strictly validates against
+// VerifyURL when configured, and stores the session under pat_token without
+// placing a zero-expiry entry into TokenCache.
+func (h *Handler) patLogin(ctx context.Context, scopes []string) (*auth.Result, error) {
+	patToken, err := h.resolvePATToken(ctx)
+	if err != nil {
+		return nil, auth.NewError(h.cfg.Name, "login", err)
+	}
+
+	username, err := h.resolvePATUsername(ctx)
+	if err != nil {
+		return nil, auth.NewError(h.cfg.Name, "login", err)
+	}
+
+	var claims *auth.Claims
+	if h.cfg.VerifyURL != "" {
+		var verifyErr error
+		claims, verifyErr = h.verifyToken(ctx, patToken)
+		if verifyErr != nil {
+			return nil, auth.NewError(h.cfg.Name, "verify_token", verifyErr)
+		}
+	}
+	if claims == nil {
+		claims = &auth.Claims{}
+	}
+	if claims.Username == "" && username != "" {
+		claims.Username = username
+	}
+
+	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix), []byte(patToken)); err != nil {
+		return nil, auth.NewError(h.cfg.Name, "store_pat", fmt.Errorf("store pat token: %w", err))
+	}
+	if username != "" {
+		if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATUsernameSuffix), []byte(username)); err != nil {
+			h.logger.V(1).Info("failed to persist pat username", "error", err)
+		}
+	}
+
+	meta := &auth.HandlerMetadata{
+		Claims:        claims,
+		ExpiresAt:     time.Time{},
+		Scopes:        scopes,
+		LastLoginFlow: auth.FlowPAT,
+	}
+	metaBytes, err := json.Marshal(meta)
+	if err != nil {
+		return nil, auth.NewError(h.cfg.Name, "store_metadata", fmt.Errorf("marshal metadata: %w", err))
+	}
+	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyMetadataSuffix), metaBytes); err != nil {
+		return nil, auth.NewError(h.cfg.Name, "store_metadata", fmt.Errorf("store metadata: %w", err))
+	}
+
+	h.clearSessionState(ctx)
+	h.setActivePAT(ctx, username)
+	return &auth.Result{Claims: claims, ExpiresAt: time.Time{}}, nil
+}
+
+// Logout clears all stored tokens for this handler and records an explicit
+// logged-out session state for the active profile so ambient config credentials
+// are not silently re-activated until the next Login.
 func (h *Handler) Logout(ctx context.Context) error {
+	ctx = h.resolveContextProfile(ctx)
+	profile := auth.ProfileFromContext(ctx)
+
+	h.mu.Lock()
+	if h.activeFlows != nil {
+		delete(h.activeFlows, profile)
+	}
+	h.lastFlow = ""
+	if h.patUsernames != nil {
+		delete(h.patUsernames, profile)
+	}
+	h.lastPATUser = ""
+	if h.dcrClients != nil {
+		delete(h.dcrClients, profile)
+	}
+	clear(h.memCache)
+	clear(h.memDerived)
+	if h.sessionStates == nil {
+		h.sessionStates = make(map[string]string)
+	}
+	h.sessionStates[profile] = sessionStateLoggedOut
+	h.mu.Unlock()
+
 	if err := h.ensureSecrets(); err != nil {
 		return err
 	}
@@ -480,10 +881,20 @@ func (h *Handler) Logout(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("clear token cache: %w", err))
 		}
 	}
-	for _, suffix := range []string{secretKeyRefreshSuffix, secretKeyMetadataSuffix, derivedTokenSuffix, derivedUsernameSuffix} {
+	for _, suffix := range []string{
+		secretKeyRefreshSuffix,
+		secretKeyMetadataSuffix,
+		derivedTokenSuffix,
+		derivedUsernameSuffix,
+		secretKeyPATTokenSuffix,
+		secretKeyPATUsernameSuffix,
+	} {
 		if err := h.secretStore.Delete(ctx, h.profileSecretKey(ctx, suffix)); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeySessionStateSuffix), []byte(sessionStateLoggedOut)); err != nil {
+		errs = append(errs, err)
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("logout %s: %w", h.cfg.Name, errs[0])
@@ -548,106 +959,498 @@ func (h *Handler) PurgeExpiredTokens(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// Status returns the current authentication state.
+// Status returns the current authentication state, falling back automatically
+// to configured headless credentials (workload_identity -> client_credentials
+// -> pat) when no active login session is stored or when the secrets store is
+// unavailable in keyless CI containers.
 func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
-	// Resolve the active profile when none is explicitly set in context.
-	// Same as GetToken: ensures callers like MCP auth_status see the active profile.
-	if auth.ProfileFromContext(ctx) == "" && !auth.IsProfileResolved(ctx) {
-		if profile := auth.ResolveActiveProfile(ctx, h.cfg.Name); profile != "" {
-			ctx = auth.WithProfile(ctx, profile)
+	ctx = h.resolveContextProfile(ctx)
+	h.ensureLoadedDynamicClient(ctx)
+
+	var expiredMeta *auth.HandlerMetadata
+	var corruptMeta bool
+
+	if h.secretStore != nil {
+		meta, err := h.loadMetadata(ctx)
+		switch {
+		case err == nil && meta != nil:
+			// Stored PAT sessions use zero ExpiresAt (non-expiring) and must still
+			// have their persisted pat_token present in secretStore.
+			switch {
+			case meta.LastLoginFlow == auth.FlowPAT:
+				patData, patErr := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix))
+				if patErr == nil && len(patData) > 0 && (meta.ExpiresAt.IsZero() || !meta.ExpiresAt.Before(time.Now())) {
+					h.restoreStoredPATUsername(ctx, meta)
+					return &auth.Status{
+						Authenticated: true,
+						Claims:        meta.Claims,
+						ExpiresAt:     meta.ExpiresAt,
+						Scopes:        meta.Scopes,
+						Flow:          meta.LastLoginFlow,
+					}, nil
+				}
+				if !meta.ExpiresAt.IsZero() && meta.ExpiresAt.Before(time.Now()) {
+					expiredMeta = meta
+				}
+			case !meta.ExpiresAt.IsZero() && !meta.ExpiresAt.Before(time.Now()):
+				if meta.LastLoginFlow != "" {
+					h.setActiveFlow(ctx, meta.LastLoginFlow)
+				}
+				return &auth.Status{
+					Authenticated: true,
+					Claims:        meta.Claims,
+					ExpiresAt:     meta.ExpiresAt,
+					Scopes:        meta.Scopes,
+					Flow:          meta.LastLoginFlow,
+				}, nil
+			default:
+				expiredMeta = meta
+			}
+		case err != nil && !errors.Is(err, secrets.ErrNotFound):
+			corruptMeta = true
 		}
 	}
 
-	if err := h.ensureSecrets(); err != nil {
-		return &auth.Status{Authenticated: false, Reason: "secrets store unavailable"}, nil //nolint:nilerr // graceful degradation
+	if corruptMeta {
+		return &auth.Status{Authenticated: false, Reason: "metadata corrupt or unreadable"}, nil
 	}
 
-	meta, err := h.loadMetadata(ctx)
-	if err != nil {
-		if errors.Is(err, secrets.ErrNotFound) {
-			return &auth.Status{Authenticated: false, Reason: "not logged in"}, nil
-		}
-		return &auth.Status{Authenticated: false, Reason: "metadata corrupt or unreadable"}, nil //nolint:nilerr // metadata error is not a caller error
+	// Do not advertise ambient headless authentication immediately after an
+	// explicit Logout or a failed Login attempt on this profile.
+	if state := h.getSessionState(ctx); state == sessionStateLoggedOut || state == sessionStateLoginFailed {
+		return &auth.Status{Authenticated: false, Reason: "not logged in"}, nil
 	}
-	if meta.ExpiresAt.Before(time.Now()) {
-		return &auth.Status{Authenticated: false, Reason: "session expired", Claims: meta.Claims}, nil
+
+	// Zero-ceremony headless credential detection (no network I/O).
+	if headlessStatus := h.headlessStatus(ctx); headlessStatus != nil {
+		return headlessStatus, nil
 	}
-	return &auth.Status{
-		Authenticated: true,
-		Claims:        meta.Claims,
-		ExpiresAt:     meta.ExpiresAt,
-		Scopes:        meta.Scopes,
-	}, nil
+
+	if h.secretStore == nil {
+		return &auth.Status{Authenticated: false, Reason: "secrets store unavailable"}, nil
+	}
+	if expiredMeta != nil {
+		return &auth.Status{Authenticated: false, Reason: "session expired", Claims: expiredMeta.Claims}, nil
+	}
+	return &auth.Status{Authenticated: false, Reason: "not logged in"}, nil
 }
 
-// GetToken returns a valid access token, refreshing if necessary.
-// If tokenExchange is configured, returns the derived token.
-func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
-	// Resolve the active profile when none is explicitly set in context.
-	// This ensures provider-level auth (e.g. HTTP provider's authProvider input)
-	// respects --auth-profile, SCAFCTL_AUTH_PROFILE, and config-level activeProfile.
-	// Skip when IsProfileResolved is true -- this means the caller already resolved
-	// the profile (e.g. "auth token --profile built-in" normalizing to default).
-	if auth.ProfileFromContext(ctx) == "" && !auth.IsProfileResolved(ctx) {
-		if profile := auth.ResolveActiveProfile(ctx, h.cfg.Name); profile != "" {
-			ctx = auth.WithProfile(ctx, profile)
+func (h *Handler) headlessStatus(ctx context.Context) *auth.Status {
+	scope := strings.Join(h.cfg.Scopes, " ")
+	for _, flow := range h.nonInteractiveFlowOrder() {
+		switch flow { //nolint:exhaustive // only headless non-interactive flows are checked
+		case auth.FlowWorkloadIdentity:
+			if !h.hasWorkloadIdentityConfig() {
+				continue
+			}
+			jwt, err := h.resolveFederatedToken(ctx)
+			if err != nil || jwt == "" {
+				continue
+			}
+			clientID := h.effectiveClientID(ctx)
+			claims := &auth.Claims{ClientID: clientID}
+			if jwtClaims, parseErr := auth.ParseJWTClaims(jwt); parseErr == nil {
+				if jwtClaims.Subject != "" {
+					claims.Subject = jwtClaims.Subject
+				}
+				if jwtClaims.Issuer != "" {
+					claims.Issuer = jwtClaims.Issuer
+				}
+			}
+			if claims.DisplayIdentity() == "" && clientID != "" {
+				claims.Name = fmt.Sprintf("Workload Identity (%s)", clientID)
+			}
+			var tokenFile string
+			switch {
+			case h.cfg.FederatedTokenFile != "":
+				tokenFile = h.cfg.FederatedTokenFile
+			case h.cfg.FederatedToken.Scheme() == "file":
+				tokenFile = strings.TrimPrefix(string(h.cfg.FederatedToken), "file://")
+			}
+			var expiresAt time.Time
+			if cached := h.lookupCachedToken(ctx, auth.FlowWorkloadIdentity, scope, 0); cached != nil {
+				expiresAt = cached.ExpiresAt
+			}
+			h.setActiveFlow(ctx, auth.FlowWorkloadIdentity)
+			return &auth.Status{
+				Authenticated: true,
+				Flow:          auth.FlowWorkloadIdentity,
+				IdentityType:  auth.IdentityTypeWorkloadIdentity,
+				ClientID:      clientID,
+				TokenFile:     tokenFile,
+				Claims:        claims,
+				Scopes:        h.cfg.Scopes,
+				ExpiresAt:     expiresAt,
+			}
+
+		case auth.FlowClientCredentials:
+			if !h.hasClientCredentialsConfig() {
+				continue
+			}
+			avail, _ := h.detectClientCredentialsAvailability(ctx)
+			if !avail {
+				continue
+			}
+			clientID := h.effectiveClientID(ctx)
+			claims := &auth.Claims{ClientID: clientID}
+			if clientID != "" {
+				claims.Username = clientID
+			}
+			var expiresAt time.Time
+			if cached := h.lookupCachedToken(ctx, auth.FlowClientCredentials, scope, 0); cached != nil {
+				expiresAt = cached.ExpiresAt
+			}
+			h.setActiveFlow(ctx, auth.FlowClientCredentials)
+			return &auth.Status{
+				Authenticated: true,
+				Flow:          auth.FlowClientCredentials,
+				IdentityType:  auth.IdentityTypeServicePrincipal,
+				ClientID:      clientID,
+				Claims:        claims,
+				Scopes:        h.cfg.Scopes,
+				ExpiresAt:     expiresAt,
+			}
+
+		case auth.FlowPAT:
+			if h.cfg.Token == "" {
+				continue
+			}
+			tok, err := h.resolvePATToken(ctx)
+			if err != nil || tok == "" {
+				continue
+			}
+			username, uErr := h.resolvePATUsername(ctx)
+			if uErr != nil {
+				continue
+			}
+			h.setActivePAT(ctx, username)
+			claims := &auth.Claims{Username: username}
+			return &auth.Status{
+				Authenticated: true,
+				Flow:          auth.FlowPAT,
+				IdentityType:  auth.IdentityTypeUser,
+				Claims:        claims,
+				Scopes:        h.cfg.Scopes,
+			}
 		}
 	}
+	return nil
+}
 
-	if err := h.ensureSecrets(); err != nil {
+// GetToken returns a valid access token, refreshing or acquiring via configured
+// non-interactive pipeline credentials (workload_identity -> client_credentials
+// -> pat) when no interactive session is stored.
+// If tokenExchange is configured (on non-PAT flows), returns the derived token.
+func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	// Derived token takes precedence when exchange is configured
-	if h.cfg.TokenExchange != nil {
-		derived, err := h.loadDerivedToken(ctx)
-		if err == nil && derived != nil && derived.IsValidFor(opts.MinValidFor) && !opts.ForceRefresh {
-			return derived, nil
-		}
-	}
+	ctx = h.resolveContextProfile(ctx)
+	h.ensureLoadedDynamicClient(ctx)
 
-	fingerprint := auth.FingerprintHash(h.cfg.ClientID)
 	scope := opts.Scope
 	if scope == "" {
 		scope = strings.Join(h.cfg.Scopes, " ")
 	}
 
-	// Use the last login flow if available, falling back to resolveDefaultFlow.
-	// This ensures GetToken uses the same cache key as the flow used during Login.
-	flow := h.resolveDefaultFlow()
-	if meta, metaErr := h.loadMetadata(ctx); metaErr == nil && meta != nil && meta.LastLoginFlow != "" {
-		flow = meta.LastLoginFlow
-	}
+	// 1. Check stored login session when secretStore is available.
+	if h.secretStore != nil {
+		meta, metaErr := h.loadMetadata(ctx)
 
-	// Try cached token
-	tc := h.profileTokenCache(ctx)
-	if !opts.ForceRefresh && tc != nil {
-		cached, err := tc.Get(ctx, flow, fingerprint, scope)
-		if err == nil && cached != nil && cached.IsValidFor(opts.MinValidFor) {
-			return cached, nil
-		}
-	}
-
-	// Try refresh
-	refreshData, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix))
-	if err == nil && len(refreshData) > 0 {
-		tokenResp, refreshErr := h.refreshAccessToken(ctx, string(refreshData), scope)
-		if refreshErr == nil {
-			token := h.tokenRespToToken(tokenResp, flow, scope)
-			if tc != nil {
-				_ = tc.Set(ctx, flow, fingerprint, scope, token)
-			}
-			if h.cfg.TokenExchange != nil {
-				if derived, exchangeErr := h.executeTokenExchange(ctx, tokenResp.AccessToken); exchangeErr == nil {
-					_ = h.storeDerivedToken(ctx, derived, token.ExpiresAt, flow, strings.Split(scope, " "))
+		// Stored PAT session: read pat_token directly (never stored in TokenCache).
+		if metaErr == nil && meta != nil && meta.LastLoginFlow == auth.FlowPAT {
+			if !opts.ForceRefresh {
+				patData, patErr := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix))
+				if patErr == nil && len(patData) > 0 {
+					h.restoreStoredPATUsername(ctx, meta)
+					return &auth.Token{
+						AccessToken: string(patData),
+						TokenType:   defaultTokenType,
+						ExpiresAt:   time.Time{},
+						Scope:       scope,
+						Flow:        auth.FlowPAT,
+					}, nil
 				}
+			} else if h.cfg.Token != "" {
+				tok, err := h.acquirePATToken(ctx, scope, true)
+				if err != nil {
+					return nil, err
+				}
+				return tok, nil
 			}
-			return token, nil
 		}
-		h.logger.V(1).Info("refresh token failed", "error", refreshErr)
+
+		// Stored derived token takes precedence when TokenExchange is configured
+		// (only for non-PAT sessions). Never fall back to returning the raw
+		// primary OAuth2 token when TokenExchange is configured.
+		if h.cfg.TokenExchange != nil && (meta == nil || meta.LastLoginFlow != auth.FlowPAT) {
+			derived, err := h.loadDerivedToken(ctx)
+			if err == nil && derived != nil && (derived.Scope == "" || derived.Scope == scope) && derived.IsValidFor(opts.MinValidFor) && !opts.ForceRefresh {
+				if derived.Flow != "" {
+					h.setActiveFlow(ctx, derived.Flow)
+				}
+				return derived, nil
+			}
+		}
+
+		sessionFlow := h.resolveDefaultFlow()
+		if metaErr == nil && meta != nil && meta.LastLoginFlow != "" {
+			sessionFlow = meta.LastLoginFlow
+		}
+
+		if h.cfg.TokenExchange == nil && sessionFlow != auth.FlowPAT && !opts.ForceRefresh {
+			if cached := h.lookupCachedToken(ctx, sessionFlow, scope, opts.MinValidFor); cached != nil {
+				h.setActiveFlow(ctx, sessionFlow)
+				return cached, nil
+			}
+		}
+
+		// Try stored OAuth refresh token if present. If a refresh token is stored
+		// for this session and refresh fails, fail closed rather than silently
+		// minting a new headless token over a revoked/invalid session.
+		refreshData, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix))
+		if err == nil && len(refreshData) > 0 {
+			refreshed, refreshErr := h.refreshWithSingleflight(ctx, string(refreshData), sessionFlow, scope, opts)
+			if refreshErr != nil {
+				return nil, auth.NewError(h.cfg.Name, "refresh_token", refreshErr)
+			}
+			return refreshed, nil
+		}
+	}
+
+	// Respect explicit Logout across subprocess invocations.
+	if h.getSessionState(ctx) == sessionStateLoggedOut {
+		return nil, auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
+	}
+
+	// 2. Zero-ceremony headless pipeline acquisition (works with or without secretStore).
+	token, headlessErr := h.acquireHeadlessToken(ctx, scope, opts)
+	if token != nil {
+		if h.getSessionState(ctx) == sessionStateLoginFailed {
+			h.clearSessionState(ctx)
+		}
+		return token, nil
+	}
+	if headlessErr != nil {
+		return nil, headlessErr
+	}
+
+	if h.secretStore == nil {
+		return nil, h.ensureSecrets()
 	}
 
 	return nil, auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
+}
+
+func (h *Handler) refreshWithSingleflight(ctx context.Context, refreshToken string, flow auth.Flow, scope string, opts auth.TokenOptions) (*auth.Token, error) {
+	sfKey := fmt.Sprintf("refresh|%s|%s|%s|min=%d|force=%t", auth.ProfileFromContext(ctx), flow, scope, opts.MinValidFor, opts.ForceRefresh)
+	return h.doSingleflightToken(ctx, sfKey, func(sfCtx context.Context) (*auth.Token, error) {
+		if !opts.ForceRefresh {
+			if h.cfg.TokenExchange != nil {
+				if derived, loadErr := h.loadDerivedToken(sfCtx); loadErr == nil && derived != nil && (derived.Scope == "" || derived.Scope == scope) && derived.IsValidFor(opts.MinValidFor) {
+					return derived, nil
+				}
+			} else if cached := h.lookupCachedToken(sfCtx, flow, scope, opts.MinValidFor); cached != nil {
+				return cached, nil
+			}
+		}
+		tokenResp, refreshErr := h.refreshAccessToken(sfCtx, refreshToken, scope)
+		if refreshErr != nil {
+			return nil, refreshErr
+		}
+		token := h.tokenRespToToken(tokenResp, flow, scope)
+		h.saveCachedToken(sfCtx, flow, scope, token)
+		h.setActiveFlow(sfCtx, flow)
+		if h.cfg.TokenExchange != nil {
+			derived, exchangeErr := h.executeTokenExchange(sfCtx, tokenResp.AccessToken)
+			if exchangeErr != nil {
+				return nil, auth.NewError(h.cfg.Name, "token_exchange", exchangeErr)
+			}
+			_ = h.storeDerivedToken(sfCtx, derived, token.ExpiresAt, flow, scopeSliceFromString(scope))
+			return &auth.Token{
+				AccessToken: derived.Token,
+				TokenType:   defaultTokenType,
+				ExpiresAt:   token.ExpiresAt,
+				Scope:       scope,
+				Flow:        flow,
+			}, nil
+		}
+		return token, nil
+	})
+}
+
+func (h *Handler) acquireHeadlessToken(ctx context.Context, scope string, opts auth.TokenOptions) (*auth.Token, error) {
+	var lastCredentialErr error
+
+	for _, flow := range h.nonInteractiveFlowOrder() {
+		switch flow { //nolint:exhaustive // only headless non-interactive flows are tried
+		case auth.FlowWorkloadIdentity:
+			if !h.hasWorkloadIdentityConfig() {
+				continue
+			}
+			// Check cached token before touching federated token file.
+			if !opts.ForceRefresh {
+				if cached := h.lookupEffectiveCachedToken(ctx, auth.FlowWorkloadIdentity, scope, opts.MinValidFor); cached != nil {
+					h.setActiveFlow(ctx, auth.FlowWorkloadIdentity)
+					return cached, nil
+				}
+			}
+			// Probe federated token availability so an absent ambient file/env
+			// can fall through cleanly to lower-priority configured flows.
+			if _, resolveErr := h.resolveFederatedToken(ctx); resolveErr != nil {
+				lastCredentialErr = resolveErr
+				h.logger.V(1).Info("workload identity federated token unavailable", "error", resolveErr)
+				continue
+			}
+			tok, err := h.mintHeadlessOAuthToken(ctx, auth.FlowWorkloadIdentity, scope, opts)
+			if err != nil {
+				return nil, err
+			}
+			return tok, nil
+
+		case auth.FlowClientCredentials:
+			if !h.hasClientCredentialsConfig() {
+				continue
+			}
+			if !opts.ForceRefresh {
+				if cached := h.lookupEffectiveCachedToken(ctx, auth.FlowClientCredentials, scope, opts.MinValidFor); cached != nil {
+					h.setActiveFlow(ctx, auth.FlowClientCredentials)
+					return cached, nil
+				}
+			}
+			avail, reason := h.detectClientCredentialsAvailability(ctx)
+			if !avail {
+				if h.cfg.ClientSecret != "" && h.cfg.DefaultFlow != "interactive" && h.cfg.DefaultFlow != "device_code" {
+					lastCredentialErr = fmt.Errorf("%s", reason)
+				}
+				continue
+			}
+			tok, err := h.mintHeadlessOAuthToken(ctx, auth.FlowClientCredentials, scope, opts)
+			if err != nil {
+				return nil, err
+			}
+			return tok, nil
+
+		case auth.FlowPAT:
+			if h.cfg.Token == "" {
+				continue
+			}
+			tok, err := h.acquirePATToken(ctx, scope, opts.ForceRefresh)
+			if err != nil {
+				lastCredentialErr = err
+				h.logger.V(1).Info("static PAT credential unavailable", "error", err)
+				continue
+			}
+			return tok, nil
+		}
+	}
+
+	if lastCredentialErr != nil {
+		return nil, auth.NewError(h.cfg.Name, "get_token", fmt.Errorf("%w: %w", auth.ErrNotAuthenticated, lastCredentialErr))
+	}
+	return nil, nil
+}
+
+func (h *Handler) mintHeadlessOAuthToken(ctx context.Context, flow auth.Flow, scope string, opts auth.TokenOptions) (*auth.Token, error) {
+	sfKey := fmt.Sprintf("mint|%s|%s|%s|min=%d|force=%t", auth.ProfileFromContext(ctx), flow, scope, opts.MinValidFor, opts.ForceRefresh)
+	return h.doSingleflightToken(ctx, sfKey, func(sfCtx context.Context) (*auth.Token, error) {
+		if !opts.ForceRefresh {
+			if cached := h.lookupEffectiveCachedToken(sfCtx, flow, scope, opts.MinValidFor); cached != nil {
+				h.setActiveFlow(sfCtx, flow)
+				return cached, nil
+			}
+		}
+
+		if err := h.dynamicClientRegistration(sfCtx); err != nil {
+			return nil, err
+		}
+
+		scopes := scopeSliceFromString(scope)
+		var (
+			tokenResp *tokenResponse
+			err       error
+		)
+		switch flow { //nolint:exhaustive // only WIF and client_credentials mint OAuth tokens headlessly
+		case auth.FlowWorkloadIdentity:
+			tokenResp, err = h.workloadIdentityLogin(sfCtx, scopes)
+		case auth.FlowClientCredentials:
+			tokenResp, err = h.clientCredentialsLogin(sfCtx, scopes)
+		default:
+			return nil, auth.NewError(h.cfg.Name, "get_token", fmt.Errorf("%w: %s", auth.ErrFlowNotSupported, flow))
+		}
+		if err != nil {
+			return nil, auth.NewError(h.cfg.Name, "get_token", err)
+		}
+
+		primary := h.tokenRespToToken(tokenResp, flow, scope)
+		h.saveCachedToken(sfCtx, flow, scope, primary)
+		h.setActiveFlow(sfCtx, flow)
+
+		if h.cfg.TokenExchange != nil {
+			derived, exchangeErr := h.executeTokenExchange(sfCtx, tokenResp.AccessToken)
+			if exchangeErr != nil {
+				return nil, auth.NewError(h.cfg.Name, "token_exchange", exchangeErr)
+			}
+			_ = h.storeDerivedToken(sfCtx, derived, primary.ExpiresAt, flow, scopes)
+			return &auth.Token{
+				AccessToken: derived.Token,
+				TokenType:   defaultTokenType,
+				ExpiresAt:   primary.ExpiresAt,
+				Scope:       scope,
+				Flow:        flow,
+			}, nil
+		}
+
+		return primary, nil
+	})
+}
+
+func (h *Handler) acquirePATToken(ctx context.Context, scope string, updateStored bool) (*auth.Token, error) {
+	tok, err := h.resolvePATToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	username, err := h.resolvePATUsername(ctx)
+	if err != nil {
+		return nil, auth.NewError(h.cfg.Name, "resolve_username", err)
+	}
+	if updateStored && h.secretStore != nil {
+		_ = h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATTokenSuffix), []byte(tok))
+		if username != "" {
+			_ = h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyPATUsernameSuffix), []byte(username))
+		}
+	}
+	h.setActivePAT(ctx, username)
+	return &auth.Token{
+		AccessToken: tok,
+		TokenType:   defaultTokenType,
+		ExpiresAt:   time.Time{},
+		Scope:       scope,
+		Flow:        auth.FlowPAT,
+	}, nil
+}
+
+func (h *Handler) doSingleflightToken(ctx context.Context, key string, fn func(context.Context) (*auth.Token, error)) (*auth.Token, error) {
+	ch := h.sfGroup.DoChan(key, func() (any, error) {
+		sfCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultTimeout)
+		defer cancel()
+		return fn(sfCtx)
+	})
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		tok, _ := res.Val.(*auth.Token)
+		if tok == nil {
+			return nil, nil
+		}
+		cp := *tok
+		return &cp, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // InjectAuth adds an Authorization header to the HTTP request.
@@ -698,6 +1501,223 @@ func (h *Handler) effectiveBinaryName() string {
 	return h.binaryName
 }
 
+func (h *Handler) reservedBinaryNames() []string {
+	names := []string{h.effectiveBinaryName()}
+	if trimmed := strings.TrimSuffix(h.secretKeyPrefix, "."); trimmed != "" {
+		if idx := strings.IndexByte(trimmed, '.'); idx > 0 {
+			names = append(names, trimmed[:idx])
+		} else {
+			names = append(names, trimmed)
+		}
+	}
+	return names
+}
+
+func (h *Handler) resolveContextProfile(ctx context.Context) context.Context {
+	if auth.ProfileFromContext(ctx) == "" && !auth.IsProfileResolved(ctx) {
+		if profile := auth.ResolveActiveProfile(ctx, h.cfg.Name); profile != "" {
+			return auth.WithProfile(ctx, profile)
+		}
+	}
+	return ctx
+}
+
+func (h *Handler) getSessionState(ctx context.Context) string {
+	profile := auth.ProfileFromContext(ctx)
+	if h.secretStore != nil {
+		data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeySessionStateSuffix))
+		if err == nil && len(data) > 0 {
+			return string(data)
+		}
+		return ""
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.sessionStates == nil {
+		return ""
+	}
+	return h.sessionStates[profile]
+}
+
+func (h *Handler) clearSessionState(ctx context.Context) {
+	profile := auth.ProfileFromContext(ctx)
+	h.mu.Lock()
+	if h.sessionStates != nil {
+		delete(h.sessionStates, profile)
+	}
+	h.mu.Unlock()
+	if h.secretStore != nil {
+		_ = h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeySessionStateSuffix))
+	}
+}
+
+func (h *Handler) recordFailedLogin(ctx context.Context) {
+	if h.secretStore != nil {
+		if meta, err := h.loadMetadata(ctx); err == nil && meta != nil {
+			if (meta.LastLoginFlow == auth.FlowPAT && meta.ExpiresAt.IsZero()) || (!meta.ExpiresAt.IsZero() && !meta.ExpiresAt.Before(time.Now())) {
+				return
+			}
+		}
+		_ = h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeySessionStateSuffix), []byte(sessionStateLoginFailed))
+	}
+	profile := auth.ProfileFromContext(ctx)
+	h.mu.Lock()
+	if h.sessionStates == nil {
+		h.sessionStates = make(map[string]string)
+	}
+	h.sessionStates[profile] = sessionStateLoginFailed
+	h.mu.Unlock()
+}
+
+func (h *Handler) effectiveClientID(ctx context.Context) string {
+	h.ensureLoadedDynamicClient(ctx)
+	profile := auth.ProfileFromContext(ctx)
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.dcrClients != nil {
+		if dcr := h.dcrClients[profile]; dcr != nil && dcr.ClientID != "" {
+			return dcr.ClientID
+		}
+	}
+	return h.cfg.ClientID
+}
+
+func (h *Handler) resolveClientCredentials(ctx context.Context) (string, string, error) {
+	h.ensureLoadedDynamicClient(ctx)
+	profile := auth.ProfileFromContext(ctx)
+	h.mu.RLock()
+	var dcr *dynamicClient
+	if h.dcrClients != nil {
+		dcr = h.dcrClients[profile]
+	}
+	cfgID := h.cfg.ClientID
+	cfgSecret := h.cfg.ClientSecret
+	h.mu.RUnlock()
+
+	if dcr != nil && dcr.ClientID != "" {
+		// Treat DCR-returned client_secret strictly as a literal string so a
+		// registration endpoint response can never trigger local SecretRef reads.
+		return dcr.ClientID, dcr.ClientSecret, nil
+	}
+	if cfgSecret == "" {
+		return cfgID, "", nil
+	}
+	resolved, err := config.ResolveCredentialValue(ctx, cfgSecret, h.secretStore, h.reservedBinaryNames()...)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve clientSecret: %w", err)
+	}
+	return cfgID, resolved, nil
+}
+
+func (h *Handler) resolveFederatedToken(ctx context.Context) (string, error) {
+	var (
+		raw string
+		err error
+	)
+	switch {
+	case h.cfg.FederatedToken != "":
+		raw, err = h.cfg.FederatedToken.ResolveWithStore(ctx, h.secretStore, h.reservedBinaryNames()...)
+	case h.cfg.FederatedTokenFile != "":
+		raw, err = config.SecretRef("file://" + h.cfg.FederatedTokenFile).Resolve()
+	default:
+		return "", fmt.Errorf("federatedToken or federatedTokenFile is required for workload_identity flow")
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve federated token: %w", err)
+	}
+	jwt := strings.TrimSpace(raw)
+	if jwt == "" {
+		return "", fmt.Errorf("federated token is empty")
+	}
+	return jwt, nil
+}
+
+func (h *Handler) resolvePATToken(ctx context.Context) (string, error) {
+	if h.cfg.Token == "" {
+		return "", fmt.Errorf("token is required for pat flow")
+	}
+	raw, err := h.cfg.Token.ResolveWithStore(ctx, h.secretStore, h.reservedBinaryNames()...)
+	if err != nil {
+		return "", fmt.Errorf("resolve token: %w", err)
+	}
+	tok := strings.TrimSpace(raw)
+	if tok == "" {
+		return "", fmt.Errorf("resolved token is empty")
+	}
+	return tok, nil
+}
+
+func (h *Handler) resolvePATUsername(ctx context.Context) (string, error) {
+	if h.cfg.Username == "" {
+		return "", nil
+	}
+	raw, err := config.ResolveCredentialValue(ctx, h.cfg.Username, h.secretStore, h.reservedBinaryNames()...)
+	if err != nil {
+		return "", fmt.Errorf("resolve username: %w", err)
+	}
+	return strings.TrimSpace(raw), nil
+}
+
+func (h *Handler) setActiveFlow(ctx context.Context, flow auth.Flow) {
+	profile := auth.ProfileFromContext(ctx)
+	h.mu.Lock()
+	if h.activeFlows == nil {
+		h.activeFlows = make(map[string]auth.Flow)
+	}
+	h.activeFlows[profile] = flow
+	h.lastFlow = flow
+	if flow != auth.FlowPAT {
+		if h.patUsernames != nil {
+			delete(h.patUsernames, profile)
+		}
+		h.lastPATUser = ""
+	}
+	h.mu.Unlock()
+}
+
+func (h *Handler) setActivePAT(ctx context.Context, username string) {
+	profile := auth.ProfileFromContext(ctx)
+	h.mu.Lock()
+	if h.activeFlows == nil {
+		h.activeFlows = make(map[string]auth.Flow)
+	}
+	if h.patUsernames == nil {
+		h.patUsernames = make(map[string]string)
+	}
+	h.activeFlows[profile] = auth.FlowPAT
+	h.lastFlow = auth.FlowPAT
+	h.patUsernames[profile] = username
+	h.lastPATUser = username
+	h.mu.Unlock()
+}
+
+func (h *Handler) restoreStoredPATUsername(ctx context.Context, meta *auth.HandlerMetadata) {
+	var username string
+	if h.secretStore != nil {
+		if data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyPATUsernameSuffix)); err == nil && len(data) > 0 {
+			username = string(data)
+		}
+	}
+	if username == "" && h.cfg.Username != "" {
+		if resolved, err := h.resolvePATUsername(ctx); err == nil && resolved != "" {
+			username = resolved
+		}
+	}
+	if username == "" && meta != nil && meta.Claims != nil {
+		username = meta.Claims.Username
+	}
+	h.setActivePAT(ctx, username)
+}
+
+func (h *Handler) inferInitialFlow() auth.Flow {
+	if h.secretStore != nil {
+		if meta, err := h.loadMetadata(context.Background()); err == nil && meta != nil && meta.LastLoginFlow != "" {
+			return meta.LastLoginFlow
+		}
+	}
+	return h.resolveDefaultFlow()
+}
+
 // callbackOpts builds CallbackOptions from the handler's config and pre-renders
 // the success/failure HTML pages for deferred completion.
 func (h *Handler) callbackOpts(ctx context.Context) []oauth.CallbackOption {
@@ -719,10 +1739,11 @@ func (h *Handler) callbackOpts(ctx context.Context) []oauth.CallbackOption {
 }
 
 func (h *Handler) launchBrowser(ctx context.Context, rawURL, browser string) error {
+	detachedCtx := context.WithoutCancel(ctx)
 	if h.openBrowser != nil {
-		return h.openBrowser(ctx, rawURL)
+		return h.openBrowser(detachedCtx, rawURL)
 	}
-	return auth.OpenBrowser(ctx, rawURL, browser)
+	return auth.OpenBrowser(detachedCtx, rawURL, browser)
 }
 
 func (h *Handler) notifyManualAuthURL(ctx context.Context, opts auth.LoginOptions, rawURL string) {
@@ -778,7 +1799,7 @@ func (h *Handler) authCodeLogin(ctx context.Context, opts auth.LoginOptions, sco
 	}
 	q := authURL.Query()
 	q.Set("response_type", "code")
-	q.Set("client_id", h.cfg.ClientID)
+	q.Set("client_id", h.effectiveClientID(ctx))
 	q.Set("redirect_uri", callbackServer.RedirectURI)
 	q.Set("state", state)
 	if !h.cfg.DisablePKCE {
@@ -812,18 +1833,22 @@ func (h *Handler) authCodeLogin(ctx context.Context, opts auth.LoginOptions, sco
 }
 
 func (h *Handler) exchangeAuthCode(ctx context.Context, code, redirectURI, codeVerifier string, scopes []string) (*tokenResponse, error) {
+	clientID, clientSecret, err := h.resolveClientCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
 	data := url.Values{
 		"grant_type":   {"authorization_code"},
 		"code":         {code},
 		"redirect_uri": {redirectURI},
-		"client_id":    {h.cfg.ClientID},
+		"client_id":    {clientID},
 	}
 	// codeVerifier is empty when h.cfg.DisablePKCE is true (set by authCodeLogin).
 	if codeVerifier != "" {
 		data.Set("code_verifier", codeVerifier)
 	}
-	if h.cfg.ClientSecret != "" {
-		data.Set("client_secret", h.cfg.ClientSecret)
+	if clientSecret != "" {
+		data.Set("client_secret", clientSecret)
 	}
 	if len(scopes) > 0 {
 		data.Set("scope", strings.Join(scopes, " "))
@@ -851,7 +1876,7 @@ func (h *Handler) implicitGrantLogin(ctx context.Context, opts auth.LoginOptions
 	}
 	q := authURL.Query()
 	q.Set("response_type", "token")
-	q.Set("client_id", h.cfg.ClientID)
+	q.Set("client_id", h.effectiveClientID(ctx))
 	q.Set("redirect_uri", callbackServer.RedirectURI)
 	q.Set("state", state)
 	if len(scopes) > 0 {
@@ -885,11 +1910,11 @@ func (h *Handler) implicitGrantLogin(ctx context.Context, opts auth.LoginOptions
 				resp.ExpiresIn = expiresIn
 			} else {
 				h.logger.V(1).Info("failed to parse expires_in from implicit grant, defaulting to 3600", "value", result.ExpiresIn, "error", scanErr)
-				resp.ExpiresIn = 3600
+				resp.ExpiresIn = defaultImplicitExpiresIn
 			}
 		} else {
 			h.logger.V(1).Info("expires_in not provided by implicit grant server, defaulting to 3600")
-			resp.ExpiresIn = 3600
+			resp.ExpiresIn = defaultImplicitExpiresIn
 		}
 		return resp, callbackServer, true, nil
 	case <-ctx.Done():
@@ -904,7 +1929,7 @@ func (h *Handler) deviceCodeLogin(ctx context.Context, opts auth.LoginOptions, s
 		return nil, fmt.Errorf("deviceAuthURL is required for device_code flow")
 	}
 
-	data := url.Values{"client_id": {h.cfg.ClientID}}
+	data := url.Values{"client_id": {h.effectiveClientID(ctx)}}
 	if len(scopes) > 0 {
 		data.Set("scope", strings.Join(scopes, " "))
 	}
@@ -966,9 +1991,9 @@ func (h *Handler) pollDeviceCode(ctx context.Context, deviceCode string, interva
 			return nil, auth.ErrTimeout
 		case <-ticker.C:
 			data := url.Values{
-				"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
+				"grant_type":  {deviceCodeGrantType},
 				"device_code": {deviceCode},
-				"client_id":   {h.cfg.ClientID},
+				"client_id":   {h.effectiveClientID(ctx)},
 			}
 			if len(scopes) > 0 {
 				data.Set("scope", strings.Join(scopes, " "))
@@ -1004,18 +2029,91 @@ func (h *Handler) pollDeviceCode(ctx context.Context, deviceCode string, interva
 // ---------- flow: client credentials ----------
 
 func (h *Handler) clientCredentialsLogin(ctx context.Context, scopes []string) (*tokenResponse, error) {
-	if h.cfg.ClientSecret == "" {
+	clientID, clientSecret, err := h.resolveClientCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if clientSecret == "" {
 		return nil, fmt.Errorf("clientSecret is required for client_credentials flow")
 	}
 	data := url.Values{
 		"grant_type":    {"client_credentials"},
-		"client_id":     {h.cfg.ClientID},
-		"client_secret": {h.cfg.ClientSecret},
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
 	}
 	if len(scopes) > 0 {
 		data.Set("scope", strings.Join(scopes, " "))
 	}
 	return h.postTokenEndpoint(ctx, data)
+}
+
+// ---------- flow: workload identity federation (RFC 7523 & RFC 8693) ----------
+
+func (h *Handler) workloadIdentityLogin(ctx context.Context, scopes []string) (*tokenResponse, error) {
+	jwt, err := h.resolveFederatedToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	grantType := h.cfg.WorkloadIdentityGrantType
+	if grantType == "" {
+		grantType = config.WorkloadIdentityGrantClientCredentials
+	}
+
+	switch grantType {
+	case config.WorkloadIdentityGrantClientCredentials:
+		clientID := h.effectiveClientID(ctx)
+		if clientID == "" {
+			return nil, fmt.Errorf("clientID is required for workload_identity flow with client_credentials grant")
+		}
+		data := url.Values{
+			"grant_type":            {"client_credentials"},
+			"client_id":             {clientID},
+			"client_assertion_type": {jwtBearerAssertionType},
+			"client_assertion":      {jwt},
+		}
+		if len(scopes) > 0 {
+			data.Set("scope", strings.Join(scopes, " "))
+		}
+		if h.cfg.Audience != "" {
+			data.Set("audience", h.cfg.Audience)
+		}
+		return h.postTokenEndpoint(ctx, data)
+
+	case config.WorkloadIdentityGrantTokenExchange:
+		clientID, clientSecret, credErr := h.resolveClientCredentials(ctx)
+		if credErr != nil {
+			return nil, credErr
+		}
+		subjectTokenType := h.cfg.SubjectTokenType
+		if subjectTokenType == "" {
+			subjectTokenType = config.DefaultSubjectTokenType
+		}
+		data := url.Values{
+			"grant_type":         {tokenExchangeGrantType},
+			"subject_token":      {jwt},
+			"subject_token_type": {subjectTokenType},
+		}
+		var basicAuth *basicAuthCredentials
+		if clientID != "" {
+			if clientSecret != "" {
+				basicAuth = &basicAuthCredentials{username: clientID, password: clientSecret}
+			} else {
+				data.Set("client_id", clientID)
+			}
+		}
+		if len(scopes) > 0 {
+			data.Set("scope", strings.Join(scopes, " "))
+		}
+		if h.cfg.Audience != "" {
+			data.Set("audience", h.cfg.Audience)
+		}
+		return h.postTokenEndpointWithAuth(ctx, data, basicAuth)
+
+	default:
+		return nil, fmt.Errorf("unknown workloadIdentityGrantType %q (valid: %s, %s)",
+			grantType, config.WorkloadIdentityGrantClientCredentials, config.WorkloadIdentityGrantTokenExchange)
+	}
 }
 
 // ---------- token exchange ----------
@@ -1027,6 +2125,10 @@ func (h *Handler) executeTokenExchange(ctx context.Context, primaryToken string)
 		method = http.MethodPost
 	}
 
+	h.mu.RLock()
+	regUsername := h.cfg.RegistryUsername
+	h.mu.RUnlock()
+
 	var bodyReader io.Reader
 	if exc.RequestBody != "" {
 		result, tmplErr := gotmpl.Execute(ctx, gotmpl.TemplateOptions{
@@ -1034,7 +2136,7 @@ func (h *Handler) executeTokenExchange(ctx context.Context, primaryToken string)
 			Content: string(exc.RequestBody),
 			Data: map[string]string{
 				"Hostname": h.cfg.Registry,
-				"Username": h.cfg.RegistryUsername,
+				"Username": regUsername,
 			},
 		})
 		if tmplErr != nil {
@@ -1086,7 +2188,9 @@ func (h *Handler) executeTokenExchange(ctx context.Context, primaryToken string)
 		if username, extractErr := extractJSONPath(respData, exc.UsernameJSONPath); extractErr == nil && username != "" {
 			result.Username = username
 			// Persist the extracted username so BridgeAuthToRegistry uses it for registry auth.
+			h.mu.Lock()
 			h.cfg.RegistryUsername = username
+			h.mu.Unlock()
 		}
 	}
 	return result, nil
@@ -1136,7 +2240,103 @@ func (h *Handler) verifyToken(ctx context.Context, accessToken string) (*auth.Cl
 	return claims, nil
 }
 
-// ---------- storage ----------
+func (h *Handler) fallbackClaims(ctx context.Context, accessToken string, flow auth.Flow) *auth.Claims {
+	if jwtClaims, err := auth.ParseJWTClaims(accessToken); err == nil {
+		return jwtClaims
+	}
+	clientID := h.effectiveClientID(ctx)
+	if (flow == auth.FlowWorkloadIdentity || flow == auth.FlowClientCredentials) && clientID != "" {
+		return &auth.Claims{ClientID: clientID, Username: clientID}
+	}
+	return &auth.Claims{}
+}
+
+// ---------- storage & caching ----------
+
+func (h *Handler) cacheFingerprint(ctx context.Context, flow auth.Flow) string {
+	clientID := h.effectiveClientID(ctx)
+	if flow == auth.FlowWorkloadIdentity {
+		return auth.FingerprintHash(strings.Join([]string{
+			clientID,
+			h.cfg.Audience,
+			h.cfg.WorkloadIdentityGrantType,
+			string(h.cfg.FederatedToken),
+			h.cfg.FederatedTokenFile,
+		}, "|"))
+	}
+	return auth.FingerprintHash(clientID)
+}
+
+func (h *Handler) memCacheKey(ctx context.Context, flow auth.Flow, scope string) string {
+	return fmt.Sprintf("%s|%s|%s|%s", auth.ProfileFromContext(ctx), flow, h.cacheFingerprint(ctx, flow), scope)
+}
+
+func (h *Handler) memDerivedKey(ctx context.Context, flow auth.Flow, scope string) string {
+	return fmt.Sprintf("%s|%s|%s", auth.ProfileFromContext(ctx), flow, scope)
+}
+
+func (h *Handler) lookupCachedToken(ctx context.Context, flow auth.Flow, scope string, minValidFor time.Duration) *auth.Token {
+	fingerprint := h.cacheFingerprint(ctx, flow)
+	if tc := h.profileTokenCache(ctx); tc != nil {
+		if cached, err := tc.Get(ctx, flow, fingerprint, scope); err == nil && cached != nil && cached.IsValidFor(minValidFor) {
+			return cached
+		}
+		return nil
+	}
+	key := h.memCacheKey(ctx, flow, scope)
+	h.mu.RLock()
+	var cached *auth.Token
+	if h.memCache != nil {
+		cached = h.memCache[key]
+	}
+	h.mu.RUnlock()
+	if cached != nil && cached.IsValidFor(minValidFor) {
+		cp := *cached
+		return &cp
+	}
+	return nil
+}
+
+func (h *Handler) lookupEffectiveCachedToken(ctx context.Context, flow auth.Flow, scope string, minValidFor time.Duration) *auth.Token {
+	if h.cfg.TokenExchange != nil {
+		if h.secretStore != nil {
+			if derived, err := h.loadDerivedToken(ctx); err == nil && derived != nil && derived.Flow == flow && (derived.Scope == "" || derived.Scope == scope) && derived.IsValidFor(minValidFor) {
+				return derived
+			}
+			return nil
+		}
+		key := h.memDerivedKey(ctx, flow, scope)
+		h.mu.RLock()
+		var derived *auth.Token
+		if h.memDerived != nil {
+			derived = h.memDerived[key]
+		}
+		h.mu.RUnlock()
+		if derived != nil && derived.IsValidFor(minValidFor) {
+			cp := *derived
+			return &cp
+		}
+		return nil
+	}
+	return h.lookupCachedToken(ctx, flow, scope, minValidFor)
+}
+
+func (h *Handler) saveCachedToken(ctx context.Context, flow auth.Flow, scope string, token *auth.Token) {
+	fingerprint := h.cacheFingerprint(ctx, flow)
+	if tc := h.profileTokenCache(ctx); tc != nil {
+		_ = tc.Set(ctx, flow, fingerprint, scope, token)
+		return
+	}
+	cp := *token
+	cp.CachedAt = time.Now()
+	key := h.memCacheKey(ctx, flow, scope)
+	h.mu.Lock()
+	if h.memCache == nil {
+		h.memCache = make(map[string]*auth.Token)
+	}
+	h.memCache[key] = &cp
+	h.mu.Unlock()
+}
 
 func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *auth.Claims, expiresAt time.Time, flow auth.Flow, scopes []string) error {
 	if resp.RefreshToken != "" {
@@ -1154,20 +2354,33 @@ func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *
 	}
 	tc := h.profileTokenCache(ctx)
 	if tc != nil {
-		fingerprint := auth.FingerprintHash(h.cfg.ClientID)
+		fingerprint := h.cacheFingerprint(ctx, flow)
 		scope := strings.Join(scopes, " ")
-		return tc.Set(ctx, flow, fingerprint, scope, h.tokenRespToToken(resp, flow, scope))
+		tok := h.tokenRespToToken(resp, flow, scope)
+		tok.ExpiresAt = expiresAt
+		return tc.Set(ctx, flow, fingerprint, scope, tok)
 	}
 	return nil
 }
 
 func (h *Handler) storeDerivedToken(ctx context.Context, result *exchangeResult, expiresAt time.Time, flow auth.Flow, scopes []string) error {
+	scope := strings.Join(scopes, " ")
 	token := &auth.Token{
 		AccessToken: result.Token,
 		TokenType:   defaultTokenType,
 		ExpiresAt:   expiresAt,
-		Scope:       strings.Join(scopes, " "),
+		Scope:       scope,
 		Flow:        flow,
+	}
+	if h.secretStore == nil {
+		key := h.memDerivedKey(ctx, flow, scope)
+		h.mu.Lock()
+		if h.memDerived == nil {
+			h.memDerived = make(map[string]*auth.Token)
+		}
+		h.memDerived[key] = token
+		h.mu.Unlock()
+		return nil
 	}
 	data, err := json.Marshal(token) //nolint:gosec // runtime token
 	if err != nil {
@@ -1197,7 +2410,9 @@ func (h *Handler) loadDerivedToken(ctx context.Context) (*auth.Token, error) {
 	// Restore the derived username so BridgeAuthToRegistry uses the correct
 	// username even when the token was loaded from cache across process restarts.
 	if usernameData, usernameErr := h.secretStore.Get(ctx, h.profileSecretKey(ctx, derivedUsernameSuffix)); usernameErr == nil && len(usernameData) > 0 {
+		h.mu.Lock()
 		h.cfg.RegistryUsername = string(usernameData)
+		h.mu.Unlock()
 	}
 	return &token, nil
 }
@@ -1217,13 +2432,17 @@ func (h *Handler) loadMetadata(ctx context.Context) (*auth.HandlerMetadata, erro
 // ---------- refresh ----------
 
 func (h *Handler) refreshAccessToken(ctx context.Context, refreshToken, scope string) (*tokenResponse, error) {
+	clientID, clientSecret, err := h.resolveClientCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
 	data := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
-		"client_id":     {h.cfg.ClientID},
+		"client_id":     {clientID},
 	}
-	if h.cfg.ClientSecret != "" {
-		data.Set("client_secret", h.cfg.ClientSecret)
+	if clientSecret != "" {
+		data.Set("client_secret", clientSecret)
 	}
 	if scope != "" {
 		data.Set("scope", scope)
@@ -1234,12 +2453,19 @@ func (h *Handler) refreshAccessToken(ctx context.Context, refreshToken, scope st
 // ---------- HTTP ----------
 
 func (h *Handler) postTokenEndpoint(ctx context.Context, data url.Values) (*tokenResponse, error) {
+	return h.postTokenEndpointWithAuth(ctx, data, nil)
+}
+
+func (h *Handler) postTokenEndpointWithAuth(ctx context.Context, data url.Values, basicAuth *basicAuthCredentials) (*tokenResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.cfg.TokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("create token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	if basicAuth != nil {
+		req.SetBasicAuth(basicAuth.username, basicAuth.password)
+	}
 
 	resp, err := h.httpClient.Do(req) //nolint:gosec // URL from trusted admin config
 	if err != nil {
@@ -1331,6 +2557,10 @@ func (h *Handler) resolveDefaultFlow() auth.Flow {
 		return auth.FlowDeviceCode
 	case "client_credentials":
 		return auth.FlowClientCredentials
+	case "workload_identity":
+		return auth.FlowWorkloadIdentity
+	case "pat":
+		return auth.FlowPAT
 	default:
 		if h.cfg.AuthorizeURL != "" {
 			return auth.FlowInteractive
@@ -1338,11 +2568,58 @@ func (h *Handler) resolveDefaultFlow() auth.Flow {
 		if h.cfg.DeviceAuthURL != "" {
 			return auth.FlowDeviceCode
 		}
-		if h.cfg.ClientSecret != "" {
+		if h.hasWorkloadIdentityConfig() {
+			return auth.FlowWorkloadIdentity
+		}
+		if h.hasClientCredentialsConfig() {
 			return auth.FlowClientCredentials
+		}
+		if h.cfg.Token != "" {
+			return auth.FlowPAT
 		}
 		return auth.FlowInteractive
 	}
+}
+
+// nonInteractiveFlowOrder returns the candidate headless flow priority order:
+// FlowWorkloadIdentity -> FlowClientCredentials -> FlowPAT, moving DefaultFlow
+// to the front when DefaultFlow explicitly names one of those three flows.
+func (h *Handler) nonInteractiveFlowOrder() []auth.Flow {
+	base := []auth.Flow{
+		auth.FlowWorkloadIdentity,
+		auth.FlowClientCredentials,
+		auth.FlowPAT,
+	}
+	var preferred auth.Flow
+	switch h.cfg.DefaultFlow {
+	case "workload_identity":
+		preferred = auth.FlowWorkloadIdentity
+	case "client_credentials":
+		preferred = auth.FlowClientCredentials
+	case "pat":
+		preferred = auth.FlowPAT
+	}
+	if preferred == "" || preferred == base[0] {
+		return base
+	}
+	ordered := make([]auth.Flow, 0, len(base))
+	ordered = append(ordered, preferred)
+	for _, f := range base {
+		if f != preferred {
+			ordered = append(ordered, f)
+		}
+	}
+	return ordered
+}
+
+func (h *Handler) tokenExpiresAt(resp *tokenResponse) time.Time {
+	if resp.ExpiresIn > 0 {
+		return time.Now().Add(time.Duration(resp.ExpiresIn) * time.Second)
+	}
+	if claims, err := auth.ParseJWTClaims(resp.AccessToken); err == nil && !claims.ExpiresAt.IsZero() {
+		return claims.ExpiresAt
+	}
+	return time.Now().Add(defaultImplicitExpiresIn * time.Second)
 }
 
 func (h *Handler) tokenRespToToken(resp *tokenResponse, flow auth.Flow, scope string) *auth.Token {
@@ -1353,10 +2630,17 @@ func (h *Handler) tokenRespToToken(resp *tokenResponse, flow auth.Flow, scope st
 	return &auth.Token{
 		AccessToken: resp.AccessToken,
 		TokenType:   tokenType,
-		ExpiresAt:   time.Now().Add(time.Duration(resp.ExpiresIn) * time.Second),
+		ExpiresAt:   h.tokenExpiresAt(resp),
 		Scope:       scope,
 		Flow:        flow,
 	}
+}
+
+func scopeSliceFromString(scope string) []string {
+	if strings.TrimSpace(scope) == "" {
+		return nil
+	}
+	return strings.Fields(scope)
 }
 
 // extractJSONPath extracts a value from a nested map using dot-notation.
@@ -1394,8 +2678,19 @@ func getStringField(data map[string]any, field string) string {
 
 // ValidateConfig validates a CustomOAuth2Config for required fields and constraints.
 func ValidateConfig(cfg config.CustomOAuth2Config) error {
+	return ValidateConfigFor(cfg)
+}
+
+// ValidateConfigFor validates a CustomOAuth2Config, additionally enforcing
+// internal-secret prefix checks on secret:// references for any custom embedder
+// binary names.
+func ValidateConfigFor(cfg config.CustomOAuth2Config, binaryNames ...string) error {
 	if cfg.Name == "" {
 		return fmt.Errorf("custom OAuth2 handler: name is required")
+	}
+
+	if err := cfg.ValidateCredentials(binaryNames...); err != nil {
+		return fmt.Errorf("custom OAuth2 handler %q: %w", cfg.Name, err)
 	}
 
 	// Validate responseType early so unknown values are rejected before
@@ -1414,28 +2709,37 @@ func ValidateConfig(cfg config.CustomOAuth2Config) error {
 		return fmt.Errorf("custom OAuth2 handler %q: unknown responseType %q (valid: code, token)", cfg.Name, cfg.ResponseType)
 	}
 
-	if cfg.TokenURL == "" && cfg.ResponseType != "token" {
-		return fmt.Errorf("custom OAuth2 handler %q: tokenURL is required", cfg.Name)
-	}
-
-	// Dynamic Client Registration (RFC 7591) supplies clientID/clientSecret
-	// at login time, so when it is configured the static credential checks
-	// below are satisfied by registration instead of requiring dummy values.
 	if cfg.DynamicClientRegistration != nil {
 		if cfg.DynamicClientRegistration.RegistrationEndpoint == "" {
 			return fmt.Errorf("custom OAuth2 handler %q: dynamicClientRegistration.registrationEndpoint is required", cfg.Name)
 		}
 	}
 	dcrEnabled := cfg.DynamicClientRegistration != nil && cfg.DynamicClientRegistration.RegistrationEndpoint != ""
+	hasWIF := cfg.FederatedToken != "" || cfg.FederatedTokenFile != ""
+	hasPAT := cfg.Token != ""
+	hasOAuthFlow := cfg.AuthorizeURL != "" || cfg.DeviceAuthURL != "" || cfg.ClientSecret != "" || hasWIF || dcrEnabled
 
-	if cfg.ClientID == "" && !dcrEnabled {
+	patOnly := (cfg.DefaultFlow == "pat" || hasPAT) && !hasOAuthFlow
+
+	if cfg.TokenURL == "" && cfg.ResponseType != "token" && !patOnly {
+		return fmt.Errorf("custom OAuth2 handler %q: tokenURL is required", cfg.Name)
+	}
+
+	wifGrant := cfg.WorkloadIdentityGrantType
+	if wifGrant == "" {
+		wifGrant = config.WorkloadIdentityGrantClientCredentials
+	}
+	wifTokenExchangeOnly := wifGrant == config.WorkloadIdentityGrantTokenExchange &&
+		(cfg.DefaultFlow == "workload_identity" || (cfg.DefaultFlow == "" && hasWIF && cfg.AuthorizeURL == "" && cfg.DeviceAuthURL == "" && cfg.ClientSecret == ""))
+
+	if cfg.ClientID == "" && !dcrEnabled && !patOnly && !wifTokenExchangeOnly {
 		return fmt.Errorf("custom OAuth2 handler %q: clientID is required", cfg.Name)
 	}
 
 	switch cfg.DefaultFlow {
 	case "", "interactive":
-		if cfg.AuthorizeURL == "" && cfg.DeviceAuthURL == "" && cfg.ClientSecret == "" && !dcrEnabled {
-			return fmt.Errorf("custom OAuth2 handler %q: at least one of authorizeURL, deviceAuthURL, or clientSecret must be set", cfg.Name)
+		if cfg.AuthorizeURL == "" && cfg.DeviceAuthURL == "" && cfg.ClientSecret == "" && !dcrEnabled && !hasWIF && !hasPAT {
+			return fmt.Errorf("custom OAuth2 handler %q: at least one of authorizeURL, deviceAuthURL, clientSecret, federatedToken, federatedTokenFile, or token must be set", cfg.Name)
 		}
 	case "device_code":
 		if cfg.DeviceAuthURL == "" {
@@ -1445,8 +2749,19 @@ func ValidateConfig(cfg config.CustomOAuth2Config) error {
 		if cfg.ClientSecret == "" && !dcrEnabled {
 			return fmt.Errorf("custom OAuth2 handler %q: clientSecret is required when defaultFlow is client_credentials", cfg.Name)
 		}
+	case "workload_identity":
+		if !hasWIF {
+			return fmt.Errorf("custom OAuth2 handler %q: federatedToken or federatedTokenFile is required when defaultFlow is workload_identity", cfg.Name)
+		}
+		if wifGrant == config.WorkloadIdentityGrantClientCredentials && cfg.ClientID == "" && !dcrEnabled {
+			return fmt.Errorf("custom OAuth2 handler %q: clientID is required when defaultFlow is workload_identity with client_credentials grant", cfg.Name)
+		}
+	case "pat":
+		if !hasPAT {
+			return fmt.Errorf("custom OAuth2 handler %q: token is required when defaultFlow is pat", cfg.Name)
+		}
 	default:
-		return fmt.Errorf("custom OAuth2 handler %q: unknown defaultFlow %q (valid: interactive, device_code, client_credentials)", cfg.Name, cfg.DefaultFlow)
+		return fmt.Errorf("custom OAuth2 handler %q: unknown defaultFlow %q (valid: interactive, device_code, client_credentials, workload_identity, pat)", cfg.Name, cfg.DefaultFlow)
 	}
 
 	if cfg.CallbackPort != 0 && (cfg.CallbackPort < 1024 || cfg.CallbackPort > 65535) {

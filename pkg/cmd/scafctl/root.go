@@ -612,7 +612,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 			// Register custom OAuth2 handlers from config
 			for _, customCfg := range cfg.Auth.CustomOAuth2 {
-				if validateErr := customoauth2.ValidateConfig(customCfg); validateErr != nil {
+				if validateErr := customoauth2.ValidateConfigFor(customCfg, binaryName); validateErr != nil {
 					lgr.V(1).Info("warning: skipping invalid custom OAuth2 handler", "name", customCfg.Name, "error", validateErr)
 					continue
 				}
@@ -633,6 +633,8 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				)
 				if secretErr == nil {
 					customOpts = append(customOpts, customoauth2.WithSecretStore(sharedSecretStore))
+				} else {
+					customOpts = append(customOpts, customoauth2.WithSecretStoreError(secretErr))
 				}
 				customHandler, err := customoauth2.New(customCfg, customOpts...)
 				if err != nil {
