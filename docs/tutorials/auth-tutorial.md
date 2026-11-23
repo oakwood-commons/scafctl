@@ -20,6 +20,7 @@ This tutorial walks you through setting up and using authentication in scafctl. 
 1. [Understanding Auth in scafctl](#understanding-auth-in-scafctl)
 2. [Logging In](#logging-in)
    - [Entra Interactive Login (Default)](#logging-in)
+   - [Selecting a Browser (--browser / auth.browser)](#selecting-a-browser---browser--authbrowser)
    - [Entra Headless / SSH (Device Code Flow)](#headless--ssh-device-code-flow)
    - [Entra Service Principal](#service-principal-authentication-cicd)
    - [Entra Workload Identity](#workload-identity-authentication-kubernetes)
@@ -128,6 +129,66 @@ Opening browser for authentication...
 
 Logged in to Microsoft Entra ID as user@example.com
 ```
+
+### Selecting a Browser (--browser / auth.browser)
+
+Enterprise identity providers frequently enforce Conditional Access policies that require a managed browser (such as Microsoft Edge), even when your operating system default browser is Chrome, Firefox, or Safari. You can choose which browser opens during interactive login (`scafctl auth login`, `scafctl kube login`, and the status TUI `o` / `Open URL` action) without changing your OS default browser.
+
+Browser selection follows this priority order (highest to lowest):
+
+1. **`--browser` flag** -- per-invocation override on `scafctl auth login` and `scafctl kube login`
+2. **`auth.browser` config setting** -- persistent user preference (`scafctl config set auth.browser msedge`)
+3. **`$BROWSER` environment variable** -- standard cross-tool convention (supports `:`-separated fallbacks on Linux/macOS and `;`-separated entries on Windows)
+4. **OS default browser** -- `open` on macOS, `xdg-open` on Linux, `rundll32` on Windows
+
+{{< tabs "auth-tutorial-cmd-browser-1" >}}
+{{% tab "Bash" %}}
+
+```bash
+# Per-invocation override
+scafctl auth login entra --browser msedge
+scafctl kube login prod --browser msedge
+
+# Persistent preference in config.yaml
+scafctl config set auth.browser msedge
+scafctl auth login entra
+
+# Environment variable override (used when --browser and auth.browser are unset)
+BROWSER=chrome scafctl auth login entra
+
+# Bypass auth.browser and $BROWSER for a single login and use the OS default browser
+scafctl auth login entra --browser default
+```
+
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+
+```powershell
+# Per-invocation override
+scafctl auth login entra --browser msedge
+scafctl kube login prod --browser msedge
+
+# Persistent preference in config.yaml
+scafctl config set auth.browser msedge
+scafctl auth login entra
+
+# Environment variable override (used when --browser and auth.browser are unset)
+$env:BROWSER = "chrome"
+scafctl auth login entra
+
+# Bypass auth.browser and $BROWSER for a single login and use the OS default browser
+scafctl auth login entra --browser default
+```
+
+{{% /tab %}}
+{{< /tabs >}}
+
+Supported browser identifiers include `msedge` (`edge`), `chrome` (`google-chrome`), `chromium`, `firefox`, `brave`, `safari` (macOS), `default` (`system`), or an executable name/path. On WSL, known browser families (`msedge`, `chrome`, `firefox`, `brave`, `chromium`) also discover Windows-installed browsers automatically when no native Linux binary is on `PATH`.
+
+Graceful fallback:
+
+- If the configured browser or `$BROWSER` cannot be found or launched, scafctl prints a warning and falls back to the OS default browser.
+- If the OS default browser also fails (for example in a headless environment), scafctl prints the authorization URL so you can open it manually.
 
 ### Headless / SSH (Device Code Flow)
 
@@ -2639,6 +2700,7 @@ Common `kube login` flags:
 | `--server` | API server URL when no resolver is configured. |
 | `--audience` | OIDC audience the minted token must target. |
 | `--profile` | Auth profile baked into the exec args (for example `work`). |
+| `--browser` | Browser to open for interactive login (overrides `auth.browser` and `$BROWSER`). |
 | `--current` | Set the new context as the current context. |
 | `--verify` | Confirm the authenticated identity via a post-login whoami (requires the kubeconfig provider). |
 | `--kubeconfig` | Target kubeconfig file (defaults to `KUBECONFIG` or `~/.kube/config`). |
@@ -2951,6 +3013,10 @@ You can configure CLI authentication defaults in your config file (`~/.config/sc
 
 ```yaml
 auth:
+  # Optional: preferred browser for interactive login (overridden by --browser;
+  # falls back to $BROWSER and the OS default browser when unset)
+  # browser: "msedge"
+
   entra:
     # Default tenant (defaults to "common"; use "organizations" for work/school only, or a tenant GUID)
     tenantId: "08e70e8e-d05c-4449-a2c2-67bd0a9c4e79"
@@ -2986,6 +3052,7 @@ auth:
 
 | Field | Description | Default |
 | ------- | ------------- | --------- |
+| `auth.browser` | Preferred web browser for interactive login (`msedge`, `chrome`, `firefox`, `brave`, `chromium`, `safari`, `default`, or an executable path; overridden by `--browser`, falls back to `$BROWSER` and OS default) | _(empty -- uses `$BROWSER` or OS default)_ |
 | `auth.entra.tenantId` | Default Azure tenant ID (`common`, `organizations`, or a tenant GUID/domain) | `common` |
 | `auth.entra.clientId` | Azure application (client) ID | Azure CLI public client |
 | `auth.entra.authority` | Azure AD authority URL (`https://` with host) | `https://login.microsoftonline.com` |
@@ -3433,16 +3500,17 @@ detect it automatically.
 **Fix:**
 
 1. Sign in to the target service's web UI first **in the same browser (and
-   browser profile)** that opens the authorize URL. `scafctl` opens your system
-   default browser automatically -- if your active session lives in a different
-   browser, copy the full `authorizeURL` from the opened tab's address bar into
-   that authenticated browser. If the system browser launcher cannot start at
-   all (for example, `xdg-open` is not installed), pass `--debug` to log the
-   `authorizeURL` in terminal output (`--debug` logs the URL only when starting
-   the launcher command itself fails, not when `xdg-open` starts and later fails
-   in a headless session); over SSH, also forward `callbackPort` with
-   `ssh -L <port>:localhost:<port>` so the redirect reaches `scafctl`'s
-   localhost listener.
+   browser profile)** that opens the authorize URL. If your active session lives
+   in a non-default browser, pass `--browser <browser>` (for example,
+   `scafctl auth login <handler> --browser msedge`) or set `auth.browser` in
+   `config.yaml` so `scafctl` opens that browser directly -- or copy the full
+   `authorizeURL` from the opened tab's address bar into your authenticated
+   browser. If no browser launcher can start (for example, `xdg-open` is not
+   installed), `scafctl` prints the `authorizeURL` automatically so you can open
+   it manually (if `xdg-open` starts and later exits without a display in a
+   headless session, pass `--debug` to inspect launcher behavior); over SSH,
+   also forward `callbackPort` with `ssh -L <port>:localhost:<port>` so the
+   redirect reaches `scafctl`'s localhost listener.
 2. Re-run `scafctl auth login <handler>` and approve the application consent
    prompt.
 

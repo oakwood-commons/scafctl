@@ -206,6 +206,10 @@ type Request struct {
 
 	// Timeout bounds the interactive login. Zero uses the handler default.
 	Timeout time.Duration
+
+	// Browser selects a preferred web browser for interactive login flows.
+	// Empty falls back to auth.browser in config, $BROWSER, and the OS default.
+	Browser string
 }
 
 // Result reports the outcome of a login.
@@ -266,6 +270,11 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 		binaryName = settings.CliBinaryName
 	}
 
+	resolvedBrowser, err := auth.ResolveBrowserPreference(ctx, req.Browser)
+	if err != nil {
+		return nil, fmt.Errorf("invalid browser preference: %w", err)
+	}
+
 	// Apply the requested profile to the context so the initial handler login
 	// and the post-login whoami store/read credentials under the same profile
 	// that the written kubeconfig exec block passes via --profile. Without this
@@ -285,7 +294,10 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 		return nil, err
 	}
 
-	loginOpts := auth.LoginOptions{Timeout: req.Timeout}
+	loginOpts := auth.LoginOptions{
+		Timeout: req.Timeout,
+		Browser: resolvedBrowser,
+	}
 	if info.OIDCAudience != "" && auth.HasCapability(handler.Capabilities(), auth.CapScopesOnLogin) {
 		loginOpts.Scopes = []string{info.OIDCAudience}
 	}

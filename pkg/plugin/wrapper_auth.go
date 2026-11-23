@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -38,6 +39,11 @@ var (
 	_ auth.FlowDetector = (*AuthHandlerWrapper)(nil)
 	_ auth.Configurer   = (*AuthHandlerWrapper)(nil)
 )
+
+// defaultPreflightFlowDetectTimeout bounds the advisory DetectAvailableFlows
+// preflight RPC when Login is called with an empty Flow and no shorter
+// caller or LoginOptions.Timeout deadline is active.
+const defaultPreflightFlowDetectTimeout = 5 * time.Second
 
 // ErrUntrustedAuthorizationURL is returned by a paste-back prompt whose
 // authorization URL falls outside the handler's trusted domains.
@@ -180,6 +186,28 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 	lgr := logger.FromContext(ctx)
 	lgr.V(1).Info("login via plugin auth handler", "handler", w.handlerName)
 
+	effectiveBrowser, err := auth.ResolveBrowserPreference(ctx, opts.Browser)
+	if err != nil {
+		return nil, fmt.Errorf("plugin auth handler %s login: invalid browser preference: %w", w.handlerName, err)
+	}
+
+	if opts.Timeout > 0 {
+		var cancelTimeout context.CancelFunc
+		ctx, cancelTimeout = context.WithTimeout(ctx, opts.Timeout)
+		defer cancelTimeout()
+	}
+
+	willOpen, err := w.willOpenBrowserOnLogin(ctx, opts.Flow, effectiveBrowser)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("plugin auth handler %s login: %w: %w", w.handlerName, auth.ErrTimeout, err)
+		}
+		return nil, fmt.Errorf("plugin auth handler %s login: %w", w.handlerName, err)
+	}
+	if willOpen {
+		auth.WarnIfBrowserUnavailable(ctx, effectiveBrowser)
+	}
+
 	req := LoginRequest{
 		TenantID:     opts.TenantID,
 		Hostname:     opts.Hostname,
@@ -187,6 +215,7 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 		Flow:         opts.Flow,
 		Timeout:      opts.Timeout,
 		CallbackPort: opts.CallbackPort,
+		Browser:      effectiveBrowser,
 	}
 
 	// Bridge the LoginOptions.DeviceCodeCallback to the plugin's streaming callback.
@@ -736,4 +765,43 @@ func KillAllAuthHandlers(clients []*AuthHandlerClient) {
 
 func (w *AuthHandlerWrapper) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
 	return w.client.ActivateServerMode(ctx, settings)
+}
+
+// willOpenBrowserOnLogin reports whether delegating Login to the plugin will
+// attempt to launch a web browser on the host. When flow is empty (e.g. from
+// 'scafctl kube login' or library callers) and a browser preference or $BROWSER
+// is set, it consults DetectAvailableFlows (bounded by ctx and
+// defaultPreflightFlowDetectTimeout) and Entra's configured defaultFlow so
+// headless/CI flows (device_code, service_principal, workload_identity, pat)
+// never emit spurious browser warnings. If ctx itself expires or is cancelled
+// before preflight completes, that error is returned so Login aborts rather
+// than proceeding after its deadline.
+func (w *AuthHandlerWrapper) willOpenBrowserOnLogin(ctx context.Context, flow auth.Flow, effectiveBrowser string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if effectiveBrowser == "" && strings.TrimSpace(os.Getenv("BROWSER")) == "" {
+		return false, nil
+	}
+	if flow != "" {
+		return flow == auth.FlowInteractive, nil
+	}
+	detectCtx, detectCancel := context.WithTimeout(ctx, defaultPreflightFlowDetectTimeout)
+	available, err := w.DetectAvailableFlows(detectCtx)
+	detectCancel()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	if err == nil {
+		for _, fa := range available {
+			if fa.Available {
+				return auth.Flow(fa.Flow) == auth.FlowInteractive, nil
+			}
+		}
+	}
+	if w.handlerName == "entra" {
+		return auth.ResolveEntraDefaultFlow(ctx) == auth.FlowInteractive, nil
+	}
+	supported := w.SupportedFlows()
+	return len(supported) == 0 || slices.Contains(supported, auth.FlowInteractive), nil
 }

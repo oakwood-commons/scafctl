@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -120,6 +122,91 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("apiServer: %w", err)
 	}
 
+	// Validate auth config
+	if err := c.Auth.Validate(); err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+
+	return nil
+}
+
+// Validate validates global authentication configuration.
+func (a *GlobalAuthConfig) Validate() error {
+	if err := ValidateBrowser(a.Browser); err != nil {
+		return fmt.Errorf("browser: %w", err)
+	}
+	return nil
+}
+
+// NormalizeBrowser returns the canonical browser preference token after
+// trimming surrounding whitespace and unwrapping a single pair of matching
+// outer double or single quotes. Callers must validate raw inputs with
+// ValidateBrowser first so control characters, whitespace-only values, and
+// overlong strings are rejected before normalization.
+func NormalizeBrowser(browser string) string {
+	if browser == "" {
+		return ""
+	}
+	s := strings.TrimSpace(browser)
+	switch {
+	case len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"':
+		s = strings.TrimSpace(s[1 : len(s)-1])
+	case len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'':
+		s = strings.TrimSpace(s[1 : len(s)-1])
+	}
+	return s
+}
+
+// ValidateBrowser validates a raw browser preference string (such as
+// auth.browser or --browser). Only the exact empty string is valid as unset.
+// Non-empty values must fit within MaxAuthBrowserLength before trimming,
+// contain valid UTF-8 with no control characters, not be whitespace-only, have
+// balanced outer quotes if quoted, and not start with '-' so config or flag
+// values cannot inject command-line options into browser launchers.
+func ValidateBrowser(browser string) error {
+	if browser == "" {
+		return nil
+	}
+	if len(browser) > MaxAuthBrowserLength {
+		return fmt.Errorf("exceeds maximum length of %d characters", MaxAuthBrowserLength)
+	}
+	if !utf8.ValidString(browser) {
+		return errors.New("contains invalid UTF-8")
+	}
+	for _, r := range browser {
+		if r < 0x20 || r == 0x7f || unicode.IsControl(r) {
+			return errors.New("must not contain control characters")
+		}
+	}
+	trimmed := strings.TrimSpace(browser)
+	if trimmed == "" {
+		return errors.New("must not be whitespace-only")
+	}
+	unquoted := trimmed
+	switch {
+	case trimmed[0] == '"' || trimmed[len(trimmed)-1] == '"':
+		if len(trimmed) < 2 || trimmed[0] != '"' || trimmed[len(trimmed)-1] != '"' {
+			return errors.New("must not contain double quotes")
+		}
+		unquoted = strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+	case trimmed[0] == '\'' || trimmed[len(trimmed)-1] == '\'':
+		if len(trimmed) < 2 || trimmed[0] != '\'' || trimmed[len(trimmed)-1] != '\'' {
+			return errors.New("must not have unmatched single quotes")
+		}
+		unquoted = strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+	}
+	if unquoted == "" {
+		return errors.New("must not be empty")
+	}
+	if strings.ContainsRune(unquoted, '"') {
+		return errors.New("must not contain double quotes")
+	}
+	if strings.HasPrefix(unquoted, "'") || strings.HasSuffix(unquoted, "'") {
+		return errors.New("must not contain nested or unmatched single quotes")
+	}
+	if strings.HasPrefix(trimmed, "-") || strings.HasPrefix(unquoted, "-") {
+		return fmt.Errorf("must not start with '-' (got %q)", browser)
+	}
 	return nil
 }
 

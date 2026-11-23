@@ -296,6 +296,16 @@ catalogs:
 #       environment: production
 
 # =============================================================================
+# Auth - Authentication handler configuration
+# =============================================================================
+# auth:
+#   # Preferred browser for interactive authentication flows (e.g., "msedge",
+#   # "chrome", "firefox", "safari", "default", or an executable path).
+#   # Priority: --browser CLI flag > auth.browser > $BROWSER > OS default.
+#   # Default: "" (empty, uses $BROWSER or OS default)
+#   # browser: "msedge"
+
+# =============================================================================
 # Plugins - Plugin management configuration
 # =============================================================================
 plugins:

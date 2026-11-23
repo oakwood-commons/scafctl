@@ -36,15 +36,16 @@ against the registry's OAuth2 authorization endpoint.
 > authorize URL** before you run `scafctl auth login <name>`.
 >
 > Sign in to `<registry-host>` in that browser first, then run
-> `scafctl auth login <name>`. `scafctl` opens your system default browser
-> automatically -- if your active session lives in a different browser or
-> browser profile, copy the full `authorizeURL` from the opened tab's address
-> bar into that authenticated browser. When the system browser launcher cannot
-> start at all (for example, `xdg-open` is not installed in a minimal container
-> or headless Linux environment), pass `--debug` to log the `authorizeURL` in
-> terminal output (`--debug` logs the URL only when starting the launcher
-> command itself fails, not when `xdg-open` starts and exits later without a
-> display). Over SSH, also forward `callbackPort` (for example,
+> `scafctl auth login <name>`. If your active session lives in a non-default
+> browser, pass `--browser <browser>` (for example,
+> `scafctl auth login <name> --browser msedge`) or set `auth.browser` in
+> `config.yaml` so `scafctl` opens that browser directly -- or copy the full
+> `authorizeURL` from the opened tab's address bar into your authenticated
+> browser. When no browser launcher can start (for example, `xdg-open` is not
+> installed in a minimal container or headless Linux environment), `scafctl`
+> prints the `authorizeURL` automatically so you can open it manually (if
+> `xdg-open` starts and exits later without a display, pass `--debug` to inspect
+> launcher behavior). Over SSH, also forward `callbackPort` (for example,
 > `ssh -L 8400:localhost:8400 ...`) so the browser redirect reaches `scafctl`'s
 > localhost listener.
 

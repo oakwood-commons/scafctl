@@ -119,7 +119,7 @@ func (p *authPageTestPlugin) Login(
 	q.Set("state", state)
 	authURL := fmt.Sprintf("%s/%s/oauth2/v2.0/authorize?%s", authority, url.PathEscape(tenantID), q.Encode())
 
-	_ = oauth.OpenBrowser(ctx, authURL)
+	_ = oauth.OpenBrowserWithPreference(ctx, authURL, req.Browser)
 
 	var code string
 	select {

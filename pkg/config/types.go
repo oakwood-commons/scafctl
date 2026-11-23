@@ -532,8 +532,17 @@ type ActionConfig struct {
 	OutputDir string `json:"outputDir,omitempty" yaml:"outputDir,omitempty" mapstructure:"outputDir" doc:"Default target directory for action file operations" maxLength:"4096" example:"/tmp/output"`
 }
 
+// MaxAuthBrowserLength is the maximum length in bytes allowed for auth.browser
+// and the --browser CLI flag.
+const MaxAuthBrowserLength = 256
+
 // GlobalAuthConfig holds authentication handler configuration.
 type GlobalAuthConfig struct {
+	// Browser sets the preferred web browser for interactive authentication flows
+	// (e.g., "msedge", "chrome", "firefox", "safari", "default", or an executable name/path).
+	// Overridden by the --browser CLI flag; falls back to $BROWSER and the OS default browser when unset.
+	Browser string `json:"browser,omitempty" yaml:"browser,omitempty" mapstructure:"browser" doc:"Preferred browser for interactive authentication flows (e.g., msedge, chrome, firefox, safari, default, or an executable path)" example:"msedge" maxLength:"256"`
+
 	// HTTPClient optionally overrides the global HTTP client settings for all auth handlers.
 	// Individual handler configs (Entra, GitHub, GCP) can further override these.
 	HTTPClient *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"HTTP client overrides for auth handlers"`

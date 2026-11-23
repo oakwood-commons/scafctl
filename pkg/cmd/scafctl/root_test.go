@@ -232,20 +232,24 @@ func TestRoot_WithExitFunc(t *testing.T) {
 type stubAuthHandler struct {
 	name        string
 	displayName string
+	loginCalls  []auth.LoginOptions
 }
 
-func (s *stubAuthHandler) Name() string                    { return s.name }
-func (s *stubAuthHandler) DisplayName() string             { return s.displayName }
-func (s *stubAuthHandler) SupportedFlows() []auth.Flow     { return []auth.Flow{auth.FlowDeviceCode} }
+func (s *stubAuthHandler) Name() string        { return s.name }
+func (s *stubAuthHandler) DisplayName() string { return s.displayName }
+func (s *stubAuthHandler) SupportedFlows() []auth.Flow {
+	return []auth.Flow{auth.FlowInteractive, auth.FlowDeviceCode}
+}
 func (s *stubAuthHandler) Capabilities() []auth.Capability { return nil }
-func (s *stubAuthHandler) Login(_ context.Context, _ auth.LoginOptions) (*auth.Result, error) {
-	return nil, nil
+func (s *stubAuthHandler) Login(_ context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+	s.loginCalls = append(s.loginCalls, opts)
+	return &auth.Result{Claims: &auth.Claims{Email: "user@example.com"}}, nil
 }
 func (s *stubAuthHandler) Logout(_ context.Context) error                 { return nil }
 func (s *stubAuthHandler) Status(_ context.Context) (*auth.Status, error) { return &auth.Status{}, nil }
 
 func (s *stubAuthHandler) GetToken(_ context.Context, _ auth.TokenOptions) (*auth.Token, error) {
-	return nil, nil
+	return &auth.Token{AccessToken: "tok"}, nil
 }
 
 func (s *stubAuthHandler) InjectAuth(_ context.Context, _ *http.Request, _ auth.TokenOptions) error {
@@ -561,4 +565,80 @@ func TestRoot_DetailedExitCode_EmbedderDefault(t *testing.T) {
 				"an explicit --detailed-exit-code=false must override an embedder default of true")
 		})
 	}
+}
+
+func TestRoot_LoginConfigFileBrowserValidationAndNormalization(t *testing.T) {
+	t.Parallel()
+
+	t.Run("invalid auth.browser in config file aborts auth login and kube login with ConfigError", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		badCfgPath := filepath.Join(tmpDir, "bad-config.yaml")
+		badCfgYAML := "version: 1\nauth:\n  browser: \"--headless\"\n  entra:\n    tenantId: configured-tenant\n"
+		require.NoError(t, os.WriteFile(badCfgPath, []byte(badCfgYAML), 0o600))
+
+		for _, args := range [][]string{
+			{"auth", "login", "internal-idp"},
+			{"auth", "login", "internal-idp", "--browser", "firefox"},
+			{"kube", "login", "prod", "--handler", "internal-idp", "--server", "https://api.example.com:6443", "--kubeconfig", filepath.Join(tmpDir, "kubeconfig")},
+		} {
+			handler := &stubAuthHandler{name: "internal-idp", displayName: "Internal IdP"}
+			ioStreams, _, stderr := terminal.NewTestIOStreams()
+			cmd, cleanup := Root(&RootOptions{
+				BinaryName:          "mycli",
+				ConfigPath:          badCfgPath,
+				IOStreams:           ioStreams,
+				BuiltinAuthHandlers: []auth.Handler{handler},
+			})
+			cmd.SetArgs(args)
+			err := cmd.Execute()
+			cleanup()
+
+			require.Error(t, err, "args %v must fail when config file fails validation", args)
+			assert.Equal(t, exitcode.ConfigError, exitcode.GetCode(err))
+			assert.Contains(t, stderr.String(), "must not start with '-'")
+			assert.Empty(t, handler.loginCalls, "login must not execute with discarded config for args %v", args)
+		}
+	})
+
+	t.Run("single-quoted auth.browser in config file normalizes before handler login", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		quotedCfgPath := filepath.Join(tmpDir, "quoted-config.yaml")
+		quotedCfgYAML := "version: 1\nauth:\n  browser: \"'firefox'\"\n"
+		require.NoError(t, os.WriteFile(quotedCfgPath, []byte(quotedCfgYAML), 0o600))
+
+		authHandler := &stubAuthHandler{name: "internal-idp", displayName: "Internal IdP"}
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		authCmd, authCleanup := Root(&RootOptions{
+			BinaryName:          "mycli",
+			ConfigPath:          quotedCfgPath,
+			IOStreams:           ioStreams,
+			BuiltinAuthHandlers: []auth.Handler{authHandler},
+		})
+		defer authCleanup()
+		authCmd.SetArgs([]string{"auth", "login", "internal-idp", "--flow", "interactive"})
+		require.NoError(t, authCmd.Execute())
+		require.Len(t, authHandler.loginCalls, 1)
+		assert.Equal(t, "firefox", authHandler.loginCalls[0].Browser)
+
+		kubeHandler := &stubAuthHandler{name: "internal-idp", displayName: "Internal IdP"}
+		kubeStreams, _, _ := terminal.NewTestIOStreams()
+		kubeCmd, kubeCleanup := Root(&RootOptions{
+			BinaryName:          "mycli",
+			ConfigPath:          quotedCfgPath,
+			IOStreams:           kubeStreams,
+			BuiltinAuthHandlers: []auth.Handler{kubeHandler},
+		})
+		defer kubeCleanup()
+		kubeCmd.SetArgs([]string{
+			"kube", "login", "prod",
+			"--handler", "internal-idp",
+			"--server", "https://api.example.com:6443",
+			"--kubeconfig", filepath.Join(tmpDir, "kubeconfig"),
+		})
+		require.NoError(t, kubeCmd.Execute())
+		require.Len(t, kubeHandler.loginCalls, 1)
+		assert.Equal(t, "firefox", kubeHandler.loginCalls[0].Browser)
+	})
 }

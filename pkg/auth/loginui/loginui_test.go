@@ -981,7 +981,7 @@ func TestBuildInteractiveStatusTUI_Snapshot(t *testing.T) {
 	fullURL := "https://login.example.com/common/oauth2/v2.0/authorize?client_id=00000000-0000-0000-0000-000000000000&code_challenge=SUPERLONGPKCECHALLENGE&state=SECRETSTATE"
 	cfg, data := buildInteractiveStatusTUI("scafctl", "Microsoft Entra ID", deviceCodeData{verificationURI: fullURL}, done, func(raw string) error {
 		return ps.submit(context.Background(), raw)
-	})
+	}, nil)
 	cfg.Width = 100
 	cfg.Height = 20
 	cfg.NoColor = true

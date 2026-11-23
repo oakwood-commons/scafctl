@@ -16,6 +16,7 @@ import (
 	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -135,6 +136,13 @@ func (s *AuthHandlerGRPCServer) Login(req *proto.LoginRequest, stream grpc.Serve
 			},
 		})
 	}
+	if err := config.ValidateBrowser(req.Browser); err != nil {
+		return stream.Send(&proto.LoginStreamMessage{
+			Payload: &proto.LoginStreamMessage_Error{
+				Error: fmt.Sprintf("invalid browser: %v", err),
+			},
+		})
+	}
 
 	// Build the device code callback that sends prompts over the stream.
 	deviceCodeCb := func(prompt DeviceCodePrompt) {
@@ -150,15 +158,15 @@ func (s *AuthHandlerGRPCServer) Login(req *proto.LoginRequest, stream grpc.Serve
 	}
 
 	loginReq := LoginRequest{
-		TenantID: req.HandlerName, // will be overridden below
+		TenantID: req.TenantId,
 		Hostname: req.Hostname,
 		Scopes:   req.Scopes,
 		Flow:     auth.Flow(req.Flow),
 		Timeout:  time.Duration(req.TimeoutSeconds) * time.Second,
 		// int32 -> int is a widening conversion and always safe.
 		CallbackPort: int(req.CallbackPort),
+		Browser:      config.NormalizeBrowser(req.Browser),
 	}
-	loginReq.TenantID = req.TenantId
 
 	result, err := s.Impl.Login(ctx, req.HandlerName, loginReq, deviceCodeCb)
 	if err != nil {
@@ -382,6 +390,7 @@ func (c *AuthHandlerGRPCClient) Login(ctx context.Context, handlerName string, r
 		TimeoutSeconds: int64(req.Timeout / time.Second),
 		Profile:        auth.ProfileFromContext(ctx),
 		CallbackPort:   callbackPortToProto(req.CallbackPort),
+		Browser:        req.Browser,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("login RPC failed: %w", err)

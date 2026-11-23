@@ -65,6 +65,8 @@ Common flags:
 - `--server`: API server URL when no resolver is configured.
 - `--audience`: OIDC audience the minted token must target.
 - `--profile`: auth profile baked into the exec args (for example `work`).
+- `--browser`: browser to open for interactive login (overrides `auth.browser`
+  and `$BROWSER`).
 - `--namespace`, `-n`: default namespace set on the written context.
 - `--current`: set the new context as the current context.
 - `--verify`: confirm the authenticated identity via a post-login whoami

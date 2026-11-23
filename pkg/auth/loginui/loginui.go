@@ -201,13 +201,17 @@ func runStatusTUI(
 		}
 	}
 
+	warnBuf := newTUIWarningBuffer(w)
+	ctx = auth.WithBrowserWarningSink(ctx, warnBuf.emit)
+
+	// Wait for the device code, an early completion, or cancellation.
+	w.Verbosef("Initiating authentication with %s...", handler.DisplayName())
+
 	go func() {
 		result, err := handler.Login(ctx, opts)
 		outcomeChan <- loginOutcome{result: result, err: err}
 	}()
 
-	// Wait for the device code, an early completion, or cancellation.
-	w.Verbosef("Initiating authentication with %s...", handler.DisplayName())
 	var dci deviceCodeData
 	select {
 	case dci = <-deviceCodeChan:
@@ -277,9 +281,15 @@ func runStatusTUI(
 	cfg.AppName = binaryName
 	cfg.DisplaySchema = schema
 	cfg.Done = done
+	cfg.OpenURL = func(targetURL string) error {
+		return openBrowser(ctx, targetURL, opts.Browser)
+	}
 
 	teaOpts := tui.WithIO(ioStreams.In, ioStreams.Out)
-	if runErr := tui.Run(data, cfg, teaOpts...); runErr != nil {
+	warnBuf.setActive(true)
+	runErr := runStatusScreen(data, cfg, teaOpts...)
+	warnBuf.flush()
+	if runErr != nil {
 		if ctx.Err() != nil {
 			return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
 		}
@@ -556,6 +566,57 @@ func (oc *outcomeCapture) wait(ctx context.Context) (*auth.Result, error) {
 // deterministically without a PTY. Production code never reassigns it.
 var runStatusScreen = tui.Run
 
+// openBrowser is auth.OpenBrowser as a test seam so status TUI Open URL tests
+// can verify browser preference forwarding without launching a real browser.
+var openBrowser = auth.OpenBrowser
+
+// tuiWarningBuffer buffers browser fallback warnings while Bubble Tea owns the
+// terminal screen so warnings never scribble onto the alt-screen buffer, then
+// flushes them cleanly to w once the TUI exits. Warnings emitted before the TUI
+// starts (or after it exits) pass straight through to w.
+type tuiWarningBuffer struct {
+	mu       sync.Mutex
+	active   bool
+	warnings []string
+	writer   *writer.Writer
+}
+
+func newTUIWarningBuffer(w *writer.Writer) *tuiWarningBuffer {
+	return &tuiWarningBuffer{writer: w}
+}
+
+func (b *tuiWarningBuffer) emit(msg string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.active {
+		b.warnings = append(b.warnings, msg)
+		return
+	}
+	if b.writer != nil {
+		b.writer.Warningf("%s", msg)
+	}
+}
+
+func (b *tuiWarningBuffer) setActive(active bool) {
+	b.mu.Lock()
+	b.active = active
+	b.mu.Unlock()
+}
+
+func (b *tuiWarningBuffer) flush() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.active = false
+	pending := b.warnings
+	b.warnings = nil
+	if b.writer == nil {
+		return
+	}
+	for _, msg := range pending {
+		b.writer.Warningf("%s", msg)
+	}
+}
+
 // readPlainPasteLine overrides input.ReadInteractiveLine in tests so plain-text
 // paste fallback can be exercised deterministically without a PTY. Production
 // code leaves it nil.
@@ -634,12 +695,15 @@ func runInteractiveTUI(
 		}
 	})
 
+	warnBuf := newTUIWarningBuffer(w)
+	ctx = auth.WithBrowserWarningSink(ctx, warnBuf.emit)
+
+	w.Verbosef("Initiating authentication with %s...", handler.DisplayName())
+
 	go func() {
 		result, err := handler.Login(ctx, opts)
 		outcomeChan <- loginOutcome{result: result, err: err}
 	}()
-
-	w.Verbosef("Initiating authentication with %s...", handler.DisplayName())
 
 	var prompt deviceCodeData
 	select {
@@ -657,10 +721,15 @@ func runInteractiveTUI(
 
 	cfg, data := buildInteractiveStatusTUI(binaryName, handler.DisplayName(), prompt, done, func(raw string) error {
 		return ps.submit(ctx, raw)
+	}, func(targetURL string) error {
+		return openBrowser(ctx, targetURL, opts.Browser)
 	})
 
 	teaOpts := tui.WithIO(ioStreams.In, ioStreams.Out)
-	if runErr := runStatusScreen(data, cfg, teaOpts...); runErr != nil {
+	warnBuf.setActive(true)
+	runErr := runStatusScreen(data, cfg, teaOpts...)
+	warnBuf.flush()
+	if runErr != nil {
 		if ctx.Err() != nil {
 			return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
 		}
@@ -691,6 +760,7 @@ func buildInteractiveStatusTUI(
 	prompt deviceCodeData,
 	done <-chan tui.StatusResult,
 	onSubmit tui.StatusInputSubmitFunc,
+	openURL func(string) error,
 ) (tui.Config, map[string]any) {
 	authURL := prompt.verificationURI
 	data := map[string]any{
@@ -753,6 +823,7 @@ func buildInteractiveStatusTUI(
 	cfg.DisplaySchema = schema
 	cfg.Done = done
 	cfg.OnStatusInput = statusSubmit
+	cfg.OpenURL = openURL
 
 	return cfg, data
 }

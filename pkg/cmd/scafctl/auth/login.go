@@ -50,6 +50,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 		registryScope             string
 		writeRegistryAuth         bool
 		profile                   string
+		browser                   string
 		saveAlias                 string
 	)
 
@@ -122,6 +123,9 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 			Examples:
 			  # Login with Entra ID using interactive browser flow (default)
 			  scafctl auth login entra
+
+			  # Login with Entra ID using a specific browser
+			  scafctl auth login entra --browser msedge
 
 			  # Login with Entra ID using device code flow (headless/SSH)
 			  scafctl auth login entra --flow device-code
@@ -206,6 +210,30 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				err := fmt.Errorf("--callback-port must be between %d and %d, got %d", auth.MinCallbackPort, auth.MaxCallbackPort, callbackPort)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// Validate browser flag and loaded configuration up front before handler lookup.
+			var effectiveBrowser string
+			if cmd.Flags().Changed("browser") {
+				if err := auth.ValidateBrowserFlag(browser); err != nil {
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+			}
+			if loadErr := config.LoadErrorFromContext(ctx); loadErr != nil {
+				w.Errorf("%v", loadErr)
+				return exitcode.WithCode(loadErr, exitcode.ConfigError)
+			}
+			if cmd.Flags().Changed("browser") {
+				effectiveBrowser = config.NormalizeBrowser(browser)
+			} else {
+				var err error
+				effectiveBrowser, err = auth.ResolveBrowserPreference(ctx, "")
+				if err != nil {
+					err = fmt.Errorf("invalid auth.browser configuration: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.ConfigError)
+				}
 			}
 
 			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile
@@ -380,9 +408,9 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 						flow = auth.FlowWorkloadIdentity
 					}
 				}
-				loginErr = loginWithFlowDetection(ctx, w, binaryName, handler, handlerName, flow, tenantID, hostname, callbackPort, timeout, scopes, force, skipIfAuthenticated, entraDefaultFlow)
+				loginErr = loginWithFlowDetection(ctx, w, binaryName, handler, handlerName, flow, tenantID, hostname, callbackPort, effectiveBrowser, timeout, scopes, force, skipIfAuthenticated, entraDefaultFlow)
 			default:
-				loginErr = loginWithFlowDetection(ctx, w, binaryName, handler, handlerName, flow, tenantID, hostname, callbackPort, timeout, scopes, force, skipIfAuthenticated, auth.Flow(""))
+				loginErr = loginWithFlowDetection(ctx, w, binaryName, handler, handlerName, flow, tenantID, hostname, callbackPort, effectiveBrowser, timeout, scopes, force, skipIfAuthenticated, auth.Flow(""))
 			}
 
 			if loginErr != nil {
@@ -476,6 +504,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 	cmd.Flags().StringVar(&registryScope, "registry-scope", "", "OAuth scope for registry credential bridging")
 	cmd.Flags().BoolVar(&writeRegistryAuth, "write-registry-auth", false, "Also write bridged credentials to container auth file (Docker/Podman interop)")
 	cmd.Flags().StringVar(&profile, "profile", "", "Named profile for isolated credential storage (e.g. work, personal)")
+	cmd.Flags().StringVar(&browser, "browser", "", "Browser to open for interactive login (e.g., msedge, chrome, firefox, safari; overrides auth.browser and $BROWSER)")
 	cmd.Flags().StringVar(&saveAlias, "save-alias", "", "After login, save the resolved --hostname as a static alias under this name (requires hostname capability)")
 
 	return cmd
@@ -485,7 +514,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 // FlowDetector interface for flow auto-detection. Handlers are resolved from
 // the registry (as plugins or built-in oauth2). Handler-specific credential
 // detection is delegated to the FlowDetector interface on the handler.
-func loginWithFlowDetection(ctx context.Context, w *writer.Writer, binaryName string, handler auth.Handler, handlerName string, flow auth.Flow, tenantID, hostname string, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool, defaultFlow auth.Flow) error {
+func loginWithFlowDetection(ctx context.Context, w *writer.Writer, binaryName string, handler auth.Handler, handlerName string, flow auth.Flow, tenantID, hostname string, callbackPort int, browser string, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool, defaultFlow auth.Flow) error {
 	// Use FlowDetector for auto-detection when no flow is explicitly set
 	if flow == "" {
 		if detector, ok := handler.(auth.FlowDetector); ok {
@@ -527,13 +556,13 @@ func loginWithFlowDetection(ctx context.Context, w *writer.Writer, binaryName st
 		return nil
 	}
 
-	return executeLogin(ctx, w, binaryName, handler, flow, tenantID, hostname, callbackPort, timeout, scopes)
+	return executeLogin(ctx, w, binaryName, handler, flow, tenantID, hostname, callbackPort, browser, timeout, scopes)
 }
 
 // executeLogin runs the common login logic for any auth handler. It delegates
 // the interactive presentation (kvx status TUI on a terminal, plain text
 // otherwise) to loginui.RunLogin, then renders the consolidated success line.
-func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, handler auth.Handler, flow auth.Flow, tenantID, hostname string, callbackPort int, timeout time.Duration, scopes []string) error {
+func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, handler auth.Handler, flow auth.Flow, tenantID, hostname string, callbackPort int, browser string, timeout time.Duration, scopes []string) error {
 	opts := auth.LoginOptions{
 		TenantID:     tenantID,
 		Hostname:     hostname,
@@ -541,6 +570,7 @@ func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, hand
 		Flow:         flow,
 		Timeout:      timeout,
 		CallbackPort: callbackPort,
+		Browser:      browser,
 	}
 
 	result, err := loginui.RunLogin(ctx, w, binaryName, handler, opts)

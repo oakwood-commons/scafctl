@@ -5884,6 +5884,71 @@ func TestIntegration_AuthLoginCallbackPortSupported(t *testing.T) {
 	assert.Contains(t, stdout, "--callback-port")
 }
 
+func TestIntegration_LoginBrowserFlagAndConfigSet(t *testing.T) {
+	t.Parallel()
+
+	t.Run("auth login --help and kube login --help advertise --browser", func(t *testing.T) {
+		t.Parallel()
+		authOut, _, authCode := runScafctl(t, "auth", "login", "--help")
+		assert.Equal(t, 0, authCode)
+		assert.Contains(t, authOut, "--browser")
+
+		kubeOut, _, kubeCode := runScafctl(t, "kube", "login", "--help")
+		assert.Equal(t, 0, kubeCode)
+		assert.Contains(t, kubeOut, "--browser")
+	})
+
+	t.Run("invalid --browser rejected by auth login and kube login", func(t *testing.T) {
+		t.Parallel()
+		_, authErr, authCode := runScafctl(t, "auth", "login", "entra", "--browser", "")
+		assert.NotEqual(t, 0, authCode)
+		assert.Contains(t, authErr, "--browser requires a non-empty browser name")
+
+		_, authDashErr, authDashCode := runScafctl(t, "auth", "login", "entra", "--browser=-flag")
+		assert.NotEqual(t, 0, authDashCode)
+		assert.Contains(t, authDashErr, "must not start with '-'")
+
+		_, kubeErr, kubeCode := runScafctl(t, "kube", "login", "prod", "--browser", "")
+		assert.NotEqual(t, 0, kubeCode)
+		assert.Contains(t, kubeErr, "--browser requires a non-empty browser name")
+	})
+
+	t.Run("config set/get/unset auth.browser round-trip and validation", func(t *testing.T) {
+		t.Parallel()
+		cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(cfgPath, []byte("version: 1\n"), 0o600))
+
+		_, setErr, setCode := runScafctl(t, "--config", cfgPath, "config", "set", "auth.browser", "msedge")
+		assert.Equal(t, 0, setCode, "stderr: %s", setErr)
+
+		getOut, getErr, getCode := runScafctl(t, "--config", cfgPath, "config", "get", "auth.browser")
+		assert.Equal(t, 0, getCode, "stderr: %s", getErr)
+		assert.Contains(t, getOut, "msedge")
+
+		// Leading-dash flag injection is rejected on config set.
+		_, badErr, badCode := runScafctl(t, "--config", cfgPath, "config", "set", "auth.browser", "--", "--headless")
+		assert.NotEqual(t, 0, badCode)
+		assert.Contains(t, badErr, "must not start with '-'")
+
+		_, unsetErr, unsetCode := runScafctl(t, "--config", cfgPath, "config", "unset", "auth.browser")
+		assert.Equal(t, 0, unsetCode, "stderr: %s", unsetErr)
+
+		// Invalid auth.browser written directly to config file aborts auth login and kube login
+		// as a configuration error while still allowing config unset to repair the file.
+		require.NoError(t, os.WriteFile(cfgPath, []byte("version: 1\nauth:\n  browser: \"--headless\"\n"), 0o600))
+		_, badAuthLoginErr, badAuthLoginCode := runScafctl(t, "--config", cfgPath, "auth", "login", "entra")
+		assert.NotEqual(t, 0, badAuthLoginCode)
+		assert.Contains(t, badAuthLoginErr, "must not start with '-'")
+
+		_, badKubeLoginErr, badKubeLoginCode := runScafctl(t, "--config", cfgPath, "kube", "login", "prod")
+		assert.NotEqual(t, 0, badKubeLoginCode)
+		assert.Contains(t, badKubeLoginErr, "must not start with '-'")
+
+		_, repairErr, repairCode := runScafctl(t, "--config", cfgPath, "config", "unset", "auth.browser")
+		assert.Equal(t, 0, repairCode, "config unset must still repair broken config: %s", repairErr)
+	})
+}
+
 func TestIntegration_AuthLoginCallbackPortOutOfRange(t *testing.T) {
 	t.Parallel()
 	// The callback-port range is validated as a static input constraint before
@@ -17339,6 +17404,59 @@ settings:
 		html2, hdr2 := readCapturedBrowser(t)
 		assert.Contains(t, hdr2, "STATUS:200")
 		assert.Equal(t, "<!doctype html><html><body>CACHED-LAZY:mycli:success</body></html>", html2)
+	})
+
+	t.Run("--browser flag overrides BROWSER and missing browser emits host-side warning", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdgDir, "cfg-browser"))
+		t.Setenv("XDG_DATA_HOME", filepath.Join(xdgDir, "data-browser"))
+		t.Setenv("XDG_CACHE_HOME", filepath.Join(xdgDir, "cache-browser"))
+		t.Setenv("SCAFCTL_SECRETS_KEY", "test-passphrase-for-isolated-keyring")
+
+		// 1. Explicit --browser=<fakeBrowserBin> overrides a broken $BROWSER.
+		t.Setenv("BROWSER", "nonexistent-env-browser-ignored")
+		var outOverride, errOverride bytes.Buffer
+		rootOverride, cleanupOverride := scafctl.Root(&scafctl.RootOptions{
+			ConfigPath:     cfgPath,
+			AuthPluginDirs: []string{pluginDir},
+			IOStreams:      &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &outOverride, ErrOut: &errOverride},
+		})
+		defer cleanupOverride()
+
+		rootOverride.SetArgs([]string{"auth", "login", "entra", "--flow", "interactive", "--browser", fakeBrowserBin, "--timeout", "15s", "--force"})
+		require.NoError(t, rootOverride.Execute(), "stderr: %s", errOverride.String())
+		htmlOverride, hdrOverride := readCapturedBrowser(t)
+		assert.Contains(t, hdrOverride, "STATUS:200")
+		assert.Contains(t, htmlOverride, "Authentication complete")
+		assert.NotContains(t, outOverride.String(), "could not be launched")
+
+		// 2. Missing --browser emits host-side warning and falls back to OS default launcher.
+		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+			shimDir := t.TempDir()
+			launcherName := "xdg-open"
+			if runtime.GOOS == "darwin" {
+				launcherName = "open"
+			}
+			require.NoError(t, os.Symlink(fakeBrowserBin, filepath.Join(shimDir, launcherName)))
+			t.Setenv("PATH", shimDir)
+			t.Setenv("WSL_DISTRO_NAME", "")
+			t.Setenv("WSL_INTEROP", "")
+			t.Setenv("BROWSER", "")
+
+			var outWarn, errWarn bytes.Buffer
+			rootWarn, cleanupWarn := scafctl.Root(&scafctl.RootOptions{
+				ConfigPath:     cfgPath,
+				AuthPluginDirs: []string{pluginDir},
+				IOStreams:      &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &outWarn, ErrOut: &errWarn},
+			})
+			defer cleanupWarn()
+
+			rootWarn.SetArgs([]string{"auth", "login", "entra", "--flow", "interactive", "--browser", "nonexistent-e2e-browser", "--timeout", "15s", "--force"})
+			require.NoError(t, rootWarn.Execute(), "stderr: %s", errWarn.String())
+			assert.Contains(t, outWarn.String(), `configured browser "nonexistent-e2e-browser" could not be launched`)
+			htmlWarn, hdrWarn := readCapturedBrowser(t)
+			assert.Contains(t, hdrWarn, "STATUS:200")
+			assert.Contains(t, htmlWarn, "Authentication complete")
+		}
 	})
 }
 

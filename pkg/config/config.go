@@ -326,6 +326,7 @@ func (m *Manager) setDefaults() {
 		"httpClient.allowedPrivateCIDRs",
 		"httpClient.trustProxyResolution",
 		"httpClient.trustedProxy",
+		"auth.browser",
 	} {
 		// Errors only when called with no key, which cannot happen here.
 		_ = m.v.BindEnv(key)
@@ -790,6 +791,17 @@ func (m *Manager) Set(key string, value any) {
 			m.config.HTTPClient.TrustedProxy = boolPtrFromValue(value)
 		case "httpClient.allowedPrivateCIDRs":
 			m.config.HTTPClient.AllowedPrivateCIDRs = stringSlicePtrFromValue(value)
+		case "auth.browser":
+			switch v := value.(type) {
+			case string:
+				m.config.Auth.Browser = v
+			case bool:
+				m.config.Auth.Browser = strconv.FormatBool(v)
+			case int:
+				m.config.Auth.Browser = strconv.Itoa(v)
+			case nil:
+				m.config.Auth.Browser = ""
+			}
 		}
 	}
 }
