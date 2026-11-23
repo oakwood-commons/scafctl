@@ -22,6 +22,9 @@ func ResolveActiveProfile(ctx context.Context, handlerName string) string {
 	if p := ProfileFromContext(ctx); p != "" {
 		return p
 	}
+	if IsProfileResolved(ctx) {
+		return ""
+	}
 
 	// 2. Global auth profile from context (set by root --auth-profile flag)
 	// Check raw value first: if the user explicitly set --auth-profile (even
@@ -303,6 +306,27 @@ func ResolveEntraConfig(cfg *config.EntraAuthConfig, profile string) *config.Ent
 	}
 
 	return &resolved
+}
+
+// ResolveEntraDefaultFlow returns the default interactive authentication flow
+// for the Entra handler when no explicit --flow flag was specified and
+// FlowDetector did not select a flow. It honors auth.entra.defaultFlow (and
+// per-profile overrides resolved from ctx) when set to interactive or
+// device_code, defaulting to FlowInteractive.
+func ResolveEntraDefaultFlow(ctx context.Context) Flow {
+	cfg := config.FromContext(ctx)
+	if cfg != nil && cfg.Auth.Entra != nil {
+		profile := ResolveActiveProfile(ctx, "entra")
+		resolved := ResolveEntraConfig(cfg.Auth.Entra, profile)
+		if resolved != nil && resolved.DefaultFlow != "" {
+			if parsed, err := ParseFlow(resolved.DefaultFlow, "entra"); err == nil {
+				if parsed == FlowInteractive || parsed == FlowDeviceCode {
+					return parsed
+				}
+			}
+		}
+	}
+	return FlowInteractive
 }
 
 // ResolveGitHubConfig returns a copy of the GitHub config with the active profile's

@@ -460,7 +460,7 @@ shown as `(not present)`.
 | `plugins.fetchCooldown` | duration | `5m` | Cooldown between failed plugin auto-fetch retries |
 | `settings.disableOfficialAuthHandlers` | bool | `false` | Disable auto-resolution of the official auth handlers (`entra`, `github`, `gcp`) |
 | `settings.disableThirdPartyAuthHandlers` | bool | `false` | Disable catalog-by-name resolution of non-official auth handlers (official-only policy) |
-| `auth.entra.*` | object | -- | Entra (Azure AD) CLI auth handler config (`tenantId` defaults to `common`; supports `clientId`, `authority`, `defaultScopes`, `defaultFlow`, `clientSecret`, `federatedTokenFile`, `federatedToken`, `httpClient`, `activeProfile`, `profiles`) |
+| `auth.entra.*` | object | -- | Entra (Azure AD) CLI auth handler config (`tenantId` defaults to `common`, `defaultFlow` defaults to `interactive`; supports `clientId`, `authority`, `defaultScopes`, `defaultFlow`, `clientSecret`, `federatedTokenFile`, `federatedToken`, `httpClient`, `activeProfile`, `profiles`) |
 | `auth.github.hostname` | string | `github.com` | GitHub hostname (or GHES hostname) |
 | `auth.github.clientId` | string | built-in | OAuth App client ID |
 | `auth.github.defaultScopes` | []string | `[gist, read:org, repo, workflow]` | Default OAuth scopes |

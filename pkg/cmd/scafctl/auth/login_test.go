@@ -109,7 +109,7 @@ func TestCommandLogin_Success(t *testing.T) {
 
 	// Verify login was called
 	require.Len(t, mock.LoginCalls, 1)
-	assert.Equal(t, auth.FlowDeviceCode, mock.LoginCalls[0].Flow)
+	assert.Equal(t, auth.FlowInteractive, mock.LoginCalls[0].Flow)
 
 	// Verify output has a plain blank separator line and no bare info prefix icon
 	output := buf.String()
@@ -366,4 +366,319 @@ func TestCommandLogin_ClientIDFlag_ErrorWhenNotConfigurer(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--client-id is not supported")
+}
+
+func TestCommandLogin_EntraDefaultFlowResolution(t *testing.T) {
+	tests := []struct {
+		name          string
+		entraCfg      *config.EntraAuthConfig
+		globalProfile string
+		args          []string
+		wantFlow      auth.Flow
+	}{
+		{
+			name:     "defaults to interactive when no config is present",
+			entraCfg: nil,
+			args:     []string{"entra"},
+			wantFlow: auth.FlowInteractive,
+		},
+		{
+			name:     "defaults to interactive when defaultFlow is empty",
+			entraCfg: &config.EntraAuthConfig{},
+			args:     []string{"entra"},
+			wantFlow: auth.FlowInteractive,
+		},
+		{
+			name:     "honors top-level defaultFlow interactive",
+			entraCfg: &config.EntraAuthConfig{DefaultFlow: "interactive"},
+			args:     []string{"entra"},
+			wantFlow: auth.FlowInteractive,
+		},
+		{
+			name:     "honors top-level defaultFlow device_code",
+			entraCfg: &config.EntraAuthConfig{DefaultFlow: "device_code"},
+			args:     []string{"entra"},
+			wantFlow: auth.FlowDeviceCode,
+		},
+		{
+			name:     "honors hyphenated defaultFlow device-code",
+			entraCfg: &config.EntraAuthConfig{DefaultFlow: "device-code"},
+			args:     []string{"entra"},
+			wantFlow: auth.FlowDeviceCode,
+		},
+		{
+			name: "honors activeProfile defaultFlow device_code",
+			entraCfg: &config.EntraAuthConfig{
+				DefaultFlow:   "interactive",
+				ActiveProfile: "headless",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"headless": {DefaultFlow: "device_code"},
+				},
+			},
+			args:     []string{"entra"},
+			wantFlow: auth.FlowDeviceCode,
+		},
+		{
+			name: "honors --profile defaultFlow device_code",
+			entraCfg: &config.EntraAuthConfig{
+				DefaultFlow: "interactive",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"headless": {DefaultFlow: "device_code"},
+				},
+			},
+			args:     []string{"entra", "--profile", "headless"},
+			wantFlow: auth.FlowDeviceCode,
+		},
+		{
+			name: "explicit --profile default bypasses activeProfile defaultFlow",
+			entraCfg: &config.EntraAuthConfig{
+				DefaultFlow:   "interactive",
+				ActiveProfile: "headless",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"headless": {DefaultFlow: "device_code"},
+				},
+			},
+			args:     []string{"entra", "--profile", "default"},
+			wantFlow: auth.FlowInteractive,
+		},
+		{
+			name:     "explicit --flow device-code overrides interactive defaultFlow",
+			entraCfg: &config.EntraAuthConfig{DefaultFlow: "interactive"},
+			args:     []string{"entra", "--flow", "device-code"},
+			wantFlow: auth.FlowDeviceCode,
+		},
+		{
+			name:     "explicit --flow device_code overrides interactive defaultFlow",
+			entraCfg: &config.EntraAuthConfig{DefaultFlow: "interactive"},
+			args:     []string{"entra", "--flow", "device_code"},
+			wantFlow: auth.FlowDeviceCode,
+		},
+		{
+			name: "honors global --auth-profile defaultFlow device_code",
+			entraCfg: &config.EntraAuthConfig{
+				DefaultFlow: "interactive",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"headless": {DefaultFlow: "device_code"},
+				},
+			},
+			globalProfile: "headless",
+			args:          []string{"entra"},
+			wantFlow:      auth.FlowDeviceCode,
+		},
+		{
+			name:     "unrecognized config defaultFlow falls back to interactive",
+			entraCfg: &config.EntraAuthConfig{DefaultFlow: "bogus"},
+			args:     []string{"entra"},
+			wantFlow: auth.FlowInteractive,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", tmpDir)
+			t.Setenv("XDG_DATA_HOME", tmpDir)
+			t.Setenv("XDG_STATE_HOME", tmpDir)
+
+			ctx, buf := newTestContext(t)
+			if tc.entraCfg != nil {
+				ctx = config.WithConfig(ctx, &config.Config{
+					Auth: config.GlobalAuthConfig{Entra: tc.entraCfg},
+				})
+			}
+			if tc.globalProfile != "" {
+				ctx = auth.WithGlobalProfile(ctx, tc.globalProfile)
+			}
+
+			mock := auth.NewMockHandler("entra")
+			mock.DisplayNameValue = "Microsoft Entra ID"
+			mock.CapabilitiesValue = []auth.Capability{
+				auth.CapScopesOnLogin,
+				auth.CapTenantID,
+				auth.CapFederatedToken,
+			}
+			mock.SetNotAuthenticated()
+			mock.LoginResult = &auth.Result{
+				Claims: &auth.Claims{Email: "test@example.com"},
+			}
+			ctx = withTestHandler(ctx, mock)
+
+			cmd := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+			cmd.SetContext(ctx)
+			cmd.SetArgs(tc.args)
+
+			require.NoError(t, cmd.Execute())
+			require.Len(t, mock.LoginCalls, 1)
+			assert.Equal(t, tc.wantFlow, mock.LoginCalls[0].Flow)
+		})
+	}
+}
+
+type mockDetectorConfigurerHandler struct {
+	*auth.MockConfigurerHandler
+	detectFn func(ctx context.Context) ([]auth.FlowAvailability, error)
+}
+
+func (m *mockDetectorConfigurerHandler) DetectAvailableFlows(ctx context.Context) ([]auth.FlowAvailability, error) {
+	return m.detectFn(ctx)
+}
+
+func TestCommandLogin_EntraFlowDetectorAndProfileOverrides(t *testing.T) {
+	t.Run("flow detector selects interactive on workstation and device_code on headless fallback", func(t *testing.T) {
+		for _, wantFlow := range []auth.Flow{auth.FlowInteractive, auth.FlowDeviceCode} {
+			ctx, buf := newTestContext(t)
+			detector := auth.NewMockFlowDetectorHandler("entra")
+			detector.DisplayNameValue = "Microsoft Entra ID"
+			detector.SetNotAuthenticated()
+			detector.LoginResult = &auth.Result{Claims: &auth.Claims{Email: "user@example.com"}}
+			detector.DetectFlowsResult = []auth.FlowAvailability{
+				{Flow: auth.FlowWorkloadIdentity, Available: false},
+				{Flow: auth.FlowServicePrincipal, Available: false},
+				{Flow: wantFlow, Available: true, Reason: "selected by plugin"},
+			}
+			ctx = withTestHandler(ctx, detector)
+
+			cmd := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+			cmd.SetContext(ctx)
+			cmd.SetArgs([]string{"entra"})
+
+			require.NoError(t, cmd.Execute())
+			require.Len(t, detector.LoginCalls, 1)
+			assert.Equal(t, wantFlow, detector.LoginCalls[0].Flow)
+		}
+	})
+
+	t.Run("explicit --profile forwards profile defaultFlow to Configurer before DetectAvailableFlows", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+		t.Setenv("XDG_DATA_HOME", tmpDir)
+		t.Setenv("XDG_STATE_HOME", tmpDir)
+
+		ctx, buf := newTestContext(t)
+		ctx = config.WithConfig(ctx, &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{
+					DefaultFlow: "interactive",
+					Profiles: map[string]*config.EntraProfileConfig{
+						"headless": {DefaultFlow: "device_code"},
+					},
+				},
+			},
+		})
+
+		base := auth.NewMockConfigurerHandler("entra")
+		base.DisplayNameValue = "Microsoft Entra ID"
+		base.SetNotAuthenticated()
+		base.LoginResult = &auth.Result{Claims: &auth.Claims{Email: "user@example.com"}}
+
+		pluginDefaultFlow := "interactive"
+		handler := &mockDetectorConfigurerHandler{
+			MockConfigurerHandler: base,
+			detectFn: func(_ context.Context) ([]auth.FlowAvailability, error) {
+				if len(base.ApplyOverridesCalls) > 0 && base.ApplyOverridesCalls[0]["defaultFlow"] != "" {
+					pluginDefaultFlow = base.ApplyOverridesCalls[0]["defaultFlow"]
+				}
+				return []auth.FlowAvailability{
+					{Flow: auth.Flow(pluginDefaultFlow), Available: true},
+				}, nil
+			},
+		}
+		ctx = withTestHandler(ctx, handler)
+
+		cmd := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"entra", "--profile", "headless"})
+
+		require.NoError(t, cmd.Execute())
+		require.Len(t, base.ApplyOverridesCalls, 1)
+		assert.Equal(t, "device_code", base.ApplyOverridesCalls[0]["defaultFlow"])
+		require.Len(t, base.LoginCalls, 1)
+		assert.Equal(t, auth.FlowDeviceCode, base.LoginCalls[0].Flow)
+	})
+
+	t.Run("explicit --profile default overrides activeProfile device_code when top-level defaultFlow is empty", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+		t.Setenv("XDG_DATA_HOME", tmpDir)
+		t.Setenv("XDG_STATE_HOME", tmpDir)
+
+		ctx, buf := newTestContext(t)
+		ctx = config.WithConfig(ctx, &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{
+					ActiveProfile: "headless",
+					Profiles: map[string]*config.EntraProfileConfig{
+						"headless": {DefaultFlow: "device_code"},
+					},
+				},
+			},
+		})
+
+		base := auth.NewMockConfigurerHandler("entra")
+		base.DisplayNameValue = "Microsoft Entra ID"
+		base.SetNotAuthenticated()
+		base.LoginResult = &auth.Result{Claims: &auth.Claims{Email: "user@example.com"}}
+
+		// Simulate lazy plugin initially started under activeProfile=headless (device_code).
+		pluginDefaultFlow := "device_code"
+		handler := &mockDetectorConfigurerHandler{
+			MockConfigurerHandler: base,
+			detectFn: func(_ context.Context) ([]auth.FlowAvailability, error) {
+				if len(base.ApplyOverridesCalls) > 0 && base.ApplyOverridesCalls[0]["defaultFlow"] != "" {
+					pluginDefaultFlow = base.ApplyOverridesCalls[0]["defaultFlow"]
+				}
+				return []auth.FlowAvailability{
+					{Flow: auth.Flow(pluginDefaultFlow), Available: true},
+				}, nil
+			},
+		}
+		ctx = withTestHandler(ctx, handler)
+
+		cmd := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"entra", "--profile", "default"})
+
+		require.NoError(t, cmd.Execute())
+		require.Len(t, base.ApplyOverridesCalls, 1)
+		assert.Equal(t, "interactive", base.ApplyOverridesCalls[0]["defaultFlow"])
+		require.Len(t, base.LoginCalls, 1)
+		assert.Equal(t, auth.FlowInteractive, base.LoginCalls[0].Flow)
+	})
+
+	t.Run("ApplyOverrides error writes to output and exits with InvalidInput", func(t *testing.T) {
+		ctx, buf := newTestContext(t)
+		base := auth.NewMockConfigurerHandler("entra")
+		base.SetNotAuthenticated()
+		base.ApplyOverridesErr = errors.New("reconfigure boom")
+		ctx = withTestHandler(ctx, base)
+
+		cmd := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"entra", "--profile", "work"})
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "applying auth handler config overrides")
+		assert.Contains(t, err.Error(), "reconfigure boom")
+		assert.Contains(t, buf.String(), "applying auth handler config overrides")
+		assert.Empty(t, base.LoginCalls)
+	})
+}
+
+func TestCommandLogin_HelpText_EntraInteractiveDefaultAndNoAuthCodeAlias(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+
+	assert.Contains(t, cmd.Long, "Opens a browser and signs in with authorization code + PKCE")
+	assert.Contains(t, cmd.Long, "# Login with Entra ID using interactive browser flow (default)")
+	assert.Contains(t, cmd.Long, "scafctl auth login entra --flow device-code")
+	assert.NotContains(t, cmd.Long, "device-code: Device code flow via microsoft.com/devicelogin (default)")
+	assert.NotContains(t, cmd.Long, "Login with Entra ID using device code flow (default)")
+	assert.NotContains(t, cmd.Long, "auth-code")
+
+	_, err := parseFlow("auth-code", "entra")
+	require.Error(t, err, "interactive flow must not expose an auth-code alias")
 }

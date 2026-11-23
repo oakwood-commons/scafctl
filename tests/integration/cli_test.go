@@ -5845,6 +5845,17 @@ func TestIntegration_AuthLoginEntraHelp(t *testing.T) {
 	}
 }
 
+func TestIntegration_AuthLoginHelp_EntraInteractiveDefault(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "login", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Opens a browser and signs in with authorization code + PKCE")
+	assert.Contains(t, stdout, "# Login with Entra ID using interactive browser flow (default)")
+	assert.Contains(t, stdout, "scafctl auth login entra --flow device-code")
+	assert.NotContains(t, stdout, "Login with Entra ID using device code flow (default)")
+}
+
 func TestIntegration_AuthLoginEntraInvalidFlow(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "auth", "login", "entra", "--flow", "bogus-flow")

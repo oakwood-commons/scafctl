@@ -63,7 +63,7 @@ type SanitizedEntraAuth struct {
 	ClientID      string   `json:"clientId,omitempty" yaml:"clientId,omitempty" doc:"Entra ID application client ID" maxLength:"256" example:"00000000-0000-0000-0000-000000000000"`
 	TenantID      string   `json:"tenantId,omitempty" yaml:"tenantId,omitempty" doc:"Entra ID tenant ID" maxLength:"256" example:"00000000-0000-0000-0000-000000000000"`
 	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" doc:"Default OAuth scopes" maxItems:"20"`
-	DefaultFlow   string   `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" doc:"Default interactive auth flow" maxLength:"32" example:"device_code"`
+	DefaultFlow   string   `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" doc:"Default interactive auth flow. Defaults to interactive; set device_code for headless environments." maxLength:"32" example:"interactive"`
 }
 
 // SanitizedGitHubAuth contains only non-sensitive GitHub auth fields.

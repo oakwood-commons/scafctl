@@ -13,13 +13,14 @@ This tutorial walks you through setting up and using authentication in scafctl. 
 - For Entra: Access to a Microsoft Entra ID tenant
 - For GitHub: A GitHub account (or GitHub Enterprise Server instance)
 - For GCP: A Google Cloud account
-- A web browser for completing the device code flow
+- A web browser for interactive authentication (or completing the device code flow in headless environments)
 
 ## Table of Contents
 
 1. [Understanding Auth in scafctl](#understanding-auth-in-scafctl)
 2. [Logging In](#logging-in)
-   - [Entra Device Code Flow](#example-output)
+   - [Entra Interactive Login (Default)](#logging-in)
+   - [Entra Headless / SSH (Device Code Flow)](#headless--ssh-device-code-flow)
    - [Entra Service Principal](#service-principal-authentication-cicd)
    - [Entra Workload Identity](#workload-identity-authentication-kubernetes)
    - [GitHub Device Code Flow](#github-device-code-flow)
@@ -121,17 +122,18 @@ By default, this opens your browser for an OAuth authorization code flow with PK
 
 ### Example Output
 
-```
-→ Opening browser for authentication...
+```text
+Opening browser for authentication...
   If the browser does not open, visit: https://login.microsoftonline.com/...
 
-✓ Successfully authenticated as user@example.com
-  Tenant: contoso.onmicrosoft.com
+Logged in to Microsoft Entra ID as user@example.com
 ```
 
-### Device Code Flow (Headless / SSH Fallback)
+### Headless / SSH (Device Code Flow)
 
-If you are in a headless environment, over SSH, or the browser cannot open, use the device code flow:
+When no browser or display is available -- for example on a headless Linux server or in a non-interactive SSH session where redirect URL paste-back cannot be used -- `scafctl auth login entra` automatically falls back to the device code flow with a notice instead of waiting for the browser callback to time out. (In an interactive remote workspace such as SSH, DevSpaces, or Codespaces, you can also complete the default interactive flow by pasting the `localhost` redirect URL into the status prompt -- see [Remote Workspaces](#remote-workspaces-devspaces-codespaces-pasting-the-redirect-url).)
+
+To force the device code flow explicitly for a single login, pass `--flow device-code`:
 
 {{< tabs "auth-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
@@ -150,9 +152,17 @@ scafctl auth login entra --flow device-code
 {{% /tab %}}
 {{< /tabs >}}
 
-This displays a code and URL for you to enter manually:
+To make device code the persistent default in a headless environment, set `defaultFlow: device_code` in `~/.config/scafctl/config.yaml` (or on a named profile under `auth.entra.profiles.<name>.defaultFlow`):
 
+```yaml
+auth:
+  entra:
+    defaultFlow: device_code
 ```
+
+Device code login displays a one-time code and URL for you to enter in any browser:
+
+```text
 To sign in, use a web browser to open the page:
   https://microsoft.com/devicelogin
 
@@ -160,8 +170,7 @@ Enter the code: ABCD1234
 
 Waiting for authentication...
 
-✓ Successfully authenticated as user@example.com
-  Tenant: contoso.onmicrosoft.com
+Logged in to Microsoft Entra ID as user@example.com
 ```
 
 ### Idempotent Login for Scripts (--skip-if-authenticated)
@@ -855,19 +864,19 @@ The Entra handler selects which flow to use based on what is available at runtim
 | ---------- | ------ | ------------------ |
 | 1 (highest) | Workload Identity | `AZURE_FEDERATED_TOKEN_FILE` or `AZURE_FEDERATED_TOKEN` is set |
 | 2 | Service Principal | `AZURE_CLIENT_SECRET` is set |
-| 3 (lowest) | Device Code / Refresh Token | A refresh token is stored in the system secret store |
+| 3 (lowest) | Interactive / Device Code (Refresh Token) | A refresh token is stored in the system secret store |
 
 **WIF does not touch the stored refresh token.**
 
-When WIF is active, the stored device-code refresh token (if any) is bypassed but **not deleted**. The two credential types live in completely separate storage:
+When WIF is active, the stored user refresh token (if any) is bypassed but **not deleted**. The two credential types live in completely separate storage:
 
 - WIF is entirely env-var driven -- no reads or writes to `scafctl.auth.entra.refresh_token`
-- A prior device-code session silently coexists in the secret store while WIF is active
+- A prior interactive or device-code session silently coexists in the secret store while WIF is active
 - `scafctl auth list` will display both the WIF-sourced access tokens and any stored refresh token
 
 **Fallback behavior**: removing WIF env vars causes the handler to automatically fall through to the next available flow. If you have a stored refresh token, it resumes being used with no reconfiguration needed.
 
-**Stale stored credentials**: if you want a clean slate after switching to WIF, explicitly remove the stored device-code session:
+**Stale stored credentials**: if you want a clean slate after switching to WIF, explicitly remove the stored user session:
 
 {{< tabs "auth-tutorial-cmd-21" >}}
 {{% tab "Bash" %}}
@@ -1778,7 +1787,7 @@ scafctl auth status -o json
 
 ### Example Output
 
-**Device Code (User) Authentication:**
+**Interactive / Device Code (User) Authentication:**
 
 ```
 Handler   Status         Identity                Tenant                     Expires
@@ -2958,7 +2967,7 @@ auth:
       - "openid"
       - "profile"
 
-    # Optional: default interactive login flow ("interactive" or "device_code")
+    # Optional: default interactive login flow (defaults to "interactive"; set "device_code" for headless environments)
     # defaultFlow: "interactive"
 
     # Optional: non-interactive credentials (work at top level or under profiles.<name>,

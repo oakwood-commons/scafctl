@@ -92,7 +92,7 @@ scafctl explain provider http
 - **Snapshots** — Capture and diff resolver output over time
 - **Dry Run** — Preview what actions would do without executing them
 - **Linting** — Validate solution files before execution
-- **Auth** — Microsoft Entra ID (Azure AD) device code and service principal flows
+- **Auth** -- Microsoft Entra ID (Azure AD), GitHub, and Google Cloud Platform authentication (interactive browser OAuth + PKCE, device code, service principals, and workload identity)
 
 ---
 

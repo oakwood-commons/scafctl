@@ -602,7 +602,7 @@ You have 2 authenticated auth handlers:
 
 ❌ entra (Microsoft Entra ID)
    Not authenticated
-   Flows: device_code, service_principal, workload_identity
+   Flows: interactive, device_code, service_principal, workload_identity
 
 Run `scafctl auth login <handler>` to authenticate.
 ```

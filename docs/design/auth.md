@@ -180,15 +180,15 @@ Auth handlers are managed via a thread-safe registry (`auth.Registry`). CLI comm
 
 Local users authenticate explicitly using the `auth` command.
 
-### Device Code Flow (Interactive)
+### Device Code Flow (Headless / SSH)
 
 ~~~bash
-scafctl auth login entra
+scafctl auth login entra --flow device-code
 ~~~
 
 Behavior:
 
-- Initiates device code flow
+- Initiates device code flow (also used as an automatic fallback when no browser or display is available)
 - User authenticates in a browser
 - A refresh token (or equivalent credential) is obtained
 - Credentials are stored securely by scafctl
@@ -249,7 +249,8 @@ Behavior:
 
 | Flow | Flag | Use Case |
 | ------ | ------ | ---------- |
-| Device Code | `--flow device-code` | Interactive user authentication |
+| Interactive | `(default)` / `--flow interactive` | Browser-based authorization code + PKCE (automatic fallback to device code when headless) |
+| Device Code | `--flow device-code` | Headless / SSH interactive user authentication |
 | Service Principal | `--flow service-principal` | CI/CD pipelines, automation |
 | Workload Identity | `--flow workload-identity` | Kubernetes (AKS) workload identity |
 

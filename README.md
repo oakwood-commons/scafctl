@@ -235,13 +235,16 @@ Architecture and design decisions are documented in [docs/design/](docs/design/)
 
 scafctl supports secure authentication for accessing protected APIs. Currently supported:
 
-- **Microsoft Entra ID** (Azure AD) - Device code flow and Service Principal
+- **Microsoft Entra ID** (Azure AD) -- Interactive browser (authorization code + PKCE), Device Code, Service Principal, and Workload Identity
 
 ### Quick Auth Setup
 
 ```bash
-# Interactive: Authenticate with Entra ID (device code)
+# Interactive: Authenticate with Entra ID (browser OAuth + PKCE, default)
 scafctl auth login entra
+
+# Headless / SSH: Authenticate with Entra ID using device code
+scafctl auth login entra --flow device-code
 
 # CI/CD: Authenticate with service principal
 export AZURE_CLIENT_ID="..."

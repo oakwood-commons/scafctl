@@ -372,6 +372,8 @@ auth:
   # entra:
   #   tenantId: "your-tenant-id"
   #   clientId: "your-client-id"
+  #   # Default interactive auth flow ("interactive" or "device_code"; defaults to "interactive")
+  #   defaultFlow: "interactive"
 
 # =============================================================================
 # Plugins - Plugin artifact management

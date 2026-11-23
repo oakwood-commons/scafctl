@@ -734,10 +734,11 @@ type EntraAuthConfig struct {
 
 	// DefaultFlow is the authentication flow used when no explicit flow is
 	// requested and no environment credentials (service principal, workload
-	// identity) are detected. Valid values: "interactive", "device_code".
+	// identity) are detected. Defaults to "interactive"; set "device_code" for
+	// headless environments. Valid values: "interactive", "device_code".
 	// Embedders can override this via WithBaseConfig to change the default
 	// for their CLI.
-	DefaultFlow string `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default interactive auth flow" enum:"interactive,device_code" maxLength:"32" example:"interactive"`
+	DefaultFlow string `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default interactive auth flow. Defaults to interactive; set device_code for headless environments." enum:"interactive,device_code" maxLength:"32" example:"interactive"`
 
 	// FederatedTokenFile is the path to the projected service account token file
 	// for workload identity federation. Provides a config-based alternative to
@@ -770,7 +771,7 @@ type EntraProfileConfig struct {
 	TenantID      string            `json:"tenantId,omitempty" yaml:"tenantId,omitempty" mapstructure:"tenantId" doc:"Default Azure tenant ID" maxLength:"36"`
 	Authority     string            `json:"authority,omitempty" yaml:"authority,omitempty" mapstructure:"authority" doc:"Azure AD authority URL" maxLength:"256"`
 	DefaultScopes []string          `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`
-	DefaultFlow   string            `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default interactive auth flow" enum:"interactive,device_code" maxLength:"32"`
+	DefaultFlow   string            `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default interactive auth flow. Defaults to interactive; set device_code for headless environments." enum:"interactive,device_code" maxLength:"32" example:"interactive"`
 
 	// FederatedTokenFile is the path to the projected service account token file
 	// for workload identity federation. When set in a profile, overrides the
