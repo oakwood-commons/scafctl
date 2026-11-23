@@ -645,6 +645,102 @@ func TestCommandLogin_EntraFlowDetectorAndProfileOverrides(t *testing.T) {
 		assert.Equal(t, auth.FlowInteractive, base.LoginCalls[0].Flow)
 	})
 
+	t.Run("ResolveEntraConfig normalizes hyphenated device-code for FlowDetector and forwards global --auth-profile override", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+		t.Setenv("XDG_DATA_HOME", tmpDir)
+		t.Setenv("XDG_STATE_HOME", tmpDir)
+
+		// 1. Top-level hyphenated DefaultFlow: "device-code" configured via ResolveEntraConfig.
+		topLevelCfg := &config.EntraAuthConfig{DefaultFlow: "device-code"}
+		resolvedTop := auth.ResolveEntraConfig(topLevelCfg, "")
+		require.NotNil(t, resolvedTop)
+		assert.Equal(t, string(auth.FlowDeviceCode), resolvedTop.DefaultFlow)
+
+		ctxTop, bufTop := newTestContext(t)
+		ctxTop = config.WithConfig(ctxTop, &config.Config{
+			Auth: config.GlobalAuthConfig{Entra: topLevelCfg},
+		})
+		detectorTop := auth.NewMockFlowDetectorHandler("entra")
+		detectorTop.DisplayNameValue = "Microsoft Entra ID"
+		detectorTop.SetNotAuthenticated()
+		detectorTop.LoginResult = &auth.Result{Claims: &auth.Claims{Email: "user@example.com"}}
+		// Mirror scafctl-plugin-auth-entra preferredFlow(), which compares strictly
+		// against canonical auth.FlowDeviceCode ("device_code") and defaults to FlowInteractive.
+		if auth.Flow(resolvedTop.DefaultFlow) == auth.FlowDeviceCode {
+			detectorTop.DetectFlowsResult = []auth.FlowAvailability{
+				{Flow: auth.FlowDeviceCode, Available: true},
+				{Flow: auth.FlowInteractive, Available: true},
+			}
+		} else {
+			detectorTop.DetectFlowsResult = []auth.FlowAvailability{
+				{Flow: auth.FlowInteractive, Available: true},
+				{Flow: auth.FlowDeviceCode, Available: true},
+			}
+		}
+		ctxTop = withTestHandler(ctxTop, detectorTop)
+
+		cmdTop := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, bufTop, bufTop, false), "scafctl/auth")
+		cmdTop.SetContext(ctxTop)
+		cmdTop.SetArgs([]string{"entra"})
+
+		require.NoError(t, cmdTop.Execute())
+		require.Len(t, detectorTop.LoginCalls, 1)
+		assert.Equal(t, auth.FlowDeviceCode, detectorTop.LoginCalls[0].Flow)
+
+		// 2. Global --auth-profile (WithGlobalProfile) forwards normalized override to
+		// preloaded Configurer before DetectAvailableFlows runs.
+		ctxGlobal, bufGlobal := newTestContext(t)
+		ctxGlobal = config.WithConfig(ctxGlobal, &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Entra: &config.EntraAuthConfig{
+					DefaultFlow: "interactive",
+					Profiles: map[string]*config.EntraProfileConfig{
+						"headless": {DefaultFlow: "device-code"},
+					},
+				},
+			},
+		})
+		ctxGlobal = auth.WithGlobalProfile(ctxGlobal, "headless")
+
+		base := auth.NewMockConfigurerHandler("entra")
+		base.DisplayNameValue = "Microsoft Entra ID"
+		base.SetNotAuthenticated()
+		base.LoginResult = &auth.Result{Claims: &auth.Claims{Email: "user@example.com"}}
+
+		// Preloaded plugin starts with top-level "interactive" prior to --auth-profile.
+		pluginDefaultFlow := "interactive"
+		handler := &mockDetectorConfigurerHandler{
+			MockConfigurerHandler: base,
+			detectFn: func(_ context.Context) ([]auth.FlowAvailability, error) {
+				if len(base.ApplyOverridesCalls) > 0 && base.ApplyOverridesCalls[0]["defaultFlow"] != "" {
+					pluginDefaultFlow = base.ApplyOverridesCalls[0]["defaultFlow"]
+				}
+				if auth.Flow(pluginDefaultFlow) == auth.FlowDeviceCode {
+					return []auth.FlowAvailability{
+						{Flow: auth.FlowDeviceCode, Available: true},
+						{Flow: auth.FlowInteractive, Available: true},
+					}, nil
+				}
+				return []auth.FlowAvailability{
+					{Flow: auth.FlowInteractive, Available: true},
+					{Flow: auth.FlowDeviceCode, Available: true},
+				}, nil
+			},
+		}
+		ctxGlobal = withTestHandler(ctxGlobal, handler)
+
+		cmdGlobal := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, bufGlobal, bufGlobal, false), "scafctl/auth")
+		cmdGlobal.SetContext(ctxGlobal)
+		cmdGlobal.SetArgs([]string{"entra"})
+
+		require.NoError(t, cmdGlobal.Execute())
+		require.Len(t, base.ApplyOverridesCalls, 1)
+		assert.Equal(t, "device_code", base.ApplyOverridesCalls[0]["defaultFlow"])
+		require.Len(t, base.LoginCalls, 1)
+		assert.Equal(t, auth.FlowDeviceCode, base.LoginCalls[0].Flow)
+	})
+
 	t.Run("ApplyOverrides error writes to output and exits with InvalidInput", func(t *testing.T) {
 		ctx, buf := newTestContext(t)
 		base := auth.NewMockConfigurerHandler("entra")

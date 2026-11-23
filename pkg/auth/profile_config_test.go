@@ -790,6 +790,29 @@ func TestResolveEntraConfig(t *testing.T) {
 				assert.Empty(t, result.ActiveProfile)
 			},
 		},
+		{
+			name: "normalizes hyphenated top-level defaultFlow to canonical snake_case",
+			cfg: &config.EntraAuthConfig{
+				DefaultFlow: "device-code",
+			},
+			profile: "",
+			check: func(t *testing.T, result *config.EntraAuthConfig) {
+				assert.Equal(t, "device_code", result.DefaultFlow)
+			},
+		},
+		{
+			name: "normalizes hyphenated profile defaultFlow to canonical snake_case",
+			cfg: &config.EntraAuthConfig{
+				DefaultFlow: "interactive",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"headless": {DefaultFlow: "device-code"},
+				},
+			},
+			profile: "headless",
+			check: func(t *testing.T, result *config.EntraAuthConfig) {
+				assert.Equal(t, "device_code", result.DefaultFlow)
+			},
+		},
 	}
 
 	for _, tt := range tests {

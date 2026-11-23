@@ -328,12 +328,12 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 			var profileDefaultFlow string
 			if handlerName == "entra" {
 				entraDefaultFlow = auth.ResolveEntraDefaultFlow(ctx)
-				if profileExplicit && flowStr == "" {
+				if (profileExplicit || auth.GlobalProfileFromContext(ctx) != "") && flowStr == "" {
 					profileDefaultFlow = string(entraDefaultFlow)
 				}
 			}
 
-			// Apply CLI flag overrides (--client-id, --tenant, and explicit --profile
+			// Apply CLI flag overrides (--client-id, --tenant, and --profile/--auth-profile
 			// defaultFlow) to the handler's plugin configuration before login so the
 			// plugin uses the correct OAuth application, tenant, and profile flow
 			// preference during flow detection and token requests.
