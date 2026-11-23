@@ -66,6 +66,12 @@ type HandshakeConfigData = sdkplugin.HandshakeConfigData
 // does not support streaming execution.
 var ErrStreamingNotSupported = sdkplugin.ErrStreamingNotSupported
 
+// WithRequestSettings returns a new context carrying per-RPC auth handler settings.
+var WithRequestSettings = sdkplugin.WithRequestSettings
+
+// RequestSettingsFromContext retrieves per-RPC auth handler settings from the context.
+var RequestSettingsFromContext = sdkplugin.RequestSettingsFromContext
+
 // PluginProtocolVersion is the current plugin protocol version.
 const PluginProtocolVersion = sdkplugin.PluginProtocolVersion
 

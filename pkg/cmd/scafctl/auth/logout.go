@@ -86,26 +86,11 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				return fmt.Errorf("writer not initialized in context")
 			}
 
-			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile
-			// Track whether profile was explicitly set (even if normalized to empty/default).
-			profileExplicit := cmd.Flags().Changed("profile")
-			effectiveProfile := auth.NormalizeProfileName(profile)
-			if effectiveProfile == "" && !profileExplicit {
-				effectiveProfile = auth.NormalizeProfileName(auth.GlobalProfileFromContext(ctx))
-			}
-			if effectiveProfile != "" {
-				if err := auth.ValidateProfileName(effectiveProfile); err != nil {
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.InvalidInput)
-				}
-				ctx = auth.WithProfile(ctx, effectiveProfile)
-			}
-
-			// For single-handler logout, fall back to config activeProfile
-			if effectiveProfile == "" && !profileExplicit && !all && len(args) > 0 {
-				if configProfile := auth.ResolveActiveProfile(ctx, args[0]); configProfile != "" {
-					ctx = auth.WithProfile(ctx, configProfile)
-				}
+			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile.
+			ctx, _, _, err := resolveCommandProfile(ctx, cmd, profile)
+			if err != nil {
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			var handlerNames []string
@@ -148,7 +133,8 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 
 			hadError := false
 			for _, handlerName := range handlerNames {
-				handler, err := getHandler(ctx, handlerName)
+				handlerCtx, _ := withHandlerActiveProfile(ctx, handlerName)
+				handler, err := getHandler(handlerCtx, handlerName)
 				if err != nil {
 					w.Errorf("Failed to initialize auth handler %s: %v", handlerName, err)
 					hadError = true
@@ -163,11 +149,11 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					// base status alone must not gate logout. When the base status is
 					// not clearly authenticated, consult the cached tokens and clear
 					// them if any exist instead of silently leaving them behind.
-					status, statusErr := handler.Status(ctx)
+					status, statusErr := handler.Status(handlerCtx)
 					authenticated := statusErr == nil && status.Authenticated
 					if !authenticated {
 						if lister, ok := handler.(auth.TokenLister); ok {
-							if tokens, lerr := lister.ListCachedTokens(ctx); lerr == nil && len(tokens) > 0 {
+							if tokens, lerr := lister.ListCachedTokens(handlerCtx); lerr == nil && len(tokens) > 0 {
 								authenticated = true
 							}
 						}
@@ -190,7 +176,7 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					continue
 				}
 
-				if err := handler.Logout(ctx); err != nil {
+				if err := handler.Logout(handlerCtx); err != nil {
 					w.Errorf("Logout failed for %s: %v", handlerName, err)
 					hadError = true
 					continue

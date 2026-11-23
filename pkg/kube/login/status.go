@@ -42,7 +42,11 @@ func populateStatusIdentity(ctx context.Context, deps Deps, st *ContextStatus) {
 	// Look tokens up under the same profile the exec block passes via --profile,
 	// so the whoami sees the credential kubectl would actually use.
 	if st.Profile != "" {
-		ctx = auth.WithProfile(ctx, st.Profile)
+		normalized := auth.NormalizeProfileName(st.Profile)
+		if normalized != "" && auth.ValidateProfileName(normalized) != nil {
+			return
+		}
+		ctx = auth.WithProfileResolved(auth.WithProfile(ctx, normalized))
 	}
 
 	handler, err := deps.HandlerLookup(ctx, st.Handler)

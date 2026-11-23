@@ -596,13 +596,31 @@ type HandlerConfig struct {
 	// domains. It is host-consumed and NOT forwarded to the plugin.
 	TrustedVerificationDomains []string `json:"trustedVerificationDomains,omitempty" yaml:"trustedVerificationDomains,omitempty" mapstructure:"trustedVerificationDomains" doc:"Per-handler trusted device-code verification domains" maxItems:"50"`
 
+	// ActiveProfile is the default profile for this handler.
+	// When set, this profile's credentials and settings are used unless overridden.
+	ActiveProfile string `json:"activeProfile,omitempty" yaml:"activeProfile,omitempty" mapstructure:"activeProfile" doc:"Default auth profile" maxLength:"64" example:"work" pattern:"^[a-zA-Z0-9][a-zA-Z0-9_-]*$" patternDescription:"ASCII alphanumeric characters, hyphens, or underscores, starting with an alphanumeric character"`
+
+	// Profiles maps profile names to per-profile opaque setting overrides.
+	// Profile settings inherit from top-level handler Settings and override matching keys.
+	Profiles map[string]map[string]any `json:"-" yaml:"profiles,omitempty" mapstructure:"profiles" doc:"Named auth profiles with per-profile setting overrides"`
+
 	// Settings captures every handler-specific key other than the host-consumed
-	// fields ("hostname", "plugin", "trustedVerificationDomains") and is
-	// forwarded opaquely to the handler plugin. The host does not interpret it.
+	// fields ("hostname", "plugin", "trustedVerificationDomains", "activeProfile", "profiles")
+	// and is forwarded opaquely to the handler plugin. The host does not interpret it.
 	// Note: viper lowercases all keys, so plugins receive lowercased setting
 	// names. The yaml `,inline` tag ensures passthrough keys survive a
 	// config save round-trip (e.g. when 'auth alias' rewrites the file).
 	Settings map[string]any `json:"-" yaml:",inline" mapstructure:",remain"`
+}
+
+// IsEmpty reports whether every field on HandlerConfig is unset.
+func (h HandlerConfig) IsEmpty() bool {
+	return h.Hostname == nil &&
+		h.Plugin == nil &&
+		len(h.TrustedVerificationDomains) == 0 &&
+		h.ActiveProfile == "" &&
+		len(h.Profiles) == 0 &&
+		len(h.Settings) == 0
 }
 
 // HandlerPluginConfig pins the catalog artifact backing a third-party auth

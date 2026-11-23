@@ -269,7 +269,7 @@ func pruneEmptyHostname(cfg *config.Config, handlerName string) {
 		hc.Hostname = nil
 		cfg.Auth.Handlers[handlerName] = hc
 	}
-	if hc.Hostname == nil && len(hc.Settings) == 0 {
+	if hc.IsEmpty() {
 		delete(cfg.Auth.Handlers, handlerName)
 	}
 }

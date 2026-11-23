@@ -94,3 +94,73 @@ auth:
 		assert.NotContains(t, key, "auth.handlers", "auth.handlers.* keys must not be flagged as unknown: %s", key)
 	}
 }
+
+func TestManager_Load_AuthHandlersProfiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+version: 1
+auth:
+  handlers:
+    openshift:
+      activeProfile: work
+      apiTimeout: 30
+      caBundlePath: /etc/ssl/default.pem
+      profiles:
+        work:
+          apiTimeout: 60
+          caBundlePath: /etc/ssl/work.pem
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
+
+	mgr := NewManager(configPath)
+	cfg, err := mgr.Load()
+	require.NoError(t, err)
+
+	handler, ok := cfg.Auth.Handlers["openshift"]
+	require.True(t, ok)
+	assert.Equal(t, "work", handler.ActiveProfile)
+	require.Contains(t, handler.Profiles, "work")
+	assert.Equal(t, "/etc/ssl/work.pem", handler.Profiles["work"]["cabundlepath"])
+	assert.NotContains(t, handler.Settings, "activeprofile")
+	assert.NotContains(t, handler.Settings, "profiles")
+	assert.Equal(t, "/etc/ssl/default.pem", handler.Settings["cabundlepath"])
+	assert.Empty(t, mgr.GetUnknownKeys())
+}
+
+func TestManager_SaveAndLoad_RestoresEmptyAuthHandlerProfiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("version: 1\n"), 0o600))
+
+	mgr := NewManager(configPath)
+	cfg, err := mgr.Load()
+	require.NoError(t, err)
+
+	cfg.Auth.Handlers = map[string]HandlerConfig{
+		"openshift": {
+			ActiveProfile: "staging",
+			Profiles: map[string]map[string]any{
+				"staging": {},
+			},
+		},
+	}
+	require.NoError(t, mgr.Save())
+
+	reloaded, err := NewManager(configPath).Load()
+	require.NoError(t, err)
+	hc, ok := reloaded.Auth.Handlers["openshift"]
+	require.True(t, ok)
+	assert.Equal(t, "staging", hc.ActiveProfile)
+	assert.Contains(t, hc.Profiles, "staging", "empty profile entry must survive Viper Load round-trip")
+}
+
+func TestHandlerConfig_IsEmpty(t *testing.T) {
+	t.Parallel()
+	assert.True(t, (HandlerConfig{}).IsEmpty())
+	assert.False(t, (HandlerConfig{ActiveProfile: "work"}).IsEmpty())
+	assert.False(t, (HandlerConfig{Profiles: map[string]map[string]any{"work": {}}}).IsEmpty())
+	assert.False(t, (HandlerConfig{TrustedVerificationDomains: []string{"sso.example.com"}}).IsEmpty())
+	assert.False(t, (HandlerConfig{Plugin: &HandlerPluginConfig{Ref: "x"}}).IsEmpty())
+}

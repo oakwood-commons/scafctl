@@ -127,12 +127,13 @@ type SanitizedDynamicClientRegistration struct {
 }
 
 // SanitizedAuthHandler mirrors HandlerConfig but drops the opaque plugin
-// Settings map (arbitrary shape, could hold secrets) and redacts any
-// resolver-source Headers values.
+// Settings and Profiles maps (arbitrary shape, could hold secrets) and redacts
+// any resolver-source Headers values.
 type SanitizedAuthHandler struct {
 	Hostname                   *SanitizedHostnameConfig `json:"hostname,omitempty" yaml:"hostname,omitempty" doc:"Host-side hostname alias/endpoint resolution"`
 	Plugin                     *HandlerPluginConfig     `json:"plugin,omitempty" yaml:"plugin,omitempty" doc:"Catalog pin for a third-party auth handler plugin"`
 	TrustedVerificationDomains []string                 `json:"trustedVerificationDomains,omitempty" yaml:"trustedVerificationDomains,omitempty" doc:"Per-handler trusted device-code verification domains" maxItems:"50"`
+	ActiveProfile              string                   `json:"activeProfile,omitempty" yaml:"activeProfile,omitempty" doc:"Default auth profile" maxLength:"64" example:"work" pattern:"^[a-zA-Z0-9][a-zA-Z0-9_-]*$" patternDescription:"ASCII alphanumeric characters, hyphens, or underscores, starting with an alphanumeric character"`
 }
 
 // SanitizedHostnameConfig mirrors HostnameConfig with resolver source headers
@@ -346,12 +347,13 @@ func sanitizeCustomOAuth2(oc CustomOAuth2Config) SanitizedCustomOAuth2 {
 	return out
 }
 
-// sanitizeAuthHandler drops the opaque plugin Settings map and redacts any
-// resolver-source header values on the host-consumed Hostname block.
+// sanitizeAuthHandler drops the opaque plugin Settings and Profiles maps and
+// redacts any resolver-source header values on the host-consumed Hostname block.
 func sanitizeAuthHandler(h HandlerConfig) SanitizedAuthHandler {
 	out := SanitizedAuthHandler{
 		Plugin:                     h.Plugin,
 		TrustedVerificationDomains: h.TrustedVerificationDomains,
+		ActiveProfile:              h.ActiveProfile,
 	}
 	if h.Hostname != nil {
 		out.Hostname = sanitizeHostnameConfig(h.Hostname)

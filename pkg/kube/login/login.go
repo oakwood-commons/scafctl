@@ -50,6 +50,9 @@ var (
 	// ErrNoCluster indicates a logout request did not identify a cluster.
 	ErrNoCluster = errors.New("login: cluster name is required")
 
+	// ErrInvalidProfile indicates the requested auth profile name is invalid.
+	ErrInvalidProfile = errors.New("login: invalid auth profile")
+
 	// ErrNoKubeconfigWriter indicates the request did not supply a kubeconfig
 	// writer dependency.
 	ErrNoKubeconfigWriter = errors.New("login: kubeconfig writer is required")
@@ -281,7 +284,13 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 	// the login would write tokens to the active profile while kubectl later
 	// looks them up under req.Profile and fails to mint credentials.
 	if req.Profile != "" {
-		ctx = auth.WithProfile(ctx, req.Profile)
+		normalized := auth.NormalizeProfileName(req.Profile)
+		if normalized != "" {
+			if err := auth.ValidateProfileName(normalized); err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrInvalidProfile, err)
+			}
+		}
+		ctx = auth.WithProfileResolved(auth.WithProfile(ctx, normalized))
 	}
 
 	info, source, err := resolveCluster(ctx, deps, req)

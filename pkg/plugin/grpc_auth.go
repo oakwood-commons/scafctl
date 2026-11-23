@@ -4,6 +4,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -125,6 +126,54 @@ func withNormalizedProfile(ctx context.Context, profile string) (context.Context
 	return auth.WithProfile(ctx, normalized), nil
 }
 
+// decodeRequestSettings unmarshals per-RPC JSON handler settings from a proto
+// request's bytes field into an isolated map. Nil/empty/"null" returns (nil, nil).
+func decodeRequestSettings(raw []byte) (map[string]json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &parsed); err != nil {
+		return nil, fmt.Errorf("failed to decode request settings: %w", err)
+	}
+	if parsed == nil {
+		return nil, nil
+	}
+	return cloneSettingsMap(parsed), nil
+}
+
+// encodeRequestSettings marshals per-RPC handler settings into JSON bytes for
+// proto transport. Settings on the request struct take precedence over
+// RequestSettingsFromContext(ctx). A non-nil empty map encodes to "{}" so
+// stateless plugins distinguish an explicit empty default profile from "unset".
+func encodeRequestSettings(ctx context.Context, reqSettings map[string]json.RawMessage) ([]byte, error) {
+	settings := reqSettings
+	if settings == nil {
+		var ok bool
+		settings, ok = RequestSettingsFromContext(ctx)
+		if !ok {
+			return nil, nil
+		}
+	}
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		return nil, fmt.Errorf("encoding request settings: %w", err)
+	}
+	return raw, nil
+}
+
+func cloneSettingsMap(in map[string]json.RawMessage) map[string]json.RawMessage {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]json.RawMessage, len(in))
+	for k, v := range in {
+		out[k] = json.RawMessage(bytes.Clone(v))
+	}
+	return out
+}
+
 // Login implements the Login RPC with server-side streaming.
 func (s *AuthHandlerGRPCServer) Login(req *proto.LoginRequest, stream grpc.ServerStreamingServer[proto.LoginStreamMessage]) error {
 	ctx := stream.Context()
@@ -143,6 +192,15 @@ func (s *AuthHandlerGRPCServer) Login(req *proto.LoginRequest, stream grpc.Serve
 			},
 		})
 	}
+	settings, err := decodeRequestSettings(req.Settings)
+	if err != nil {
+		return stream.Send(&proto.LoginStreamMessage{
+			Payload: &proto.LoginStreamMessage_Error{
+				Error: err.Error(),
+			},
+		})
+	}
+	ctx = WithRequestSettings(ctx, settings)
 
 	// Build the device code callback that sends prompts over the stream.
 	deviceCodeCb := func(prompt DeviceCodePrompt) {
@@ -166,6 +224,7 @@ func (s *AuthHandlerGRPCServer) Login(req *proto.LoginRequest, stream grpc.Serve
 		// int32 -> int is a widening conversion and always safe.
 		CallbackPort: int(req.CallbackPort),
 		Browser:      config.NormalizeBrowser(req.Browser),
+		Settings:     cloneSettingsMap(settings),
 	}
 
 	result, err := s.Impl.Login(ctx, req.HandlerName, loginReq, deviceCodeCb)
@@ -206,11 +265,19 @@ func (s *AuthHandlerGRPCServer) GetStatus(ctx context.Context, req *proto.GetSta
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
 	}
-	status, err := s.Impl.GetStatus(ctx, req.HandlerName, StatusRequest{Hostname: req.Hostname})
+	settings, err := decodeRequestSettings(req.Settings)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	ctx = WithRequestSettings(ctx, settings)
+	st, err := s.Impl.GetStatus(ctx, req.HandlerName, StatusRequest{
+		Hostname: req.Hostname,
+		Settings: cloneSettingsMap(settings),
+	})
 	if err != nil {
 		return nil, err
 	}
-	return statusToProto(status), nil
+	return statusToProto(st), nil
 }
 
 // GetToken implements the GetToken RPC.
@@ -219,6 +286,11 @@ func (s *AuthHandlerGRPCServer) GetToken(ctx context.Context, req *proto.GetToke
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
 	}
+	settings, err := decodeRequestSettings(req.Settings)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	ctx = WithRequestSettings(ctx, settings)
 	tokenReq := TokenRequest{
 		Scope:         req.Scope,
 		MinValidFor:   time.Duration(req.MinValidForSeconds) * time.Second,
@@ -227,6 +299,7 @@ func (s *AuthHandlerGRPCServer) GetToken(ctx context.Context, req *proto.GetToke
 		Caller:        sdkauth.CallerType(req.Caller),
 		Assertion:     req.Assertion,
 		Hostname:      req.Hostname,
+		Settings:      cloneSettingsMap(settings),
 	}
 	token, err := s.Impl.GetToken(ctx, req.HandlerName, tokenReq)
 	if err != nil {
@@ -272,6 +345,18 @@ func (s *AuthHandlerGRPCServer) PurgeExpiredTokens(ctx context.Context, req *pro
 
 // DetectAvailableFlows implements the DetectAvailableFlows RPC.
 func (s *AuthHandlerGRPCServer) DetectAvailableFlows(ctx context.Context, req *proto.DetectAvailableFlowsRequest) (*proto.DetectAvailableFlowsResponse, error) {
+	ctx, err := withNormalizedProfile(ctx, req.Profile)
+	if err != nil {
+		//nolint:nilerr // Error is communicated via response, not gRPC error
+		return &proto.DetectAvailableFlowsResponse{Error: fmt.Sprintf("invalid profile: %v", err)}, nil
+	}
+	settings, err := decodeRequestSettings(req.Settings)
+	if err != nil {
+		//nolint:nilerr // Error is communicated via response, not gRPC error
+		return &proto.DetectAvailableFlowsResponse{Error: err.Error()}, nil
+	}
+	ctx = WithRequestSettings(ctx, settings)
+
 	flows, err := s.Impl.DetectAvailableFlows(ctx, req.HandlerName)
 	if err != nil {
 		//nolint:nilerr // Error is communicated via response, not gRPC error
@@ -291,6 +376,12 @@ func (s *AuthHandlerGRPCServer) DetectAvailableFlows(ctx context.Context, req *p
 
 // ConfigureAuthHandler implements the ConfigureAuthHandler RPC.
 func (s *AuthHandlerGRPCServer) ConfigureAuthHandler(ctx context.Context, req *proto.ConfigureAuthHandlerRequest) (*proto.ConfigureAuthHandlerResponse, error) {
+	ctx, err := withNormalizedProfile(ctx, req.Profile)
+	if err != nil {
+		//nolint:nilerr // Error is communicated via response, not gRPC error
+		return &proto.ConfigureAuthHandlerResponse{Error: fmt.Sprintf("invalid profile: %v", err)}, nil
+	}
+
 	settings := make(map[string]json.RawMessage, len(req.Settings))
 	for k, v := range req.Settings {
 		settings[k] = json.RawMessage(v)
@@ -300,7 +391,7 @@ func (s *AuthHandlerGRPCServer) ConfigureAuthHandler(ctx context.Context, req *p
 		Quiet:             req.Quiet,
 		NoColor:           req.NoColor,
 		BinaryName:        req.BinaryName,
-		Profile:           req.Profile,
+		Profile:           auth.ProfileFromContext(ctx),
 		Settings:          settings,
 		AuthCallbackPages: authCallbackPagesFromProto(req.AuthCallbackPages),
 	}
@@ -337,6 +428,12 @@ type AuthHandlerGRPCClient struct {
 	// serves PromptAuthResponse (host deps with a prompt broker). It drives
 	// the HostCapabilities advertisement at configure time.
 	supportsPromptAuth bool
+}
+
+// NewAuthHandlerGRPCClient constructs an AuthHandlerGRPCClient over an existing
+// gRPC service client (for in-memory transport and embedder test harnesses).
+func NewAuthHandlerGRPCClient(client proto.AuthHandlerServiceClient) *AuthHandlerGRPCClient {
+	return &AuthHandlerGRPCClient{client: client}
 }
 
 // GetAuthHandlers implements AuthHandlerPlugin.GetAuthHandlers.
@@ -381,6 +478,10 @@ func callbackPortToProto(port int) int32 {
 
 // Login implements AuthHandlerPlugin.Login with streaming device code support.
 func (c *AuthHandlerGRPCClient) Login(ctx context.Context, handlerName string, req LoginRequest, deviceCodeCb func(DeviceCodePrompt)) (*LoginResponse, error) {
+	settingsBytes, err := encodeRequestSettings(ctx, req.Settings)
+	if err != nil {
+		return nil, err
+	}
 	stream, err := c.client.Login(ctx, &proto.LoginRequest{
 		HandlerName:    handlerName,
 		TenantId:       req.TenantID,
@@ -391,6 +492,7 @@ func (c *AuthHandlerGRPCClient) Login(ctx context.Context, handlerName string, r
 		Profile:        auth.ProfileFromContext(ctx),
 		CallbackPort:   callbackPortToProto(req.CallbackPort),
 		Browser:        req.Browser,
+		Settings:       settingsBytes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("login RPC failed: %w", err)
@@ -433,7 +535,16 @@ func (c *AuthHandlerGRPCClient) Logout(ctx context.Context, handlerName string, 
 
 // GetStatus implements AuthHandlerPlugin.GetStatus.
 func (c *AuthHandlerGRPCClient) GetStatus(ctx context.Context, handlerName string, req StatusRequest) (*auth.Status, error) {
-	resp, err := c.client.GetStatus(ctx, &proto.GetStatusRequest{HandlerName: handlerName, Hostname: req.Hostname, Profile: auth.ProfileFromContext(ctx)})
+	settingsBytes, err := encodeRequestSettings(ctx, req.Settings)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.client.GetStatus(ctx, &proto.GetStatusRequest{
+		HandlerName: handlerName,
+		Hostname:    req.Hostname,
+		Profile:     auth.ProfileFromContext(ctx),
+		Settings:    settingsBytes,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -442,6 +553,10 @@ func (c *AuthHandlerGRPCClient) GetStatus(ctx context.Context, handlerName strin
 
 // GetToken implements AuthHandlerPlugin.GetToken.
 func (c *AuthHandlerGRPCClient) GetToken(ctx context.Context, handlerName string, req TokenRequest) (*TokenResponse, error) {
+	settingsBytes, err := encodeRequestSettings(ctx, req.Settings)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := c.client.GetToken(ctx, &proto.GetTokenRequest{
 		HandlerName:        handlerName,
 		Scope:              req.Scope,
@@ -452,6 +567,7 @@ func (c *AuthHandlerGRPCClient) GetToken(ctx context.Context, handlerName string
 		ServerContext:      string(req.ServerContext),
 		Caller:             string(req.Caller),
 		Assertion:          req.Assertion,
+		Settings:           settingsBytes,
 	})
 	if err != nil {
 		return nil, err
@@ -512,7 +628,7 @@ func (c *AuthHandlerGRPCClient) ConfigureAuthHandler(ctx context.Context, handle
 		}
 		return err
 	}
-	if resp.Error != "" {
+	if resp != nil && resp.Error != "" {
 		return fmt.Errorf("configure auth handler failed: %s", resp.Error)
 	}
 	return nil
@@ -561,8 +677,14 @@ func authCallbackPagesFromProto(p *proto.AuthCallbackPages) *AuthCallbackPages {
 
 // DetectAvailableFlows implements AuthHandlerPlugin.DetectAvailableFlows.
 func (c *AuthHandlerGRPCClient) DetectAvailableFlows(ctx context.Context, handlerName string) ([]FlowAvailability, error) {
+	settingsBytes, err := encodeRequestSettings(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := c.client.DetectAvailableFlows(ctx, &proto.DetectAvailableFlowsRequest{
 		HandlerName: handlerName,
+		Profile:     auth.ProfileFromContext(ctx),
+		Settings:    settingsBytes,
 	})
 	if err != nil {
 		// Older plugins (SDK <0.5.0) may not implement DetectAvailableFlows.
@@ -572,6 +694,9 @@ func (c *AuthHandlerGRPCClient) DetectAvailableFlows(ctx context.Context, handle
 			return []FlowAvailability{}, nil
 		}
 		return nil, fmt.Errorf("detect available flows RPC failed: %w", err)
+	}
+	if resp == nil {
+		return []FlowAvailability{}, nil
 	}
 	if resp.Error != "" {
 		return nil, fmt.Errorf("detect available flows: %s", resp.Error)

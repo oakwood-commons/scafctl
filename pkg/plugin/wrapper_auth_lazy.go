@@ -143,8 +143,12 @@ func configureLazyWrapper(ctx context.Context, client *AuthHandlerClient, info A
 			NoColor:           pluginCfg.NoColor,
 			BinaryName:        pluginCfg.BinaryName,
 			Profile:           pluginCfg.Profile,
+			GlobalProfile:     auth.GlobalProfileFromContext(ctx),
+			AppConfig:         config.FromContext(ctx),
 			AuthCallbackPages: pluginCfg.AuthCallbackPages,
+			BaseSettings:      cloneSettingsMap(pluginCfg.Settings),
 		})
+		wrapper.configMu.Lock()
 		hostCfg := *pluginCfg
 		hostCfg.Settings = maps.Clone(pluginCfg.Settings)
 		hostCfg.HostServiceID = client.HostServiceID()
@@ -152,7 +156,10 @@ func configureLazyWrapper(ctx context.Context, client *AuthHandlerClient, info A
 		if cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg); cfgErr != nil {
 			lgr.Info("failed to configure lazy auth handler",
 				"handler", info.Name, "error", cfgErr)
+		} else {
+			wrapper.recordConfiguredLocked(hostCfg.Profile, hostCfg.Settings[info.Name])
 		}
+		wrapper.configMu.Unlock()
 	}
 
 	return wrapper

@@ -461,6 +461,22 @@ func (h *HostServiceServer) GetAuthIdentity(ctx context.Context, req *proto.GetA
 		}, nil
 	}
 
+	if h.Deps.ProfileResolverFunc != nil {
+		profile := auth.NormalizeProfileName(h.Deps.ProfileResolverFunc(req.HandlerName))
+		if profile != "" {
+			if err := auth.ValidateProfileName(profile); err != nil {
+				return &proto.GetAuthIdentityResponse{
+					Error: fmt.Sprintf("invalid profile: %v", err),
+				}, nil
+			}
+		}
+		ctx = auth.WithProfile(ctx, profile)
+		ctx = auth.WithProfileResolved(ctx)
+	}
+	if h.Deps.HostConfig != nil && config.FromContext(ctx) == nil {
+		ctx = config.WithConfig(ctx, h.Deps.HostConfig)
+	}
+
 	claims, err := h.Deps.AuthIdentityFunc(ctx, req.HandlerName, req.Scope)
 	if err != nil {
 		return &proto.GetAuthIdentityResponse{
@@ -534,10 +550,12 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 	// Inject profile into context so downstream token acquisition uses the
 	// correct profile-scoped credentials.
 	profile := req.Profile
+	resolved := req.Profile != ""
 	if profile == "" && h.Deps.ProfileResolverFunc != nil {
 		profile = h.Deps.ProfileResolverFunc(req.HandlerName)
+		resolved = true
 	}
-	if profile != "" {
+	if resolved {
 		profile = auth.NormalizeProfileName(profile)
 		if profile != "" {
 			if err := auth.ValidateProfileName(profile); err != nil {
@@ -545,11 +563,11 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 					Error: fmt.Sprintf("invalid profile from plugin: %v", err),
 				}, nil
 			}
-			ctx = auth.WithProfile(ctx, profile)
 		}
 		// Mark profile as resolved even when normalized to "" (built-in/default).
 		// This prevents downstream GetToken from re-resolving the active profile
-		// from config, which would override an explicit built-in selection.
+		// from HostConfig, which would override an explicit built-in selection.
+		ctx = auth.WithProfile(ctx, profile)
 		ctx = auth.WithProfileResolved(ctx)
 	}
 

@@ -120,6 +120,16 @@ func IsProfileResolved(ctx context.Context) bool {
 	return v
 }
 
+// ResetProfileResolution returns a child context with per-handler profile
+// selection cleared while preserving GlobalProfileFromContext and config.
+// Used when crossing from one auth handler to an independent helper handler
+// (e.g. dynamic hostname inventory resolution) so the first handler's
+// --profile does not leak into the second handler's token lookup.
+func ResetProfileResolution(ctx context.Context) context.Context {
+	ctx = context.WithValue(ctx, profileContextKey, "")
+	return context.WithValue(ctx, profileResolvedContextKey, false)
+}
+
 // NormalizeProfileName maps the reserved names "built-in" and "default" to the
 // internal empty string representation. All other names are returned as-is.
 func NormalizeProfileName(name string) string {

@@ -138,6 +138,39 @@ func TestCommandAliasRemove_DeletesAndPrunes(t *testing.T) {
 	assert.False(t, ok, "empty handler entry must be pruned after last alias removed")
 }
 
+func TestCommandAliasRemove_PreservesProfilesAndTrustedDomains(t *testing.T) {
+	ctx := aliasFixture(t, "openshift", auth.CapHostname)
+
+	seed := config.NewManager("")
+	cfg, err := seed.Load()
+	require.NoError(t, err)
+	cfg.Auth.Handlers = map[string]config.HandlerConfig{
+		"openshift": {
+			ActiveProfile:              "work",
+			TrustedVerificationDomains: []string{"sso.openshift.example.com"},
+			Profiles: map[string]map[string]any{
+				"work": {"apitimeout": "60s"},
+			},
+			Hostname: &config.HostnameConfig{
+				Aliases: map[string]string{"prod": "https://api.prod.example.com:6443"},
+			},
+		},
+	}
+	require.NoError(t, seed.Save())
+
+	_, err = runAlias(t, ctx, "remove", "openshift", "prod")
+	require.NoError(t, err)
+
+	reloaded, err := config.NewManager("").Load()
+	require.NoError(t, err)
+	hc, ok := reloaded.Auth.Handlers["openshift"]
+	require.True(t, ok, "handler entry with profiles/trustedVerificationDomains must not be deleted on alias remove")
+	assert.Nil(t, hc.Hostname)
+	assert.Equal(t, "work", hc.ActiveProfile)
+	assert.Equal(t, []string{"sso.openshift.example.com"}, hc.TrustedVerificationDomains)
+	assert.Equal(t, "60s", hc.Profiles["work"]["apitimeout"])
+}
+
 // TestCommandAliasRemove_UnknownSelectorErrors verifies removing a missing
 // alias fails clearly.
 func TestCommandAliasRemove_UnknownSelectorErrors(t *testing.T) {

@@ -17717,3 +17717,80 @@ func TestIntegration_CredentialsValueRef_SolutionFixture(t *testing.T) {
 	assert.Equal(t, 0, dryExit, "dry-run failed: %s", dryErr)
 	assert.Contains(t, dryOut, "scrt:service-shared-secret")
 }
+
+func TestIntegration_AuthPluginMultiProfile_SubprocessRoundTrip(t *testing.T) {
+	projectRoot := findProjectRoot()
+	pluginDir := t.TempDir()
+	pluginBin := filepath.Join(pluginDir, "scafctl-plugin-auth-entra")
+	if runtime.GOOS == "windows" {
+		pluginBin += ".exe"
+	}
+
+	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelBuild()
+
+	buildCmd := exec.CommandContext(buildCtx, "go", "build", "-o", pluginBin, "./tests/integration/testdata/authpageplugin") //nolint:gosec // test-controlled build path
+	buildCmd.Dir = projectRoot
+	buildCmd.Env = append(os.Environ(), "GOWORK=off")
+	buildOut, buildErr := buildCmd.CombinedOutput()
+	require.NoError(t, buildErr, "build authpageplugin: %s", string(buildOut))
+
+	xdgDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdgDir, "cfg"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(xdgDir, "data"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(xdgDir, "cache"))
+	t.Setenv("SCAFCTL_SECRETS_KEY", "test-passphrase-for-multiprofile-subprocess")
+
+	cfgPath := filepath.Join(xdgDir, "config.yaml")
+	cfgContent := `version: 1
+auth:
+  entra:
+    activeProfile: work
+    clientId: default-subproc-client
+    tenantId: default-subproc-tenant
+    profiles:
+      work:
+        clientId: work-subproc-client
+        tenantId: work-subproc-tenant
+      staging:
+        clientId: staging-subproc-client
+        tenantId: staging-subproc-tenant
+  handlers:
+    entra:
+      profiles:
+        customprof:
+          apitimeout: 45
+settings:
+  requireSecureKeyring: false
+`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgContent), 0o600))
+
+	execCLI := func(t *testing.T, args ...string) string {
+		t.Helper()
+		var outBuf, errBuf bytes.Buffer
+		rootCmd, cleanup := scafctl.Root(&scafctl.RootOptions{
+			ConfigPath:     cfgPath,
+			AuthPluginDirs: []string{pluginDir},
+			IOStreams:      &terminal.IOStreams{In: io.NopCloser(strings.NewReader("")), Out: &outBuf, ErrOut: &errBuf},
+		})
+		defer cleanup()
+		rootCmd.SetArgs(args)
+		require.NoError(t, rootCmd.Execute(), "args=%v stderr=%s", args, errBuf.String())
+		return outBuf.String()
+	}
+
+	// 1. Multi-profile 'auth status entra -o json' delivers distinct settings per profile over gRPC subprocess.
+	statusJSON := execCLI(t, "auth", "status", "entra", "-o", "json")
+	assert.Contains(t, statusJSON, "default-subproc-client")
+	assert.Contains(t, statusJSON, "work-subproc-client")
+	assert.Contains(t, statusJSON, "staging-subproc-client")
+
+	// 2. Explicit '--profile staging' delivers staging settings to GetToken over gRPC subprocess.
+	tokStaging := execCLI(t, "auth", "token", "entra", "--profile", "staging", "--scope", "api://test/.default")
+	assert.Contains(t, tokStaging, "subproc-tok:staging:staging-subproc-client:staging-subproc-tenant:api://test/.default")
+
+	// 3. Explicit '--profile default' when activeProfile is 'work' targets built-in default, never 'work'.
+	tokDefault := execCLI(t, "auth", "token", "entra", "--profile", "default", "--scope", "api://test/.default")
+	assert.Contains(t, tokDefault, "subproc-tok::default-subproc-client:default-subproc-tenant:api://test/.default")
+	assert.NotContains(t, tokDefault, "work-subproc-client")
+}

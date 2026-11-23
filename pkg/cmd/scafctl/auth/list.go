@@ -136,19 +136,11 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			}
 			outputFlags.AppName = cliParams.BinaryName
 
-			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile
-			// Track whether profile was explicitly set (even if normalized to empty/default).
-			profileExplicit := cmd.Flags().Changed("profile")
-			effectiveProfile := auth.NormalizeProfileName(profile)
-			if effectiveProfile == "" && !profileExplicit {
-				effectiveProfile = auth.NormalizeProfileName(auth.GlobalProfileFromContext(ctx))
-			}
-			if effectiveProfile != "" {
-				if err := auth.ValidateProfileName(effectiveProfile); err != nil {
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.InvalidInput)
-				}
-				ctx = auth.WithProfile(ctx, effectiveProfile)
+			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile.
+			ctx, _, profileExplicit, err := resolveCommandProfile(ctx, cmd, profile)
+			if err != nil {
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			if expiredOnly && validOnly {
@@ -175,11 +167,9 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				}
 				handlerNames = []string{handlerName}
 
-				// Fall back to config activeProfile when no explicit profile was set
-				if effectiveProfile == "" && !profileExplicit {
-					if configProfile := auth.ResolveActiveProfile(ctx, handlerName); configProfile != "" {
-						ctx = auth.WithProfile(ctx, configProfile)
-					}
+				// Fall back to config activeProfile when no explicit profile was set.
+				if !profileExplicit {
+					ctx, _ = withHandlerActiveProfile(ctx, handlerName)
 				}
 			} else if len(handlerNames) == 0 {
 				// No eagerly-registered handlers. Check if official ones exist.
@@ -209,7 +199,8 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			if purgeExpired {
 				total := 0
 				for _, name := range handlerNames {
-					handler, err := getHandler(ctx, name)
+					handlerCtx, _ := withHandlerActiveProfile(ctx, name)
+					handler, err := getHandler(handlerCtx, name)
 					if err != nil {
 						w.WarnStderrf("Failed to initialize %s: %v", name, err)
 						continue
@@ -218,13 +209,6 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 					if !ok {
 						w.WarnStderrf("%s does not support token purging", name)
 						continue
-					}
-					// Apply per-handler activeProfile when iterating all handlers
-					handlerCtx := ctx
-					if effectiveProfile == "" && !profileExplicit && len(args) == 0 {
-						if configProfile := auth.ResolveActiveProfile(ctx, name); configProfile != "" {
-							handlerCtx = auth.WithProfile(ctx, configProfile)
-						}
 					}
 					n, err := purger.PurgeExpiredTokens(handlerCtx)
 					if err != nil {
@@ -262,7 +246,8 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			)
 
 			for _, name := range handlerNames {
-				handler, err := getHandler(ctx, name)
+				handlerCtx, _ := withHandlerActiveProfile(ctx, name)
+				handler, err := getHandler(handlerCtx, name)
 				if err != nil {
 					w.WarnStderrf("Failed to initialize %s: %v", name, err)
 					continue
@@ -272,15 +257,6 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				if !ok {
 					w.WarnStderrf("%s does not support token listing", name)
 					continue
-				}
-
-				// Apply per-handler activeProfile when iterating all handlers
-				// (no explicit --profile was set and no single handler arg).
-				handlerCtx := ctx
-				if effectiveProfile == "" && !profileExplicit && len(args) == 0 {
-					if configProfile := auth.ResolveActiveProfile(ctx, name); configProfile != "" {
-						handlerCtx = auth.WithProfile(ctx, configProfile)
-					}
 				}
 
 				tokens, err := lister.ListCachedTokens(handlerCtx)

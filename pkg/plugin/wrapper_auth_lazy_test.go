@@ -11,6 +11,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -470,4 +471,110 @@ func TestLazyAuthHandlerWrapper_PluginCfgFn_DeferredAndPreservedOnApplyOverrides
 	assert.Equal(t, pages.FailureHTML, mockImpl.lastConfig.AuthCallbackPages.FailureHTML)
 	assert.Equal(t, "mycli", mockImpl.lastConfig.BinaryName)
 	assert.Equal(t, "work", mockImpl.lastConfig.Profile)
+}
+
+func TestLazyAuthHandlerWrapper_ProfileForwardedAfterCapabilitiesInitAndFirstTouch(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ActiveProfile: "work",
+				ClientID:      "default-client",
+				TenantID:      "default-tenant",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {
+						ClientID: "work-client",
+						TenantID: "work-tenant",
+					},
+					"staging": {
+						ClientID: "staging-client",
+						TenantID: "staging-tenant",
+					},
+				},
+			},
+		},
+	}
+
+	t.Run("Capabilities initializes with baseCtx then Login and DetectAvailableFlows reconfigure for caller profile", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingProfilePlugin{}
+		lazyCfg := LazyAuthHandlerConfig{
+			Name: "entra",
+			PluginCfgFn: func() *ProviderConfig {
+				return &ProviderConfig{BinaryName: "mycli"}
+			},
+		}
+		lazy := &LazyAuthHandlerWrapper{
+			name:        "entra",
+			displayName: "entra",
+			initFn: func(ctx context.Context) (*AuthHandlerWrapper, error) {
+				info := AuthHandlerInfo{
+					Name:         "entra",
+					DisplayName:  "Microsoft Entra ID",
+					Capabilities: []auth.Capability{auth.CapTenantID, auth.CapScopesOnLogin},
+				}
+				return configureLazyWrapper(ctx, NewAuthHandlerClientFromPlugin(rec), info, lazyCfg), nil
+			},
+		}
+
+		baseCtx := config.WithConfig(context.Background(), appCfg)
+		lazy.SetContext(baseCtx)
+
+		// Metadata call initializes plugin with baseCtx (activeProfile = "work").
+		caps := lazy.Capabilities()
+		assert.Contains(t, caps, auth.CapTenantID)
+		require.Len(t, rec.configCalls, 1)
+		assert.Equal(t, "work", rec.configCalls[0].Profile)
+
+		// Subsequent command call uses --profile staging.
+		stagingCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, "staging"))
+		flows, err := lazy.DetectAvailableFlows(stagingCtx)
+		require.NoError(t, err)
+		require.Len(t, flows, 1)
+		_, err = lazy.Login(stagingCtx, auth.LoginOptions{Flow: auth.FlowInteractive})
+		require.NoError(t, err)
+
+		require.Len(t, rec.configCalls, 2)
+		assert.Equal(t, "staging", rec.configCalls[1].Profile)
+		require.Len(t, rec.rpcRecords, 2)
+		assert.Equal(t, "staging", rec.rpcRecords[0].profile)
+		assert.Equal(t, `"staging-client"`, string(rec.rpcRecords[0].reqSettings["clientId"]))
+		assert.Equal(t, "staging", rec.rpcRecords[1].profile)
+		assert.Equal(t, `"staging-tenant"`, string(rec.rpcRecords[1].reqSettings["tenantId"]))
+
+		// Explicit --profile default reconfigures away from staging/work to default.
+		defaultCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, ""))
+		st, err := lazy.Status(defaultCtx)
+		require.NoError(t, err)
+		assert.Equal(t, "default-client", st.ClientID)
+		assert.Equal(t, "default-tenant", st.TenantID)
+	})
+
+	t.Run("First touch via Status with explicit default uses default settings immediately", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingProfilePlugin{}
+		lazyCfg := LazyAuthHandlerConfig{
+			Name:      "entra",
+			PluginCfg: &ProviderConfig{BinaryName: "mycli"},
+		}
+		lazy := &LazyAuthHandlerWrapper{
+			name:        "entra",
+			displayName: "entra",
+			initFn: func(ctx context.Context) (*AuthHandlerWrapper, error) {
+				info := AuthHandlerInfo{Name: "entra", DisplayName: "Microsoft Entra ID"}
+				return configureLazyWrapper(ctx, NewAuthHandlerClientFromPlugin(rec), info, lazyCfg), nil
+			},
+		}
+
+		baseCtx := config.WithConfig(context.Background(), appCfg)
+		defaultCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, ""))
+
+		st, err := lazy.Status(defaultCtx)
+		require.NoError(t, err)
+		assert.Equal(t, "default-client", st.ClientID)
+		assert.Equal(t, "default-tenant", st.TenantID)
+		require.Len(t, rec.configCalls, 1)
+		assert.Empty(t, rec.configCalls[0].Profile)
+	})
 }

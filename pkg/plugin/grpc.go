@@ -798,9 +798,13 @@ func buildExecuteProviderRequest(ctx context.Context, providerName string, input
 		}
 	}
 
-	// Auth profile
+	// Auth profile: preserve explicit default/built-in selection across the
+	// provider gRPC boundary so HostServiceServer.GetAuthToken does not fall
+	// back to activeProfile or session overrides.
 	if profile := auth.ProfileFromContext(ctx); profile != "" {
 		req.AuthProfile = profile
+	} else if auth.IsProfileResolved(ctx) {
+		req.AuthProfile = auth.DefaultProfileName
 	}
 
 	return req, nil

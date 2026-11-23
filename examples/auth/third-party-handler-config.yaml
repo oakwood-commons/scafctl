@@ -39,6 +39,14 @@ auth:
       trustedVerificationDomains:
         - sso.openshift.example.com
 
+      # Optional: default profile and per-profile setting overrides.
+      # Any non-reserved keys are forwarded opaquely to the handler plugin.
+      activeProfile: work
+      caBundlePath: /etc/ssl/default-corp.pem
+      profiles:
+        work:
+          caBundlePath: /etc/ssl/work-corp.pem
+
   # Global trusted domains apply to every handler, official or third-party.
   trustedVerificationDomains:
     - login.example.com

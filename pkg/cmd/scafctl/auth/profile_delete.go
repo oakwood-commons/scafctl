@@ -117,7 +117,7 @@ func CommandProfileDelete(cliParams *settings.Run, _ *terminal.IOStreams, _ stri
 			// Try to clear credentials (best-effort)
 			// Always attempt logout even if status check fails -- credentials may exist
 			// even when status is unavailable or shows unauthenticated.
-			ctx = auth.WithProfile(ctx, profileName)
+			ctx = auth.WithProfileResolved(auth.WithProfile(ctx, profileName))
 			handler, handlerErr := getHandler(ctx, handlerName)
 			if handlerErr == nil {
 				if logoutErr := handler.Logout(ctx); logoutErr != nil && !force {

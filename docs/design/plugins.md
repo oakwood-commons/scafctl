@@ -255,7 +255,7 @@ Called once after plugin load with host-side configuration:
 
 ### ConfigureAuthHandler
 
-Called once after auth handler plugin load, using the same configuration model as `ConfigureProvider`:
+Called after auth handler plugin load (and re-sent when the effective auth profile or runtime overrides change), using the same configuration model as `ConfigureProvider`:
 
 - `handler_name` -- which auth handler to configure (multi-handler plugins)
 - `quiet` / `no_color` -- terminal output preferences

@@ -6,13 +6,17 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func TestInjectAuthHandlerSettings(t *testing.T) {
@@ -621,4 +625,581 @@ func TestAuthHandlerWrapper_ApplyOverrides_SelectedDefaultProfileOverridesActive
 	assert.Equal(t, "top-level-tenant-id", updatedSettings["tenantId"])
 	assert.Equal(t, "interactive", updatedSettings["defaultFlow"])
 	assert.NotContains(t, updatedSettings, "clientSecret")
+}
+
+// recordingProfilePlugin records both stateful ConfigureAuthHandler updates and
+// per-RPC profile/settings observed on every method.
+type recordingProfilePlugin struct {
+	mu          sync.Mutex
+	configCalls []ProviderConfig
+	rpcRecords  []recordedAuthRPC
+}
+
+type recordedAuthRPC struct {
+	method         string
+	profile        string
+	hasReqSettings bool
+	reqSettings    map[string]json.RawMessage
+}
+
+func (r *recordingProfilePlugin) recordRPC(ctx context.Context, method string, explicit map[string]json.RawMessage) {
+	settings := explicit
+	hasSettings := explicit != nil
+	if !hasSettings {
+		settings, hasSettings = RequestSettingsFromContext(ctx)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rpcRecords = append(r.rpcRecords, recordedAuthRPC{
+		method:         method,
+		profile:        auth.ProfileFromContext(ctx),
+		hasReqSettings: hasSettings,
+		reqSettings:    cloneSettingsMap(settings),
+	})
+}
+
+func (r *recordingProfilePlugin) GetAuthHandlers(_ context.Context) ([]AuthHandlerInfo, error) {
+	return []AuthHandlerInfo{{Name: "entra", DisplayName: "Entra"}}, nil
+}
+
+func (r *recordingProfilePlugin) ConfigureAuthHandler(_ context.Context, _ string, cfg ProviderConfig) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.configCalls = append(r.configCalls, cfg)
+	return nil
+}
+
+func (r *recordingProfilePlugin) Login(ctx context.Context, _ string, req LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+	r.recordRPC(ctx, "Login", req.Settings)
+	return &LoginResponse{
+		Claims:    &auth.Claims{Email: "user@example.com"},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}, nil
+}
+
+func (r *recordingProfilePlugin) Logout(ctx context.Context, _ string, _ LogoutRequest) error {
+	r.recordRPC(ctx, "Logout", nil)
+	return nil
+}
+
+func (r *recordingProfilePlugin) GetStatus(ctx context.Context, _ string, req StatusRequest) (*auth.Status, error) {
+	r.recordRPC(ctx, "GetStatus", req.Settings)
+	var clientID, tenantID string
+	if raw, ok := req.Settings["clientId"]; ok {
+		_ = json.Unmarshal(raw, &clientID)
+	}
+	if raw, ok := req.Settings["tenantId"]; ok {
+		_ = json.Unmarshal(raw, &tenantID)
+	}
+	return &auth.Status{
+		Authenticated: true,
+		ClientID:      clientID,
+		TenantID:      tenantID,
+		Claims:        &auth.Claims{Email: fmt.Sprintf("%s@example.com", auth.DisplayProfileName(auth.ProfileFromContext(ctx)))},
+	}, nil
+}
+
+func (r *recordingProfilePlugin) GetToken(ctx context.Context, _ string, req TokenRequest) (*TokenResponse, error) {
+	r.recordRPC(ctx, "GetToken", req.Settings)
+	var clientID, tenantID string
+	if raw, ok := req.Settings["clientId"]; ok {
+		_ = json.Unmarshal(raw, &clientID)
+	}
+	if raw, ok := req.Settings["tenantId"]; ok {
+		_ = json.Unmarshal(raw, &tenantID)
+	}
+	return &TokenResponse{
+		AccessToken: fmt.Sprintf("%s:%s:%s", auth.ProfileFromContext(ctx), clientID, tenantID),
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}, nil
+}
+
+func (r *recordingProfilePlugin) ListCachedTokens(ctx context.Context, handlerName string) ([]*auth.CachedTokenInfo, error) {
+	r.recordRPC(ctx, "ListCachedTokens", nil)
+	return []*auth.CachedTokenInfo{{Handler: handlerName}}, nil
+}
+
+func (r *recordingProfilePlugin) PurgeExpiredTokens(ctx context.Context, _ string) (int, error) {
+	r.recordRPC(ctx, "PurgeExpiredTokens", nil)
+	return 1, nil
+}
+
+func (r *recordingProfilePlugin) DetectAvailableFlows(ctx context.Context, _ string) ([]FlowAvailability, error) {
+	r.recordRPC(ctx, "DetectAvailableFlows", nil)
+	return []FlowAvailability{{Flow: auth.FlowInteractive, Available: true}}, nil
+}
+
+func (r *recordingProfilePlugin) StopAuthHandler(_ context.Context, _ string) error {
+	return nil
+}
+
+func TestAuthHandlerWrapper_PerProfileReconfigureAndStatelessSettings(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ActiveProfile: "work",
+				Authority:     "https://login.microsoftonline.com",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {
+						ClientID:      "work-client",
+						TenantID:      "work-tenant",
+						DefaultScopes: []string{"api://work/.default"},
+						ClientSecret:  "work-secret",
+					},
+					"staging": {
+						ClientID:           "staging-client",
+						TenantID:           "staging-tenant",
+						FederatedTokenFile: "/var/run/secrets/staging-token",
+					},
+				},
+			},
+		},
+	}
+
+	rec := &recordingProfilePlugin{}
+	reg := auth.NewRegistry()
+	baseCtx := config.WithConfig(context.Background(), appCfg)
+	configureAndRegisterAuthHandlers(baseCtx, reg, NewAuthHandlerClientFromPlugin(rec), []AuthHandlerInfo{
+		{Name: "entra", DisplayName: "Microsoft Entra ID"},
+	}, &ProviderConfig{BinaryName: "mycli"})
+
+	h, err := reg.Get("entra")
+	require.NoError(t, err)
+	wrapper := h.(*AuthHandlerWrapper)
+
+	// Initial startup configured activeProfile ("work").
+	require.Len(t, rec.configCalls, 1)
+	assert.Equal(t, "work", rec.configCalls[0].Profile)
+
+	// 1. Switch to "staging" profile: reconfigures stateful plugin AND sends staging settings per RPC.
+	stagingCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, "staging"))
+	_, err = wrapper.DetectAvailableFlows(stagingCtx)
+	require.NoError(t, err)
+	st, err := wrapper.Status(stagingCtx)
+	require.NoError(t, err)
+	assert.Equal(t, "staging-client", st.ClientID)
+	assert.Equal(t, "staging-tenant", st.TenantID)
+
+	// ConfigureAuthHandler ran once for the staging switch (not duplicated on Status).
+	require.Len(t, rec.configCalls, 2)
+	assert.Equal(t, "staging", rec.configCalls[1].Profile)
+	assert.Equal(t, "mycli", rec.configCalls[1].BinaryName)
+
+	// 2. Explicit --profile default when activeProfile is "work":
+	// resets ConfigureAuthHandler to Profile "" and top-level settings (no work leak),
+	// and sends top-level settings (authority only, no clientId/clientSecret) per RPC.
+	defaultCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, ""))
+	_, err = wrapper.Login(defaultCtx, auth.LoginOptions{Flow: auth.FlowInteractive})
+	require.NoError(t, err)
+	require.NoError(t, wrapper.Logout(defaultCtx))
+	stDefault, err := wrapper.Status(defaultCtx)
+	require.NoError(t, err)
+	assert.Empty(t, stDefault.ClientID, "default profile must not inherit work clientId")
+	tokDefault, err := wrapper.GetToken(defaultCtx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "::", tokDefault.AccessToken)
+	_, err = wrapper.ListCachedTokens(defaultCtx)
+	require.NoError(t, err)
+	_, err = wrapper.PurgeExpiredTokens(defaultCtx)
+	require.NoError(t, err)
+
+	require.Len(t, rec.configCalls, 3)
+	assert.Equal(t, "", rec.configCalls[2].Profile)
+	var defaultCfgMap map[string]any
+	require.NoError(t, json.Unmarshal(rec.configCalls[2].Settings["entra"], &defaultCfgMap))
+	assert.Equal(t, "https://login.microsoftonline.com", defaultCfgMap["authority"])
+	assert.NotContains(t, defaultCfgMap, "clientId")
+	assert.NotContains(t, defaultCfgMap, "clientSecret")
+
+	// Verify every defaultCtx RPC saw Profile == "".
+	for _, call := range rec.rpcRecords[2:] {
+		assert.Empty(t, call.profile, "method %s should receive empty default profile", call.method)
+	}
+}
+
+func TestAuthHandlerWrapper_ExplicitEmptyDefaultConfigSendsEmptyObjectSettings(t *testing.T) {
+	t.Parallel()
+
+	// Top-level Entra config has ONLY activeProfile + profiles.work (zero top-level settings).
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ActiveProfile: "work",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {
+						ClientID: "work-client",
+						TenantID: "work-tenant",
+					},
+				},
+			},
+		},
+	}
+
+	rec := &recordingProfilePlugin{}
+	reg := auth.NewRegistry()
+	baseCtx := config.WithConfig(context.Background(), appCfg)
+	configureAndRegisterAuthHandlers(baseCtx, reg, NewAuthHandlerClientFromPlugin(rec), []AuthHandlerInfo{
+		{Name: "entra", DisplayName: "Microsoft Entra ID"},
+	}, &ProviderConfig{BinaryName: "scafctl"})
+
+	h, err := reg.Get("entra")
+	require.NoError(t, err)
+	wrapper := h.(*AuthHandlerWrapper)
+
+	// Explicit --profile default: top-level marshals to "{}".
+	// ConfigureAuthHandler must clear Settings (nil) and Profile (""), while
+	// per-RPC Settings must be a non-nil empty map so stateless plugins do not
+	// fall back to ConfigureAuthHandler's prior "work" state.
+	defaultCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, ""))
+	st, err := wrapper.Status(defaultCtx)
+	require.NoError(t, err)
+	assert.Empty(t, st.ClientID)
+
+	require.Len(t, rec.configCalls, 2)
+	assert.Empty(t, rec.configCalls[1].Profile)
+	assert.Nil(t, rec.configCalls[1].Settings)
+
+	require.Len(t, rec.rpcRecords, 1)
+	assert.Empty(t, rec.rpcRecords[0].profile)
+	assert.True(t, rec.rpcRecords[0].hasReqSettings)
+	assert.NotNil(t, rec.rpcRecords[0].reqSettings)
+	assert.Empty(t, rec.rpcRecords[0].reqSettings)
+}
+
+func TestAuthHandlerWrapper_ApplyOverrides_PreservesResolvedProfileSettings(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				Authority: "https://login.microsoftonline.com",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {
+						ClientID:      "profile-client",
+						TenantID:      "profile-tenant",
+						DefaultScopes: []string{"api://work/.default"},
+						ClientSecret:  "profile-secret",
+					},
+				},
+			},
+		},
+	}
+
+	rec := &recordingProfilePlugin{}
+	wrapper := NewAuthHandlerWrapper(NewAuthHandlerClientFromPlugin(rec), AuthHandlerInfo{Name: "entra"})
+	wrapper.setHostConfig(hostConfig{BinaryName: "mycli"})
+
+	workCtx := auth.WithProfileResolved(auth.WithProfile(config.WithConfig(context.Background(), appCfg), "work"))
+
+	// CLI passes --profile work --client-id override-client (without --tenant).
+	require.NoError(t, wrapper.ApplyOverrides(workCtx, map[string]string{
+		"clientId": "override-client",
+	}))
+	_, err := wrapper.DetectAvailableFlows(workCtx)
+	require.NoError(t, err)
+	st, err := wrapper.Status(workCtx)
+	require.NoError(t, err)
+	_, err = wrapper.Login(workCtx, auth.LoginOptions{Flow: auth.FlowServicePrincipal})
+	require.NoError(t, err)
+
+	assert.Equal(t, "override-client", st.ClientID)
+	assert.Equal(t, "profile-tenant", st.TenantID)
+
+	// ConfigureAuthHandler ran once during ApplyOverrides and was not clobbered by subsequent RPCs.
+	require.Len(t, rec.configCalls, 1)
+	assert.Equal(t, "work", rec.configCalls[0].Profile)
+
+	for _, call := range rec.rpcRecords {
+		assert.Equal(t, "work", call.profile)
+		assert.Equal(t, `"override-client"`, string(call.reqSettings["clientId"]), "method %s must keep CLI override", call.method)
+		assert.Equal(t, `"profile-tenant"`, string(call.reqSettings["tenantId"]), "method %s must keep profile tenantId", call.method)
+		assert.Equal(t, `"profile-secret"`, string(call.reqSettings["clientSecret"]), "method %s must keep profile credentials", call.method)
+		assert.Equal(t, `"https://login.microsoftonline.com"`, string(call.reqSettings["authority"]), "method %s must keep inherited authority", call.method)
+	}
+}
+
+func TestAuthHandlerWrapper_GenericHandlerProfiles(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Handlers: map[string]config.HandlerConfig{
+				"openshift": {
+					ActiveProfile: "work",
+					Settings: map[string]any{
+						"clientId": "default-ocp-client",
+						"tenantId": "default-cluster",
+					},
+					Profiles: map[string]map[string]any{
+						"work": {
+							"clientId": "work-ocp-client",
+							"tenantId": "work-cluster",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	rec := &recordingProfilePlugin{}
+	wrapper := NewAuthHandlerWrapper(NewAuthHandlerClientFromPlugin(rec), AuthHandlerInfo{Name: "openshift"})
+	baseCtx := config.WithConfig(context.Background(), appCfg)
+
+	stWork, err := wrapper.Status(baseCtx)
+	require.NoError(t, err)
+	assert.Equal(t, "work-ocp-client", stWork.ClientID)
+	assert.Equal(t, "work-cluster", stWork.TenantID)
+
+	defaultCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, ""))
+	stDefault, err := wrapper.Status(defaultCtx)
+	require.NoError(t, err)
+	assert.Equal(t, "default-ocp-client", stDefault.ClientID)
+	assert.Equal(t, "default-cluster", stDefault.TenantID)
+}
+
+func TestAuthHandlerWrapper_ConcurrentMultiProfileRace(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ClientID: "default-client",
+				TenantID: "default-tenant",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {
+						ClientID: "work-client",
+						TenantID: "work-tenant",
+					},
+					"prod": {
+						ClientID: "prod-client",
+						TenantID: "prod-tenant",
+					},
+				},
+			},
+		},
+	}
+
+	rec := &recordingProfilePlugin{}
+	grpcServer := &AuthHandlerGRPCServer{Impl: rec}
+	wireSvc := &concurrentWireServiceClient{server: grpcServer}
+	wrapper := NewAuthHandlerWrapper(NewAuthHandlerClientFromPlugin(NewAuthHandlerGRPCClient(wireSvc)), AuthHandlerInfo{Name: "entra"})
+	baseCtx := config.WithConfig(context.Background(), appCfg)
+
+	type target struct {
+		profile  string
+		expected string
+	}
+	targets := []target{
+		{profile: "", expected: ":default-client:default-tenant"},
+		{profile: "work", expected: "work:work-client:work-tenant"},
+		{profile: "prod", expected: "prod:prod-client:prod-tenant"},
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 24; i++ {
+		tgt := targets[i%len(targets)]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx := auth.WithProfileResolved(auth.WithProfile(baseCtx, tgt.profile))
+			tok, err := wrapper.GetToken(ctx, auth.TokenOptions{Scope: "api://app/.default"})
+			require.NoError(t, err)
+			assert.Equal(t, tgt.expected, tok.AccessToken)
+
+			_, err = wrapper.Status(ctx)
+			require.NoError(t, err)
+			_, err = wrapper.DetectAvailableFlows(ctx)
+			require.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+}
+
+type concurrentWireServiceClient struct {
+	proto.AuthHandlerServiceClient
+	server *AuthHandlerGRPCServer
+}
+
+func (c *concurrentWireServiceClient) ConfigureAuthHandler(ctx context.Context, req *proto.ConfigureAuthHandlerRequest, _ ...grpc.CallOption) (*proto.ConfigureAuthHandlerResponse, error) {
+	return c.server.ConfigureAuthHandler(ctx, req)
+}
+
+func (c *concurrentWireServiceClient) GetStatus(ctx context.Context, req *proto.GetStatusRequest, _ ...grpc.CallOption) (*proto.GetStatusResponse, error) {
+	return c.server.GetStatus(ctx, req)
+}
+
+func (c *concurrentWireServiceClient) GetToken(ctx context.Context, req *proto.GetTokenRequest, _ ...grpc.CallOption) (*proto.GetTokenResponse, error) {
+	return c.server.GetToken(ctx, req)
+}
+
+func (c *concurrentWireServiceClient) DetectAvailableFlows(ctx context.Context, req *proto.DetectAvailableFlowsRequest, _ ...grpc.CallOption) (*proto.DetectAvailableFlowsResponse, error) {
+	return c.server.DetectAvailableFlows(ctx, req)
+}
+
+func TestAuthHandlerWrapper_ServerModeProtectsCredentialsAndConfigLessCtxPreservesStartup(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ActiveProfile: "work",
+				ClientID:      "cli-default-client",
+				TenantID:      "cli-default-tenant",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"work": {
+						ClientID: "cli-work-client",
+						TenantID: "cli-work-tenant",
+					},
+				},
+			},
+		},
+	}
+
+	t.Run("config-less context preserves startup AppConfig and activeProfile", func(t *testing.T) {
+		t.Parallel()
+		rec := &recordingProfilePlugin{}
+		reg := auth.NewRegistry()
+		startupCtx := config.WithConfig(context.Background(), appCfg)
+		configureAndRegisterAuthHandlers(startupCtx, reg, NewAuthHandlerClientFromPlugin(rec), []AuthHandlerInfo{
+			{Name: "entra", DisplayName: "Microsoft Entra ID"},
+		}, &ProviderConfig{BinaryName: "mycli"})
+
+		h, err := reg.Get("entra")
+		require.NoError(t, err)
+		wrapper := h.(*AuthHandlerWrapper)
+
+		// Bare context.Background() (e.g. HostService or embedder) must NOT wipe startup config.
+		st, err := wrapper.Status(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, "cli-work-client", st.ClientID)
+		assert.Equal(t, "cli-work-tenant", st.TenantID)
+		assert.Len(t, rec.configCalls, 1, "no redundant ConfigureAuthHandler on matching startup profile")
+	})
+
+	t.Run("ActivateServerMode prevents CLI settings and ConfigureAuthHandler from clobbering server mode", func(t *testing.T) {
+		t.Parallel()
+		var gotTokenReq *proto.GetTokenRequest
+		mockSvc := &mockAuthHandlerServiceClient{
+			activateServerModeResp: &proto.ActivateServerModeResponse{},
+			getTokenResp:           &proto.GetTokenResponse{AccessToken: "srv-tok", TokenType: "Bearer"},
+		}
+		grpcClient := &AuthHandlerGRPCClient{client: mockSvc, hostServiceID: 77}
+		wrapper := NewAuthHandlerWrapper(NewAuthHandlerClientFromPlugin(grpcClient), AuthHandlerInfo{Name: "entra"})
+
+		require.NoError(t, wrapper.ActivateServerMode(context.Background(), json.RawMessage(`{"clientId":"ConfidentialSrv"}`)))
+
+		reqCtx := config.WithConfig(context.Background(), appCfg)
+		tok, err := wrapper.GetToken(reqCtx, auth.TokenOptions{Scope: "https://graph.microsoft.com/.default"})
+		require.NoError(t, err)
+		assert.Equal(t, "srv-tok", tok.AccessToken)
+		assert.Nil(t, mockSvc.lastConfigureReq, "server-mode wrapper must never call ConfigureAuthHandler")
+		gotTokenReq = mockSvc.capturedGetTokenReq
+		require.NotNil(t, gotTokenReq)
+		assert.Empty(t, gotTokenReq.Settings, "server-mode wrapper must not attach CLI per-RPC settings")
+	})
+
+	t.Run("Profile-scoped ApplyOverrides isolation, error rollback, and HostServiceID preservation", func(t *testing.T) {
+		t.Parallel()
+		var failConfigure bool
+		mockSvc := &mockAuthHandlerServiceClient{
+			configureAuthHandlerResp: &proto.ConfigureAuthHandlerResponse{ProtocolVersion: PluginProtocolVersion},
+			getStatusResp:            &proto.GetStatusResponse{Authenticated: true},
+		}
+		grpcClient := &AuthHandlerGRPCClient{client: mockSvc, hostServiceID: 99}
+		wrapper := NewAuthHandlerWrapper(NewAuthHandlerClientFromPlugin(grpcClient), AuthHandlerInfo{Name: "openshift"})
+
+		genericCfg := &config.Config{
+			Auth: config.GlobalAuthConfig{
+				Handlers: map[string]config.HandlerConfig{
+					"openshift": {
+						Settings: map[string]any{"clientid": "default-ocp"},
+						Profiles: map[string]map[string]any{
+							"work": {"clientid": "work-ocp"},
+							"prod": {"clientid": "prod-ocp"},
+						},
+					},
+				},
+			},
+		}
+		baseCtx := config.WithConfig(context.Background(), genericCfg)
+		workCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, "work"))
+		prodCtx := auth.WithProfileResolved(auth.WithProfile(baseCtx, "prod"))
+
+		require.NoError(t, wrapper.ApplyOverrides(workCtx, map[string]string{"clientId": "work-cli-override"}))
+		require.NotNil(t, mockSvc.lastConfigureReq)
+		assert.Equal(t, uint32(99), mockSvc.lastConfigureReq.HostServiceId, "HostServiceID must be preserved on reconfigure")
+		var workSettings map[string]any
+		require.NoError(t, json.Unmarshal(mockSvc.lastConfigureReq.Settings["openshift"], &workSettings))
+		assert.Equal(t, "work-cli-override", workSettings["clientId"])
+		assert.NotContains(t, workSettings, "clientid", "case-colliding lowercased key must be removed")
+
+		// Switching to prod must NOT inherit work's CLI override.
+		_, err := wrapper.Status(prodCtx)
+		require.NoError(t, err)
+		var prodSettings map[string]any
+		require.NoError(t, json.Unmarshal(mockSvc.lastConfigureReq.Settings["openshift"], &prodSettings))
+		assert.Equal(t, "prod-ocp", prodSettings["clientid"])
+		assert.NotContains(t, prodSettings, "clientId")
+
+		// Simulate ConfigureAuthHandler failure on ApplyOverrides and verify rollback.
+		failConfigure = true
+		if failConfigure {
+			mockSvc.configureAuthHandlerResp = &proto.ConfigureAuthHandlerResponse{Error: "rejected"}
+		}
+		err = wrapper.ApplyOverrides(prodCtx, map[string]string{"clientId": "bad-override"})
+		require.Error(t, err)
+		mockSvc.configureAuthHandlerResp = &proto.ConfigureAuthHandlerResponse{ProtocolVersion: PluginProtocolVersion}
+
+		// Invalid profile in context is rejected before gRPC.
+		_, err = wrapper.Status(auth.WithProfile(baseCtx, "../evil"))
+		require.Error(t, err)
+	})
+
+	t.Run("HostService GetAuthToken and GetAuthIdentity honor explicit default profile", func(t *testing.T) {
+		t.Parallel()
+		var tokenCtxProfile string
+		var tokenCtxResolved bool
+		var idCtxProfile string
+		var idCtxResolved bool
+
+		srv := &HostServiceServer{
+			Deps: HostServiceDeps{
+				HostConfig: appCfg,
+				ProfileResolverFunc: func(_ string) string {
+					// Simulates --auth-profile default normalizing to "".
+					return ""
+				},
+				AuthTokenWithHostnameFunc: func(ctx context.Context, _, _, _ string, _ int64, _ bool) (*proto.GetAuthTokenResponse, error) {
+					tokenCtxProfile = auth.ProfileFromContext(ctx)
+					tokenCtxResolved = auth.IsProfileResolved(ctx)
+					return &proto.GetAuthTokenResponse{AccessToken: "ok", TokenType: "Bearer"}, nil
+				},
+				AuthIdentityFunc: func(ctx context.Context, _, _ string) (*proto.Claims, error) {
+					idCtxProfile = auth.ProfileFromContext(ctx)
+					idCtxResolved = auth.IsProfileResolved(ctx)
+					return &proto.Claims{Email: "default@example.com"}, nil
+				},
+			},
+		}
+
+		tokResp, err := srv.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{HandlerName: "entra"})
+		require.NoError(t, err)
+		assert.Empty(t, tokResp.Error)
+		assert.Empty(t, tokenCtxProfile)
+		assert.True(t, tokenCtxResolved, "GetAuthToken must mark empty resolved profile so HostConfig activeProfile does not win")
+
+		idResp, err := srv.GetAuthIdentity(context.Background(), &proto.GetAuthIdentityRequest{HandlerName: "entra"})
+		require.NoError(t, err)
+		assert.Empty(t, idResp.Error)
+		assert.Empty(t, idCtxProfile)
+		assert.True(t, idCtxResolved, "GetAuthIdentity must mark resolved profile")
+
+		execCtx := auth.WithProfileResolved(auth.WithProfile(context.Background(), ""))
+		execReq, err := buildExecuteProviderRequest(execCtx, "http", []byte(`{"url":"https://example.com"}`))
+		require.NoError(t, err)
+		assert.Equal(t, auth.DefaultProfileName, execReq.AuthProfile, "explicit built-in profile must serialize as default on ExecuteProviderRequest")
+	})
 }

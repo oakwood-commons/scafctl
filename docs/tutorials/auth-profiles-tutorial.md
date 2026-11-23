@@ -339,9 +339,19 @@ auth:
       deploy:
         project: "my-prod-project"
         impersonateServiceAccount: "deployer@my-prod-project.iam.gserviceaccount.com"
+
+  handlers:
+    openshift:
+      activeProfile: work
+      caBundlePath: /etc/ssl/default.pem
+      profiles:
+        work:
+          caBundlePath: /etc/ssl/work.pem
 ```
 
-Profile configs inherit from the top-level handler config and override specific fields. In the example above, the `work` GitHub profile uses `clientId: Iv1.work-org-app-id` but would inherit any other top-level GitHub settings.
+Profile configs inherit from the top-level handler config and override specific fields. In the example above, the `work` GitHub profile uses `clientId: Iv1.work-org-app-id` but would inherit any other top-level GitHub settings. Custom plugin handlers configured under `auth.handlers.<name>` follow the same `activeProfile` and `profiles` inheritance model.
+
+When `activeProfile` is set in `config.yaml`, pass `--profile default` (or `--profile built-in`) to explicitly target the unnamed default profile for a single command without changing `activeProfile`.
 
 ---
 

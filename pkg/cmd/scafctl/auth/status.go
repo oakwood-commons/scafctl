@@ -179,19 +179,11 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				return fmt.Errorf("writer not initialized in context")
 			}
 
-			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile
-			// Track whether profile was explicitly set (even if normalized to empty/default).
-			profileExplicit := cmd.Flags().Changed("profile")
-			effectiveProfile := auth.NormalizeProfileName(profile)
-			if effectiveProfile == "" && !profileExplicit {
-				effectiveProfile = auth.NormalizeProfileName(auth.GlobalProfileFromContext(ctx))
-			}
-			if effectiveProfile != "" {
-				if err := auth.ValidateProfileName(effectiveProfile); err != nil {
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.InvalidInput)
-				}
-				ctx = auth.WithProfile(ctx, effectiveProfile)
+			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile.
+			ctx, _, profileExplicit, err := resolveCommandProfile(ctx, cmd, profile)
+			if err != nil {
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			handlers := listActiveHandlers(ctx, cliParams.BinaryName)
@@ -207,11 +199,11 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				handlers = []string{handlerName}
 			}
 
-			if effectiveProfile == "" && !profileExplicit {
+			if !profileExplicit {
 				// No explicit profile — expand all known profiles per handler.
 				results, warnings = expandProfileStatuses(ctx, cliParams, handlers)
 			} else {
-				results, warnings = queryHandlerStatuses(ctx, cliParams, handlers, profileExplicit)
+				results, warnings = queryHandlerStatuses(ctx, cliParams, handlers, true)
 			}
 
 			for _, warn := range warnings {
@@ -388,10 +380,8 @@ func expandProfileStatuses(ctx context.Context, cliParams *settings.Run, handler
 		// Query built-in first, then named profiles (already sorted by ListConfiguredProfiles).
 		allProfiles := append([]string{""}, profiles...)
 		for _, p := range allProfiles {
-			pCtx := ctx
-			if p != "" {
-				pCtx = auth.WithProfile(pCtx, p)
-			}
+			pCtx := auth.WithProfile(ctx, p)
+			pCtx = auth.WithProfileResolved(pCtx)
 			r, w := queryHandlerStatuses(pCtx, cliParams, []string{h}, true)
 			allResults = append(allResults, r...)
 			allWarnings = append(allWarnings, w...)
@@ -430,10 +420,8 @@ func queryHandlerStatuses(ctx context.Context, cliParams *settings.Run, handlers
 
 			// Resolve per-handler config profile when no explicit profile was set.
 			handlerCtx := gCtx
-			if auth.ProfileFromContext(handlerCtx) == "" && !profileExplicit {
-				if configProfile := auth.ResolveActiveProfile(handlerCtx, handlerName); configProfile != "" {
-					handlerCtx = auth.WithProfile(handlerCtx, configProfile)
-				}
+			if !profileExplicit {
+				handlerCtx, _ = withHandlerActiveProfile(handlerCtx, handlerName)
 			}
 
 			handler, err := getHandler(handlerCtx, handlerName)

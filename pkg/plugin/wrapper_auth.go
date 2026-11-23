@@ -4,6 +4,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -101,18 +102,31 @@ type AuthHandlerWrapper struct {
 	// trust domains.
 	requireTrustedDomains bool
 	startupLatency        time.Duration
-	hostCfg               hostConfig // host-level config preserved across ApplyOverrides
+	hostCfg               hostConfig // host-level config preserved across reconfigurations
 	mu                    sync.RWMutex
+
+	// configMu serializes ConfigureAuthHandler calls and guards overrides,
+	// serverMode, configured, configuredProfile, and configuredSettingsRaw.
+	// Never hold configMu while acquiring mu or across user-facing RPCs.
+	configMu              sync.Mutex
+	overrides             map[string]map[string]string
+	serverMode            bool
+	configured            bool
+	configuredProfile     string
+	configuredSettingsRaw []byte
 }
 
-// hostConfig stores host-level ProviderConfig fields so ApplyOverrides
-// can reconstruct a full config without zeroing them.
+// hostConfig stores host-level ProviderConfig fields so ApplyOverrides and
+// per-profile reconfigurations can reconstruct a full config without zeroing them.
 type hostConfig struct {
 	Quiet             bool
 	NoColor           bool
 	BinaryName        string
 	Profile           string
+	GlobalProfile     string
+	AppConfig         *config.Config
 	AuthCallbackPages *AuthCallbackPages
+	BaseSettings      map[string]json.RawMessage
 }
 
 // NewAuthHandlerWrapper creates a new wrapper for a plugin auth handler.
@@ -197,6 +211,11 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 		defer cancelTimeout()
 	}
 
+	ctx, perCallSettings, err := w.prepareCall(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	willOpen, err := w.willOpenBrowserOnLogin(ctx, opts.Flow, effectiveBrowser)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -216,6 +235,7 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 		Timeout:      opts.Timeout,
 		CallbackPort: opts.CallbackPort,
 		Browser:      effectiveBrowser,
+		Settings:     cloneSettingsMap(perCallSettings),
 	}
 
 	// Bridge the LoginOptions.DeviceCodeCallback to the plugin's streaming callback.
@@ -296,6 +316,10 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 // scafctl-plugin-sdk#58 and is intentionally out of scope for the
 // --callback-port work (#589).
 func (w *AuthHandlerWrapper) Logout(ctx context.Context) error {
+	ctx, _, err := w.prepareCall(ctx)
+	if err != nil {
+		return err
+	}
 	return w.client.plugin.Logout(ctx, w.handlerName, LogoutRequest{})
 }
 
@@ -309,16 +333,14 @@ func (w *AuthHandlerWrapper) Status(ctx context.Context) (*auth.Status, error) {
 		trace.WithAttributes(attribute.String("auth.handler", w.handlerName)))
 	defer span.End()
 
-	// Resolve the active profile on the host side before the gRPC boundary.
-	// Context values don't cross process boundaries, so the profile must be
-	// set here for AuthHandlerGRPCClient to include it in the request.
-	if auth.ProfileFromContext(ctx) == "" && !auth.IsProfileResolved(ctx) {
-		if profile := auth.ResolveActiveProfile(ctx, w.handlerName); profile != "" {
-			ctx = auth.WithProfile(ctx, profile)
-		}
+	ctx, perCallSettings, err := w.prepareCall(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	return w.client.plugin.GetStatus(ctx, w.handlerName, StatusRequest{})
+	return w.client.plugin.GetStatus(ctx, w.handlerName, StatusRequest{
+		Settings: cloneSettingsMap(perCallSettings),
+	})
 }
 
 // GetToken implements auth.Handler.
@@ -327,13 +349,9 @@ func (w *AuthHandlerWrapper) GetToken(ctx context.Context, opts auth.TokenOption
 		trace.WithAttributes(attribute.String("auth.handler", w.handlerName)))
 	defer span.End()
 
-	// Resolve the active profile on the host side before the gRPC boundary.
-	// Context values don't cross process boundaries, so the profile must be
-	// set here for AuthHandlerGRPCClient to include it in the request.
-	if auth.ProfileFromContext(ctx) == "" && !auth.IsProfileResolved(ctx) {
-		if profile := auth.ResolveActiveProfile(ctx, w.handlerName); profile != "" {
-			ctx = auth.WithProfile(ctx, profile)
-		}
+	ctx, perCallSettings, err := w.prepareCall(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	req := TokenRequest{
@@ -344,6 +362,7 @@ func (w *AuthHandlerWrapper) GetToken(ctx context.Context, opts auth.TokenOption
 		ServerContext: opts.ServerContext,
 		Caller:        opts.Caller,
 		Assertion:     opts.Assertion,
+		Settings:      cloneSettingsMap(perCallSettings),
 	}
 
 	resp, err := w.client.plugin.GetToken(ctx, w.handlerName, req)
@@ -381,16 +400,28 @@ func (w *AuthHandlerWrapper) InjectAuth(ctx context.Context, req *http.Request, 
 
 // ListCachedTokens implements auth.TokenLister.
 func (w *AuthHandlerWrapper) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo, error) {
+	ctx, _, err := w.prepareCall(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return w.client.plugin.ListCachedTokens(ctx, w.handlerName)
 }
 
 // PurgeExpiredTokens implements auth.TokenPurger.
 func (w *AuthHandlerWrapper) PurgeExpiredTokens(ctx context.Context) (int, error) {
+	ctx, _, err := w.prepareCall(ctx)
+	if err != nil {
+		return 0, err
+	}
 	return w.client.plugin.PurgeExpiredTokens(ctx, w.handlerName)
 }
 
 // DetectAvailableFlows implements auth.FlowDetector.
 func (w *AuthHandlerWrapper) DetectAvailableFlows(ctx context.Context) ([]auth.FlowAvailability, error) {
+	ctx, _, err := w.prepareCall(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return w.client.plugin.DetectAvailableFlows(ctx, w.handlerName)
 }
 
@@ -398,7 +429,8 @@ func (w *AuthHandlerWrapper) DetectAvailableFlows(ctx context.Context) ([]auth.F
 // It merges the provided key-value overrides into the handler's current
 // plugin configuration and re-sends ConfigureAuthHandler to the plugin process.
 // This allows CLI flags (e.g., --client-id, --tenant) to override config-file
-// and default settings at runtime before login.
+// and default settings at runtime before login, and preserves them across
+// subsequent per-profile RPCs on this wrapper.
 func (w *AuthHandlerWrapper) ApplyOverrides(ctx context.Context, overrides map[string]string) error {
 	if len(overrides) == 0 {
 		return nil
@@ -416,45 +448,261 @@ func (w *AuthHandlerWrapper) ApplyOverrides(ctx context.Context, overrides map[s
 		return nil
 	}
 
-	// Build a settings map with just the overrides for this handler.
-	settingsJSON, err := json.Marshal(filtered)
+	ctx, profile, err := w.resolveEffectiveProfile(ctx)
 	if err != nil {
-		return fmt.Errorf("marshaling overrides: %w", err)
+		return err
 	}
-
-	// Reconstruct the ProviderConfig with the override settings merged.
-	// Preserve host-level fields (Quiet, NoColor, BinaryName, Profile, AuthCallbackPages) from initial config.
 	hc := w.getHostConfig()
-	cfg := ProviderConfig{
-		Quiet:             hc.Quiet,
-		NoColor:           hc.NoColor,
-		BinaryName:        hc.BinaryName,
-		Profile:           hc.Profile,
-		AuthCallbackPages: hc.AuthCallbackPages,
-		Settings:          map[string]json.RawMessage{w.handlerName: settingsJSON},
-		HostServiceID:     w.client.HostServiceID(),
+
+	w.configMu.Lock()
+	defer w.configMu.Unlock()
+
+	if w.serverMode {
+		return nil
+	}
+	if w.overrides == nil {
+		w.overrides = make(map[string]map[string]string)
+	}
+	prevProfileOverrides, hadPrev := w.overrides[profile]
+	w.overrides[profile] = maps.Clone(filtered)
+
+	rawForConfigure, _, _, err := w.resolveHandlerSettingsLocked(ctx, hc, profile)
+	if err != nil {
+		restoreProfileOverrides(w.overrides, profile, prevProfileOverrides, hadPrev)
+		return err
 	}
 
-	// Inject base settings from app config first, then overlay overrides.
-	injectAuthHandlerSettings(ctx, w.handlerName, &cfg)
+	cfg := w.buildProviderConfig(hc, profile, rawForConfigure)
+	if err := w.client.ConfigureAuthHandler(ctx, w.handlerName, cfg); err != nil {
+		restoreProfileOverrides(w.overrides, profile, prevProfileOverrides, hadPrev)
+		return err
+	}
+	w.configured = true
+	w.configuredProfile = profile
+	w.configuredSettingsRaw = bytes.Clone(rawForConfigure)
+	return nil
+}
 
-	// Merge overrides on top of base settings.
-	if base, ok := cfg.Settings[w.handlerName]; ok {
-		var baseMap map[string]interface{}
-		if jsonErr := json.Unmarshal(base, &baseMap); jsonErr != nil {
-			return fmt.Errorf("unmarshaling base settings for handler %s: %w", w.handlerName, jsonErr)
+func restoreProfileOverrides(m map[string]map[string]string, profile string, prev map[string]string, hadPrev bool) {
+	if hadPrev {
+		m[profile] = prev
+		return
+	}
+	delete(m, profile)
+}
+
+// resolveEffectiveProfile normalizes, validates, and resolves the target
+// profile on ctx so both host-side settings lookup and gRPC serialization
+// enforce the same validated profile name.
+func (w *AuthHandlerWrapper) resolveEffectiveProfile(ctx context.Context) (context.Context, string, error) {
+	finalize := func(ctx context.Context, raw string) (context.Context, string, error) {
+		normalized := auth.NormalizeProfileName(raw)
+		if normalized != "" {
+			if err := auth.ValidateProfileName(normalized); err != nil {
+				return ctx, "", err
+			}
 		}
-		for k, v := range filtered {
+		ctx = auth.WithProfile(ctx, normalized)
+		ctx = auth.WithProfileResolved(ctx)
+		return ctx, normalized, nil
+	}
+
+	if p := auth.ProfileFromContext(ctx); p != "" {
+		return finalize(ctx, p)
+	}
+	if auth.IsProfileResolved(ctx) {
+		return finalize(ctx, "")
+	}
+
+	hc := w.getHostConfig()
+	resolveCtx := ctx
+	if config.FromContext(resolveCtx) == nil && hc.AppConfig != nil {
+		resolveCtx = config.WithConfig(resolveCtx, hc.AppConfig)
+	}
+	if auth.GlobalProfileFromContext(resolveCtx) == "" && hc.GlobalProfile != "" {
+		resolveCtx = auth.WithGlobalProfile(resolveCtx, hc.GlobalProfile)
+	}
+
+	if auth.GlobalProfileFromContext(resolveCtx) != "" || config.FromContext(resolveCtx) != nil {
+		return finalize(ctx, auth.ResolveActiveProfile(resolveCtx, w.handlerName))
+	}
+	if hc.Profile != "" {
+		return finalize(ctx, hc.Profile)
+	}
+	return finalize(ctx, "")
+}
+
+// prepareCall resolves the per-call profile and handler settings, re-sending
+// ConfigureAuthHandler when the target profile or effective settings differ
+// from what the plugin last received (for stateful/legacy plugins) and
+// attaching stateless per-RPC settings to ctx and the returned map (for SDK
+// v0.19.0+ plugins).
+func (w *AuthHandlerWrapper) prepareCall(ctx context.Context) (context.Context, map[string]json.RawMessage, error) {
+	ctx, profile, err := w.resolveEffectiveProfile(ctx)
+	if err != nil {
+		return ctx, nil, err
+	}
+	hc := w.getHostConfig()
+
+	var perCallSettings map[string]json.RawMessage
+	if err := func() error {
+		w.configMu.Lock()
+		defer w.configMu.Unlock()
+
+		// In server mode (scafctl serve), ActivateServerMode owns the plugin's
+		// confidential credentials; never clobber them with CLI settings.
+		if w.serverMode {
+			return nil
+		}
+
+		rawForConfigure, rpcSettings, hasConfigSource, err := w.resolveHandlerSettingsLocked(ctx, hc, profile)
+		if err != nil {
+			return err
+		}
+		perCallSettings = rpcSettings
+
+		if w.client == nil || w.client.plugin == nil {
+			return nil
+		}
+		if !hasConfigSource {
+			if !w.configured || w.configuredProfile == profile {
+				return nil
+			}
+		}
+		if w.configured && w.configuredProfile == profile && bytes.Equal(w.configuredSettingsRaw, rawForConfigure) {
+			return nil
+		}
+
+		cfg := w.buildProviderConfig(hc, profile, rawForConfigure)
+		if err := w.client.ConfigureAuthHandler(ctx, w.handlerName, cfg); err != nil {
+			return fmt.Errorf("plugin auth handler %s configure for profile %q: %w",
+				w.handlerName, auth.DisplayProfileName(profile), err)
+		}
+		w.configured = true
+		w.configuredProfile = profile
+		w.configuredSettingsRaw = bytes.Clone(rawForConfigure)
+		return nil
+	}(); err != nil {
+		return ctx, nil, err
+	}
+
+	if perCallSettings != nil {
+		ctx = WithRequestSettings(ctx, cloneSettingsMap(perCallSettings))
+	}
+	return ctx, perCallSettings, nil
+}
+
+// resolveHandlerSettingsLocked computes the resolved JSON settings for profile
+// with any runtime CLI overrides overlaid. Caller must hold w.configMu.
+func (w *AuthHandlerWrapper) resolveHandlerSettingsLocked(
+	ctx context.Context,
+	hc hostConfig,
+	profile string,
+) (rawForConfigure json.RawMessage, perRPCSettings map[string]json.RawMessage, hasConfigSource bool, err error) {
+	cfgCtx := ctx
+	if config.FromContext(cfgCtx) == nil && hc.AppConfig != nil {
+		cfgCtx = config.WithConfig(cfgCtx, hc.AppConfig)
+	}
+	baseRaw, fromAppCfg, marshalErr := marshalAppAuthHandlerSettings(cfgCtx, w.handlerName, profile)
+	if marshalErr != nil {
+		return nil, nil, false, marshalErr
+	}
+	hasConfigSource = fromAppCfg
+
+	if !hasConfigSource {
+		if staticRaw, ok := hc.BaseSettings[w.handlerName]; ok && len(staticRaw) > 0 {
+			hasConfigSource = true
+			baseRaw = bytes.Clone(staticRaw)
+		}
+	}
+
+	profileOverrides := w.overrides[profile]
+	if len(profileOverrides) > 0 {
+		hasConfigSource = true
+		var baseMap map[string]any
+		if len(baseRaw) > 0 {
+			if unmarshalErr := json.Unmarshal(baseRaw, &baseMap); unmarshalErr != nil {
+				return nil, nil, false, fmt.Errorf("unmarshaling base settings for handler %s: %w", w.handlerName, unmarshalErr)
+			}
+		}
+		if baseMap == nil {
+			baseMap = make(map[string]any, len(profileOverrides))
+		}
+		for k, v := range profileOverrides {
+			for ek := range baseMap {
+				if ek != k && strings.EqualFold(ek, k) {
+					delete(baseMap, ek)
+				}
+			}
 			baseMap[k] = v
 		}
 		merged, mergeErr := json.Marshal(baseMap)
 		if mergeErr != nil {
-			return fmt.Errorf("marshaling merged settings for handler %s: %w", w.handlerName, mergeErr)
+			return nil, nil, false, fmt.Errorf("marshaling merged settings for handler %s: %w", w.handlerName, mergeErr)
 		}
-		cfg.Settings[w.handlerName] = merged
+		baseRaw = merged
 	}
 
-	return w.client.ConfigureAuthHandler(ctx, w.handlerName, cfg)
+	if !hasConfigSource {
+		return nil, nil, false, nil
+	}
+
+	if len(baseRaw) == 0 {
+		baseRaw = []byte("{}")
+	}
+
+	var rpcMap map[string]json.RawMessage
+	if unmarshalErr := json.Unmarshal(baseRaw, &rpcMap); unmarshalErr != nil {
+		return nil, nil, false, fmt.Errorf("decoding resolved settings for handler %s: %w", w.handlerName, unmarshalErr)
+	}
+	if rpcMap == nil {
+		rpcMap = make(map[string]json.RawMessage)
+	}
+
+	if string(baseRaw) != "{}" {
+		rawForConfigure = json.RawMessage(bytes.Clone(baseRaw))
+	}
+	return rawForConfigure, rpcMap, hasConfigSource, nil
+}
+
+func (w *AuthHandlerWrapper) buildProviderConfig(hc hostConfig, profile string, handlerRaw json.RawMessage) ProviderConfig {
+	var settings map[string]json.RawMessage
+	if len(hc.BaseSettings) > 0 {
+		settings = cloneSettingsMap(hc.BaseSettings)
+		delete(settings, w.handlerName)
+	}
+	if len(handlerRaw) > 0 {
+		if settings == nil {
+			settings = make(map[string]json.RawMessage, 1)
+		}
+		settings[w.handlerName] = json.RawMessage(bytes.Clone(handlerRaw))
+	}
+	if len(settings) == 0 {
+		settings = nil
+	}
+	var hostServiceID uint32
+	if w.client != nil {
+		hostServiceID = w.client.HostServiceID()
+	}
+	return ProviderConfig{
+		Quiet:             hc.Quiet,
+		NoColor:           hc.NoColor,
+		BinaryName:        hc.BinaryName,
+		Profile:           profile,
+		AuthCallbackPages: hc.AuthCallbackPages,
+		Settings:          settings,
+		HostServiceID:     hostServiceID,
+	}
+}
+
+func (w *AuthHandlerWrapper) recordConfiguredLocked(profile string, handlerRaw json.RawMessage) {
+	w.configured = true
+	w.configuredProfile = profile
+	if len(handlerRaw) > 0 && string(handlerRaw) != "{}" {
+		w.configuredSettingsRaw = bytes.Clone(handlerRaw)
+	} else {
+		w.configuredSettingsRaw = nil
+	}
 }
 
 // Client returns the underlying plugin client.
@@ -479,13 +727,16 @@ func (w *AuthHandlerWrapper) SetStartupLatency(d time.Duration) {
 func (w *AuthHandlerWrapper) setHostConfig(hc hostConfig) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	hc.BaseSettings = cloneSettingsMap(hc.BaseSettings)
 	w.hostCfg = hc
 }
 
 func (w *AuthHandlerWrapper) getHostConfig() hostConfig {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.hostCfg
+	hc := w.hostCfg
+	hc.BaseSettings = cloneSettingsMap(hc.BaseSettings)
+	return hc
 }
 
 // configureAndRegisterAuthHandlers configures each handler with host-side
@@ -528,7 +779,10 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 				NoColor:           cfg.NoColor,
 				BinaryName:        cfg.BinaryName,
 				Profile:           cfg.Profile,
+				GlobalProfile:     auth.GlobalProfileFromContext(ctx),
+				AppConfig:         config.FromContext(ctx),
 				AuthCallbackPages: cfg.AuthCallbackPages,
+				BaseSettings:      cloneSettingsMap(cfg.Settings),
 			})
 		}
 
@@ -540,17 +794,25 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 		registered = append(registered, info.Name)
 
 		// Configure only after successful registration so secrets are
-		// never sent to a plugin that won't actually be used.
+		// never sent to a plugin that won't actually be used. Hold configMu
+		// so concurrent callers obtaining wrapper from registry cannot race
+		// with initial ConfigureAuthHandler.
 		if cfg != nil {
-			hostCfg := *cfg
-			hostCfg.Settings = maps.Clone(cfg.Settings)
-			hostCfg.HostServiceID = client.HostServiceID()
-			injectAuthHandlerSettings(ctx, info.Name, &hostCfg)
-			if cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg); cfgErr != nil {
-				lgr.Info("failed to configure auth handler plugin",
-					"handler", info.Name,
-					"error", cfgErr)
+			wrapper.configMu.Lock()
+			if !wrapper.configured {
+				hostCfg := *cfg
+				hostCfg.Settings = maps.Clone(cfg.Settings)
+				hostCfg.HostServiceID = client.HostServiceID()
+				injectAuthHandlerSettings(ctx, info.Name, &hostCfg)
+				if cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg); cfgErr != nil {
+					lgr.Info("failed to configure auth handler plugin",
+						"handler", info.Name,
+						"error", cfgErr)
+				} else {
+					wrapper.recordConfiguredLocked(hostCfg.Profile, hostCfg.Settings[info.Name])
+				}
 			}
+			wrapper.configMu.Unlock()
 		}
 	}
 
@@ -623,41 +885,8 @@ func injectAuthHandlerSettings(ctx context.Context, handlerName string, cfg *Pro
 	profile := auth.ResolveActiveProfile(ctx, handlerName)
 	cfg.Profile = profile
 
-	var raw json.RawMessage
-	var err error
-
-	switch handlerName {
-	case "github":
-		if appCfg.Auth.GitHub == nil {
-			return
-		}
-		resolved := auth.ResolveGitHubConfig(appCfg.Auth.GitHub, profile)
-		raw, err = json.Marshal(resolved) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
-	case "entra":
-		if appCfg.Auth.Entra == nil {
-			return
-		}
-		resolved := auth.ResolveEntraConfig(appCfg.Auth.Entra, profile)
-		raw, err = json.Marshal(resolved) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
-	case "gcp":
-		if appCfg.Auth.GCP == nil {
-			return
-		}
-		resolved := auth.ResolveGCPConfig(appCfg.Auth.GCP, profile)
-		raw, err = json.Marshal(resolved) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
-	default:
-		// Open per-handler namespace (auth.handlers.<name>). scafctl core is
-		// shape-blind to these settings: the reserved "hostname" block is
-		// consumed by the host (not here), and every other key is forwarded
-		// opaquely to the handler plugin.
-		handlerCfg, ok := appCfg.Auth.Handlers[handlerName]
-		if !ok || len(handlerCfg.Settings) == 0 {
-			return
-		}
-		raw, err = json.Marshal(handlerCfg.Settings) //nolint:gosec // G117: intentionally forwarding opaque host config to plugin over local gRPC
-	}
-
-	if err != nil || len(raw) == 0 || string(raw) == "{}" {
+	raw, hasSource, err := marshalAppAuthHandlerSettings(ctx, handlerName, profile)
+	if err != nil || !hasSource || len(raw) == 0 || string(raw) == "{}" {
 		return
 	}
 
@@ -665,6 +894,53 @@ func injectAuthHandlerSettings(ctx context.Context, handlerName string, cfg *Pro
 		cfg.Settings = make(map[string]json.RawMessage)
 	}
 	cfg.Settings[handlerName] = raw
+}
+
+// marshalAppAuthHandlerSettings resolves and JSON-encodes the effective handler
+// settings for profile from config.FromContext(ctx). hasSource is true when the
+// app config declares a section for handlerName (even if the resolved default
+// profile marshals to "{}").
+func marshalAppAuthHandlerSettings(ctx context.Context, handlerName, profile string) (raw json.RawMessage, hasSource bool, err error) {
+	appCfg := config.FromContext(ctx)
+	if appCfg == nil {
+		return nil, false, nil
+	}
+
+	switch handlerName {
+	case "github":
+		if appCfg.Auth.GitHub == nil {
+			return nil, false, nil
+		}
+		resolved := auth.ResolveGitHubConfig(appCfg.Auth.GitHub, profile)
+		raw, err = json.Marshal(resolved) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
+		return raw, true, err
+	case "entra":
+		if appCfg.Auth.Entra == nil {
+			return nil, false, nil
+		}
+		resolved := auth.ResolveEntraConfig(appCfg.Auth.Entra, profile)
+		raw, err = json.Marshal(resolved) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
+		return raw, true, err
+	case "gcp":
+		if appCfg.Auth.GCP == nil {
+			return nil, false, nil
+		}
+		resolved := auth.ResolveGCPConfig(appCfg.Auth.GCP, profile)
+		raw, err = json.Marshal(resolved) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
+		return raw, true, err
+	default:
+		// Open per-handler namespace (auth.handlers.<name>). scafctl core is
+		// shape-blind to these settings: host-consumed blocks ("hostname",
+		// "plugin", "trustedVerificationDomains") and profile metadata are
+		// stripped, and per-profile overrides are merged on top of base settings.
+		handlerCfg, ok := appCfg.Auth.Handlers[handlerName]
+		if !ok || !auth.HasHandlerSettingsOrProfiles(handlerCfg) {
+			return nil, false, nil
+		}
+		resolved := auth.ResolveHandlerSettings(handlerCfg, profile)
+		raw, err = json.Marshal(resolved) //nolint:gosec // G117: intentionally forwarding opaque host config to plugin over local gRPC
+		return raw, true, err
+	}
 }
 
 // RegisterAuthHandlerPlugins discovers auth handler plugins in pluginDirs,
@@ -764,7 +1040,13 @@ func KillAllAuthHandlers(clients []*AuthHandlerClient) {
 }
 
 func (w *AuthHandlerWrapper) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
-	return w.client.ActivateServerMode(ctx, settings)
+	w.configMu.Lock()
+	defer w.configMu.Unlock()
+	if err := w.client.ActivateServerMode(ctx, settings); err != nil {
+		return err
+	}
+	w.serverMode = true
+	return nil
 }
 
 // willOpenBrowserOnLogin reports whether delegating Login to the plugin will

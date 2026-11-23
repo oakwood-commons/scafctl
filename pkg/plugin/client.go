@@ -683,6 +683,15 @@ func NewAuthHandlerClient(pluginPath string, opts ...ClientOption) (*AuthHandler
 	return newAuthHandlerClientWithConnector(pluginPath, connectPlugin, opts...)
 }
 
+// NewAuthHandlerClientFromPlugin wraps an in-process AuthHandlerPlugin
+// implementation in an AuthHandlerClient without spawning a subprocess.
+// Primarily used by embedders and tests exercising AuthHandlerWrapper directly.
+func NewAuthHandlerClientFromPlugin(impl AuthHandlerPlugin) *AuthHandlerClient {
+	return &AuthHandlerClient{
+		plugin: impl,
+	}
+}
+
 // GetAuthHandlers returns all auth handler names exposed by this plugin.
 func (c *AuthHandlerClient) GetAuthHandlers(ctx context.Context) ([]AuthHandlerInfo, error) {
 	return c.plugin.GetAuthHandlers(ctx)
@@ -730,7 +739,7 @@ func (c *AuthHandlerClient) HostServiceID() uint32 {
 // authPromptBroker returns the shared PromptAuthResponse broker for this
 // client's HostService, or nil when no host deps are wired.
 func (c *AuthHandlerClient) authPromptBroker() *AuthPromptBroker {
-	if c.hostDeps == nil {
+	if c == nil || c.hostDeps == nil {
 		return nil
 	}
 	return c.hostDeps.PromptBroker
