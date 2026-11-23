@@ -40,8 +40,13 @@ scafctl get examples --category solutions
 # View an example by path (always unique)...
 scafctl get examples resolvers/hello-world.yaml > hello.yaml
 
-# ...or by its metadata.name when unambiguous
+# ...or by metadata.name, directory/file slug, or unique partial match
 scafctl get examples cel-basics
+scafctl get examples state-fingerprint
+scafctl get examples fingerprint
+
+# Queries matching multiple examples list the candidates by name and path
+scafctl get examples hello-world
 
 # Interactive card + detail view, or JSON
 scafctl get examples -i

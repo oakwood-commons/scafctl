@@ -275,17 +275,249 @@ func TestMatchExamples_UniqueName(t *testing.T) {
 
 func TestMatchExamples_MultipleReturnsAll(t *testing.T) {
 	t.Parallel()
-	// "hello-world" is a basename shared by several examples; MatchExamples
-	// returns all of them (the CLI lists them for the user to pick).
+	// "hello-world" matches all four hello-world examples across file basenames
+	// and <dir>/solution.yaml directory slugs.
 	got, err := MatchExamples("hello-world")
 	require.NoError(t, err)
-	require.Greater(t, len(got), 1)
 	paths := make([]string, len(got))
 	for i, m := range got {
 		paths[i] = m.Path
 	}
-	assert.Contains(t, paths, "actions/hello-world.yaml")
-	assert.Contains(t, paths, "resolvers/hello-world.yaml")
+	assert.Equal(t, []string{
+		"actions/hello-world.yaml",
+		"catalog/hello-world/solution.yaml",
+		"resolvers/hello-world.yaml",
+		"solutions/hello-world/solution.yaml",
+	}, paths)
+}
+
+func TestMatchExamples_Tiers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		query     string
+		wantPaths []string
+		wantErr   error
+	}{
+		// Tier 1: exact embedded path
+		{
+			name:      "tier 1 exact solution path",
+			query:     "resolvers/cel-basics.yaml",
+			wantPaths: []string{"resolvers/cel-basics.yaml"},
+		},
+		{
+			name:      "tier 1 exact non-solution path",
+			query:     "catalog/native-auth.yaml",
+			wantPaths: []string{"catalog/native-auth.yaml"},
+		},
+		{
+			name:      "tier 1 backslash path normalized",
+			query:     `solutions\state-fingerprint\solution.yaml`,
+			wantPaths: []string{"solutions/state-fingerprint/solution.yaml"},
+		},
+		// Tier 2: exact metadata.name (case-insensitive), wins over substring
+		{
+			name:      "tier 2 exact metadata.name case-insensitive",
+			query:     "CEL-BASICS",
+			wantPaths: []string{"resolvers/cel-basics.yaml"},
+		},
+		{
+			name:      "tier 2 exact metadata.name state-example beats github-state-example",
+			query:     "state-example",
+			wantPaths: []string{"solutions/state/solution.yaml"},
+		},
+		{
+			name:      "tier 2 exact metadata.name dryrun-demo beats conditional-dryrun-demo",
+			query:     "dryrun-demo",
+			wantPaths: []string{"dryrun/basic-dryrun.yaml"},
+		},
+		{
+			name:      "tier 2 exact metadata.name snapshot-demo beats redacted-snapshot-demo",
+			query:     "snapshot-demo",
+			wantPaths: []string{"snapshots/basic-snapshot.yaml"},
+		},
+		{
+			name:      "tier 2 exact metadata.name validation-example beats split-resolver-validation-example",
+			query:     "validation-example",
+			wantPaths: []string{"resolvers/validation.yaml"},
+		},
+		// Tier 3: exact folder/file slug (case-insensitive), wins over substring
+		{
+			name:      "tier 3 directory slug state-fingerprint",
+			query:     "state-fingerprint",
+			wantPaths: []string{"solutions/state-fingerprint/solution.yaml"},
+		},
+		{
+			name:      "tier 3 directory slug case-insensitive",
+			query:     "STATE-FINGERPRINT",
+			wantPaths: []string{"solutions/state-fingerprint/solution.yaml"},
+		},
+		{
+			name:      "tier 3 slug state beats state-* substrings",
+			query:     "state",
+			wantPaths: []string{"solutions/state/solution.yaml"},
+		},
+		{
+			name:      "tier 3 file slug validation beats *validation* substrings",
+			query:     "validation",
+			wantPaths: []string{"resolvers/validation.yaml"},
+		},
+		{
+			name:      "tier 3 category and slug without extension",
+			query:     "solutions/hello-world",
+			wantPaths: []string{"solutions/hello-world/solution.yaml"},
+		},
+		{
+			name:  "tier 3 hello-world returns all four examples",
+			query: "hello-world",
+			wantPaths: []string{
+				"actions/hello-world.yaml",
+				"catalog/hello-world/solution.yaml",
+				"resolvers/hello-world.yaml",
+				"solutions/hello-world/solution.yaml",
+			},
+		},
+		// Tier 4: case-insensitive substring over Name and extension-stripped Path
+		{
+			name:      "tier 4 substring fingerprint",
+			query:     "fingerprint",
+			wantPaths: []string{"solutions/state-fingerprint/solution.yaml"},
+		},
+		{
+			name:      "tier 4 substring case-insensitive",
+			query:     "FINGERPRINT",
+			wantPaths: []string{"solutions/state-fingerprint/solution.yaml"},
+		},
+		{
+			name:      "tier 4 path substring with slash",
+			query:     "state-fingerprint/solution",
+			wantPaths: []string{"solutions/state-fingerprint/solution.yaml"},
+		},
+		// Rejections: extensions, empty/dot, not found, path traversal
+		{
+			name:    "reject .yaml extension",
+			query:   ".yaml",
+			wantErr: ErrExampleNotFound,
+		},
+		{
+			name:    "reject .yml extension",
+			query:   ".yml",
+			wantErr: ErrExampleNotFound,
+		},
+		{
+			name:    "reject dot query",
+			query:   ".",
+			wantErr: ErrExampleNotFound,
+		},
+		{
+			name:    "reject dot-slash query",
+			query:   "./",
+			wantErr: ErrExampleNotFound,
+		},
+		{
+			name:    "reject empty query",
+			query:   "   ",
+			wantErr: ErrExampleNotFound,
+		},
+		{
+			name:    "reject path traversal",
+			query:   "../../etc/passwd",
+			wantErr: ErrPathTraversal,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := MatchExamples(tc.query)
+			if tc.wantErr != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			paths := make([]string, len(got))
+			for i, m := range got {
+				paths[i] = m.Path
+			}
+			assert.Equal(t, tc.wantPaths, paths)
+		})
+	}
+}
+
+func TestMatchExamples_PriorityAndYMLSynthetic(t *testing.T) {
+	t.Parallel()
+
+	items := []Example{
+		{Name: "alpha", Path: "cat/alpha-full.yml"},
+		{Name: "alpha-other", Path: "cat/alpha/solution.yml"},
+		{Name: "top-sol", Path: "solution.yml"},
+		{Name: "bundled", Path: "catalog/bundling/solution.yaml"},
+		{Name: "state-main", Path: "solutions/state/solution.yaml"},
+		{Name: "state-alt", Path: "my-solutions/state/solution.yaml"},
+	}
+
+	// Tier 2 (metadata.name == "alpha") beats Tier 3 (folder slug "alpha").
+	got, err := matchExamples(items, "alpha", "alpha", nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "cat/alpha-full.yml", got[0].Path)
+
+	// Root-level solution.yml keeps "solution" as its slug, while nested
+	// catalog/bundling/solution.yaml uses "bundling".
+	got, err = matchExamples(items, "solution", "solution", nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "solution.yml", got[0].Path)
+
+	// Querying "bundling" matches catalog/bundling/solution.yaml via Tier 3.
+	got, err = matchExamples(items, "bundling", "bundling", nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "catalog/bundling/solution.yaml", got[0].Path)
+
+	// Extension-stripped or case-variant <dir>/solution paths match Tier 3
+	// directly rather than falling into Tier 4 substring matching against
+	// superstrings like my-solutions/state/solution.yaml.
+	for _, q := range []string{"solutions/state/solution", "SOLUTIONS/state/solution.yaml"} {
+		got, err = matchExamples(items, q, q, nil)
+		require.NoError(t, err, "query %q", q)
+		require.Len(t, got, 1, "query %q", q)
+		assert.Equal(t, "solutions/state/solution.yaml", got[0].Path, "query %q", q)
+	}
+
+	// Bare "yaml" and "yml" never match file extensions after stripping.
+	for _, q := range []string{"yaml", "yml"} {
+		_, err = matchExamples(items, q, q, nil)
+		require.ErrorIs(t, err, ErrExampleNotFound, "query %q", q)
+	}
+}
+
+func TestMatchExamples_ExtensionNeverMatchedFromSuffix(t *testing.T) {
+	t.Parallel()
+
+	items, err := Scan("")
+	require.NoError(t, err)
+
+	for _, extWord := range []string{"yaml", "yml"} {
+		wantAny := false
+		for _, it := range items {
+			normPath := canonicalExamplePath(it.Path)
+			if strings.Contains(strings.ToLower(it.Name), extWord) ||
+				strings.Contains(strings.ToLower(normPath), extWord) {
+				wantAny = true
+				break
+			}
+		}
+		got, matchErr := MatchExamples(extWord)
+		if !wantAny {
+			assert.ErrorIs(t, matchErr, ErrExampleNotFound, "query %q should not match file extensions", extWord)
+		} else {
+			require.NoError(t, matchErr)
+			assert.NotEmpty(t, got)
+		}
+	}
 }
 
 func TestMatchExamples_ExactPath(t *testing.T) {
@@ -459,6 +691,26 @@ func BenchmarkResolveExample(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		_, _ = ResolveExample("cel-basics")
+	}
+}
+
+func BenchmarkMatchExamples(b *testing.B) {
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{name: "ExactPath", query: "resolvers/cel-basics.yaml"},
+		{name: "ExactName", query: "cel-basics"},
+		{name: "Slug", query: "state-fingerprint"},
+		{name: "Substring", query: "fingerprint"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				_, _ = MatchExamples(tc.query)
+			}
+		})
 	}
 }
 

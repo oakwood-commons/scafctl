@@ -41,6 +41,7 @@ type Options struct {
 // CommandExamples creates the get examples command.
 func CommandExamples(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	opts := &Options{}
+	bin := resolveBinaryName(cliParams)
 
 	cmd := &cobra.Command{
 		Use:     "examples [example-path]",
@@ -50,7 +51,8 @@ func CommandExamples(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 			List embedded examples or show the contents of one example.
 
 			Without arguments, lists available examples.
-			With an example-path argument, prints that example to stdout.
+			With an argument (exact path, metadata.name, folder/file slug, or partial match),
+			prints that example to stdout or lists matching candidates when ambiguous.
 
 			Examples:
 			  # List all examples
@@ -59,9 +61,10 @@ func CommandExamples(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 			  # Filter list by category
 			  scafctl get examples --category solutions
 
-			  # Get one example by path
+			  # Get one example by name, slug, partial match, or path
+			  scafctl get examples state-fingerprint
 			  scafctl get examples resolver-demo.yaml
-		`), settings.CliBinaryName, cliParams.BinaryName),
+		`), settings.CliBinaryName, bin),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
@@ -79,7 +82,7 @@ func CommandExamples(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
-			opts.AppName = cliParams.BinaryName
+			opts.AppName = resolveBinaryName(cliParams)
 
 			if len(args) > 0 {
 				return opts.runGet(ctx, args[0])
@@ -94,6 +97,17 @@ func CommandExamples(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	cmd.Flags().StringVar(&opts.Category, "category", "", "Filter by category (e.g., solutions, resolvers, actions)")
 
 	return cmd
+}
+
+func resolveBinaryName(cliParams *settings.Run) string {
+	if cliParams != nil && cliParams.BinaryName != "" {
+		return cliParams.BinaryName
+	}
+	return settings.CliBinaryName
+}
+
+func (o *Options) binaryName() string {
+	return resolveBinaryName(o.CliParams)
 }
 
 func (o *Options) runList(ctx context.Context) error {
@@ -141,7 +155,7 @@ func (o *Options) runList(ctx context.Context) error {
 	// Tip: the list shows metadata, but the content lives in the embedded FS.
 	// Tell the user how to view a specific example.
 	if !structured && !quiet {
-		bin := o.CliParams.BinaryName
+		bin := o.binaryName()
 		w.PlainStderrf("")
 		w.PlainStderrf("Tip: run '%s get examples <name>' to view an example (e.g. '%s get examples %s').",
 			bin, bin, items[0].Name)
@@ -149,16 +163,16 @@ func (o *Options) runList(ctx context.Context) error {
 	return nil
 }
 
-// listOutputOpts builds the kvx output options for the example listing (shared
-// by the full list and the multi-match filtered list). The display schema drives
-// the interactive (-i) card + detail view; the column hints tune the plain
-// table. name and path are internal fetch handles, not list columns.
+// listOutputOpts builds the kvx output options for the full example listing.
+// The display schema drives the interactive (-i) card + detail view; the column
+// hints tune the plain table so name, category, and description fit cleanly.
 func (o *Options) listOutputOpts(ctx context.Context) *kvx.OutputOptions {
+	noColor := o.CliParams != nil && o.CliParams.NoColor
 	return flags.ToKvxOutputOptions(&o.KvxOutputFlags,
 		kvx.WithIOStreams(o.IOStreams),
 		kvx.WithOutputContext(ctx),
-		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName(o.CliParams.BinaryName+" get examples"),
+		kvx.WithOutputNoColor(noColor),
+		kvx.WithOutputAppName(o.binaryName()+" get examples"),
 		kvx.WithOutputDisplaySchemaJSON(examplesSchemaJSON),
 		kvx.WithOutputColumnOrder([]string{"name", "category", "description"}),
 		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
@@ -191,8 +205,8 @@ func (o *Options) runGet(ctx context.Context, query string) error {
 		return exitcode.WithCode(fmt.Errorf("--category can only be used in list mode"), exitcode.InvalidInput)
 	}
 
-	// Resolve the query (exact path, metadata.name, or basename) to matching
-	// example(s).
+	// Resolve the query (exact path, metadata.name, slug, or partial match) to
+	// matching example(s).
 	matches, err := exampleslib.MatchExamples(query)
 	if err != nil {
 		switch {
@@ -201,36 +215,38 @@ func (o *Options) runGet(ctx context.Context, query string) error {
 			return exitcode.WithCode(fmt.Errorf("invalid example path: %w", err), exitcode.InvalidInput)
 		case errors.Is(err, exampleslib.ErrExampleNotFound):
 			w.Errorf("Example not found: %s", query)
-			w.PlainStderrf("Run '%s get examples' to list available examples.", o.CliParams.BinaryName)
+			w.PlainStderrf("Run '%s get examples' to list available examples.", o.binaryName())
 			return exitcode.WithCode(err, exitcode.FileNotFound)
 		default:
 			return err
 		}
 	}
 
-	// More than one example matched the name/basename: show the matches as a
-	// filtered list so the user can pick one, rather than guessing or erroring.
+	noColor := o.CliParams != nil && o.CliParams.NoColor
+
+	// More than one example matched: show the candidates as a filtered list
+	// with both name and path handles visible so the user can pick one.
 	if len(matches) > 1 {
 		outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
 			kvx.WithIOStreams(o.IOStreams),
 			kvx.WithOutputContext(ctx),
-			kvx.WithOutputNoColor(o.CliParams.NoColor),
-			kvx.WithOutputAppName(o.CliParams.BinaryName+" get examples"),
+			kvx.WithOutputNoColor(noColor),
+			kvx.WithOutputAppName(o.binaryName()+" get examples"),
 			kvx.WithOutputDisplaySchemaJSON(examplesSchemaJSON),
-			kvx.WithOutputColumnOrder([]string{"displayName", "category", "path"}),
+			kvx.WithOutputColumnOrder([]string{"name", "category", "path"}),
 			kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
-				"displayName": {MaxWidth: 32, Priority: 10},
-				"category":    {MaxWidth: 16, Priority: 8},
-				// Show path here so the user can disambiguate the matches.
-				"path":        {MaxWidth: 48, Priority: 6},
-				"name":        {Hidden: true},
+				"name":     {MaxWidth: 34, Priority: 10},
+				"category": {MaxWidth: 18, Priority: 8},
+				// Show path alongside name so both fetch handles are visible.
+				"path":        {MaxWidth: 38, Priority: 6, Flex: true},
+				"displayName": {Hidden: true},
 				"tags":        {Hidden: true},
 				"description": {Hidden: true},
 				"content":     {Hidden: true},
 			}),
 		)
 		if !kvx.IsStructuredFormat(outputOpts.Format) && !kvx.IsQuietFormat(outputOpts.Format) {
-			w.WarnStderrf("%d examples match %q -- pick one by its path:", len(matches), query)
+			w.WarnStderrf("%d examples match %q -- pick one by its name or path:", len(matches), query)
 		}
 		return outputOpts.Write(matches)
 	}
@@ -257,8 +273,8 @@ func (o *Options) runGet(ctx context.Context, query string) error {
 			&o.KvxOutputFlags,
 			kvx.WithIOStreams(o.IOStreams),
 			kvx.WithOutputContext(ctx),
-			kvx.WithOutputNoColor(o.CliParams.NoColor),
-			kvx.WithOutputAppName(o.CliParams.BinaryName+" get examples"),
+			kvx.WithOutputNoColor(noColor),
+			kvx.WithOutputAppName(o.binaryName()+" get examples"),
 		)
 		return outputOpts.Write(parsed)
 	}

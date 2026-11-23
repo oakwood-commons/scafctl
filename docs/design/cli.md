@@ -1305,29 +1305,39 @@ scafctl get examples -o yaml
 
 ### Get an Example
 
-You can fetch an example by its **path** (always unique) or by its
-**metadata.name** / basename when that is unambiguous:
+Queries resolve in deterministic priority order so exact identifiers always win
+before partial matching:
+
+1. **Exact embedded path** (always unique, e.g. `resolvers/hello-world.yaml`)
+2. **Exact `metadata.name`** (case-insensitive, e.g. `cel-basics`)
+3. **Exact folder or file slug** (case-insensitive, e.g. `state-fingerprint` for
+   `solutions/state-fingerprint/solution.yaml`)
+4. **Partial substring** across `metadata.name` and extension-stripped path
+   (case-insensitive, e.g. `fingerprint`)
 
 ~~~bash
 # By full path (always works)
 scafctl get examples resolvers/hello-world.yaml
 
-# By metadata.name when unique
+# By metadata.name, directory slug, or unique partial match
 scafctl get examples cel-basics
+scafctl get examples state-fingerprint
+scafctl get examples fingerprint
 
 # Save to file
 scafctl get examples resolvers/hello-world.yaml > output.yaml
 ~~~
 
-If a name matches more than one example (e.g. `hello-world` exists as an action,
-a resolver, and a solution), the command refuses to guess and lists the
-candidate paths so you can pick one:
+If a query matches more than one example (e.g. `hello-world` exists across
+actions, catalog, resolvers, and solutions), the command lists the matching
+candidates with their `name`, `category`, and `path` handles (exiting 0) so you
+can pick one:
 
 ~~~bash
 scafctl get examples hello-world
-# error: ambiguous example query: "hello-world" matches
-#        actions/hello-world.yaml, resolvers/hello-world.yaml, ...
-# Pass the full path to disambiguate.
+# 4 examples match "hello-world" -- pick one by its name or path:
+# Lists hello-world-action, hello-world-catalog, hello-world-resolver,
+# and hello-world-solution alongside their embedded paths.
 ~~~
 
 ---

@@ -102,3 +102,107 @@ func TestCommandExamples_Get_NotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
 }
+
+func TestCommandExamples_Get_SlugAndPartialMatch(t *testing.T) {
+	t.Parallel()
+
+	for _, query := range []string{"state-fingerprint", "fingerprint"} {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+			cliParams := settings.NewCliParams()
+			ioStreams, out, _ := terminal.NewTestIOStreams()
+			cmd := CommandExamples(cliParams, ioStreams, "scafctl/get")
+			cmd.SetArgs([]string{query})
+
+			err := cmd.Execute()
+			require.NoError(t, err)
+			assert.Contains(t, out.String(), "name: state-fingerprint-showcase")
+		})
+	}
+}
+
+func TestCommandExamples_Get_MultipleMatchesShowsNameCategoryPath(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, out, errOut := terminal.NewTestIOStreams()
+	cmd := CommandExamples(cliParams, ioStreams, "scafctl/get")
+	cmd.SetArgs([]string{"hello-world"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, errOut.String(), `4 examples match "hello-world"`)
+
+	stdout := out.String()
+	for _, want := range []string{
+		"hello-world-action",
+		"hello-world-catalog",
+		"hello-world-resolver",
+		"hello-world-solution",
+		"actions/hello-world.yaml",
+		"catalog/hello-world/solution.yaml",
+		"resolvers/hello-world.yaml",
+		"solutions/hello-world/solution.yaml",
+	} {
+		assert.Contains(t, stdout, want)
+	}
+	assert.NotContains(t, stdout, "Hello World Action", "displayName must remain hidden in multi-match table output")
+}
+
+func TestCommandExamples_Get_CategoryFlagRejected(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandExamples(cliParams, ioStreams, "scafctl/get")
+	cmd.SetArgs([]string{"cel-basics", "--category", "resolvers"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+}
+
+func TestCommandExamples_EmbedderBinaryName(t *testing.T) {
+	t.Parallel()
+
+	t.Run("custom binary name mycli", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+
+		ioStreams, _, errOut := terminal.NewTestIOStreams()
+		cmd := CommandExamples(cliParams, ioStreams, "mycli/get")
+		assert.Contains(t, cmd.Long, "mycli get examples")
+		assert.NotContains(t, cmd.Long, settings.CliBinaryName+" get examples")
+
+		cmd.SetArgs([]string{})
+		require.NoError(t, cmd.Execute())
+		assert.Contains(t, errOut.String(), "mycli get examples")
+		assert.NotContains(t, errOut.String(), settings.CliBinaryName+" get examples")
+
+		ioStreamsNotFound, _, errOutNotFound := terminal.NewTestIOStreams()
+		cmdNotFound := CommandExamples(cliParams, ioStreamsNotFound, "mycli/get")
+		cmdNotFound.SetArgs([]string{"does-not-exist-xyz"})
+		require.Error(t, cmdNotFound.Execute())
+		assert.Contains(t, errOutNotFound.String(), "Run 'mycli get examples' to list available examples.")
+		assert.NotContains(t, errOutNotFound.String(), settings.CliBinaryName+" get examples")
+	})
+
+	t.Run("empty binary name falls back to default", func(t *testing.T) {
+		t.Parallel()
+		cliParams := &settings.Run{}
+		ioStreams, _, errOut := terminal.NewTestIOStreams()
+		cmd := CommandExamples(cliParams, ioStreams, "get")
+		assert.Contains(t, cmd.Long, settings.CliBinaryName+" get examples")
+
+		cmd.SetArgs([]string{})
+		require.NoError(t, cmd.Execute())
+		assert.Contains(t, errOut.String(), settings.CliBinaryName+" get examples")
+
+		ioStreamsNotFound, _, errOutNotFound := terminal.NewTestIOStreams()
+		cmdNotFound := CommandExamples(&settings.Run{}, ioStreamsNotFound, "get")
+		cmdNotFound.SetArgs([]string{"does-not-exist-xyz"})
+		require.Error(t, cmdNotFound.Execute())
+		assert.Contains(t, errOutNotFound.String(), "Run '"+settings.CliBinaryName+" get examples'")
+	})
+}
