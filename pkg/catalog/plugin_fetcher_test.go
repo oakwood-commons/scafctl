@@ -75,28 +75,33 @@ func okSource(name string) *fakePluginSource {
 	return &fakePluginSource{name: name, info: ArtifactInfo{Catalog: name}, platforms: []string{name}}
 }
 
-// chainOps exercises every chain operation and returns the serving catalog.
-var chainOps = map[string]func(c *pluginSourceChain) (string, error){
-	"FetchByPlatform": func(c *pluginSourceChain) (string, error) {
-		_, info, err := c.FetchByPlatform(context.Background(), testRef("p", "1.0.0"), "linux/amd64")
-		return info.Catalog, err
-	},
-	"ListPlatforms": func(c *pluginSourceChain) (string, error) {
-		platforms, err := c.ListPlatforms(context.Background(), testRef("p", "1.0.0"))
-		if len(platforms) > 0 {
-			return platforms[0], err
-		}
-		return "", err
-	},
-	"ResolveContentDigest": func(c *pluginSourceChain) (string, error) {
-		info, err := c.ResolveContentDigest(context.Background(), testRef("p", "1.0.0"), "linux/amd64", MediaTypeProviderBinary)
-		return info.Catalog, err
-	},
-	"Find": func(c *pluginSourceChain) (string, error) {
-		info, err := c.Find(context.Background(), ArtifactQuery{Name: "p", Kind: ArtifactKindProvider})
-		return info.Catalog, err
-	},
+// chainOpsFor builds the 4-operation dispatch table targeting name@version.
+func chainOpsFor(name, version string) map[string]func(c *pluginSourceChain) (string, error) {
+	return map[string]func(c *pluginSourceChain) (string, error){
+		"FetchByPlatform": func(c *pluginSourceChain) (string, error) {
+			_, info, err := c.FetchByPlatform(context.Background(), testRef(name, version), "linux/amd64")
+			return info.Catalog, err
+		},
+		"ListPlatforms": func(c *pluginSourceChain) (string, error) {
+			platforms, err := c.ListPlatforms(context.Background(), testRef(name, version))
+			if len(platforms) > 0 {
+				return platforms[0], err
+			}
+			return "", err
+		},
+		"ResolveContentDigest": func(c *pluginSourceChain) (string, error) {
+			info, err := c.ResolveContentDigest(context.Background(), testRef(name, version), "linux/amd64", MediaTypeProviderBinary)
+			return info.Catalog, err
+		},
+		"Find": func(c *pluginSourceChain) (string, error) {
+			info, err := c.Find(context.Background(), ArtifactQuery{Name: name, Kind: ArtifactKindProvider, Version: version})
+			return info.Catalog, err
+		},
+	}
 }
+
+// chainOps exercises every chain operation and returns the serving catalog.
+var chainOps = chainOpsFor("p", "1.0.0")
 
 func TestPluginSourceChain(t *testing.T) {
 	t.Parallel()
@@ -305,12 +310,12 @@ func TestPluginSourceChain_BestEffortAndStrictModes(t *testing.T) {
 			t.Run("best-effort still halts on wrapped corrupt local build", func(t *testing.T) {
 				t.Parallel()
 				local := newTestLocalCatalog(t)
-				storeCorruptPlugin(t, local, "p", "1.0.0")
-				wrappedLocal := newAllowlistPluginSource(newLocalPlugin(local), []string{"p"})
+				storeCorruptPlugin(t, local, "corrupt-plugin", "2.0.0")
+				wrappedLocal := newAllowlistPluginSource(newLocalPlugin(local), []string{"corrupt-plugin"})
 				official := okSource("official")
 
 				chain := newPluginSourceChainWithMode(logr.Discard(), ChainModeBestEffort, nil, nil, wrappedLocal, official)
-				_, err := op(chain)
+				_, err := chainOpsFor("corrupt-plugin", "2.0.0")[opName](chain)
 				require.Error(t, err)
 				assert.Zero(t, official.calls, "wrapped corrupt local build must halt even in best-effort mode")
 			})

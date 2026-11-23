@@ -723,4 +723,72 @@ func TestBuildCatalogChain_ArtifactKindsUnwrapsCleanly(t *testing.T) {
 	require.ErrorIs(t, err, ErrArtifactNotFound)
 	_, err = rpf.ResolvePlugin(t.Context(), "blocked-prov", ArtifactKindProvider, "")
 	require.ErrorIs(t, err, ErrArtifactNotFound)
+
+	// SelectSolutionRemoteCatalogs & SelectPluginRemoteCatalogs honor artifactKinds across scopes.
+	mixedCfg := &config.Config{
+		Settings: config.Settings{
+			DefaultCatalog:         "solutions-only",
+			DisableOfficialCatalog: false,
+		},
+		Catalogs: []config.CatalogConfig{
+			{
+				Name:          "solutions-only",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://registry.example.com/solutions",
+				ArtifactKinds: []string{config.CatalogArtifactKindSolution},
+			},
+			{
+				Name:          "providers-only",
+				Type:          config.CatalogTypeOCI,
+				URL:           "oci://registry.example.com/providers",
+				ArtifactKinds: []string{config.CatalogArtifactKindProvider},
+			},
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  config.DefaultOfficialCatalogURL,
+			},
+		},
+	}
+	assert.Nil(t, SelectSolutionRemoteCatalogs(nil, "", nil, logr.Discard()))
+	nilCats, nilExcl := SelectPluginRemoteCatalogs(nil, "", nil, logr.Discard())
+	assert.Nil(t, nilCats)
+	assert.False(t, nilExcl)
+
+	assert.Len(t, SelectSolutionRemoteCatalogs(mixedCfg, "", nil, logr.Discard()), 1)
+	assert.Len(t, SelectSolutionRemoteCatalogs(mixedCfg, "all", nil, logr.Discard()), 2)
+	assert.Len(t, SelectSolutionRemoteCatalogs(mixedCfg, "solutions-only", nil, logr.Discard()), 1)
+	assert.Empty(t, SelectSolutionRemoteCatalogs(mixedCfg, "providers-only", nil, logr.Discard()))
+
+	defPluginCats, excluded := SelectPluginRemoteCatalogs(mixedCfg, "", nil, logr.Discard())
+	assert.False(t, excluded)
+	require.Len(t, defPluginCats, 1)
+	assert.Equal(t, config.CatalogNameOfficial, defPluginCats[0].Name())
+
+	allPluginCats, excluded := SelectPluginRemoteCatalogs(mixedCfg, "all", nil, logr.Discard())
+	assert.False(t, excluded)
+	require.Len(t, allPluginCats, 2)
+
+	namedPluginCats, excluded := SelectPluginRemoteCatalogs(mixedCfg, "providers-only", nil, logr.Discard())
+	assert.False(t, excluded)
+	require.Len(t, namedPluginCats, 1)
+	assert.IsType(t, &KindFilterCatalog{}, namedPluginCats[0])
+
+	unknownCats, excluded := SelectPluginRemoteCatalogs(mixedCfg, "nonexistent", nil, logr.Discard())
+	assert.False(t, excluded)
+	assert.Nil(t, unknownCats)
+
+	exclCats, excluded := SelectPluginRemoteCatalogs(mixedCfg, "solutions-only", nil, logr.Discard())
+	assert.True(t, excluded)
+	assert.Empty(t, exclCats)
+
+	// DisableOfficialCatalog prevents official from being returned even by name or default.
+	disabledOfficialCfg := *mixedCfg
+	disabledOfficialCfg.Settings.DefaultCatalog = config.CatalogNameOfficial
+	disabledOfficialCfg.Settings.DisableOfficialCatalog = true
+	assert.Nil(t, SelectSolutionRemoteCatalogs(&disabledOfficialCfg, "", nil, logr.Discard()))
+	assert.Nil(t, SelectSolutionRemoteCatalogs(&disabledOfficialCfg, config.CatalogNameOfficial, nil, logr.Discard()))
+	offCats, offExcl := SelectPluginRemoteCatalogs(&disabledOfficialCfg, config.CatalogNameOfficial, nil, logr.Discard())
+	assert.Nil(t, offCats)
+	assert.False(t, offExcl)
 }

@@ -6,7 +6,10 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -193,19 +196,26 @@ func TestCatalogListPluginsToolRegistered(t *testing.T) {
 func TestHandleCatalogListPlugins_SkipsSolutionOnlyCatalog(t *testing.T) {
 	setTestXDG(t, t.TempDir())
 
+	unreachSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(unreachSrv.Close)
+	unreachHost := strings.TrimPrefix(unreachSrv.URL, "http://")
+
 	cfg := &config.Config{
 		Catalogs: []config.CatalogConfig{
 			{
 				Name:          "solutions-only",
 				Type:          config.CatalogTypeOCI,
-				URL:           "oci://127.0.0.1:1/solutions",
+				URL:           "oci://" + unreachHost + "/solutions",
 				Insecure:      true,
 				ArtifactKinds: []string{config.CatalogArtifactKindSolution},
 			},
 			{
 				Name:          "providers-only",
 				Type:          config.CatalogTypeOCI,
-				URL:           "oci://registry.example.com/providers",
+				URL:           "oci://" + unreachHost + "/providers",
+				Insecure:      true,
 				ArtifactKinds: []string{config.CatalogArtifactKindProvider},
 			},
 		},
@@ -222,6 +232,11 @@ func TestHandleCatalogListPlugins_SkipsSolutionOnlyCatalog(t *testing.T) {
 	env := decodePluginEnvelope(t, callListPlugins(t, srv, map[string]any{"catalog": "solutions-only"}))
 	assert.Empty(t, env.Plugins)
 	assert.Zero(t, env.Count)
+
+	// Named unreachable providers-only catalog surfaces an error instead of
+	// masking the failure behind the excluded auth-handler kind.
+	errResult := callListPlugins(t, srv, map[string]any{"catalog": "providers-only", "name": "exec"})
+	assert.True(t, errResult.IsError, "unreachable single-kind plugin catalog must surface an error")
 
 	// Plugin remote builder skips solutions-only and wraps providers-only in KindFilterCatalog.
 	allCats, excluded := srv.buildPluginRemoteCatalogs("all")

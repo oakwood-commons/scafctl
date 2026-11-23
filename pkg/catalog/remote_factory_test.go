@@ -182,4 +182,46 @@ func TestContextRemoteFactory(t *testing.T) {
 		_, err := factory(context.Background(), "")
 		require.ErrorContains(t, err, "no registry")
 	})
+
+	t.Run("configured plugin-only catalog is rejected for solutions", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Config{
+			Catalogs: []config.CatalogConfig{
+				{
+					Name:          "plugins-only",
+					Type:          config.CatalogTypeOCI,
+					URL:           "oci://registry.example.com/plugins",
+					ArtifactKinds: []string{config.CatalogArtifactKindProvider},
+				},
+			},
+		}
+		ctx := config.WithConfig(context.Background(), cfg)
+		_, err := factory(ctx, "registry.example.com/plugins")
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+		assert.Contains(t, err.Error(), `catalog "plugins-only" does not serve solution artifacts`)
+	})
+
+	t.Run("shared URL allowed when another configured catalog serves solutions", func(t *testing.T) {
+		t.Parallel()
+		cfg := &config.Config{
+			Catalogs: []config.CatalogConfig{
+				{
+					Name:          "shared-plugins",
+					Type:          config.CatalogTypeOCI,
+					URL:           "oci://registry.example.com/shared",
+					ArtifactKinds: []string{config.CatalogArtifactKindProvider},
+				},
+				{
+					Name:          "shared-solutions",
+					Type:          config.CatalogTypeOCI,
+					URL:           "oci://registry.example.com/shared",
+					ArtifactKinds: []string{config.CatalogArtifactKindSolution},
+				},
+			},
+		}
+		ctx := config.WithConfig(context.Background(), cfg)
+		remote, err := factory(ctx, "registry.example.com/shared")
+		require.NoError(t, err)
+		assert.Equal(t, "registry.example.com/shared", remote.CanonicalID())
+	})
 }

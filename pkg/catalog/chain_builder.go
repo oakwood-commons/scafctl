@@ -622,6 +622,147 @@ func DefaultListCatalogs(cfg *config.Config) []config.CatalogConfig {
 	return append(catalogs, *official)
 }
 
+// SelectSolutionRemoteCatalogs builds the RemoteCatalog instances matching
+// catalogFilter ("" = default catalog or official fallback, "all" = every
+// configured OCI catalog, otherwise the named catalog) filtered to catalogs
+// that serve solution artifacts.
+func SelectSolutionRemoteCatalogs(
+	cfg *config.Config,
+	catalogFilter string,
+	authReg *auth.Registry,
+	logger logr.Logger,
+) []*RemoteCatalog {
+	if cfg == nil {
+		return nil
+	}
+
+	servesSolutions := func(catCfg config.CatalogConfig) bool {
+		return catCfg.ServesArtifactKind(config.CatalogArtifactKindSolution)
+	}
+
+	var targets []config.CatalogConfig
+	switch {
+	case catalogFilter == "":
+		for _, catCfg := range DefaultListCatalogs(cfg) {
+			if catCfg.URL != "" && servesSolutions(catCfg) {
+				targets = append(targets, catCfg)
+				break
+			}
+		}
+	case strings.EqualFold(catalogFilter, "all"):
+		for _, catCfg := range cfg.Catalogs {
+			if catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" && servesSolutions(catCfg) {
+				if catCfg.Name == config.CatalogNameLocal {
+					continue
+				}
+				if catCfg.Name == config.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog {
+					continue
+				}
+				targets = append(targets, catCfg)
+			}
+		}
+	default:
+		if catCfg, ok := cfg.GetCatalog(catalogFilter); ok &&
+			(catCfg.Name != config.CatalogNameOfficial || !cfg.Settings.DisableOfficialCatalog) &&
+			catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" && servesSolutions(*catCfg) {
+			targets = append(targets, *catCfg)
+		}
+	}
+
+	if len(targets) == 0 {
+		return nil
+	}
+
+	credStore, err := NewCredentialStore(logger)
+	if err != nil {
+		logger.V(1).Info("credential store not available for remote search", "error", err)
+	}
+
+	var result []*RemoteCatalog
+	for _, catCfg := range targets {
+		rc, buildErr := BuildRemoteCatalogFromConfig(catCfg, credStore, authReg, logger)
+		if buildErr != nil {
+			logger.V(1).Info("failed to build remote catalog, skipping", "catalog", catCfg.Name, "error", buildErr)
+			continue
+		}
+		result = append(result, rc)
+	}
+	return result
+}
+
+// SelectPluginRemoteCatalogs builds the Catalog instances matching
+// catalogFilter ("" = default + official fallback via DefaultListCatalogs,
+// "all" = every configured OCI catalog, otherwise the named catalog) filtered
+// to catalogs that serve plugin artifacts and wrapped in KindFilterCatalog when
+// restricted. When catalogFilter names a configured catalog that excludes all
+// plugin kinds, configuredExcluded is true so callers can return an empty list
+// rather than an unknown-catalog error.
+func SelectPluginRemoteCatalogs(
+	cfg *config.Config,
+	catalogFilter string,
+	authReg *auth.Registry,
+	logger logr.Logger,
+) ([]Catalog, bool) {
+	if cfg == nil {
+		return nil, false
+	}
+
+	var targets []config.CatalogConfig
+	switch {
+	case catalogFilter == "":
+		for _, catCfg := range DefaultListCatalogs(cfg) {
+			if catCfg.URL != "" && catCfg.ServesPluginKinds() {
+				targets = append(targets, catCfg)
+			}
+		}
+	case strings.EqualFold(catalogFilter, "all"):
+		for _, catCfg := range cfg.Catalogs {
+			if catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" && catCfg.ServesPluginKinds() {
+				if catCfg.Name == config.CatalogNameLocal {
+					continue
+				}
+				if catCfg.Name == config.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog {
+					continue
+				}
+				targets = append(targets, catCfg)
+			}
+		}
+	default:
+		if catCfg, ok := cfg.GetCatalog(catalogFilter); ok &&
+			(catCfg.Name != config.CatalogNameOfficial || !cfg.Settings.DisableOfficialCatalog) &&
+			catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
+			if !catCfg.ServesPluginKinds() {
+				return nil, true
+			}
+			targets = append(targets, *catCfg)
+		}
+	}
+
+	if len(targets) == 0 {
+		return nil, false
+	}
+
+	credStore, err := NewCredentialStore(logger)
+	if err != nil {
+		logger.V(1).Info("credential store not available for remote plugin listing", "error", err)
+	}
+
+	var result []Catalog
+	for _, catCfg := range targets {
+		rc, buildErr := BuildRemoteCatalogFromConfig(catCfg, credStore, authReg, logger)
+		if buildErr != nil {
+			logger.V(1).Info("failed to build remote catalog, skipping", "catalog", catCfg.Name, "error", buildErr)
+			continue
+		}
+		var cat Catalog = rc
+		if len(catCfg.ArtifactKinds) > 0 {
+			cat = NewKindFilterCatalog(cat, ParseConfiguredArtifactKinds(catCfg.ArtifactKinds))
+		}
+		result = append(result, cat)
+	}
+	return result, false
+}
+
 // isOfficialByURL reports whether the given URL matches the official catalog's
 // URL. Used to detect that a default catalog is the official catalog even when
 // it is referenced under a different (mirror) name.

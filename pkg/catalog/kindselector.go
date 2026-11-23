@@ -72,10 +72,18 @@ func ExpandKindSelector(sel string) (kinds []ArtifactKind, ok bool) {
 //
 // When every kind in a multi-kind request fails, the last error is returned so
 // the caller is not left with a silently empty result masking a systemic
-// failure (e.g. the whole catalog being unreachable).
+// failure (e.g. the whole catalog being unreachable). When cat wraps a
+// KindFilterCatalog, requested kinds are intersected with its allowed kinds
+// up front so excluded kinds never count as successful catalog queries.
 func ListAcrossKinds(ctx context.Context, cat Catalog, kinds []ArtifactKind, name string, logger logr.Logger) ([]ArtifactInfo, error) {
 	if len(kinds) == 0 {
 		return cat.List(ctx, "", name)
+	}
+
+	var serves bool
+	kinds, serves = narrowKindsForCatalog(cat, kinds)
+	if !serves {
+		return []ArtifactInfo{}, nil
 	}
 
 	if len(kinds) == 1 {
@@ -105,4 +113,35 @@ func ListAcrossKinds(ctx context.Context, cat Catalog, kinds []ArtifactKind, nam
 		return nil, lastErr
 	}
 	return results, nil
+}
+
+type innerCataloger interface {
+	Inner() Catalog
+}
+
+func narrowKindsForCatalog(cat Catalog, kinds []ArtifactKind) ([]ArtifactKind, bool) {
+	if len(kinds) == 0 {
+		return nil, true
+	}
+	cur := cat
+	for cur != nil {
+		if kf, ok := cur.(*KindFilterCatalog); ok && kf.allowed != nil {
+			filtered := make([]ArtifactKind, 0, len(kinds))
+			for _, k := range kinds {
+				if kf.isAllowed(k) {
+					filtered = append(filtered, k)
+				}
+			}
+			if len(filtered) == 0 {
+				return nil, false
+			}
+			kinds = filtered
+		}
+		wrapped, ok := cur.(innerCataloger)
+		if !ok {
+			break
+		}
+		cur = wrapped.Inner()
+	}
+	return kinds, true
 }

@@ -172,3 +172,33 @@ func TestListAcrossKinds_MultiKindAllFailSurfacesError(t *testing.T) {
 	require.ErrorIs(t, err, sentinel)
 	assert.Nil(t, got, "no partial success means the error is returned")
 }
+
+func TestListAcrossKinds_KindFilterDoesNotMaskServedKindFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	sentinel := errors.New("provider registry unreachable")
+	inner := newMockCatalog("providers-only")
+	inner.listFunc = func(_ context.Context, _ ArtifactKind, _ string) ([]ArtifactInfo, error) {
+		return nil, sentinel
+	}
+
+	// Wrap inner in KindFilterCatalog([provider]). Requesting PluginKinds()
+	// ([provider, auth-handler]) must narrow to [provider] before looping so
+	// the excluded auth-handler kind cannot increment okCount and swallow sentinel.
+	wrapped := NewKindFilterCatalog(inner, []ArtifactKind{ArtifactKindProvider})
+	got, err := ListAcrossKinds(ctx, wrapped, PluginKinds(), "", logr.Discard())
+	require.ErrorIs(t, err, sentinel)
+	assert.Nil(t, got)
+
+	// Requesting an unserved kind returns an empty slice with zero inner calls.
+	var calls int
+	inner.listFunc = func(_ context.Context, _ ArtifactKind, _ string) ([]ArtifactInfo, error) {
+		calls++
+		return nil, sentinel
+	}
+	empty, err := ListAcrossKinds(ctx, wrapped, []ArtifactKind{ArtifactKindSolution}, "", logr.Discard())
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+	assert.Zero(t, calls)
+}
