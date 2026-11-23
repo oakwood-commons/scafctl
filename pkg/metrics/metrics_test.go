@@ -4,9 +4,12 @@
 package metrics
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -359,5 +362,37 @@ func BenchmarkRecordAuthStatus(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		RecordAuthStatus(ctx, "bench-handler", 0.05, true)
+	}
+}
+
+// Dependency guard tests
+
+// TestPackageDoesNotPullRouterFrameworks verifies that pkg/metrics does not
+// transitively import HTTP router frameworks or QUIC/HTTP3 stacks.
+func TestPackageDoesNotPullRouterFrameworks(t *testing.T) {
+	t.Parallel()
+
+	goBin, err := exec.LookPath("go")
+	require.NoError(t, err, "go binary not found in PATH")
+
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(t.Context(), goBin, "list", "-deps", ".")
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	require.NoError(t, err, "go list -deps . failed: %s", stderr.String())
+
+	deps := strings.Fields(string(out))
+	require.Contains(t, deps, "net/http", "expected standard library dependencies in go list output")
+
+	forbiddenPrefixes := []string{
+		"github.com/gin-gonic/gin",
+		"github.com/quic-go/quic-go",
+	}
+	for _, dep := range deps {
+		for _, prefix := range forbiddenPrefixes {
+			if dep == prefix || strings.HasPrefix(dep, prefix+"/") {
+				t.Errorf("pkg/metrics must not transitively import %q (found %q)", prefix, dep)
+			}
+		}
 	}
 }

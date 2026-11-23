@@ -10,11 +10,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strconv"
 	"sync"
 	"sync/atomic"
 
-	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -72,7 +70,6 @@ var (
 
 // private instruments
 var (
-	httpRequestsTotal             metric.Int64Counter
 	httpClientConcurrentRequests  metric.Int64UpDownCounter
 	httpClientCacheSizeBytes      metric.Float64ObservableGauge
 	httpClientCircuitBreakerState metric.Float64ObservableGauge
@@ -88,13 +85,6 @@ func InitMetrics(_ context.Context) error {
 		m := otel.GetMeterProvider().Meter(settings.CliBinaryName)
 		n := settings.CliBinaryName
 		var err error
-
-		httpRequestsTotal, err = m.Int64Counter(fmt.Sprintf("%s_http_requests_total", n),
-			metric.WithDescription("Number of HTTP requests"))
-		if err != nil {
-			initErr = fmt.Errorf("httpRequestsTotal: %w", err)
-			return
-		}
 
 		httpClientConcurrentRequests, err = m.Int64UpDownCounter(fmt.Sprintf("%s_http_client_concurrent_requests", n),
 			metric.WithDescription("Current number of concurrent HTTP client requests"))
@@ -300,22 +290,6 @@ func Handler() http.Handler { return promhttp.Handler() }
 func RegisterMetrics() {
 	_ = InitMetrics(context.Background())
 	http.Handle("/metrics", Handler())
-}
-
-// PrometheusMiddleware returns a Gin middleware handler that records HTTP request totals.
-func PrometheusMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Next()
-		if httpRequestsTotal == nil {
-			return
-		}
-		statusCode := strconv.Itoa(c.Writer.Status())
-		httpRequestsTotal.Add(c.Request.Context(), 1,
-			metric.WithAttributes(
-				attribute.String(AttrPath, c.Request.URL.Path),
-				attribute.String(AttrStatusCode, statusCode),
-			))
-	}
 }
 
 // RecordPluginResolution records plugin resolution metrics to OTel.
