@@ -4584,6 +4584,219 @@ func TestHandler_LockIdentity_CollidingHandlerAndProfileShareRefreshLock(t *test
 	assert.Equal(t, int32(2), refreshSeq.Load())
 }
 
+func TestHandler_FailedLoginDetachedCtx_And_SessionVersionCorruptionHealing(t *testing.T) {
+	t.Parallel()
+
+	t.Run("timed-out Login still persists login_failed on context-checking store", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(120 * time.Millisecond)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		baseStore := secrets.NewMockStore()
+		ctxStore := &deleteOnCorruptStore{
+			MockStore:        baseStore,
+			checkCtxOnGetSet: true,
+		}
+		ctx := context.Background()
+		require.NoError(t, baseStore.Set(ctx, "ambient-pat", []byte("pat-val")))
+
+		h, err := New(config.CustomOAuth2Config{
+			Name:         "timeout-failed-login",
+			TokenURL:     srv.URL + "/token",
+			ClientID:     "cid",
+			ClientSecret: "csec",
+			Token:        "secret://ambient-pat",
+			DefaultFlow:  "client_credentials",
+		}, WithSecretStore(ctxStore), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		_, loginErr := h.Login(ctx, auth.LoginOptions{
+			Flow:    auth.FlowClientCredentials,
+			Timeout: 30 * time.Millisecond,
+		})
+		require.Error(t, loginErr)
+
+		// Even on a fresh handler, persisted session_state must be login_failed so Status reports unauthenticated.
+		hFresh, err := New(config.CustomOAuth2Config{
+			Name:         "timeout-failed-login",
+			TokenURL:     srv.URL + "/token",
+			ClientID:     "cid",
+			ClientSecret: "csec",
+			Token:        "secret://ambient-pat",
+			DefaultFlow:  "pat",
+		}, WithSecretStore(baseStore), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		st, stErr := hFresh.Status(ctx)
+		require.NoError(t, stErr)
+		assert.False(t, st.Authenticated, "timed-out Login must persist login_failed via detached context")
+	})
+
+	t.Run("patLogin post-advance store failure records login_failed using newSnap", func(t *testing.T) {
+		t.Parallel()
+		baseStore := secrets.NewMockStore()
+		ctx := context.Background()
+		require.NoError(t, baseStore.Set(ctx, "pat-cred", []byte("pat-secret")))
+
+		patKey := secretKeyPrefix + "pat-post-adv." + secretKeyPATTokenSuffix
+		wrapStore := &failingSessionStateStore{
+			MockStore:  baseStore,
+			failSetKey: patKey,
+			setErr:     errors.New("disk write error on pat_token"),
+		}
+		h, err := New(config.CustomOAuth2Config{
+			Name:        "pat-post-adv",
+			Token:       "secret://pat-cred",
+			DefaultFlow: "pat",
+		}, WithSecretStore(wrapStore), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		_, loginErr := h.Login(ctx, auth.LoginOptions{Flow: auth.FlowPAT})
+		require.Error(t, loginErr)
+
+		stateBytes, getErr := baseStore.Get(ctx, h.profileSecretKey(ctx, secretKeySessionStateSuffix))
+		require.NoError(t, getErr)
+		assert.Equal(t, sessionStateLoginFailed, string(stateBytes))
+	})
+
+	t.Run("corrupted auto-deleted session_version re-seeds non-empty epoch", func(t *testing.T) {
+		t.Parallel()
+		baseStore := secrets.NewMockStore()
+		ctx := context.Background()
+		verKey := secretKeyPrefix + "ver-heal." + secretKeySessionVersionSuffix
+		require.NoError(t, baseStore.Set(ctx, verKey, []byte("v1-before-corrupt")))
+
+		delStore := &deleteOnCorruptStore{
+			MockStore:  baseStore,
+			corruptKey: verKey,
+			corruptErr: secrets.NewCorruptedSecretError(verKey, "corrupt", errors.New("bad cipher")),
+		}
+		h, err := New(config.CustomOAuth2Config{
+			Name:         "ver-heal",
+			TokenURL:     "https://example.com/token",
+			ClientID:     "cid",
+			ClientSecret: "csec",
+		}, WithSecretStore(delStore), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		// Corrupt read returns error AND re-seeds a fresh non-empty epoch so subsequent reads never revert to "".
+		_, verErr := h.readPersistedSessionVersion(ctx)
+		require.Error(t, verErr)
+
+		reseededVer, err := h.readPersistedSessionVersion(ctx)
+		require.NoError(t, err)
+		assert.NotEmpty(t, reseededVer)
+		assert.NotEqual(t, "v1-before-corrupt", reseededVer)
+	})
+}
+
+func TestHandler_ProfileNormalization_SharesSessionLocksAndMemCache(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PROD vs prod and default vs empty share session state locks and caches", func(t *testing.T) {
+		t.Parallel()
+		var mintCount atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			n := mintCount.Add(1)
+			writeJSON(w, tokenResponse{
+				AccessToken: fmt.Sprintf("norm-tok-%d", n),
+				TokenType:   "Bearer",
+				ExpiresIn:   3600,
+			})
+		}))
+		defer srv.Close()
+
+		store := secrets.NewMockStore()
+		cfg := config.CustomOAuth2Config{
+			Name:         "norm-prof",
+			TokenURL:     srv.URL + "/token",
+			ClientID:     "cid",
+			ClientSecret: "csec",
+			DefaultFlow:  "client_credentials",
+		}
+		h, err := New(cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		ctxUpper := auth.WithProfile(context.Background(), "PROD")
+		ctxLower := auth.WithProfile(context.Background(), "prod")
+		ctxDefault := auth.WithProfile(context.Background(), "default")
+		ctxBuiltIn := auth.WithProfile(context.Background(), "built-in")
+		ctxEmpty := context.Background()
+
+		// Login under "PROD", read cached token under "prod" without a second mint, then Logout under "PROD" and verify "prod" is fenced.
+		_, err = h.Login(ctxUpper, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+		require.NoError(t, err)
+		tokLower, err := h.GetToken(ctxLower, auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "norm-tok-1", tokLower.AccessToken)
+		assert.Equal(t, int32(1), mintCount.Load())
+
+		entriesUpper, err := h.ListCachedTokens(ctxUpper)
+		require.NoError(t, err)
+		assert.Len(t, entriesUpper, 1)
+
+		require.NoError(t, h.Logout(ctxUpper))
+		_, err = h.GetToken(ctxLower, auth.TokenOptions{})
+		require.ErrorIs(t, err, auth.ErrNotAuthenticated)
+
+		// Login under "default", read cached token under "" and "built-in", then Logout under "default" and verify "" is fenced.
+		_, err = h.Login(ctxDefault, auth.LoginOptions{Flow: auth.FlowClientCredentials})
+		require.NoError(t, err)
+		tokEmpty, err := h.GetToken(ctxEmpty, auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "norm-tok-2", tokEmpty.AccessToken)
+
+		entriesDefault, err := h.ListCachedTokens(ctxDefault)
+		require.NoError(t, err)
+		assert.Len(t, entriesDefault, 1)
+
+		require.NoError(t, h.Logout(ctxBuiltIn))
+		_, err = h.GetToken(ctxEmpty, auth.TokenOptions{})
+		require.ErrorIs(t, err, auth.ErrNotAuthenticated)
+	})
+
+	t.Run("keyless memCache shares PROD vs prod and default vs empty", func(t *testing.T) {
+		t.Parallel()
+		var mintCount atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			n := mintCount.Add(1)
+			writeJSON(w, tokenResponse{
+				AccessToken: fmt.Sprintf("mem-tok-%d", n),
+				TokenType:   "Bearer",
+				ExpiresIn:   3600,
+			})
+		}))
+		defer srv.Close()
+
+		h, err := New(config.CustomOAuth2Config{
+			Name:         "norm-mem",
+			TokenURL:     srv.URL + "/token",
+			ClientID:     "cid",
+			ClientSecret: "csec",
+			DefaultFlow:  "client_credentials",
+		}, WithSecretStore(nil), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+
+		tok1, err := h.GetToken(auth.WithProfile(context.Background(), "PROD"), auth.TokenOptions{})
+		require.NoError(t, err)
+		tok2, err := h.GetToken(auth.WithProfile(context.Background(), "prod"), auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, tok1.AccessToken, tok2.AccessToken)
+		assert.Equal(t, int32(1), mintCount.Load())
+
+		tok3, err := h.GetToken(auth.WithProfile(context.Background(), "default"), auth.TokenOptions{})
+		require.NoError(t, err)
+		tok4, err := h.GetToken(context.Background(), auth.TokenOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, tok3.AccessToken, tok4.AccessToken)
+		assert.Equal(t, int32(2), mintCount.Load())
+	})
+}
+
 func BenchmarkHandler_PAT_GetToken(b *testing.B) {
 	store := secrets.NewMockStore()
 	ctx := context.Background()

@@ -668,7 +668,7 @@ func (h *Handler) ensureLoadedDynamicClient(ctx context.Context) {
 // profile and registration fingerprint, returning an immutable snapshot of the
 // selected client so concurrent requests never clobber one another's client
 // binding mid-acquisition.
-func (h *Handler) ensureDynamicClient(ctx context.Context, snap sessionSnapshot) (*dynamicClient, error) {
+func (h *Handler) ensureDynamicClient(ctx context.Context, snap sessionSnapshot, flow auth.Flow) (*dynamicClient, error) {
 	dcr := h.cfg.DynamicClientRegistration
 	if dcr == nil || dcr.RegistrationEndpoint == "" {
 		return nil, nil
@@ -705,13 +705,22 @@ func (h *Handler) ensureDynamicClient(ctx context.Context, snap sessionSnapshot)
 			}
 			pubMu := h.profilePublishLock(profile)
 			pubMu.Lock()
+			if state, stateErr := h.getSessionStateInternal(sfCtx, true); stateErr != nil {
+				pubMu.Unlock()
+				unlockCommit()
+				return nil, auth.NewError(h.cfg.Name, "session_state", stateErr)
+			} else if state == sessionStateLoggedOut || h.isLocallyLoggedOut(profile) {
+				pubMu.Unlock()
+				unlockCommit()
+				return nil, auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
+			}
 			if ok, verErr := h.matchesSessionSnapshotLocked(sfCtx, profile, snap); verErr != nil || !ok {
 				pubMu.Unlock()
 				unlockCommit()
 				if verErr != nil {
 					return nil, verErr
 				}
-				return nil, auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
+				return nil, auth.NewError(h.cfg.Name, "get_token", &sessionReplacedError{flow: flow})
 			}
 			cp := *cachedClient
 			h.mu.Lock()
@@ -810,13 +819,22 @@ func (h *Handler) ensureDynamicClient(ctx context.Context, snap sessionSnapshot)
 		}
 		pubMu := h.profilePublishLock(profile)
 		pubMu.Lock()
+		if state, stateErr := h.getSessionStateInternal(sfCtx, true); stateErr != nil {
+			pubMu.Unlock()
+			unlockCommit()
+			return nil, auth.NewError(h.cfg.Name, "session_state", stateErr)
+		} else if state == sessionStateLoggedOut || h.isLocallyLoggedOut(profile) {
+			pubMu.Unlock()
+			unlockCommit()
+			return nil, auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
+		}
 		if ok, verErr := h.matchesSessionSnapshotLocked(sfCtx, profile, snap); verErr != nil || !ok {
 			pubMu.Unlock()
 			unlockCommit()
 			if verErr != nil {
 				return nil, verErr
 			}
-			return nil, auth.NewError(h.cfg.Name, "get_token", auth.ErrNotAuthenticated)
+			return nil, auth.NewError(h.cfg.Name, "get_token", &sessionReplacedError{flow: flow})
 		}
 		if err := h.storeDynamicClient(sfCtx, newClient); err != nil {
 			pubMu.Unlock()
@@ -894,17 +912,17 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 	}
 
 	if flow == auth.FlowPAT {
-		res, patErr := h.patLogin(ctx, scopes, snap)
+		res, recordSnap, patErr := h.patLogin(ctx, scopes, snap)
 		if patErr != nil {
 			if !errors.Is(patErr, auth.ErrNotAuthenticated) {
-				h.recordFailedLogin(ctx, snap)
+				h.recordFailedLogin(ctx, recordSnap)
 			}
 			return nil, patErr
 		}
 		return res, nil
 	}
 
-	dcrClient, err := h.ensureDynamicClient(ctx, snap)
+	dcrClient, err := h.ensureDynamicClient(ctx, snap, flow)
 	if err != nil {
 		if !errors.Is(err, auth.ErrNotAuthenticated) {
 			h.recordFailedLogin(ctx, snap)
@@ -1057,15 +1075,15 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 // static token via SecretRef, skips TokenExchange, strictly validates against
 // VerifyURL when configured, and stores the session under pat_token bound to a
 // PAT configuration fingerprint without placing a zero-expiry entry into TokenCache.
-func (h *Handler) patLogin(ctx context.Context, scopes []string, snap sessionSnapshot) (*auth.Result, error) {
+func (h *Handler) patLogin(ctx context.Context, scopes []string, snap sessionSnapshot) (*auth.Result, sessionSnapshot, error) {
 	patToken, err := h.resolvePATToken(ctx)
 	if err != nil {
-		return nil, auth.NewError(h.cfg.Name, "login", err)
+		return nil, snap, auth.NewError(h.cfg.Name, "login", err)
 	}
 
 	username, err := h.resolvePATUsername(ctx)
 	if err != nil {
-		return nil, auth.NewError(h.cfg.Name, "login", err)
+		return nil, snap, auth.NewError(h.cfg.Name, "login", err)
 	}
 
 	var claims *auth.Claims
@@ -1073,7 +1091,7 @@ func (h *Handler) patLogin(ctx context.Context, scopes []string, snap sessionSna
 		var verifyErr error
 		claims, verifyErr = h.verifyToken(ctx, patToken)
 		if verifyErr != nil {
-			return nil, auth.NewError(h.cfg.Name, "verify_token", verifyErr)
+			return nil, snap, auth.NewError(h.cfg.Name, "verify_token", verifyErr)
 		}
 	}
 	if claims == nil {
@@ -1091,13 +1109,13 @@ func (h *Handler) patLogin(ctx context.Context, scopes []string, snap sessionSna
 	}
 	metaBytes, err := json.Marshal(meta)
 	if err != nil {
-		return nil, auth.NewError(h.cfg.Name, "store_metadata", fmt.Errorf("marshal metadata: %w", err))
+		return nil, snap, auth.NewError(h.cfg.Name, "store_metadata", fmt.Errorf("marshal metadata: %w", err))
 	}
 
 	profile := auth.ProfileFromContext(ctx)
 	unlockCommit, commitLockErr := h.acquireSessionCommitLock(ctx, profile)
 	if commitLockErr != nil {
-		return nil, auth.NewError(h.cfg.Name, "login", commitLockErr)
+		return nil, snap, auth.NewError(h.cfg.Name, "login", commitLockErr)
 	}
 	defer unlockCommit()
 
@@ -1107,37 +1125,38 @@ func (h *Handler) patLogin(ctx context.Context, scopes []string, snap sessionSna
 
 	snapOK, snapVerErr := h.matchesSessionSnapshotLocked(ctx, profile, snap)
 	if snapVerErr != nil {
-		return nil, auth.NewError(h.cfg.Name, "session_version", snapVerErr)
+		return nil, snap, auth.NewError(h.cfg.Name, "session_version", snapVerErr)
 	}
 	if !snapOK {
-		return nil, auth.NewError(h.cfg.Name, "login", auth.ErrNotAuthenticated)
+		return nil, snap, auth.NewError(h.cfg.Name, "login", auth.ErrNotAuthenticated)
 	}
 
 	// Clear any OAuth refresh/derived/cached tokens from an earlier flow on this profile
 	// before committing the PAT session so stale refresh credentials are never retained.
 	if err := h.secretStore.Delete(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix)); err != nil && !errors.Is(err, secrets.ErrNotFound) {
-		return nil, auth.NewError(h.cfg.Name, "clear_refresh_token", fmt.Errorf("clear previous refresh token: %w", err))
+		return nil, snap, auth.NewError(h.cfg.Name, "clear_refresh_token", fmt.Errorf("clear previous refresh token: %w", err))
 	}
 	if err := h.clearDerivedStateErr(ctx); err != nil {
-		return nil, auth.NewError(h.cfg.Name, "clear_derived_token", err)
+		return nil, snap, auth.NewError(h.cfg.Name, "clear_derived_token", err)
 	}
 	if tc := h.profileTokenCache(ctx); tc != nil {
 		_ = tc.Clear(ctx)
 	}
-	if _, advErr := h.advanceSessionVersionLocked(ctx, profile); advErr != nil {
-		return nil, auth.NewError(h.cfg.Name, "session_version", advErr)
+	newSnap, advErr := h.advanceSessionVersionLocked(ctx, profile)
+	if advErr != nil {
+		return nil, snap, auth.NewError(h.cfg.Name, "session_version", advErr)
 	}
 	if err := h.storePATSessionSecrets(ctx, patToken, username, claims, scopes); err != nil {
-		return nil, auth.NewError(h.cfg.Name, "store_pat", err)
+		return nil, newSnap, auth.NewError(h.cfg.Name, "store_pat", err)
 	}
 	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyMetadataSuffix), metaBytes); err != nil {
-		return nil, auth.NewError(h.cfg.Name, "store_metadata", fmt.Errorf("store metadata: %w", err))
+		return nil, newSnap, auth.NewError(h.cfg.Name, "store_metadata", fmt.Errorf("store metadata: %w", err))
 	}
 	if clearErr := h.clearSessionState(ctx); clearErr != nil {
-		return nil, auth.NewError(h.cfg.Name, "session_state", clearErr)
+		return nil, newSnap, auth.NewError(h.cfg.Name, "session_state", clearErr)
 	}
 	h.setActivePAT(ctx, username)
-	return &auth.Result{Claims: claims, ExpiresAt: time.Time{}}, nil
+	return &auth.Result{Claims: claims, ExpiresAt: time.Time{}}, newSnap, nil
 }
 
 type sessionSnapshot struct {
@@ -1161,14 +1180,27 @@ func (h *Handler) readPersistedSessionVersion(ctx context.Context) (string, erro
 	if h.secretStore == nil {
 		return "", nil
 	}
-	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeySessionVersionSuffix))
+	key := h.profileSecretKey(ctx, secretKeySessionVersionSuffix)
+	data, err := h.secretStore.Get(ctx, key)
 	if err != nil {
 		if errors.Is(err, secrets.ErrNotFound) {
 			return "", nil
 		}
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			// Real secrets.Store.Get auto-deletes corrupted .enc files before
+			// returning ErrCorrupted. Re-seed a fresh non-empty epoch so
+			// subsequent reads cannot revert to ErrNotFound ("") and match
+			// pre-session snapshots.
+			_ = h.secretStore.Set(context.WithoutCancel(ctx), key, []byte(newSessionEpoch()))
+		}
 		return "", err
 	}
-	return strings.TrimSpace(string(data)), nil
+	ver := strings.TrimSpace(string(data))
+	if ver == "" {
+		_ = h.secretStore.Set(context.WithoutCancel(ctx), key, []byte(newSessionEpoch()))
+		return "", fmt.Errorf("session version is empty or corrupt")
+	}
+	return ver, nil
 }
 
 func (h *Handler) captureSessionSnapshot(ctx context.Context, profile string) (sessionSnapshot, error) {
@@ -1597,10 +1629,21 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 		var replErr *sessionReplacedError
 		if errors.As(err, &replErr) && h.secretStore != nil {
 			resolvedCtx := h.resolveContextProfile(ctx)
-			if state, stateErr := h.getSessionState(resolvedCtx); stateErr == nil && state != sessionStateLoggedOut {
-				if meta, metaErr := h.loadMetadata(resolvedCtx); metaErr == nil && meta != nil && meta.LastLoginFlow != "" && meta.LastLoginFlow == replErr.flow {
-					return h.getTokenOnce(ctx, opts)
+			profile := auth.ProfileFromContext(resolvedCtx)
+			var shouldRetry bool
+			if unlockCommit, lockErr := h.acquireSessionCommitLock(resolvedCtx, profile); lockErr == nil {
+				pubMu := h.profilePublishLock(profile)
+				pubMu.Lock()
+				if state, stateErr := h.getSessionStateInternal(resolvedCtx, true); stateErr == nil && state != sessionStateLoggedOut && !h.isLocallyLoggedOut(profile) {
+					if meta, metaErr := h.loadMetadata(resolvedCtx); metaErr == nil && meta != nil && meta.LastLoginFlow != "" && meta.LastLoginFlow == replErr.flow {
+						shouldRetry = true
+					}
 				}
+				pubMu.Unlock()
+				unlockCommit()
+			}
+			if shouldRetry {
+				return h.getTokenOnce(ctx, opts)
 			}
 		}
 		return nil, err
@@ -2013,7 +2056,7 @@ func (h *Handler) mintHeadlessOAuthToken(ctx context.Context, flow auth.Flow, sc
 			return nil, activeErr
 		}
 
-		dcrClient, dcrErr := h.ensureDynamicClient(sfCtx, snap)
+		dcrClient, dcrErr := h.ensureDynamicClient(sfCtx, snap, flow)
 		if dcrErr != nil {
 			return nil, dcrErr
 		}
@@ -2249,9 +2292,12 @@ func (h *Handler) reservedBinaryNames() []string {
 }
 
 func (h *Handler) resolveContextProfile(ctx context.Context) context.Context {
-	if auth.ProfileFromContext(ctx) == "" && !auth.IsProfileResolved(ctx) {
+	if p := auth.ProfileFromContext(ctx); p != "" {
+		return auth.WithProfileResolved(auth.WithProfile(ctx, auth.NormalizeProfileName(p)))
+	}
+	if !auth.IsProfileResolved(ctx) {
 		if profile := auth.ResolveActiveProfile(ctx, h.cfg.Name); profile != "" {
-			return auth.WithProfile(ctx, profile)
+			return auth.WithProfileResolved(auth.WithProfile(ctx, auth.NormalizeProfileName(profile)))
 		}
 	}
 	return ctx
@@ -2444,8 +2490,9 @@ func (h *Handler) clearSessionState(ctx context.Context) error {
 }
 
 func (h *Handler) recordFailedLogin(ctx context.Context, snap sessionSnapshot) {
-	profile := auth.ProfileFromContext(ctx)
-	unlockCommit, commitErr := h.acquireSessionCommitLock(context.WithoutCancel(ctx), profile)
+	detachedCtx := context.WithoutCancel(ctx)
+	profile := auth.ProfileFromContext(detachedCtx)
+	unlockCommit, commitErr := h.acquireSessionCommitLock(detachedCtx, profile)
 	if commitErr != nil {
 		return
 	}
@@ -2455,7 +2502,7 @@ func (h *Handler) recordFailedLogin(ctx context.Context, snap sessionSnapshot) {
 	pubMu.Lock()
 	defer pubMu.Unlock()
 
-	if ok, verErr := h.matchesSessionSnapshotLocked(ctx, profile, snap); verErr != nil || !ok {
+	if ok, verErr := h.matchesSessionSnapshotLocked(detachedCtx, profile, snap); verErr != nil || !ok {
 		return
 	}
 
@@ -2467,19 +2514,19 @@ func (h *Handler) recordFailedLogin(ctx context.Context, snap sessionSnapshot) {
 	h.mu.RUnlock()
 
 	if h.secretStore != nil {
-		if state, err := h.getSessionStateInternal(ctx, true); err != nil || state == sessionStateLoggedOut {
+		if state, err := h.getSessionStateInternal(detachedCtx, true); err != nil || state == sessionStateLoggedOut {
 			return
 		}
-		if meta, err := h.loadMetadata(ctx); err == nil && meta != nil {
+		if meta, err := h.loadMetadata(detachedCtx); err == nil && meta != nil {
 			if meta.LastLoginFlow == auth.FlowPAT {
-				if _, _, patOK, patErr := h.loadValidStoredPAT(ctx); patErr == nil && patOK && meta.ExpiresAt.IsZero() {
+				if _, _, patOK, patErr := h.loadValidStoredPAT(detachedCtx); patErr == nil && patOK && meta.ExpiresAt.IsZero() {
 					return
 				}
 			} else if !meta.ExpiresAt.IsZero() && !meta.ExpiresAt.Before(time.Now()) {
 				return
 			}
 		}
-		_ = h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeySessionStateSuffix), []byte(sessionStateLoginFailed))
+		_ = h.secretStore.Set(detachedCtx, h.profileSecretKey(detachedCtx, secretKeySessionStateSuffix), []byte(sessionStateLoginFailed))
 	}
 	h.mu.Lock()
 	if h.sessionStates == nil {
@@ -3775,7 +3822,7 @@ func (h *Handler) tokenCacheForProfile(profile string) string {
 // profileTokenCache returns a TokenCache for the active profile in context.
 // If no profile is set, returns the default token cache.
 func (h *Handler) profileTokenCache(ctx context.Context) *auth.TokenCache {
-	profile := auth.ProfileFromContext(ctx)
+	profile := auth.NormalizeProfileName(auth.ProfileFromContext(ctx))
 	if profile == "" {
 		return h.tokenCache
 	}
