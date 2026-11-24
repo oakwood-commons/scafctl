@@ -13,8 +13,11 @@ import (
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	authpkg "github.com/oakwood-commons/scafctl/pkg/auth"
+	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -142,6 +145,93 @@ func TestBuildHandlerInfoResult_LazyPluginClassifiedAsPlugin(t *testing.T) {
 	result := buildHandlerInfoResult(ctx, "github", registry, nil)
 	assert.Equal(t, "installed", result["status"])
 	assert.Equal(t, "plugin", result["source"], "lazy wrappers should be classified as plugin, not built-in")
+}
+
+func TestBuildHandlerInfoResult_CustomOAuth2ClassifiedAsCustomOAuth2(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	customHandler, err := customoauth2.New(config.CustomOAuth2Config{
+		Name:         "quay",
+		DisplayName:  "Quay.io",
+		AuthorizeURL: "https://quay.io/oauth/authorize",
+		ClientID:     "quay-client",
+		DefaultFlow:  "interactive",
+		ResponseType: "token",
+	}, customoauth2.WithSecretStore(secrets.NewMockStore()), customoauth2.WithCustomConfigSource())
+	require.NoError(t, err)
+
+	// Embedder BuiltinAuthHandlers constructed via oauth2.New without
+	// WithCustomConfigSource must report source: "built-in" even when
+	// cfg.Auth.CustomOAuth2 contains a stale entry with the same name.
+	embedderBuiltin, err := customoauth2.New(config.CustomOAuth2Config{
+		Name:         "corp-sso",
+		DisplayName:  "Corp SSO",
+		AuthorizeURL: "https://sso.example.com/authorize",
+		ClientID:     "corp-client",
+		DefaultFlow:  "interactive",
+		ResponseType: "token",
+	}, customoauth2.WithSecretStore(secrets.NewMockStore()))
+	require.NoError(t, err)
+	ctxWithStaleCustom := config.WithConfig(ctx, &config.Config{
+		Auth: config.GlobalAuthConfig{
+			CustomOAuth2: []config.CustomOAuth2Config{
+				{Name: "corp-sso", DefaultFlow: "pat", Token: "env://STALE_TOKEN"},
+			},
+		},
+	})
+	assert.Equal(t, "built-in", installedHandlerSource(ctxWithStaleCustom, embedderBuiltin))
+
+	registry := authpkg.NewRegistry()
+	require.NoError(t, registry.Register(customHandler))
+	ctx = authpkg.WithRegistry(ctx, registry)
+
+	// List row classification
+	result := buildHandlerInfoResult(ctx, "quay", registry, nil)
+	assert.Equal(t, "installed", result["status"])
+	assert.Equal(t, "Quay.io", result["displayName"])
+	assert.Equal(t, "custom-oauth2", result["source"])
+
+	// Detail map classification
+	detail := buildHandlerDetailMap(ctx, customHandler)
+	assert.Equal(t, "custom-oauth2", detail["source"])
+
+	// Interactive card classification
+	rows := collectHandlerInfoInteractive(ctx)
+	require.Len(t, rows, 1)
+	row, ok := rows[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "custom-oauth2", row["source"])
+
+	// Full CLI JSON output
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+	cmd := CommandHandlers(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"-o", "json"})
+	require.NoError(t, cmd.Execute())
+
+	var parsed []map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
+	require.Len(t, parsed, 1)
+	assert.Equal(t, "quay", parsed[0]["name"])
+	assert.Equal(t, "custom-oauth2", parsed[0]["source"])
+
+	// Disabled custom-oauth2 handler still reports source: "custom-oauth2".
+	require.NoError(t, registry.Disable("quay", "server mode"))
+	disabledHandler, exists := registry.GetRegistered("quay")
+	require.True(t, exists)
+	assert.Equal(t, "custom-oauth2", installedHandlerSource(ctx, disabledHandler))
+
+	// 'auth handlers remove <custom-name>' directs the user to 'auth oauth2 remove'.
+	cfgCtx := config.WithConfig(ctx, &config.Config{
+		Auth: config.GlobalAuthConfig{
+			CustomOAuth2: []config.CustomOAuth2Config{{Name: "quay"}},
+		},
+	})
+	mycliParams := &settings.Run{BinaryName: "mycli"}
+	rmErr := removeAuthHandler(cfgCtx, "quay", mycliParams, plugin.NewCache(t.TempDir()))
+	require.Error(t, rmErr)
+	assert.Contains(t, rmErr.Error(), "mycli auth oauth2 remove quay")
 }
 
 func TestCommandHandlers_WithRegisteredHandler(t *testing.T) {

@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"context"
 	_ "embed"
 	"fmt"
 	"strings"
@@ -140,9 +141,11 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			// ── 1.5. Handler source ──────────────────────────────────────────
 			officialReg := authofficial.RegistryFromContext(ctx)
 			authReg := authpkg.RegistryFromContext(ctx)
+			checkedSources := make(map[string]struct{})
 			if officialReg != nil {
 				for _, name := range officialReg.Names() {
-					source := handlerSource(authReg, name)
+					checkedSources[name] = struct{}{}
+					source := handlerSource(ctx, authReg, name)
 					status := diagnose.StatusOK
 					if source == "not found" {
 						status = diagnose.StatusWarn
@@ -154,6 +157,21 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 						Message:  fmt.Sprintf("Handler source: %s", source),
 					})
 				}
+			}
+			for _, name := range handlerNames {
+				if _, already := checkedSources[name]; already {
+					continue
+				}
+				source := handlerSource(ctx, authReg, name)
+				if source == "not found" {
+					continue
+				}
+				addCheck(diagnose.Check{
+					Category: "source",
+					Name:     fmt.Sprintf("%s: handler source", name),
+					Status:   diagnose.StatusOK,
+					Message:  fmt.Sprintf("Handler source: %s", source),
+				})
 			}
 
 			// ── 1.6. Plugin startup latency ──────────────────────────────────
@@ -182,7 +200,7 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 							Category: "startup",
 							Name:     fmt.Sprintf("%s: startup latency", name),
 							Status:   diagnose.StatusOK,
-							Message:  "Handler startup: n/a (built-in, not measured)",
+							Message:  fmt.Sprintf("Handler startup: n/a (%s, not measured)", installedHandlerSource(ctx, h)),
 						})
 					}
 				}
@@ -446,20 +464,18 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 	return cmd
 }
 
-// handlerSource determines the source of an auth handler:
-//   - "built-in" if the handler is registered but not a plugin wrapper
+// handlerSource classifies a handler's origin based on its registry presence:
+//   - "built-in" if the handler is registered natively
+//   - "custom-oauth2" if the handler was registered from auth.customOAuth2
 //   - "plugin" if the handler is a plugin wrapper
 //   - "not found" if the handler is not registered
-func handlerSource(authReg *authpkg.Registry, name string) string {
+func handlerSource(ctx context.Context, authReg *authpkg.Registry, name string) string {
 	if authReg == nil || !authReg.Has(name) {
 		return "not found"
 	}
-	handler, err := authReg.Get(name)
-	if err != nil {
+	handler, ok := authReg.GetRegistered(name)
+	if !ok || handler == nil {
 		return "not found"
 	}
-	if _, ok := handler.(*plugin.AuthHandlerWrapper); ok {
-		return "plugin"
-	}
-	return "built-in"
+	return installedHandlerSource(ctx, handler)
 }

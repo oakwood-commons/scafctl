@@ -36,6 +36,7 @@ func CommandAuth(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			Use 'scafctl auth list' to show cached refresh and access token metadata.
 			Use 'scafctl auth logout <handler>' to clear credentials.
 			Use 'scafctl auth token <handler>' to retrieve a token value (for debugging).
+			Use 'scafctl auth oauth2' to manage custom OAuth2 handlers in config.
 			Use 'scafctl auth diagnose' to run health checks and troubleshoot issues.
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
@@ -49,6 +50,7 @@ func CommandAuth(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	cmd.AddCommand(CommandLogin(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandLogout(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandMigrate(cliParams, ioStreams, cmdPath))
+	cmd.AddCommand(CommandOAuth2(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandProfile(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandStatus(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandSwitch(cliParams, ioStreams, cmdPath))

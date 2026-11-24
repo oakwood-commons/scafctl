@@ -11,7 +11,9 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	authpkg "github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -80,6 +82,19 @@ func removeAuthHandler(ctx context.Context, name string, cliParams *settings.Run
 	// Check if the handler has any cached binaries.
 	handlerDir := filepath.Join(cache.Dir(), cacheKey)
 	if _, err := os.Stat(handlerDir); os.IsNotExist(err) {
+		if authReg := authpkg.RegistryFromContext(ctx); authReg != nil {
+			if registered, ok := authReg.GetRegistered(name); ok && registered != nil {
+				if installedHandlerSource(ctx, registered) == "built-in" {
+					return fmt.Errorf("auth handler %q is a built-in handler (not a cached plugin)", name)
+				}
+			}
+		}
+		if cfg := config.FromContext(ctx); cfg != nil {
+			if _, isCustom := cfg.GetCustomOAuth2(name); isCustom {
+				binName := resolveBinaryName(cliParams)
+				return fmt.Errorf("auth handler %q is a custom OAuth2 handler configured in config.yaml (not a cached plugin); use '%s auth oauth2 remove %s' instead", name, binName, name)
+			}
+		}
 		return fmt.Errorf("auth handler %q is not installed (no cached binaries found)", name)
 	}
 

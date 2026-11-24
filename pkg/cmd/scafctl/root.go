@@ -630,6 +630,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 					customoauth2.WithLogger(*lgr),
 					customoauth2.WithBinaryName(binaryName),
 					customoauth2.WithAuthPageRenderer(opts.AuthPageRenderer),
+					customoauth2.WithCustomConfigSource(),
 				)
 				if secretErr == nil {
 					customOpts = append(customOpts, customoauth2.WithSecretStore(sharedSecretStore))

@@ -106,6 +106,15 @@ func TestIsDisabled(t *testing.T) {
 	assert.False(t, IsDisabled(original))
 }
 
+func TestUnwrapHandler(t *testing.T) {
+	original := NewMockHandler("entra")
+	d := newDisabledHandler(original, "reason")
+
+	assert.Same(t, original, UnwrapHandler(d))
+	assert.Same(t, original, UnwrapHandler(original))
+	assert.Nil(t, UnwrapHandler(nil))
+}
+
 func TestRegistry_Disable(t *testing.T) {
 	reg := NewRegistry()
 	handler := NewMockHandler("entra")

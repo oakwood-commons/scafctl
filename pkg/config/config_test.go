@@ -4,9 +4,12 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
@@ -1421,4 +1424,232 @@ func TestManager_Load_AddressPolicyFromEnv(t *testing.T) {
 			"an explicit false must bind as a present pointer, distinct from unset")
 		assert.False(t, *cfg.HTTPClient.TrustedProxy)
 	})
+}
+
+func TestManager_CustomOAuth2_MergedLayersSynchronizedWithGetAndAllSettings(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	dropInDir := filepath.Join(dir, ConfigDirName)
+	require.NoError(t, os.MkdirAll(dropInDir, 0o700))
+
+	baseYAML := []byte(`
+auth:
+  customOAuth2:
+    - name: base-idp
+      displayName: Base IDP
+      defaultFlow: pat
+      token: env://BASE_TOKEN
+`)
+	dropInYAML := `auth:
+  customOAuth2:
+    - name: dropin-idp
+      displayName: DropIn IDP
+      defaultFlow: pat
+      token: env://DROPIN_TOKEN
+`
+	userYAML := `auth:
+  browser: chrome
+  github:
+    clientId: gh-user-client
+  customOAuth2:
+    - name: user-idp
+      displayName: User IDP
+      defaultFlow: pat
+      token: env://USER_TOKEN
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dropInDir, "10-auth.yaml"), []byte(dropInYAML), 0o600))
+	require.NoError(t, os.WriteFile(configPath, []byte(userYAML), 0o600))
+
+	mgr := NewManager(configPath, WithBaseConfig(baseYAML))
+	cfg, err := mgr.Load()
+	require.NoError(t, err)
+	require.Len(t, cfg.Auth.CustomOAuth2, 2, "config.d overrides base slice before user merge; dropin-idp + user-idp active")
+
+	// Sibling auth.* keys and parent mgr.Get("auth") remain intact after Load().
+	assert.Equal(t, "chrome", mgr.Get("auth.browser"))
+	assert.Equal(t, "gh-user-client", mgr.Get("auth.github.clientId"))
+	authSubtree, ok := mgr.Get("auth").(map[string]any)
+	require.True(t, ok, "Manager.Get(auth) must return map[string]any, got %T", mgr.Get("auth"))
+	assert.Equal(t, "chrome", authSubtree["browser"])
+
+	gotVal := mgr.Get("auth.customOAuth2")
+	gotSlice, ok := gotVal.([]any)
+	require.True(t, ok, "Manager.Get(auth.customOAuth2) should return []any, got %T", gotVal)
+	require.Len(t, gotSlice, 2, "Manager.Get(auth.customOAuth2) must include merged lower-layer and user handlers")
+	firstElem, ok := gotSlice[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "DropIn IDP", firstElem["displayname"], "inner slice map keys must be lowercased to match Viper")
+
+	allAuth, ok := mgr.AllSettings()["auth"].(map[string]any)
+	require.True(t, ok)
+	allCustom, ok := allAuth["customoauth2"].([]any)
+	require.True(t, ok)
+	require.Len(t, allCustom, 2, "Manager.AllSettings() must also reflect merged customOAuth2 entries")
+	assert.Equal(t, "chrome", allAuth["browser"])
+
+	// Saving sibling auth.* and logging edits must NOT bake dropin-idp into
+	// config.yaml AND must keep sibling auth.* keys + customOAuth2 synchronized.
+	mgr.Set("auth.browser", "firefox")
+	mgr.Set("logging.level", "debug")
+	require.NoError(t, mgr.Save())
+
+	diskBytes, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(diskBytes), "user-idp")
+	assert.Contains(t, string(diskBytes), "firefox")
+	assert.NotContains(t, string(diskBytes), "dropin-idp")
+
+	assert.Equal(t, "firefox", mgr.Get("auth.browser"))
+	assert.Equal(t, "gh-user-client", mgr.Get("auth.github.clientId"))
+	afterSaveSlice, ok := mgr.Get("auth.customOAuth2").([]any)
+	require.True(t, ok)
+	assert.Len(t, afterSaveSlice, 2, "Manager.Get(auth.customOAuth2) must stay synchronized after Save()")
+
+	// Removing the last customOAuth2 entry on a user-only manager and calling
+	// Save() clears Manager.Get("auth.customOAuth2") to [] while preserving sibling auth keys.
+	userOnlyPath := filepath.Join(t.TempDir(), "user-only.yaml")
+	require.NoError(t, os.WriteFile(userOnlyPath, []byte(userYAML), 0o600))
+	userMgr := NewManager(userOnlyPath)
+	userCfg, err := userMgr.Load()
+	require.NoError(t, err)
+	userCfg.Auth.CustomOAuth2 = nil
+	userMgr.UnmarkUserCustomOAuth2("user-idp")
+	require.NoError(t, userMgr.Save())
+
+	clearedSlice, ok := userMgr.Get("auth.customOAuth2").([]any)
+	require.True(t, ok, "Manager.Get(auth.customOAuth2) after clearing must return []any, got %T", userMgr.Get("auth.customOAuth2"))
+	assert.Empty(t, clearedSlice)
+	assert.Equal(t, "chrome", userMgr.Get("auth.browser"))
+	assert.Equal(t, "gh-user-client", userMgr.Get("auth.github.clientId"))
+}
+
+func TestManager_Save_PreservesUserCustomOAuth2IdenticalToSoleDropIn(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	dropInDir := filepath.Join(dir, ConfigDirName)
+	require.NoError(t, os.MkdirAll(dropInDir, 0o700))
+
+	dropInYAML := `auth:
+  customOAuth2:
+    - name: corp-idp
+      displayName: Corp DropIn
+      defaultFlow: pat
+      token: env://CORP_TOKEN
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dropInDir, "10-auth.yaml"), []byte(dropInYAML), 0o600))
+
+	mgr := NewManager(configPath)
+	cfg, err := mgr.Load()
+	require.NoError(t, err)
+	require.Len(t, cfg.Auth.CustomOAuth2, 1)
+
+	// Explicitly mark the sole drop-in handler as user-owned (simulating --force
+	// with an identical entry) and save.
+	mgr.MarkUserCustomOAuth2("corp-idp")
+	require.NoError(t, mgr.Save())
+
+	diskBytes, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(diskBytes), "corp-idp", "selected user customOAuth2 slice must survive drop-in pruning even when identical to config.d")
+
+	// Reload and confirm the handler is recognized as user-owned.
+	reloadedMgr := NewManager(configPath)
+	_, err = reloadedMgr.Load()
+	require.NoError(t, err)
+	assert.True(t, reloadedMgr.IsUserCustomOAuth2("corp-idp"))
+
+	// Also verify when user config originally used non-canonical casing ("Auth:")
+	// and saves an identical user override against config.d.
+	casedDir := t.TempDir()
+	casedPath := filepath.Join(casedDir, "config.yaml")
+	casedDropInDir := filepath.Join(casedDir, ConfigDirName)
+	require.NoError(t, os.MkdirAll(casedDropInDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(casedDropInDir, "10-auth.yaml"), []byte(dropInYAML), 0o600))
+	require.NoError(t, os.WriteFile(casedPath, []byte("Auth:\n  browser: firefox\n"), 0o600))
+
+	casedMgr := NewManager(casedPath)
+	_, err = casedMgr.Load()
+	require.NoError(t, err)
+	casedMgr.MarkUserCustomOAuth2("corp-idp")
+	require.NoError(t, casedMgr.Save())
+
+	casedDisk, err := os.ReadFile(casedPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(casedDisk), "corp-idp", "user override must survive pruning even when original config.yaml spelled Auth: with uppercase A")
+}
+
+func TestManager_Save_SaveAs_Delete_AtomicPrivateReplacement(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file permissions and inode replacement only")
+	}
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("logging:\n  level: info\n"), 0o600))
+
+	infoBefore, err := os.Stat(configPath)
+	require.NoError(t, err)
+	openFD, err := os.Open(configPath)
+	require.NoError(t, err)
+	defer func() { _ = openFD.Close() }()
+
+	mgr := NewManager(configPath)
+	cfg, err := mgr.Load()
+	require.NoError(t, err)
+	cfg.Logging.Level = "error"
+	require.NoError(t, mgr.Save())
+
+	infoAfterSave, err := os.Stat(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), infoAfterSave.Mode().Perm())
+	assert.False(t, os.SameFile(infoBefore, infoAfterSave), "Save must atomically replace the config file inode")
+
+	oldContent, err := io.ReadAll(openFD)
+	require.NoError(t, err)
+	assert.Contains(t, string(oldContent), "info")
+	assert.NotContains(t, string(oldContent), "error")
+
+	// Verify SaveAs also atomically replaces an existing file with 0600 permissions.
+	saveAsPath := filepath.Join(dir, "save-as.yaml")
+	require.NoError(t, os.WriteFile(saveAsPath, []byte("logging:\n  level: debug\n"), 0o600))
+	saveAsBefore, err := os.Stat(saveAsPath)
+	require.NoError(t, err)
+	require.NoError(t, mgr.SaveAs(saveAsPath))
+	saveAsAfter, err := os.Stat(saveAsPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), saveAsAfter.Mode().Perm())
+	assert.False(t, os.SameFile(saveAsBefore, saveAsAfter), "SaveAs must atomically replace the target file inode")
+
+	// Verify Delete also atomically replaces the file with 0600 permissions.
+	delBefore, err := os.Stat(configPath)
+	require.NoError(t, err)
+	removed, err := mgr.Delete("logging.level")
+	require.NoError(t, err)
+	assert.True(t, removed)
+	delAfter, err := os.Stat(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), delAfter.Mode().Perm())
+	assert.False(t, os.SameFile(delBefore, delAfter), "Delete must atomically replace the config file inode")
+
+	// Verify SaveAs and Save on a .json config path preserve JSON format selection.
+	jsonSaveAsPath := filepath.Join(dir, "config.json")
+	require.NoError(t, mgr.SaveAs(jsonSaveAsPath))
+	jsonSaveAsBytes, err := os.ReadFile(jsonSaveAsPath)
+	require.NoError(t, err)
+	assert.True(t, json.Valid(jsonSaveAsBytes), "SaveAs(config.json) must write valid JSON, got: %s", string(jsonSaveAsBytes))
+
+	jsonMgrPath := filepath.Join(dir, "direct.json")
+	jsonMgr := NewManager(jsonMgrPath)
+	jsonCfg, err := jsonMgr.Load()
+	require.NoError(t, err)
+	jsonCfg.Logging.Level = "warn"
+	require.NoError(t, jsonMgr.Save())
+	jsonDirectBytes, err := os.ReadFile(jsonMgrPath)
+	require.NoError(t, err)
+	assert.True(t, json.Valid(jsonDirectBytes), "Save() on a .json config path must write valid JSON, got: %s", string(jsonDirectBytes))
 }

@@ -19,6 +19,7 @@ var ErrHandlerDisabled = errors.New("auth handler disabled")
 // and metadata (SupportedFlows, Capabilities) for discoverability, but all
 // state-changing or token-acquiring methods fail immediately.
 type disabledHandler struct {
+	inner   Handler
 	name    string
 	display string
 	reason  string
@@ -28,6 +29,7 @@ type disabledHandler struct {
 
 func newDisabledHandler(original Handler, reason string) *disabledHandler {
 	return &disabledHandler{
+		inner:   original,
 		name:    original.Name(),
 		display: original.DisplayName(),
 		reason:  reason,
@@ -73,6 +75,18 @@ func (d *disabledHandler) GetGroups(_ context.Context) ([]string, error) {
 func IsDisabled(h Handler) bool {
 	_, ok := h.(*disabledHandler)
 	return ok
+}
+
+// UnwrapHandler returns the underlying Handler wrapped by a disabled handler,
+// or h unchanged when h is not wrapped.
+func UnwrapHandler(h Handler) Handler {
+	for {
+		d, ok := h.(*disabledHandler)
+		if !ok || d == nil || d.inner == nil {
+			return h
+		}
+		h = d.inner
+	}
 }
 
 var (

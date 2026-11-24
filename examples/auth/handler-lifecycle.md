@@ -22,12 +22,18 @@ scafctl auth handlers -o yaml
 Example table output:
 
 ~~~text
-NAME     DISPLAY NAME   STATUS      SOURCE    FLOWS                 LOGGED IN
-entra    Microsoft      installed   official  interactive,device    true
-github   GitHub         installed   official  interactive,device    true
-gcp      Google Cloud   available   official  interactive           false
-gitlab   GitLab         installed   custom    interactive           true
+NAME     DISPLAY NAME   STATUS      SOURCE         FLOWS                 LOGGED IN
+entra    Microsoft      installed   plugin         interactive,device    true
+github   GitHub         installed   plugin         interactive,device    true
+gcp      Google Cloud   available   catalog        interactive           false
+gitlab   GitLab         installed   custom-oauth2  interactive           true
 ~~~
+
+> Note: `scafctl auth handlers` inspects all handlers and manages cached plugin
+> binaries (`source: plugin` / `catalog`). Entries configured under
+> `auth.customOAuth2` show `source: custom-oauth2` and are managed via
+> `scafctl auth oauth2 add|remove|list` (see
+> [custom-oauth2-config.md](custom-oauth2-config.md)).
 
 ## Inspecting a Single Handler
 

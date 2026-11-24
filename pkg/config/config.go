@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/oakwood-commons/scafctl/pkg/fs"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/spf13/viper"
@@ -83,6 +84,12 @@ type Manager struct {
 	// config file, which would defeat config.d layering.
 	dropIn       map[string]any
 	userSettings map[string]any
+
+	// lowerCustomOAuth2 records auth.customOAuth2 entries supplied by WithBaseConfig
+	// and config.d fragments before merging the user's config.yaml, and
+	// userCustomOAuth2 tracks handler names explicitly owned by config.yaml.
+	lowerCustomOAuth2 []CustomOAuth2Config
+	userCustomOAuth2  map[string]struct{}
 }
 
 // NewManager creates a new configuration manager.
@@ -98,6 +105,7 @@ func NewManager(configPath string, opts ...ManagerOption) *Manager {
 
 	v := viper.New()
 	v.SetConfigType(DefaultConfigFileType)
+	v.SetConfigPermissions(0o600)
 	v.SetEnvPrefix(m.envPrefix)
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
@@ -139,9 +147,12 @@ func (m *Manager) Load() (*Config, error) {
 		return nil, err
 	}
 
-	// Capture the user config file's own values (no defaults, base, config.d, or
-	// env) so Save can distinguish user-owned keys from drop-in values.
+	// Capture lower-layer auth.customOAuth2 entries (WithBaseConfig + config.d)
+	// before merging config.yaml, and capture the user config file's own values
+	// so Save can avoid baking lower-layer entries into config.yaml.
+	m.lowerCustomOAuth2 = extractViperCustomOAuth2(m.v)
 	m.userSettings = readUserSettings(configPath)
+	m.userCustomOAuth2 = extractUserCustomOAuth2Names(m.userSettings)
 
 	// Read user config file (not an error if it doesn't exist).
 	// MergeInConfig is used unconditionally so that when a base config layer
@@ -167,9 +178,10 @@ func (m *Manager) Load() (*Config, error) {
 	// handler entries and profile keys that were lost during unmarshal.
 	restoreAuthProfileEntries(m.v, &cfg)
 
-	// Viper replaces arrays entirely when merging config files, so default
-	// catalog entries may be lost when a base config or user config supplies
-	// its own catalogs list. Re-add any missing default catalogs by name.
+	// Viper replaces arrays entirely when merging config files, so lower-layer
+	// customOAuth2 entries (WithBaseConfig / config.d) and default catalogs
+	// would otherwise be lost when config.yaml supplies its own slice.
+	mergeLowerLayerCustomOAuth2(&cfg, m.lowerCustomOAuth2, m.userSettings)
 	mergeDefaultCatalogEntries(&cfg)
 
 	// Validate configuration
@@ -178,6 +190,7 @@ func (m *Manager) Load() (*Config, error) {
 	}
 
 	m.config = &cfg
+	m.syncEffectiveCustomOAuth2OnLoad()
 	return &cfg, nil
 }
 
@@ -601,7 +614,7 @@ func restoreAuthProfileEntries(v *viper.Viper, cfg *Config) {
 }
 
 // Save saves the current configuration to file.
-// It syncs m.config to viper before writing, then uses viper's WriteConfig.
+// It syncs m.config to viper before atomically writing the configuration file.
 // This allows both direct config modification AND Set() calls to be persisted.
 //
 // The configuration is validated first and refused if it would fail Load:
@@ -632,6 +645,8 @@ func (m *Manager) Save() error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	hadCustomOAuth2 := m.v.IsSet("auth.customOAuth2")
+
 	// Sync m.config to viper. This allows direct modifications to cfg.Settings
 	// or cfg.Catalogs to be persisted. For individual key changes, use Set() first.
 	m.v.Set("version", m.config.Version)
@@ -643,9 +658,10 @@ func (m *Manager) Save() error {
 	m.v.Set("cel", m.config.CEL)
 	m.v.Set("resolver", m.config.Resolver)
 	m.v.Set("action", m.config.Action)
-	m.v.Set("auth", m.config.Auth)
+	m.v.Set("auth", m.persistedAuthConfig())
 	m.v.Set("kube", m.config.Kube)
 	m.v.Set("build", m.config.Build)
+	defer m.restoreEffectiveAuthToViper(hadCustomOAuth2)
 
 	return m.writeConfig(m.v, "")
 }
@@ -668,6 +684,8 @@ func (m *Manager) SaveAs(path string) error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	hadCustomOAuth2 := m.v.IsSet("auth.customOAuth2")
+
 	// Update viper with current config
 	m.v.Set("version", m.config.Version)
 	m.v.Set("catalogs", m.config.Catalogs)
@@ -678,9 +696,10 @@ func (m *Manager) SaveAs(path string) error {
 	m.v.Set("cel", m.config.CEL)
 	m.v.Set("resolver", m.config.Resolver)
 	m.v.Set("action", m.config.Action)
-	m.v.Set("auth", m.config.Auth)
+	m.v.Set("auth", m.persistedAuthConfig())
 	m.v.Set("kube", m.config.Kube)
 	m.v.Set("build", m.config.Build)
+	defer m.restoreEffectiveAuthToViper(hadCustomOAuth2)
 
 	return m.writeConfig(m.v, path)
 }
@@ -688,19 +707,37 @@ func (m *Manager) SaveAs(path string) error {
 // writeConfig persists the configuration, pruning any values that came solely
 // from the config.d drop-in layer so they are not baked into the user's config
 // file (which would defeat config.d layering). When path is empty the manager's
-// current config file is used. With no drop-in layer present it writes v
-// directly, preserving the original output byte-for-byte.
+// current config file is used. Writes go to a private 0600 temporary file in
+// the target directory and atomically replace the destination.
 func (m *Manager) writeConfig(v *viper.Viper, path string) error {
+	target := path
+	if target == "" {
+		target = v.ConfigFileUsed()
+	}
+	if target == "" {
+		return fmt.Errorf("no config file path available for save")
+	}
+
 	if len(m.dropIn) == 0 {
-		if path == "" {
-			return v.WriteConfig()
+		var buf bytes.Buffer
+		if err := writeViperConfigToBuffer(v, target, &buf); err != nil {
+			return err
 		}
-		return v.WriteConfigAs(path)
+		if err := writePrivateConfigFileAtomic(target, buf.Bytes()); err != nil {
+			return fmt.Errorf("failed to write config file %s: %w", target, err)
+		}
+		if path == "" {
+			m.userSettings = readUserSettings(target)
+			m.userCustomOAuth2 = extractUserCustomOAuth2Names(m.userSettings)
+		}
+		return nil
 	}
 
 	// Normalize the effective config to documented (yaml-tag) casing so it can
 	// be compared against the fragment/user maps, then drop pure drop-in values.
-	effBytes, err := yaml.Marshal(m.config)
+	cfgForSave := *m.config
+	cfgForSave.Auth = m.persistedAuthConfig()
+	effBytes, err := yaml.Marshal(&cfgForSave)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config for save: %w", err)
 	}
@@ -709,23 +746,297 @@ func (m *Manager) writeConfig(v *viper.Viper, path string) error {
 		return fmt.Errorf("failed to normalize config for save: %w", err)
 	}
 
-	pruned := pruneDropIn(effMap, m.dropIn, m.userSettings)
+	userForPrune := userSettingsWithPersistedAuth(m.userSettings, effMap, len(cfgForSave.Auth.CustomOAuth2) > 0)
+	pruned := pruneDropIn(effMap, m.dropIn, userForPrune)
 	outBytes, err := yaml.Marshal(pruned)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config for save: %w", err)
 	}
 
-	target := path
-	if target == "" {
-		target = v.ConfigFileUsed()
+	if err := writePrivateConfigFileAtomic(target, outBytes); err != nil {
+		return fmt.Errorf("failed to write config file %s: %w", target, err)
 	}
+	if path == "" {
+		m.userSettings = pruned
+		m.userCustomOAuth2 = extractUserCustomOAuth2Names(pruned)
+	}
+	return nil
+}
+
+func writeViperConfigToBuffer(v *viper.Viper, target string, buf *bytes.Buffer) error {
+	configType := DefaultConfigFileType
+	if ext := filepath.Ext(target); ext != "" && ext != filepath.Base(target) {
+		configType = strings.ToLower(ext[1:])
+	}
+	v.SetConfigType(configType)
+	defer v.SetConfigType(DefaultConfigFileType)
+	return v.WriteConfigTo(buf)
+}
+
+func writePrivateConfigFileAtomic(target string, data []byte) error {
 	if target == "" {
 		return fmt.Errorf("no config file path available for save")
 	}
-	if err := os.WriteFile(target, outBytes, 0o600); err != nil {
-		return fmt.Errorf("failed to write config file %s: %w", target, err)
+	return fs.WriteFileAtomic(target, data, 0o600)
+}
+
+func userSettingsWithPersistedAuth(userSettings, effMap map[string]any, hasPersistedCustomOAuth2 bool) map[string]any {
+	out := make(map[string]any, len(userSettings)+1)
+	var origAuth map[string]any
+	for k, v := range userSettings {
+		if strings.EqualFold(k, "auth") {
+			origAuth, _ = v.(map[string]any)
+			continue
+		}
+		out[k] = v
 	}
-	return nil
+
+	authCopy := make(map[string]any, len(origAuth)+1)
+	for k, v := range origAuth {
+		if !strings.EqualFold(k, "customOAuth2") {
+			authCopy[k] = v
+		}
+	}
+
+	if hasPersistedCustomOAuth2 {
+		if effAuth, ok := effMap["auth"].(map[string]any); ok {
+			if customSlice, exists := effAuth["customOAuth2"]; exists {
+				authCopy["customOAuth2"] = customSlice
+			}
+		}
+	}
+
+	if len(authCopy) > 0 {
+		out["auth"] = authCopy
+	}
+	return out
+}
+
+func extractViperCustomOAuth2(v *viper.Viper) []CustomOAuth2Config {
+	if v == nil || !v.IsSet("auth.customOAuth2") {
+		return nil
+	}
+	var holder struct {
+		Auth struct {
+			CustomOAuth2 []CustomOAuth2Config `mapstructure:"customOAuth2"`
+		} `mapstructure:"auth"`
+	}
+	if err := v.Unmarshal(&holder); err != nil || len(holder.Auth.CustomOAuth2) == 0 {
+		return nil
+	}
+	return holder.Auth.CustomOAuth2
+}
+
+func extractUserCustomOAuth2Names(userSettings map[string]any) map[string]struct{} {
+	rawList, hasKey := lookupUserCustomOAuth2Slice(userSettings)
+	if !hasKey {
+		return nil
+	}
+	names := make(map[string]struct{}, len(rawList))
+	for _, elem := range rawList {
+		m, ok := elem.(map[string]any)
+		if !ok {
+			continue
+		}
+		for k, val := range m {
+			if strings.EqualFold(k, "name") {
+				if s, ok := val.(string); ok && s != "" {
+					names[s] = struct{}{}
+				}
+			}
+		}
+	}
+	return names
+}
+
+func lookupUserCustomOAuth2Slice(userSettings map[string]any) ([]any, bool) {
+	if len(userSettings) == 0 {
+		return nil, false
+	}
+	var authMap map[string]any
+	for k, v := range userSettings {
+		if strings.EqualFold(k, "auth") {
+			authMap, _ = v.(map[string]any)
+			break
+		}
+	}
+	if len(authMap) == 0 {
+		return nil, false
+	}
+	for k, v := range authMap {
+		if strings.EqualFold(k, "customOAuth2") {
+			slice, _ := v.([]any)
+			return slice, true
+		}
+	}
+	return nil, false
+}
+
+func mergeLowerLayerCustomOAuth2(cfg *Config, lower []CustomOAuth2Config, userSettings map[string]any) {
+	if cfg == nil || len(lower) == 0 {
+		return
+	}
+	if _, userHasCustomOAuth2 := lookupUserCustomOAuth2Slice(userSettings); !userHasCustomOAuth2 {
+		return
+	}
+
+	userByName := make(map[string]CustomOAuth2Config, len(cfg.Auth.CustomOAuth2))
+	for _, u := range cfg.Auth.CustomOAuth2 {
+		userByName[u.Name] = u
+	}
+
+	merged := make([]CustomOAuth2Config, 0, len(lower)+len(cfg.Auth.CustomOAuth2))
+	seenLower := make(map[string]struct{}, len(lower))
+	for _, lc := range lower {
+		seenLower[lc.Name] = struct{}{}
+		if override, ok := userByName[lc.Name]; ok {
+			merged = append(merged, override)
+		} else {
+			merged = append(merged, lc)
+		}
+	}
+	for _, u := range cfg.Auth.CustomOAuth2 {
+		if _, inLower := seenLower[u.Name]; !inLower {
+			merged = append(merged, u)
+		}
+	}
+	cfg.Auth.CustomOAuth2 = merged
+}
+
+// IsLowerLayerCustomOAuth2 reports whether name is defined in WithBaseConfig or config.d.
+func (m *Manager) IsLowerLayerCustomOAuth2(name string) bool {
+	_, ok := m.LowerLayerCustomOAuth2(name)
+	return ok
+}
+
+// LowerLayerCustomOAuth2 returns the lower-layer CustomOAuth2Config for name, if any.
+func (m *Manager) LowerLayerCustomOAuth2(name string) (CustomOAuth2Config, bool) {
+	for _, lc := range m.lowerCustomOAuth2 {
+		if lc.Name == name {
+			return lc, true
+		}
+	}
+	return CustomOAuth2Config{}, false
+}
+
+// IsUserCustomOAuth2 reports whether name is owned by the user's config.yaml.
+func (m *Manager) IsUserCustomOAuth2(name string) bool {
+	if m.userCustomOAuth2 == nil {
+		return false
+	}
+	_, ok := m.userCustomOAuth2[name]
+	return ok
+}
+
+// MarkUserCustomOAuth2 marks name as explicitly persisted in the user's config.yaml.
+func (m *Manager) MarkUserCustomOAuth2(name string) {
+	if name == "" {
+		return
+	}
+	if m.userCustomOAuth2 == nil {
+		m.userCustomOAuth2 = make(map[string]struct{})
+	}
+	m.userCustomOAuth2[name] = struct{}{}
+}
+
+// UnmarkUserCustomOAuth2 removes name from the set of user-owned customOAuth2 entries.
+func (m *Manager) UnmarkUserCustomOAuth2(name string) {
+	if m.userCustomOAuth2 != nil {
+		delete(m.userCustomOAuth2, name)
+	}
+}
+
+func (m *Manager) persistedAuthConfig() GlobalAuthConfig {
+	authCfg := m.config.Auth
+	if len(m.lowerCustomOAuth2) == 0 || len(authCfg.CustomOAuth2) == 0 {
+		return authCfg
+	}
+
+	userSlice := make([]CustomOAuth2Config, 0, len(authCfg.CustomOAuth2))
+	for _, oc := range authCfg.CustomOAuth2 {
+		if m.IsUserCustomOAuth2(oc.Name) {
+			userSlice = append(userSlice, oc)
+			continue
+		}
+		if lc, inLower := m.LowerLayerCustomOAuth2(oc.Name); inLower && reflect.DeepEqual(oc, lc) {
+			continue
+		}
+		userSlice = append(userSlice, oc)
+	}
+	if len(userSlice) == 0 {
+		authCfg.CustomOAuth2 = nil
+	} else {
+		authCfg.CustomOAuth2 = userSlice
+	}
+	return authCfg
+}
+
+// syncEffectiveCustomOAuth2OnLoad merges the effective auth.customOAuth2 slice
+// into Viper's config map (without populating Viper's override map) so
+// Manager.Get("auth"), Manager.Get("auth.customOAuth2"), sibling auth.* keys,
+// and Manager.AllSettings() all stay consistent after Load().
+func (m *Manager) syncEffectiveCustomOAuth2OnLoad() {
+	if m == nil || m.v == nil || m.config == nil || len(m.config.Auth.CustomOAuth2) == 0 {
+		return
+	}
+	rawBytes, err := yaml.Marshal(m.config.Auth.CustomOAuth2) //nolint:gosec // G117: in-memory normalization to match Viper's YAML map representation
+	if err != nil {
+		return
+	}
+	var rawSlice []any
+	if err := yaml.Unmarshal(rawBytes, &rawSlice); err != nil {
+		return
+	}
+	_ = m.v.MergeConfigMap(map[string]any{
+		"auth": map[string]any{
+			"customoauth2": lowercaseMapKeys(rawSlice),
+		},
+	})
+}
+
+// restoreEffectiveAuthToViper restores the full effective m.config.Auth map into
+// Viper after Save() or SaveAs() temporarily wrote persistedAuthConfig() to
+// disk, preserving sibling auth.* keys and lower-layer customOAuth2 entries for
+// subsequent Manager.Get and Manager.AllSettings calls.
+func (m *Manager) restoreEffectiveAuthToViper(hadCustomOAuth2 bool) {
+	if m == nil || m.v == nil || m.config == nil {
+		return
+	}
+	rawBytes, err := yaml.Marshal(&m.config.Auth) //nolint:gosec // G117: in-memory normalization to match Viper's YAML map representation
+	if err != nil {
+		return
+	}
+	var authMap map[string]any
+	if err := yaml.Unmarshal(rawBytes, &authMap); err != nil {
+		return
+	}
+	normalized, _ := lowercaseMapKeys(authMap).(map[string]any)
+	if normalized == nil {
+		normalized = map[string]any{}
+	}
+	if len(m.config.Auth.CustomOAuth2) == 0 && hadCustomOAuth2 {
+		normalized["customoauth2"] = []any{}
+	}
+	m.v.Set("auth", normalized)
+}
+
+func lowercaseMapKeys(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(val))
+		for k, elem := range val {
+			out[strings.ToLower(k)] = lowercaseMapKeys(elem)
+		}
+		return out
+	case []any:
+		out := make([]any, len(val))
+		for i, elem := range val {
+			out[i] = lowercaseMapKeys(elem)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // pruneDropIn returns a copy of effective with keys whose values came solely
@@ -946,7 +1257,7 @@ func (m *Manager) Delete(key string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("marshaling config: %w", err)
 	}
-	if err := os.WriteFile(configPath, out, 0o600); err != nil { //nolint:gosec // config file permissions
+	if err := writePrivateConfigFileAtomic(configPath, out); err != nil {
 		return false, fmt.Errorf("writing config file: %w", err)
 	}
 	return true, nil
