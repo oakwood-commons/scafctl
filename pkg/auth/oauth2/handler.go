@@ -157,6 +157,7 @@ type Handler struct {
 	logger                logr.Logger
 	secretKeyPrefix       string
 	binaryName            string
+	customConfigSource    bool
 	pageRenderer          authpage.Renderer
 	openBrowser           func(context.Context, string) error
 
@@ -243,6 +244,18 @@ func WithBinaryName(name string) Option {
 // authpage.DefaultRenderer is used.
 func WithAuthPageRenderer(r authpage.Renderer) Option {
 	return func(h *Handler) { h.pageRenderer = r }
+}
+
+// WithCustomConfigSource marks the handler as originating from user or
+// application configuration (auth.customOAuth2) rather than an embedder's
+// compiled-in BuiltinAuthHandlers slice.
+func WithCustomConfigSource() Option {
+	return func(h *Handler) { h.customConfigSource = true }
+}
+
+// IsCustomConfig reports whether this handler was registered from auth.customOAuth2.
+func (h *Handler) IsCustomConfig() bool {
+	return h != nil && h.customConfigSource
 }
 
 // New creates a new generic OAuth2 auth handler from a CustomOAuth2Config.
@@ -4062,8 +4075,32 @@ func ValidateConfigFor(cfg config.CustomOAuth2Config, binaryNames ...string) err
 		return fmt.Errorf("custom OAuth2 handler %q: callbackPort must be 0 (random) or 1024-65535, got %d", cfg.Name, cfg.CallbackPort)
 	}
 
+	if cfg.DeviceCodePollInterval < 0 || cfg.DeviceCodePollInterval > config.MaxDeviceCodePollInterval {
+		return fmt.Errorf("custom OAuth2 handler %q: deviceCodePollInterval must be between 0 and %d, got %d", cfg.Name, config.MaxDeviceCodePollInterval, cfg.DeviceCodePollInterval)
+	}
+
 	if cfg.CallbackHost != "" || cfg.CallbackPath != "" {
 		if err := oauth.ValidateCallbackHostPath(cfg.CallbackHost, cfg.CallbackPath); err != nil {
+			return fmt.Errorf("custom OAuth2 handler %q: %w", cfg.Name, err)
+		}
+	}
+
+	for _, ep := range []struct {
+		field string
+		raw   string
+	}{
+		{field: "authorizeURL", raw: cfg.AuthorizeURL},
+		{field: "tokenURL", raw: cfg.TokenURL},
+		{field: "deviceAuthURL", raw: cfg.DeviceAuthURL},
+		{field: "verifyURL", raw: cfg.VerifyURL},
+	} {
+		if err := validateOAuth2EndpointURL(ep.field, ep.raw); err != nil {
+			return fmt.Errorf("custom OAuth2 handler %q: %w", cfg.Name, err)
+		}
+	}
+
+	if cfg.DynamicClientRegistration != nil {
+		if err := validateOAuth2EndpointURL("dynamicClientRegistration.registrationEndpoint", cfg.DynamicClientRegistration.RegistrationEndpoint); err != nil {
 			return fmt.Errorf("custom OAuth2 handler %q: %w", cfg.Name, err)
 		}
 	}
@@ -4071,6 +4108,9 @@ func ValidateConfigFor(cfg config.CustomOAuth2Config, binaryNames ...string) err
 	if cfg.TokenExchange != nil {
 		if cfg.TokenExchange.URL == "" {
 			return fmt.Errorf("custom OAuth2 handler %q: tokenExchange.url is required", cfg.Name)
+		}
+		if err := validateOAuth2EndpointURL("tokenExchange.url", cfg.TokenExchange.URL); err != nil {
+			return fmt.Errorf("custom OAuth2 handler %q: %w", cfg.Name, err)
 		}
 		if cfg.TokenExchange.TokenJSONPath == "" {
 			return fmt.Errorf("custom OAuth2 handler %q: tokenExchange.tokenJSONPath is required", cfg.Name)
@@ -4084,5 +4124,16 @@ func ValidateConfigFor(cfg config.CustomOAuth2Config, binaryNames ...string) err
 		}
 	}
 
+	return nil
+}
+
+func validateOAuth2EndpointURL(field, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("%s must be a valid http:// or https:// URL, got %q", field, raw)
+	}
 	return nil
 }

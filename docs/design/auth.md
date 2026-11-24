@@ -649,6 +649,8 @@ scafctl supports user-defined OAuth2 auth handlers for any OAuth2-compliant serv
 
 ### Configuration
 
+Custom OAuth2 entries can be managed via `scafctl auth oauth2 add|remove|list` (supporting flag-based setup, `--client-secret-stdin` encrypted secret storage, and `--from-file` for nested `tokenExchange` / `dynamicClientRegistration` blocks) or written directly under `auth.customOAuth2[]` in `config.yaml`:
+
 ```yaml
 auth:
   customOAuth2:
@@ -678,7 +680,7 @@ auth:
 
 ### Registration
 
-Custom handlers are registered at startup from config. Name conflicts with built-in handlers (`github`, `entra`, `gcp`) are rejected. Each handler creates its own token cache under `scafctl.auth.oauth2.<name>.token.*` in the secrets store.
+Custom handlers are registered at startup from config and report `source: custom-oauth2` in `scafctl auth handlers` and `scafctl auth diagnose`. Name conflicts with built-in, official (`github`, `entra`, `gcp`, `openshift`), or plugin-pinned handlers are rejected dynamically. Each handler creates its own token cache under `scafctl.auth.oauth2.<name>.token.*` in the secrets store.
 
 ### Registry Auto-Detection
 

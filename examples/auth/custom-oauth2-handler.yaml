@@ -1,0 +1,25 @@
+# Standalone custom OAuth2 handler definition for:
+#   scafctl auth oauth2 add --from-file examples/auth/custom-oauth2-handler.yaml
+#
+# Unlike config.yaml, a --from-file definition is a single CustomOAuth2Config
+# object (no outer 'auth.customOAuth2' wrapper).
+
+name: custom-ar
+displayName: "Custom Artifact Registry"
+tokenURL: "https://idp.example.com/oauth2/token"
+clientID: "ar-client"
+clientSecret: "secret://ar-client-secret"
+defaultFlow: client_credentials
+scopes:
+  - "registry:catalog:*"
+registry: "us-docker.pkg.dev"
+registryUsername: "oauth2accesstoken"
+verifyURL: "https://idp.example.com/oauth2/userinfo"
+identityFields:
+  username: "preferred_username"
+  email: "email"
+  name: "name"
+tokenExchange:
+  url: "https://us-docker.pkg.dev/v2/token?service=us-docker.pkg.dev"
+  method: GET
+  tokenJSONPath: "token"

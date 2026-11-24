@@ -362,10 +362,40 @@ scafctl auth login openshift
 Pin the artifact and declare trust via `auth.handlers.<name>` -- see
 [third-party-handler-config.yaml](third-party-handler-config.yaml).
 
+### Custom OAuth2 Handlers (`auth.customOAuth2`)
+
+Manage generic OAuth2 handlers in `config.yaml` directly from the CLI:
+
+```bash
+# Add via flags (use SecretRef URIs or --client-secret-stdin for secrets)
+scafctl auth oauth2 add quay \
+  --display-name "Quay.io" \
+  --authorize-url https://quay.io/oauth/authorize \
+  --client-id your-quay-app-client-id \
+  --default-flow interactive \
+  --response-type token \
+  --callback-port 8400 \
+  --registry quay.io \
+  --registry-username '$oauthtoken'
+
+# Or add from a single-handler YAML definition file
+scafctl auth oauth2 add --from-file examples/auth/custom-oauth2-handler.yaml
+
+# List and remove custom OAuth2 handlers
+scafctl auth oauth2 list
+scafctl auth oauth2 remove quay
+```
+
+See [custom-oauth2-config.md](custom-oauth2-config.md) for interactive,
+`device_code`, `client_credentials`, `workload_identity`, `pat`, token exchange,
+and Dynamic Client Registration examples.
+
 ---
 
 ## Related
 
+- [Custom OAuth2 handler examples](custom-oauth2-config.md) -- Quay.io, GitLab, Harbor, workload identity, and CLI setup
+- [Custom OAuth2 `--from-file` template](custom-oauth2-handler.yaml) -- standalone handler definition for `scafctl auth oauth2 add --from-file`
 - [Auth Tutorial](../../docs/tutorials/auth-tutorial.md) -- full walkthrough
 - [kubectl Exec Credential](kubectl-exec-credential.md) -- use scafctl as a Kubernetes credential plugin
 - [Kubernetes login / logout](kube-login.md) -- automate kubeconfig setup with `scafctl kube login`

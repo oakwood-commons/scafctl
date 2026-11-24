@@ -471,6 +471,7 @@ shown as `(not present)`.
 | `auth.github.hostname` | string | `github.com` | GitHub hostname (or GHES hostname) |
 | `auth.github.clientId` | string | built-in | OAuth App client ID |
 | `auth.github.defaultScopes` | []string | `[gist, read:org, repo, workflow]` | Default OAuth scopes |
+| `auth.customOAuth2` | []object | `[]` | User-defined OAuth2 auth handlers (`interactive`, `device_code`, `workload_identity`, `client_credentials`, `pat`, `tokenExchange`, `dynamicClientRegistration`); managed via `scafctl auth oauth2 add\|remove\|list` |
 | `auth.handlers.<name>.plugin.ref` | string | handler name | Catalog artifact name for a pinned third-party auth handler |
 | `auth.handlers.<name>.plugin.version` | string | `latest` | Version constraint for a pinned third-party auth handler |
 | `auth.handlers.<name>.trustedVerificationDomains` | []string | -- | Per-handler trusted device-code verification domains (required trust source for third-party handlers) |

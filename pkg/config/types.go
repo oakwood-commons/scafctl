@@ -1239,6 +1239,31 @@ type APITracingConfig struct {
 	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable OpenTelemetry tracing"`
 }
 
+// Custom OAuth2 configuration limits matching struct validation tags.
+const (
+	// MaxCustomOAuth2Handlers is the maximum number of custom OAuth2 handler entries allowed in config.
+	MaxCustomOAuth2Handlers = 20
+
+	// MaxCustomOAuth2NameLength is the maximum length of a custom OAuth2 handler name.
+	MaxCustomOAuth2NameLength = 64
+
+	// MaxDeviceCodePollInterval is the maximum polling interval in seconds for device_code flow.
+	MaxDeviceCodePollInterval = 30
+)
+
+// GetCustomOAuth2 returns a custom OAuth2 handler configuration by name.
+func (c *Config) GetCustomOAuth2(name string) (*CustomOAuth2Config, bool) {
+	if c == nil {
+		return nil, false
+	}
+	for i := range c.Auth.CustomOAuth2 {
+		if c.Auth.CustomOAuth2[i].Name == name {
+			return &c.Auth.CustomOAuth2[i], true
+		}
+	}
+	return nil, false
+}
+
 // Workload identity grant type constants for CustomOAuth2Config.WorkloadIdentityGrantType.
 const (
 	// WorkloadIdentityGrantClientCredentials exchanges the federated JWT via

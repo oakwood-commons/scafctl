@@ -1462,6 +1462,165 @@ func TestIsStructuredFormat_TOML(t *testing.T) {
 	assert.True(t, IsStructuredFormat(OutputFormatTOML))
 }
 
+func TestOutputOptions_Write_TypedStructSlice_CSV_TOML_Expression(t *testing.T) {
+	t.Parallel()
+
+	type row struct {
+		Name        string `json:"name" yaml:"name"`
+		DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty"`
+		Secret      string `json:"secret,omitempty" yaml:"secret,omitempty"`
+	}
+	rows := []row{
+		{Name: "quay", DisplayName: "Quay.io", Secret: "***REDACTED***"},
+	}
+
+	t.Run("CSV uses json tag headers instead of fmt.Sprintf dump", func(t *testing.T) {
+		t.Parallel()
+		out := &bytes.Buffer{}
+		opts := NewOutputOptions(&terminal.IOStreams{Out: out})
+		opts.Format = OutputFormatCSV
+		require.NoError(t, opts.Write(rows))
+		assert.Contains(t, out.String(), "displayName,name,secret\n")
+		assert.Contains(t, out.String(), "Quay.io,quay,***REDACTED***\n")
+	})
+
+	t.Run("CSV empty typed slice emits empty output", func(t *testing.T) {
+		t.Parallel()
+		out := &bytes.Buffer{}
+		opts := NewOutputOptions(&terminal.IOStreams{Out: out})
+		opts.Format = OutputFormatCSV
+		require.NoError(t, opts.Write([]row{}))
+		assert.Empty(t, out.String())
+	})
+
+	t.Run("TOML uses json tag keys and honors omitempty", func(t *testing.T) {
+		t.Parallel()
+		out := &bytes.Buffer{}
+		opts := NewOutputOptions(&terminal.IOStreams{Out: out})
+		opts.Format = OutputFormatTOML
+		require.NoError(t, opts.Write([]row{{Name: "quay"}}))
+		assert.Contains(t, out.String(), "name = 'quay'")
+		assert.NotContains(t, out.String(), "DisplayName")
+		assert.NotContains(t, out.String(), "Secret")
+	})
+
+	t.Run("JSON with CEL expression evaluates over typed struct slice", func(t *testing.T) {
+		t.Parallel()
+		out := &bytes.Buffer{}
+		opts := NewOutputOptions(&terminal.IOStreams{Out: out})
+		opts.Format = OutputFormatJSON
+		opts.Expression = "_[0].displayName"
+		require.NoError(t, opts.Write(rows))
+		assert.Equal(t, "\"Quay.io\"\n", out.String())
+	})
+
+	t.Run("preserves integral-valued float64/float32 and int64 numeric kinds for CEL and TOML", func(t *testing.T) {
+		t.Parallel()
+		type embeddedMetrics struct {
+			Weight float32 `json:"weight"`
+		}
+		type metricRow struct {
+			embeddedMetrics
+			Name  string  `json:"name"`
+			Ratio float64 `json:"ratio"`
+			Count int64   `json:"count"`
+			Port  uint16  `json:"port"`
+		}
+		items := []metricRow{
+			{
+				embeddedMetrics: embeddedMetrics{Weight: 2.0},
+				Name:            "alpha",
+				Ratio:           1.0,
+				Count:           42,
+				Port:            8400,
+			},
+			{
+				embeddedMetrics: embeddedMetrics{Weight: 2.5},
+				Name:            "beta",
+				Ratio:           1.5,
+				Count:           100,
+				Port:            8443,
+			},
+		}
+
+		normalized, err := normalizeForStructured(items)
+		require.NoError(t, err)
+		normSlice, ok := normalized.([]any)
+		require.True(t, ok)
+		require.Len(t, normSlice, 2)
+		firstMap, ok := normSlice[0].(map[string]any)
+		require.True(t, ok)
+		assert.IsType(t, float64(0), firstMap["ratio"], "integral-valued float64(1.0) must remain float64")
+		assert.IsType(t, float64(0), firstMap["weight"], "integral-valued float32(2.0) must normalize to float64")
+		assert.IsType(t, int64(0), firstMap["count"], "int64 field must remain int64")
+		assert.IsType(t, int64(0), firstMap["port"], "uint16 field must normalize to int64")
+
+		// CEL float arithmetic on integral-valued float64(1.0) must succeed.
+		floatOut := &bytes.Buffer{}
+		floatOpts := NewOutputOptions(&terminal.IOStreams{Out: floatOut})
+		floatOpts.Format = OutputFormatJSON
+		floatOpts.Expression = "_[0].ratio + 0.5"
+		require.NoError(t, floatOpts.Write(items))
+		assert.Equal(t, "1.5\n", floatOut.String())
+
+		// CEL int64 arithmetic on int64 field must succeed.
+		intOut := &bytes.Buffer{}
+		intOpts := NewOutputOptions(&terminal.IOStreams{Out: intOut})
+		intOpts.Format = OutputFormatJSON
+		intOpts.Expression = "_[0].count + 8"
+		require.NoError(t, intOpts.Write(items))
+		assert.Equal(t, "50\n", intOut.String())
+
+		// TOML serialization keeps consistent numeric types across integral and fractional float rows.
+		tomlOut := &bytes.Buffer{}
+		tomlOpts := NewOutputOptions(&terminal.IOStreams{Out: tomlOut})
+		tomlOpts.Format = OutputFormatTOML
+		require.NoError(t, tomlOpts.Write(items))
+		assert.Contains(t, tomlOut.String(), "count = 42")
+		assert.Contains(t, tomlOut.String(), "ratio = 1.0")
+		assert.Contains(t, tomlOut.String(), "ratio = 1.5")
+
+		// Competing promoted fields across embedded depths and tag precedence:
+		// First{Deep{Ratio float64 `json:"ratio"`}} (depth 2) vs Second{Ratio int64 `json:"ratio"`} (depth 1),
+		// plus untagged vs tagged at the same depth (UntaggedVal float64 vs TaggedVal int64 `json:"UntaggedVal"`).
+		type deepFloat struct {
+			Ratio float64 `json:"ratio"`
+		}
+		type firstEmbed struct {
+			deepFloat
+			UntaggedVal float64
+		}
+		type secondEmbed struct {
+			Ratio     int64 `json:"ratio"`
+			TaggedVal int64 `json:"UntaggedVal"`
+		}
+		type competingRow struct {
+			firstEmbed
+			secondEmbed
+		}
+		competing := []competingRow{
+			{
+				firstEmbed:  firstEmbed{deepFloat: deepFloat{Ratio: 1.0}, UntaggedVal: 2.0},
+				secondEmbed: secondEmbed{Ratio: 42, TaggedVal: 99},
+			},
+		}
+
+		compOut := &bytes.Buffer{}
+		compOpts := NewOutputOptions(&terminal.IOStreams{Out: compOut})
+		compOpts.Format = OutputFormatJSON
+		compOpts.Expression = "_[0].ratio + 8"
+		require.NoError(t, compOpts.Write(competing))
+		assert.Equal(t, "50\n", compOut.String(), "shallower embedded int64 field must win over deeper embedded float64 field")
+
+		tagOut := &bytes.Buffer{}
+		tagOpts := NewOutputOptions(&terminal.IOStreams{Out: tagOut})
+		tagOpts.Format = OutputFormatJSON
+		tagOpts.Expression = "_[0].UntaggedVal + 1"
+		require.NoError(t, tagOpts.Write(competing))
+		assert.Equal(t, "100\n", tagOut.String(), "tagged embedded int64 field must win over untagged float64 field at the same depth")
+	})
+}
+
 func BenchmarkOutputOptions_Write_CSV(b *testing.B) {
 	data := []map[string]any{
 		{"name": "alice", "age": 30, "role": "admin"},

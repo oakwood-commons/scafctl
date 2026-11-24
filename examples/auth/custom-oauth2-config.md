@@ -3,6 +3,77 @@
 These examples show how to configure custom OAuth2 auth handlers for
 registries and OAuth2 services that don't have built-in support.
 
+## Managing Handlers from the CLI (`scafctl auth oauth2`)
+
+You can add, inspect, and remove `auth.customOAuth2[]` entries directly from
+the CLI without editing `config.yaml` by hand:
+
+```bash
+# Add an interactive OAuth2 handler via CLI flags
+scafctl auth oauth2 add quay \
+  --display-name "Quay.io" \
+  --authorize-url https://quay.io/oauth/authorize \
+  --client-id your-quay-app-client-id \
+  --default-flow interactive \
+  --response-type token \
+  --callback-port 8400 \
+  --scopes repo:read \
+  --registry quay.io \
+  --registry-username '$oauthtoken'
+
+# Add a client_credentials handler reading the secret from stdin
+# (stored encrypted as secret://ci-service-client-secret)
+printf '%s' "$CLIENT_SECRET" | scafctl auth oauth2 add ci-service \
+  --display-name "CI Service" \
+  --token-url https://idp.example.com/oauth2/token \
+  --client-id ci-client \
+  --default-flow client_credentials \
+  --client-secret-stdin
+
+# Load a handler with nested blocks (tokenExchange, dynamicClientRegistration, identityFields)
+scafctl auth oauth2 add --from-file examples/auth/custom-oauth2-handler.yaml
+
+# Update an existing custom OAuth2 entry in place
+scafctl auth oauth2 add quay --from-file ./quay.yaml --force
+
+# List configured custom OAuth2 handlers (secrets are redacted)
+scafctl auth oauth2 list
+scafctl auth oauth2 list -i
+scafctl auth oauth2 list -o json
+
+# Inspect all registered handlers (custom entries report source: custom-oauth2)
+scafctl auth handlers
+
+# Remove a custom OAuth2 handler from config.yaml
+scafctl auth oauth2 remove ci-service
+```
+
+> [!NOTE]
+> Plaintext secrets are rejected on `--client-secret`, `--federated-token`, and
+> `--token` CLI flags so credentials never appear in process arguments or shell
+> history. Pass a `SecretRef` URI (`secret://`, `env://`, or `file://`) or pipe
+> a client secret via `--client-secret-stdin`.
+
+When using `--from-file`, the file contains a single handler object (not wrapped
+in `auth.customOAuth2` -- see [custom-oauth2-handler.yaml](custom-oauth2-handler.yaml)):
+
+```yaml
+name: custom-ar
+displayName: "Custom Artifact Registry"
+tokenURL: "https://idp.example.com/oauth2/token"
+clientID: "ar-client"
+clientSecret: "secret://ar-client-secret"
+defaultFlow: client_credentials
+scopes:
+  - "registry:catalog:*"
+registry: "us-docker.pkg.dev"
+registryUsername: "oauth2accesstoken"
+tokenExchange:
+  url: "https://us-docker.pkg.dev/v2/token?service=us-docker.pkg.dev"
+  method: GET
+  tokenJSONPath: "token"
+```
+
 ## Quay.io (Robot Account -- Zero-Ceremony Static Token)
 
 For headless CI/CD pipelines or Kubernetes jobs using a pre-issued Quay robot

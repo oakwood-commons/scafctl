@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Custom OAuth2 Handlers",
+  "description": "Schema for configured custom OAuth2 authentication handlers with display extensions",
+  "type": "array",
+
+  "x-kvx-collectionTitle": "Custom OAuth2 Handlers",
+
+  "x-kvx-list": {
+    "titleField": "name",
+    "subtitleField": "displayName",
+    "subtitleMaxLines": 1,
+    "badgeFields": ["defaultFlow", "registry"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "name",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["name", "displayName", "defaultFlow", "responseType"],
+        "layout": "inline"
+      },
+      {
+        "title": "Endpoints",
+        "fields": ["authorizeURL", "tokenURL", "deviceAuthURL", "verifyURL"],
+        "layout": "table"
+      },
+      {
+        "title": "Credentials & Identity",
+        "fields": [
+          "clientID",
+          "clientSecret",
+          "federatedToken",
+          "federatedTokenFile",
+          "audience",
+          "workloadIdentityGrantType",
+          "subjectTokenType",
+          "token",
+          "username"
+        ],
+        "layout": "table"
+      },
+      {
+        "title": "Scopes",
+        "fields": ["scopes"],
+        "layout": "tags"
+      },
+      {
+        "title": "Callback & Flow Settings",
+        "fields": [
+          "callbackHost",
+          "callbackPort",
+          "callbackPath",
+          "deviceCodePollInterval",
+          "disablePKCE"
+        ],
+        "layout": "table"
+      },
+      {
+        "title": "OCI Registry",
+        "fields": ["registry", "registryUsername"],
+        "layout": "table"
+      },
+      {
+        "title": "Advanced",
+        "fields": ["identityFields", "tokenExchange", "dynamicClientRegistration"],
+        "layout": "table"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["name"],
+    "properties": {
+      "name": {
+        "type": "string",
+        "title": "Name",
+        "description": "Custom OAuth2 handler identifier",
+        "maxLength": 20,
+        "x-kvx-priority": 10
+      },
+      "displayName": {
+        "type": "string",
+        "title": "Display Name",
+        "description": "Human-readable handler name",
+        "maxLength": 24,
+        "x-kvx-priority": 8
+      },
+      "defaultFlow": {
+        "type": "string",
+        "title": "Default Flow",
+        "description": "Configured default OAuth2 authentication flow",
+        "maxLength": 18,
+        "x-kvx-priority": 9
+      },
+      "tokenURL": {
+        "type": "string",
+        "title": "Token URL",
+        "description": "OAuth2 token endpoint URL",
+        "x-kvx-priority": 7
+      },
+      "registry": {
+        "type": "string",
+        "title": "Registry",
+        "description": "Associated OCI container registry host",
+        "maxLength": 24,
+        "x-kvx-priority": 6
+      },
+      "authorizeURL": {
+        "type": "string",
+        "title": "Authorize URL",
+        "description": "OAuth2 authorization endpoint URL"
+      },
+      "deviceAuthURL": {
+        "type": "string",
+        "title": "Device Auth URL",
+        "description": "OAuth2 device authorization endpoint URL"
+      },
+      "clientID": {
+        "type": "string",
+        "title": "Client ID",
+        "description": "OAuth2 client identifier"
+      },
+      "clientSecret": {
+        "type": "string",
+        "title": "Client Secret",
+        "description": "OAuth2 client secret (redacted)"
+      },
+      "federatedToken": {
+        "type": "string",
+        "title": "Federated Token",
+        "description": "Workload identity federated token reference (redacted)"
+      },
+      "federatedTokenFile": {
+        "type": "string",
+        "title": "Federated Token File",
+        "description": "Path to projected workload identity token file"
+      },
+      "audience": {
+        "type": "string",
+        "title": "Audience",
+        "description": "Target audience for workload identity token exchange"
+      },
+      "workloadIdentityGrantType": {
+        "type": "string",
+        "title": "WIF Grant Type",
+        "description": "Workload identity OAuth2 grant type"
+      },
+      "subjectTokenType": {
+        "type": "string",
+        "title": "Subject Token Type",
+        "description": "RFC 8693 subject token type URI"
+      },
+      "token": {
+        "type": "string",
+        "title": "Token",
+        "description": "Static bearer or robot token reference (redacted)"
+      },
+      "username": {
+        "type": "string",
+        "title": "Username",
+        "description": "Static or robot account username"
+      },
+      "scopes": {
+        "type": "array",
+        "items": { "type": "string" },
+        "title": "Scopes",
+        "description": "Default OAuth2 scopes"
+      },
+      "callbackPort": {
+        "type": "integer",
+        "title": "Callback Port",
+        "description": "Local interactive callback port"
+      },
+      "callbackPath": {
+        "type": "string",
+        "title": "Callback Path",
+        "description": "Local interactive callback URL path"
+      },
+      "callbackHost": {
+        "type": "string",
+        "title": "Callback Host",
+        "description": "Local interactive callback host"
+      },
+      "deviceCodePollInterval": {
+        "type": "integer",
+        "title": "Poll Interval",
+        "description": "Device code polling interval in seconds"
+      },
+      "disablePKCE": {
+        "type": "boolean",
+        "title": "Disable PKCE",
+        "description": "Whether PKCE is disabled for interactive flow"
+      },
+      "responseType": {
+        "type": "string",
+        "title": "Response Type",
+        "description": "OAuth2 authorization response type"
+      },
+      "verifyURL": {
+        "type": "string",
+        "title": "Verify URL",
+        "description": "Token verification endpoint URL"
+      },
+      "identityFields": {
+        "type": "object",
+        "title": "Identity Fields",
+        "description": "Identity claim field mapping from verify endpoint"
+      },
+      "registryUsername": {
+        "type": "string",
+        "title": "Registry Username",
+        "description": "OCI registry username convention"
+      },
+      "tokenExchange": {
+        "type": "object",
+        "title": "Token Exchange",
+        "description": "Secondary API credential derivation settings"
+      },
+      "dynamicClientRegistration": {
+        "type": "object",
+        "title": "Dynamic Client Registration",
+        "description": "RFC 7591 Dynamic Client Registration settings"
+      }
+    }
+  }
+}

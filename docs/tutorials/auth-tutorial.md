@@ -3672,7 +3672,41 @@ If you can't connect to your GHES instance:
 
 ## Custom OAuth2 Handlers
 
-You can add OAuth2 handlers for any service by configuring them in your
+You can add OAuth2 handlers for any service using `scafctl auth oauth2` or by
+configuring `auth.customOAuth2` in `~/.config/scafctl/config.yaml`:
+
+```bash
+# Add a custom OAuth2 handler from the CLI
+scafctl auth oauth2 add quay \
+  --display-name "Quay.io" \
+  --authorize-url https://quay.io/oauth/authorize \
+  --client-id your-app-client-id \
+  --default-flow interactive \
+  --response-type token \
+  --callback-port 8400 \
+  --scopes repo:read \
+  --registry quay.io \
+  --registry-username '$oauthtoken'
+
+# Add a client_credentials handler reading the secret from stdin
+# (stored encrypted as secret://<name>-client-secret; raw secrets on CLI flags are rejected)
+printf '%s' "$CLIENT_SECRET" | scafctl auth oauth2 add my-api \
+  --token-url https://idp.example.com/oauth2/token \
+  --client-id api-client \
+  --default-flow client_credentials \
+  --client-secret-stdin
+
+# Or load a single-handler YAML definition (no outer 'auth.customOAuth2' wrapper;
+# see examples/auth/custom-oauth2-handler.yaml)
+scafctl auth oauth2 add --from-file examples/auth/custom-oauth2-handler.yaml
+
+# List or remove configured custom OAuth2 handlers (secrets are redacted)
+scafctl auth oauth2 list
+scafctl auth oauth2 list -o json
+scafctl auth oauth2 remove my-api
+```
+
+This writes the corresponding entry under `auth.customOAuth2` in
 `~/.config/scafctl/config.yaml`:
 
 ```yaml
@@ -3691,7 +3725,8 @@ auth:
       registryUsername: "$oauthtoken"
 ```
 
-Once configured, custom handlers work exactly like built-in handlers:
+Once configured, custom handlers appear with `source: custom-oauth2` in
+`scafctl auth handlers` and work identically to built-in handlers:
 
 ```bash
 # Login

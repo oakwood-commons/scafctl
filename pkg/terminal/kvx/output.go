@@ -4,6 +4,7 @@
 package kvx
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/oakwood-commons/kvx/pkg/core"
@@ -609,12 +611,15 @@ func (o *OutputOptions) writeStructured(data any) error {
 
 	// Apply expression filter if provided
 	if o.Expression != "" {
+		outputData, err = normalizeForStructured(outputData)
+		if err != nil {
+			return fmt.Errorf("failed to normalize data for expression evaluation: %w", err)
+		}
 		// Use context from options, or fall back to Background
 		ctx := o.Ctx
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		var err error
 		outputData, err = EvaluateExpression(ctx, o.Expression, outputData)
 		if err != nil {
 			return fmt.Errorf("expression evaluation failed: %w", err)
@@ -635,8 +640,16 @@ func (o *OutputOptions) writeStructured(data any) error {
 	case OutputFormatYAML:
 		return o.writeYAML(outputData)
 	case OutputFormatCSV:
+		outputData, err = normalizeForStructured(outputData)
+		if err != nil {
+			return fmt.Errorf("failed to normalize data for CSV output: %w", err)
+		}
 		return o.writeCSV(outputData)
 	case OutputFormatTOML:
+		outputData, err = normalizeForStructured(outputData)
+		if err != nil {
+			return fmt.Errorf("failed to normalize data for TOML output: %w", err)
+		}
 		return o.writeTOML(outputData)
 	case OutputFormatTable, OutputFormatAuto, OutputFormatList, OutputFormatTree, OutputFormatMermaid, OutputFormatText, OutputFormatQuiet, OutputFormatTest:
 		// These formats are handled upstream (writeKvx or command-level test generation),
@@ -776,6 +789,226 @@ func normalizeForText(data any) (any, error) {
 	}
 	// Struct or other type: round-trip through JSON.
 	return StructToMap(data)
+}
+
+// normalizeForStructured converts Go structs and typed struct slices into
+// generic JSON-tag-aligned map/slice values so CEL expressions, CSV headers,
+// and TOML serialization honor json tags and omitempty rules while preserving
+// original numeric kinds (float32/float64 as float64, int/int64 as int64).
+func normalizeForStructured(data any) (any, error) {
+	if isAlreadyNormalized(data) {
+		return data, nil
+	}
+	b, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal to JSON: %w", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var result any
+	if err := dec.Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal from JSON: %w", err)
+	}
+	return convertJSONNumbersWithTypes(result, reflect.ValueOf(data)), nil
+}
+
+func isAlreadyNormalized(v any) bool {
+	switch val := v.(type) {
+	case nil, string, bool, float64, int, int64:
+		return true
+	case map[string]any:
+		for _, elem := range val {
+			if !isAlreadyNormalized(elem) {
+				return false
+			}
+		}
+		return true
+	case []map[string]any:
+		for _, m := range val {
+			if !isAlreadyNormalized(m) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		for _, elem := range val {
+			if !isAlreadyNormalized(elem) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func unwrapReflectValue(v reflect.Value) reflect.Value {
+	for v.IsValid() && (v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface) {
+		if v.IsNil() {
+			return reflect.Value{}
+		}
+		v = v.Elem()
+	}
+	return v
+}
+
+func convertJSONNumbersWithTypes(v any, orig reflect.Value) any {
+	orig = unwrapReflectValue(orig)
+
+	switch val := v.(type) {
+	case json.Number:
+		return convertSingleJSONNumber(val, orig)
+	case map[string]any:
+		for k, elem := range val {
+			var childOrig reflect.Value
+			if orig.IsValid() {
+				switch orig.Kind() { //nolint:exhaustive // only struct and map containers hold keyed children
+				case reflect.Struct:
+					childOrig = structFieldByJSONKey(orig, k)
+				case reflect.Map:
+					if orig.Type().Key().Kind() == reflect.String {
+						mk := reflect.ValueOf(k).Convert(orig.Type().Key())
+						childOrig = orig.MapIndex(mk)
+					}
+					if !childOrig.IsValid() && orig.Type().Elem().Kind() != reflect.Interface {
+						childOrig = reflect.Zero(orig.Type().Elem())
+					}
+				}
+			}
+			val[k] = convertJSONNumbersWithTypes(elem, childOrig)
+		}
+		return val
+	case []any:
+		for i, elem := range val {
+			var childOrig reflect.Value
+			if orig.IsValid() && (orig.Kind() == reflect.Slice || orig.Kind() == reflect.Array) {
+				if i < orig.Len() {
+					childOrig = orig.Index(i)
+				} else if orig.Type().Elem().Kind() != reflect.Interface {
+					childOrig = reflect.Zero(orig.Type().Elem())
+				}
+			}
+			val[i] = convertJSONNumbersWithTypes(elem, childOrig)
+		}
+		return val
+	default:
+		return v
+	}
+}
+
+func convertSingleJSONNumber(val json.Number, orig reflect.Value) any {
+	if orig.IsValid() {
+		switch orig.Kind() { //nolint:exhaustive // only numeric kinds are relevant for json.Number conversion
+		case reflect.Float32, reflect.Float64:
+			if f, err := val.Float64(); err == nil {
+				return f
+			}
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if i, err := val.Int64(); err == nil {
+				return i
+			}
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+			if i, err := val.Int64(); err == nil {
+				return i
+			}
+			if u, err := strconv.ParseUint(val.String(), 10, 64); err == nil {
+				return u
+			}
+		}
+	}
+	raw := val.String()
+	if strings.ContainsAny(raw, ".eE") {
+		if f, err := val.Float64(); err == nil {
+			return f
+		}
+	}
+	if i, err := val.Int64(); err == nil {
+		return i
+	}
+	if f, err := val.Float64(); err == nil {
+		return f
+	}
+	return raw
+}
+
+func structFieldByJSONKey(v reflect.Value, key string) reflect.Value {
+	type fieldCandidate struct {
+		val    reflect.Value
+		tagged bool
+	}
+
+	current := []reflect.Value{v}
+	visitedDepth := make(map[reflect.Type]int)
+
+	for depth := 0; len(current) > 0; depth++ {
+		var matches []fieldCandidate
+		var next []reflect.Value
+
+		for _, node := range current {
+			node = unwrapReflectValue(node)
+			if !node.IsValid() || node.Kind() != reflect.Struct {
+				continue
+			}
+			t := node.Type()
+			if prevDepth, seen := visitedDepth[t]; seen && prevDepth < depth {
+				continue
+			}
+			visitedDepth[t] = depth
+
+			for i := range t.NumField() {
+				sf := t.Field(i)
+				tag := sf.Tag.Get("json")
+				if tag == "-" {
+					continue
+				}
+				name, _, _ := strings.Cut(tag, ",")
+				tagged := name != ""
+
+				if sf.Anonymous && !tagged {
+					fv := unwrapReflectValue(node.Field(i))
+					if fv.IsValid() && fv.Kind() == reflect.Struct {
+						next = append(next, fv)
+						continue
+					}
+					if !sf.IsExported() {
+						continue
+					}
+				} else if !sf.IsExported() {
+					continue
+				}
+
+				if !tagged {
+					name = sf.Name
+				}
+				if name == key {
+					matches = append(matches, fieldCandidate{
+						val:    node.Field(i),
+						tagged: tagged,
+					})
+				}
+			}
+		}
+
+		if len(matches) > 0 {
+			var taggedMatches []fieldCandidate
+			for _, m := range matches {
+				if m.tagged {
+					taggedMatches = append(taggedMatches, m)
+				}
+			}
+			if len(taggedMatches) > 0 {
+				matches = taggedMatches
+			}
+			if len(matches) == 1 {
+				return matches[0].val
+			}
+			return reflect.Value{}
+		}
+
+		current = next
+	}
+
+	return reflect.Value{}
 }
 
 // normalizeSliceKeys pads all maps in a []any so every map contains the

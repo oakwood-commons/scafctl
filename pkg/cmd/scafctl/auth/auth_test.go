@@ -25,7 +25,7 @@ func TestCommandAuth(t *testing.T) {
 
 	// Verify subcommands are added
 	subCmds := cmd.Commands()
-	require.Len(t, subCmds, 11)
+	require.Len(t, subCmds, 12)
 
 	cmdNames := make([]string, len(subCmds))
 	for i, c := range subCmds {
@@ -37,6 +37,7 @@ func TestCommandAuth(t *testing.T) {
 	assert.Contains(t, cmdNames, "login <handler>")
 	assert.Contains(t, cmdNames, "logout [handler]")
 	assert.Contains(t, cmdNames, "migrate")
+	assert.Contains(t, cmdNames, "oauth2")
 	assert.Contains(t, cmdNames, "handlers [name]")
 	assert.Contains(t, cmdNames, "profile")
 	assert.Contains(t, cmdNames, "status [handler]")
@@ -100,6 +101,27 @@ func TestCommandProfile_UnknownSubcommandErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown command")
 
 	cmd2 := CommandProfile(cliParams, ioStreams, "scafctl/auth")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
+}
+
+// TestCommandOAuth2_UnknownSubcommandErrors verifies the nested 'auth oauth2'
+// group rejects unknown subcommands while bare invocation shows help.
+func TestCommandOAuth2_UnknownSubcommandErrors(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, nil, nil, false)
+
+	cmd := CommandOAuth2(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandOAuth2(cliParams, ioStreams, "scafctl/auth")
 	cmd2.SetArgs([]string{})
 	cmd2.SilenceErrors = true
 	cmd2.SilenceUsage = true

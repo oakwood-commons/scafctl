@@ -307,7 +307,7 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 	if len(cfg.Auth.CustomOAuth2) > 0 {
 		s.Auth.CustomOAuth2 = make([]SanitizedCustomOAuth2, 0, len(cfg.Auth.CustomOAuth2))
 		for _, oc := range cfg.Auth.CustomOAuth2 {
-			s.Auth.CustomOAuth2 = append(s.Auth.CustomOAuth2, sanitizeCustomOAuth2(oc))
+			s.Auth.CustomOAuth2 = append(s.Auth.CustomOAuth2, SanitizeCustomOAuth2(oc))
 		}
 	}
 	if len(cfg.Auth.Handlers) > 0 {
@@ -320,9 +320,9 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 	return s
 }
 
-// sanitizeCustomOAuth2 copies non-sensitive fields, redacts credential-bearing
-// fields, and drops any templated request body.
-func sanitizeCustomOAuth2(oc CustomOAuth2Config) SanitizedCustomOAuth2 {
+// SanitizeCustomOAuth2 copies non-sensitive fields from a CustomOAuth2Config,
+// redacts credential-bearing fields, and drops any templated request body.
+func SanitizeCustomOAuth2(oc CustomOAuth2Config) SanitizedCustomOAuth2 {
 	out := SanitizedCustomOAuth2{
 		Name:                      oc.Name,
 		DisplayName:               oc.DisplayName,

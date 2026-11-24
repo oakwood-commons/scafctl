@@ -73,7 +73,7 @@
       "source": {
         "type": "string",
         "title": "Source",
-        "description": "Where the handler comes from (built-in, plugin, catalog)"
+        "description": "Where the handler comes from (built-in, custom-oauth2, plugin, catalog)"
       },
       "loggedIn": {
         "type": "boolean",

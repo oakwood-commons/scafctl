@@ -7226,6 +7226,183 @@ func TestIntegration_CustomOAuth2Handler_AuthList(t *testing.T) {
 	assert.Contains(t, stdout, "test-quay", "expected custom handler to appear in handlers output, got: %q", stdout)
 }
 
+func TestIntegration_AuthOAuth2Help(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "auth", "oauth2", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "add")
+	assert.Contains(t, stdout, "remove")
+	assert.Contains(t, stdout, "list")
+
+	addHelp, _, addCode := runScafctl(t, "auth", "oauth2", "add", "--help")
+	assert.Equal(t, 0, addCode)
+	assert.Contains(t, addHelp, "--from-file")
+	assert.Contains(t, addHelp, "--client-secret-stdin")
+
+	rmHelp, _, rmCode := runScafctl(t, "auth", "oauth2", "remove", "--help")
+	assert.Equal(t, 0, rmCode)
+	assert.Contains(t, rmHelp, "remove")
+
+	listHelp, _, listCode := runScafctl(t, "auth", "oauth2", "list", "--help")
+	assert.Equal(t, 0, listCode)
+	assert.Contains(t, listHelp, "list")
+}
+
+func TestIntegration_AuthOAuth2_AddListHandlersRemove(t *testing.T) {
+	t.Parallel()
+
+	xdgRoot := t.TempDir()
+	env := map[string]string{
+		"XDG_CONFIG_HOME": filepath.Join(xdgRoot, "config"),
+		"XDG_DATA_HOME":   filepath.Join(xdgRoot, "data"),
+		"XDG_CACHE_HOME":  filepath.Join(xdgRoot, "cache"),
+	}
+
+	// 1. Empty list: -o json emits [], human format emits message on stderr.
+	stdout, stderr, code := runScafctlWithEnv(t, env, "auth", "oauth2", "list", "-o", "json")
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.Equal(t, "[]\n", stdout)
+	assert.Empty(t, stderr)
+
+	stdout, stderr, code = runScafctlWithEnv(t, env, "auth", "oauth2", "list")
+	require.Equal(t, 0, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "no custom OAuth2 handlers configured")
+
+	// 2. Reject plaintext secret on CLI flag.
+	_, stderr, code = runScafctlWithEnv(t, env,
+		"auth", "oauth2", "add", "quay",
+		"--token-url", "https://quay.io/oauth/token",
+		"--client-id", "quay-app",
+		"--client-secret", "plaintext-cli-secret",
+		"--default-flow", "client_credentials",
+	)
+	assert.Equal(t, exitcode.InvalidInput, code)
+	assert.Contains(t, stderr, "--client-secret-stdin")
+
+	// 3. Reject collision with official handler even with --force.
+	_, stderr, code = runScafctlWithEnv(t, env,
+		"auth", "oauth2", "add", "github",
+		"--authorize-url", "https://github.com/login/oauth/authorize",
+		"--token-url", "https://github.com/login/oauth/access_token",
+		"--client-id", "cid",
+		"--force",
+	)
+	assert.Equal(t, exitcode.InvalidInput, code)
+	assert.Contains(t, stderr, "official auth handler")
+
+	// 4. Add custom handler with --client-secret-stdin.
+	stdout, stderr, code = runScafctlWithOpts(
+		t, findProjectRoot(), strings.NewReader("integration-secret-val\n"), env,
+		"auth", "oauth2", "add", "quay",
+		"--display-name", "Quay.io",
+		"--token-url", "https://quay.io/oauth/token",
+		"--client-id", "quay-app",
+		"--default-flow", "client_credentials",
+		"--scopes", "repo:read",
+		"--registry", "quay.io",
+		"--registry-username", "$oauthtoken",
+		"--client-secret-stdin",
+	)
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.Contains(t, stdout, `Added custom OAuth2 handler "quay"`)
+	assert.NotContains(t, stdout+stderr, "integration-secret-val")
+
+	// Verify secret was persisted in XDG secrets store and config passes 'config validate'.
+	secOut, stderr, code := runScafctlWithEnv(t, env, "secrets", "get", "quay-client-secret")
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.Equal(t, "integration-secret-val", strings.TrimSpace(secOut))
+
+	_, stderr, code = runScafctlWithEnv(t, env, "config", "validate")
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+
+	// Verify --force updates an existing customOAuth2 handler in place.
+	updOut, stderr, code := runScafctlWithEnv(t, env,
+		"auth", "oauth2", "add", "quay",
+		"--display-name", "Quay.io Updated",
+		"--token-url", "https://quay.io/oauth/token",
+		"--client-id", "quay-app",
+		"--client-secret", "secret://quay-client-secret",
+		"--default-flow", "client_credentials",
+		"--registry", "quay.io",
+		"--force",
+	)
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.Contains(t, updOut, `Updated custom OAuth2 handler "quay"`)
+
+	// 5. Add second handler via --from-file.
+	fromFile := filepath.Join(xdgRoot, "sts.yaml")
+	fromFileContent := `name: sts-wif
+displayName: STS Broker
+tokenURL: https://sts.example.com/oauth/token
+federatedToken: env://CI_OIDC_TOKEN
+workloadIdentityGrantType: token_exchange
+defaultFlow: workload_identity
+tokenExchange:
+  url: https://sts.example.com/v1/derive
+  method: POST
+  requestBody: '{"secret":"{{.Username}}"}'
+  tokenJSONPath: derived.token
+`
+	require.NoError(t, os.WriteFile(fromFile, []byte(fromFileContent), 0o600))
+	_, stderr, code = runScafctlWithEnv(t, env, "auth", "oauth2", "add", "--from-file", fromFile)
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+
+	// 6. List -o json: verify redacted secrets and dropped tokenExchange.requestBody.
+	listOut, stderr, code := runScafctlWithEnv(t, env, "auth", "oauth2", "list", "-o", "json")
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.NotContains(t, listOut, "integration-secret-val")
+	assert.NotContains(t, listOut, "quay-client-secret")
+	assert.NotContains(t, listOut, "CI_OIDC_TOKEN")
+	assert.NotContains(t, listOut, "requestBody")
+
+	var listed []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(listOut), &listed))
+	require.Len(t, listed, 2)
+	assert.Equal(t, "quay", listed[0]["name"])
+	assert.Equal(t, "***REDACTED***", listed[0]["clientSecret"])
+	assert.Equal(t, "sts-wif", listed[1]["name"])
+	assert.Equal(t, "***REDACTED***", listed[1]["federatedToken"])
+
+	// 7. Verify 'auth handlers -o json' and 'auth handlers quay -o json' report source: custom-oauth2.
+	handlersOut, stderr, code := runScafctlWithEnv(t, env, "auth", "handlers", "-o", "json")
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	var handlers []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(handlersOut), &handlers))
+	byName := map[string]map[string]any{}
+	for _, h := range handlers {
+		if n, ok := h["name"].(string); ok {
+			byName[n] = h
+		}
+	}
+	require.Contains(t, byName, "quay")
+	assert.Equal(t, "custom-oauth2", byName["quay"]["source"])
+	require.Contains(t, byName, "sts-wif")
+	assert.Equal(t, "custom-oauth2", byName["sts-wif"]["source"])
+
+	detailOut, stderr, code := runScafctlWithEnv(t, env, "auth", "handlers", "quay", "-o", "json")
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	var detail map[string]any
+	require.NoError(t, json.Unmarshal([]byte(detailOut), &detail))
+	assert.Equal(t, "custom-oauth2", detail["source"])
+
+	// 8. Remove handlers and verify FileNotFound exit code when absent.
+	_, stderr, code = runScafctlWithEnv(t, env, "auth", "oauth2", "remove", "quay")
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+
+	_, stderr, code = runScafctlWithEnv(t, env, "auth", "oauth2", "remove", "quay")
+	assert.Equal(t, exitcode.FileNotFound, code)
+	assert.Contains(t, stderr, "not found")
+
+	_, stderr, code = runScafctlWithEnv(t, env, "auth", "oauth2", "remove", "sts-wif")
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+
+	emptyAgain, stderr, code := runScafctlWithEnv(t, env, "auth", "oauth2", "list", "-o", "json")
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.Equal(t, "[]\n", emptyAgain)
+}
+
 func TestIntegration_CustomOAuth2Handler_AuthStatus(t *testing.T) {
 	t.Parallel()
 
@@ -14822,6 +14999,7 @@ func TestIntegration_UnknownSubcommand_ErrorsNonZero(t *testing.T) {
 		{"render", "bogus-xyz"},
 		// Nested groups.
 		{"auth", "alias", "bogus-xyz"},
+		{"auth", "oauth2", "bogus-xyz"},
 		{"catalog", "index", "bogus-xyz"},
 	}
 

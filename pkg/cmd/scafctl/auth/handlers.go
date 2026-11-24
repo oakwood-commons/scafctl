@@ -12,6 +12,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	authpkg "github.com/oakwood-commons/scafctl/pkg/auth"
+	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -67,7 +68,7 @@ func CommandHandlers(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			Without arguments, lists all handlers. For each handler, shows:
 			  - name: handler identifier
 			  - status: installed or available
-			  - source: built-in, plugin, or catalog
+			  - source: built-in, custom-oauth2, plugin, or catalog
 			  - flows: supported authentication flows
 			  - loggedIn: whether the handler is currently authenticated
 
@@ -320,17 +321,29 @@ func buildHandlerInfoResult(ctx context.Context, name string, authReg *authpkg.R
 	return result
 }
 
+// installedHandlerSource classifies an installed auth handler's origin.
+// Custom OAuth2 handlers registered from auth.customOAuth2 report "custom-oauth2",
+// whereas embedder BuiltinAuthHandlers constructed via oauth2.New report "built-in".
+func installedHandlerSource(_ context.Context, handler authpkg.Handler) string {
+	switch h := authpkg.UnwrapHandler(handler).(type) {
+	case *plugin.AuthHandlerWrapper, *plugin.LazyAuthHandlerWrapper:
+		return "plugin"
+	case *customoauth2.Handler:
+		if h.IsCustomConfig() {
+			return "custom-oauth2"
+		}
+		return "built-in"
+	default:
+		return "built-in"
+	}
+}
+
 // populateInstalledHandlerInfo fills an installed handler's status, source,
 // flows, and loggedIn fields into result.
 func populateInstalledHandlerInfo(ctx context.Context, result map[string]any, handler authpkg.Handler) {
 	result["status"] = "installed"
 	result["displayName"] = handler.DisplayName()
-	switch handler.(type) {
-	case *plugin.AuthHandlerWrapper, *plugin.LazyAuthHandlerWrapper:
-		result["source"] = "plugin"
-	default:
-		result["source"] = "built-in"
-	}
+	result["source"] = installedHandlerSource(ctx, handler)
 
 	flows := handler.SupportedFlows()
 	flowNames := make([]string, 0, len(flows))
@@ -436,11 +449,7 @@ func buildHandlerDetailMap(ctx context.Context, handler authpkg.Handler) map[str
 		capNames = append(capNames, string(c))
 	}
 
-	source := "built-in"
-	switch handler.(type) {
-	case *plugin.AuthHandlerWrapper, *plugin.LazyAuthHandlerWrapper:
-		source = "plugin"
-	}
+	source := installedHandlerSource(ctx, handler)
 
 	loggedIn := false
 	if status, err := handler.Status(ctx); err == nil && status != nil {

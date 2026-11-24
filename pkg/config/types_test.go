@@ -150,3 +150,27 @@ func TestNormalizeCatalogArtifactKinds(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `invalid artifact kind "invalid"`)
 }
+
+func TestConfig_GetCustomOAuth2(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Auth: GlobalAuthConfig{
+			CustomOAuth2: []CustomOAuth2Config{
+				{Name: "quay", DisplayName: "Quay.io"},
+				{Name: "gitlab", DisplayName: "GitLab"},
+			},
+		},
+	}
+
+	got, ok := cfg.GetCustomOAuth2("quay")
+	require.True(t, ok)
+	assert.Equal(t, "Quay.io", got.DisplayName)
+
+	_, ok = cfg.GetCustomOAuth2("missing")
+	assert.False(t, ok)
+
+	var nilCfg *Config
+	_, ok = nilCfg.GetCustomOAuth2("quay")
+	assert.False(t, ok)
+}

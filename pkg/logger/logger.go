@@ -18,7 +18,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"go.opentelemetry.io/contrib/bridges/otellogr"
-	logGlobal "go.opentelemetry.io/otel/log/global"
+	"go.opentelemetry.io/otel"
 )
 
 // Define an unexported custom type for the context key to prevent collisions.
@@ -237,11 +237,11 @@ func GetWithOptions(opts Options) *logr.Logger {
 		consoleSink := logr.FromSlogHandler(slogHandler).GetSink()
 
 		// ── Sink 2: otellogr forwarding to global OTel LoggerProvider ────────
-		// Uses logGlobal.GetLoggerProvider() which returns the provider set by
+		// Uses otel.GetLoggerProvider() which returns the provider set by
 		// telemetry.Setup(). If Setup has not been called, this is the noop provider
 		// and nothing is exported — safe for unit tests.
 		otelSink := otellogr.NewLogSink(settings.CliBinaryName,
-			otellogr.WithLoggerProvider(logGlobal.GetLoggerProvider()),
+			otellogr.WithLoggerProvider(otel.GetLoggerProvider()),
 		)
 
 		gl := logr.New(newMultiSink(consoleSink, otelSink))

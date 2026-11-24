@@ -85,9 +85,9 @@ func EnsureDefaultsWith(configPath string, customDefaults []byte) error {
 	return mergeDefaults(configPath, customDefaults)
 }
 
-// writeDefaultsFile writes data with 0600 permissions.
+// writeDefaultsFile writes data atomically with 0600 permissions.
 func writeDefaultsFile(path string, data []byte) error {
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := writePrivateConfigFileAtomic(path, data); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	return nil

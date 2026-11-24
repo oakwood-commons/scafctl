@@ -15,9 +15,11 @@ import (
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/diagnose"
+	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -545,13 +547,45 @@ func TestHandlerSource(t *testing.T) {
 			query:    "github",
 			expected: "plugin",
 		},
+		{
+			name: "custom oauth2 handler",
+			setup: func() *auth.Registry {
+				r := auth.NewRegistry()
+				h, _ := customoauth2.New(config.CustomOAuth2Config{
+					Name:         "quay",
+					AuthorizeURL: "https://quay.io/oauth/authorize",
+					ClientID:     "cid",
+					ResponseType: "token",
+				}, customoauth2.WithSecretStore(secrets.NewMockStore()), customoauth2.WithCustomConfigSource())
+				_ = r.Register(h)
+				return r
+			},
+			query:    "quay",
+			expected: "custom-oauth2",
+		},
+		{
+			name: "embedder builtin oauth2 handler",
+			setup: func() *auth.Registry {
+				r := auth.NewRegistry()
+				h, _ := customoauth2.New(config.CustomOAuth2Config{
+					Name:         "corp-sso",
+					AuthorizeURL: "https://sso.example.com/authorize",
+					ClientID:     "cid",
+					ResponseType: "token",
+				}, customoauth2.WithSecretStore(secrets.NewMockStore()))
+				_ = r.Register(h)
+				return r
+			},
+			query:    "corp-sso",
+			expected: "built-in",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			reg := tc.setup()
-			assert.Equal(t, tc.expected, handlerSource(reg, tc.query))
+			assert.Equal(t, tc.expected, handlerSource(context.Background(), reg, tc.query))
 		})
 	}
 }
