@@ -227,14 +227,18 @@ func TestResolveDependencies_WritesNothing(t *testing.T) {
 
 func TestVendorResult_WriteFiles_Error(t *testing.T) {
 	dir := t.TempDir()
-	blocker := filepath.Join(dir, "blocker")
-	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
 
-	result := &VendorResult{Fetched: map[string][]byte{"blocker/dep.yaml": []byte("x")}}
+	// Path outside .scafctl/vendor is rejected before touching disk.
+	outsideErr := (&VendorResult{Fetched: map[string][]byte{"blocker/dep.yaml": []byte("x")}}).WriteFiles(dir)
+	require.Error(t, outsideErr)
+	assert.Contains(t, outsideErr.Error(), "blocker/dep.yaml")
 
-	err := result.WriteFiles(dir)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "blocker/dep.yaml")
+	// Filesystem blocker inside .scafctl/vendor surfaces path in error.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".scafctl", "vendor"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".scafctl", "vendor", "blocker"), nil, 0o600))
+	fsErr := (&VendorResult{Fetched: map[string][]byte{".scafctl/vendor/blocker/dep.yaml": []byte("x")}}).WriteFiles(dir)
+	require.Error(t, fsErr)
+	assert.Contains(t, fsErr.Error(), ".scafctl/vendor/blocker/dep.yaml")
 }
 
 func TestVendorResult_Contents(t *testing.T) {
@@ -258,8 +262,8 @@ func TestResolveDependencies_LockFileReplay(t *testing.T) {
 	// Pre-create vendored file
 	vendorRelPath := ".scafctl/vendor/deploy-to-k8s@2.0.0.yaml"
 	absVendorPath := filepath.Join(dir, vendorRelPath)
-	require.NoError(t, os.MkdirAll(filepath.Dir(absVendorPath), 0o755))
-	require.NoError(t, os.WriteFile(absVendorPath, solutionContent, 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(absVendorPath), 0o700))
+	require.NoError(t, os.WriteFile(absVendorPath, solutionContent, 0o600))
 
 	// Pre-create lock file
 	lockPath := filepath.Join(dir, "solution.lock")
@@ -799,8 +803,8 @@ func TestResolveDependencies_LockReplayConstraintSatisfied(t *testing.T) {
 	// Pre-create vendored file
 	vendorRelPath := ".scafctl/vendor/deploy-to-k8s@1.5.2.yaml"
 	absVendorPath := filepath.Join(dir, vendorRelPath)
-	require.NoError(t, os.MkdirAll(filepath.Dir(absVendorPath), 0o755))
-	require.NoError(t, os.WriteFile(absVendorPath, solutionContent, 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(absVendorPath), 0o700))
+	require.NoError(t, os.WriteFile(absVendorPath, solutionContent, 0o600))
 
 	// Pre-create lock file with constraint info
 	lockPath := filepath.Join(dir, "solution.lock")
@@ -861,8 +865,8 @@ func TestResolveDependencies_LockReplayConstraintStale(t *testing.T) {
 	// Pre-create vendored file
 	vendorRelPath := ".scafctl/vendor/deploy-to-k8s@1.5.2.yaml"
 	absVendorPath := filepath.Join(dir, vendorRelPath)
-	require.NoError(t, os.MkdirAll(filepath.Dir(absVendorPath), 0o755))
-	require.NoError(t, os.WriteFile(absVendorPath, solutionContent, 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(absVendorPath), 0o700))
+	require.NoError(t, os.WriteFile(absVendorPath, solutionContent, 0o600))
 
 	// Pre-create lock file with a version that does NOT satisfy the new constraint
 	lockPath := filepath.Join(dir, "solution.lock")
@@ -1027,4 +1031,176 @@ func TestVendorFileNameFromRef(t *testing.T) {
 	// ref already has .yaml extension
 	name = VendorFileNameFromRef("my-sol@1.0.0.yaml", catalog.ArtifactInfo{})
 	assert.Equal(t, "my-sol@1.0.0.yaml", name)
+}
+
+func TestResolveDependencies_MaterializeLockedDepAndStaleDigestFallback(t *testing.T) {
+	t.Parallel()
+
+	t.Run("materializes pinned ResolvedVersion when vendor file is missing on disk", func(t *testing.T) {
+		t.Parallel()
+		ctx := testContext()
+		dir := t.TempDir()
+
+		leafContent := []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: leaf\n  version: 1.0.0\nspec: {}\n")
+		leafDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(leafContent))
+
+		v152Content := []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: deploy-to-k8s\n  version: 1.5.2\nspec:\n  resolvers:\n    sub:\n      resolve:\n        with:\n          - provider: solution\n            inputs:\n              source: leaf@1.0.0\n")
+		v152Digest := fmt.Sprintf("sha256:%x", sha256.Sum256(v152Content))
+
+		// Lock pins 1.5.2 (as produced by 'vendor update --lock-only'), with NO .scafctl/vendor/ on disk,
+		// while 1.5.9 is also available in listings.
+		existingLock := &LockFile{
+			Version: LockFileVersion,
+			Dependencies: []LockDependency{
+				{
+					Ref:             "deploy-to-k8s@^1.5.0",
+					ResolvedVersion: "1.5.2",
+					Constraint:      "^1.5.0",
+					Digest:          v152Digest,
+					ResolvedFrom:    "remote-cat",
+					VendoredAt:      ".scafctl/vendor/deploy-to-k8s@1.5.2.yaml",
+				},
+			},
+		}
+
+		fetcher := &mockCatalogFetcher{
+			listings: map[string][]catalog.ArtifactInfo{
+				"deploy-to-k8s": {
+					{Reference: catalog.Reference{Name: "deploy-to-k8s", Version: semver.MustParse("1.5.2")}},
+					{Reference: catalog.Reference{Name: "deploy-to-k8s", Version: semver.MustParse("1.5.9")}},
+				},
+			},
+			solutions: map[string]mockFetchResult{
+				"deploy-to-k8s@1.5.2": {
+					content: v152Content,
+					info:    catalog.ArtifactInfo{Reference: catalog.Reference{Name: "deploy-to-k8s", Version: semver.MustParse("1.5.2")}},
+				},
+				"leaf@1.0.0": {
+					content: leafContent,
+					info:    catalog.ArtifactInfo{Reference: catalog.Reference{Name: "leaf", Version: semver.MustParse("1.0.0")}, Catalog: "remote-cat"},
+				},
+			},
+		}
+
+		sol := &solution.Solution{
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"k8s": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{Provider: "solution", Inputs: map[string]*spec.ValueRef{"source": {Literal: "deploy-to-k8s@^1.5.0"}}},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		res, err := ResolveDependencies(ctx, sol, []CatalogRefEntry{{Ref: "deploy-to-k8s@^1.5.0"}}, VendorOptions{
+			BundleRoot:     dir,
+			ExistingLock:   existingLock,
+			CatalogFetcher: fetcher,
+		})
+		require.NoError(t, err)
+		require.Len(t, res.Lock.Dependencies, 2, "must materialize locked dep AND its transitive sub-solution")
+		assert.Equal(t, "1.5.2", res.Lock.Dependencies[0].ResolvedVersion, "must materialize locked 1.5.2, not drift to 1.5.9")
+		assert.Equal(t, "remote-cat", res.Lock.Dependencies[0].ResolvedFrom, "must preserve ResolvedFrom when info.Catalog is empty")
+		assert.Equal(t, leafDigest, res.Lock.Dependencies[1].Digest)
+		assert.Equal(t, ".scafctl/vendor/deploy-to-k8s@1.5.2.yaml", sol.Spec.Resolvers["k8s"].Resolve.With[0].Inputs["source"].Literal)
+	})
+
+	t.Run("fails closed on digest mismatch when materializing locked dep", func(t *testing.T) {
+		t.Parallel()
+		ctx := testContext()
+		dir := t.TempDir()
+
+		existingLock := &LockFile{
+			Version: LockFileVersion,
+			Dependencies: []LockDependency{
+				{
+					Ref:             "deploy-to-k8s@^1.5.0",
+					ResolvedVersion: "1.5.2",
+					Constraint:      "^1.5.0",
+					Digest:          "sha256:expected-digest",
+					ResolvedFrom:    "remote-cat",
+					VendoredAt:      ".scafctl/vendor/deploy-to-k8s@1.5.2.yaml",
+				},
+			},
+		}
+		fetcher := &mockCatalogFetcher{
+			solutions: map[string]mockFetchResult{
+				"deploy-to-k8s@1.5.2": {
+					content: []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: tampered\n"),
+					info:    catalog.ArtifactInfo{Reference: catalog.Reference{Name: "deploy-to-k8s", Version: semver.MustParse("1.5.2")}},
+				},
+			},
+		}
+		sol := &solution.Solution{}
+		_, err := ResolveDependencies(ctx, sol, []CatalogRefEntry{{Ref: "deploy-to-k8s@^1.5.0"}}, VendorOptions{
+			BundleRoot:     dir,
+			ExistingLock:   existingLock,
+			CatalogFetcher: fetcher,
+		})
+		require.ErrorContains(t, err, "digest mismatch")
+	})
+
+	t.Run("corrupted on-disk vendor file does not poison visited map before re-fetch", func(t *testing.T) {
+		t.Parallel()
+		ctx := testContext()
+		dir := t.TempDir()
+
+		cleanContent := []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: deploy-to-k8s\n  version: 1.5.2\nspec: {}\n")
+		cleanDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(cleanContent))
+		vendorRelPath := ".scafctl/vendor/deploy-to-k8s@1.5.2.yaml"
+		absVendorPath := filepath.Join(dir, vendorRelPath)
+		require.NoError(t, os.MkdirAll(filepath.Dir(absVendorPath), 0o700))
+		require.NoError(t, os.WriteFile(absVendorPath, []byte("corrupted-on-disk"), 0o600))
+
+		existingLock := &LockFile{
+			Version: LockFileVersion,
+			Dependencies: []LockDependency{
+				{
+					Ref:             "deploy-to-k8s@^1.5.0",
+					ResolvedVersion: "1.5.2",
+					Constraint:      "^1.5.0",
+					Digest:          cleanDigest,
+					ResolvedFrom:    "default",
+					VendoredAt:      vendorRelPath,
+				},
+			},
+		}
+		fetcher := &mockCatalogFetcher{
+			listings: map[string][]catalog.ArtifactInfo{
+				"deploy-to-k8s": {{Reference: catalog.Reference{Name: "deploy-to-k8s", Version: semver.MustParse("1.5.2")}}},
+			},
+			solutions: map[string]mockFetchResult{
+				"deploy-to-k8s@1.5.2": {
+					content: cleanContent,
+					info:    catalog.ArtifactInfo{Reference: catalog.Reference{Name: "deploy-to-k8s", Version: semver.MustParse("1.5.2")}, Catalog: "default"},
+				},
+			},
+		}
+		sol := &solution.Solution{
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"k8s": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{Provider: "solution", Inputs: map[string]*spec.ValueRef{"source": {Literal: "deploy-to-k8s@^1.5.0"}}},
+							},
+						},
+					},
+				},
+			},
+		}
+		res, err := ResolveDependencies(ctx, sol, []CatalogRefEntry{{Ref: "deploy-to-k8s@^1.5.0"}}, VendorOptions{
+			BundleRoot:     dir,
+			ExistingLock:   existingLock,
+			CatalogFetcher: fetcher,
+		})
+		require.NoError(t, err)
+		require.Len(t, res.VendoredFiles, 1)
+		assert.Equal(t, cleanContent, res.Fetched[vendorRelPath], "missed lock replay must re-fetch rather than silently skipping")
+		assert.Equal(t, vendorRelPath, sol.Spec.Resolvers["k8s"].Resolve.With[0].Inputs["source"].Literal)
+	})
 }

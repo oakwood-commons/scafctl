@@ -1247,108 +1247,112 @@ Files below `--dedupe-threshold` are grouped into a single tar layer to avoid ex
 
 ## Vendor Update (`scafctl vendor update`)
 
-Re-resolve and update vendored dependencies without a full rebuild, enabling quick dependency updates without modifying source files.
+Re-resolve and update vendored sub-solution dependencies and locked `bundle.plugins` entries without a full rebuild, enabling quick dependency upgrades without manually editing or deleting `solution.lock`.
 
 ### Command Specification
 
-```bash
+~~~bash
 scafctl vendor update [-f solution-path]
-```
+~~~
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-f` | `auto-discover` | Path to solution YAML file; if omitted, auto-discover a solution file and fall back to `./solution.yaml` only when discovery finds nothing |
-| `--dependency` | — | Update only this dependency (repeatable); if omitted, update all |
+| `-f`, `--file` | `auto-discover` | Path to solution YAML file; if omitted, auto-discover a solution file and fall back to `./solution.yaml` only when discovery finds nothing |
+| `--dependency` | -- | Update only this sub-solution or plugin (repeatable; accepts sub-solution ref/name, plugin `name`, `source.artifact`, or `<kind>/<name>`) |
 | `--dry-run` | `false` | Show what would be updated without making changes |
-| `--lock-only` | `false` | Update `solution.lock` without re-vendoring files |
-| `--pre-release` | `false` | Include pre-release versions when resolving |
+| `--lock-only` | `false` | Update `solution.lock` without writing files under `.scafctl/vendor/` (subsequent `scafctl package solution` runs materialize the pinned versions from the configured catalog chain) |
+| `--pre-release` | `false` | Include pre-release versions when resolving `latest`/unversioned refs and sub-solution constraints (plugin semver ranges use `-0` suffixes such as `^0.1.0-0`) |
+| `-o`, `--output` | (none) | Emit a machine-readable `VendorUpdateResult` report on stdout (`json` or `yaml`); routes human progress to stderr |
 
 ### Behavior
 
-1. **Parse** the solution YAML and `solution.lock` file.
-2. **Re-resolve** catalog references against current registry state, respecting version constraints.
-3. **Compare** resolved versions against locked versions.
-4. **Fetch** updated dependencies and write to `.scafctl/vendor/`.
-5. **Update** `solution.lock` with new digests and versions.
+1. **Parse and compose:** Load the solution YAML (merging any `compose:` partial files) and load `solution.lock` (if missing, instruct the user to run `scafctl package solution` first).
+2. **Discover declarations:** Discover catalog sub-solution references across the composed solution and local sub-solutions via `DiscoverFiles`, and read `bundle.plugins` declarations.
+3. **Re-resolve live catalogs in memory:** Query the configured solution catalog chain (`BuildCatalogChain` with `WithoutRemoteCache()`) via `ResolveDependencies` (replaying untargeted lock entries when `--dependency` is set, and failing before any disk write on version conflicts or fetch errors) and the live plugin catalog chain (`BuildPluginFetcher` with `WithoutRemoteCache()`, honoring `source.registry`, `source.built`, short-name chain priority, `--pre-release`, and active `SignaturePolicy`).
+4. **Diff against existing lock:** Diff `existingLock` against the resolved sub-solutions and plugins (`added`, `updated`, `unchanged`, `pruned`), preserving multi-platform primary digests across OS/arch when platform digests and version are unchanged.
+5. **Write updates:** Write newly fetched `.scafctl/vendor/<name>@<resolvedVersion>.yaml` files (`0600`), delete pruned `.scafctl/vendor/` files no longer referenced by the new lock, best-effort cache remotely fetched sub-solutions into the local catalog, and atomically update `solution.lock` only when changes apply.
 
 ### Output
 
-```bash
+~~~bash
 $ scafctl vendor update --dry-run
 
 Checking vendored dependencies for ./solution.yaml...
 
-  deploy-to-k8s:
+  deploy-to-k8s@^2.0.0:
     locked:   2.0.0 (sha256:abc123...)
     latest:   2.1.0 (sha256:def456...)
     action:   would update
 
-  logging-sidecar:
-    locked:   1.0.0 (sha256:789abc...)
-    latest:   1.0.0 (sha256:789abc...)
-    action:   up to date
+  - logging-sidecar@1.0.0: up to date (1.0.0)
 
-  aws-provider (plugin):
+  aws-provider (provider):
     locked:   1.5.3 (sha256:aaa111...)
     latest:   1.5.5 (sha256:bbb222...)
     action:   would update
 
-Summary: 2 dependencies would be updated
+Summary: 2 dependency(ies) would be updated
 
 $ scafctl vendor update
 
 Updating vendored dependencies...
 
-  ✓ deploy-to-k8s: 2.0.0 → 2.1.0
-  ✓ aws-provider: 1.5.3 → 1.5.5
-  • logging-sidecar: up to date
+  deploy-to-k8s@^2.0.0: 2.0.0 -> 2.1.0 (sha256:abc123... -> sha256:def456...)
+  - logging-sidecar@1.0.0: up to date (1.0.0)
+  aws-provider (provider): 1.5.3 -> 1.5.5 (sha256:aaa111... -> sha256:bbb222...)
 
 Updated solution.lock
-```
+~~~
 
 ### Selective Update
 
-```bash
+~~~bash
+# Target a single sub-solution by name or ref
 $ scafctl vendor update --dependency deploy-to-k8s
 
-Updating deploy-to-k8s...
-  ✓ 2.0.0 → 2.1.0
-
-Updated solution.lock
-```
+# Target a single plugin (disambiguating kind when needed)
+$ scafctl vendor update --dependency provider/aws-provider
+~~~
 
 ### Lock File Changes
 
-After `vendor update`, the `solution.lock` file reflects new resolved versions:
+After `vendor update`, `solution.lock` preserves `resolvedVersion`, `constraint`, `resolvedFrom`, `resolvedCanonical`, and multi-platform `digests`:
 
-```yaml
+~~~yaml
 version: 1
 dependencies:
-  - ref: deploy-to-k8s@2.1.0           # ← updated
-    digest: sha256:def456...            # ← new digest
-    resolvedFrom: registry.example.com/solutions/deploy-to-k8s
+  - ref: deploy-to-k8s@^2.0.0
+    resolvedVersion: 2.1.0
+    constraint: ^2.0.0
+    digest: sha256:def456...
+    resolvedFrom: acme-catalog
     vendoredAt: .scafctl/vendor/deploy-to-k8s@2.1.0.yaml
 plugins:
   - name: aws-provider
     kind: provider
-    version: "^1.5.0"
-    resolved: 1.5.5                     # ← updated
-    digest: sha256:bbb222...            # ← new digest
-    resolvedFrom: registry.example.com/plugins/aws-provider
-```
+    version: 1.5.5
+    constraint: ^1.5.0
+    digest: sha256:bbb222...
+    digests:
+      darwin/arm64: sha256:ccc333...
+      linux/amd64: sha256:bbb222...
+    resolvedFrom: acme-catalog
+    resolvedCanonical: registry.example.com/plugins
+~~~
 
 ### Use Cases
 
-- **Security patches:** Update a dependency to pick up a security fix without rebuilding.
-- **Dependency hygiene:** Regularly update vendored dependencies to latest compatible versions.
-- **Pre-flight check:** Use `--dry-run` before a release to see available updates.
+- **Security patches:** Update a plugin or sub-solution dependency to pick up a security fix without rebuilding.
+- **Dependency hygiene:** Regularly upgrade locked plugins and vendored sub-solutions to the newest versions satisfying their constraints.
+- **CI / automation checks:** Run `scafctl vendor update --dry-run -o json` in CI to detect available updates cleanly on stdout.
 
 ### Implementation Notes
 
-- Reuses catalog resolution logic from `scafctl package`.
-- Version constraint evaluation uses existing semver library.
-- Lock file update is atomic — written to a temp file, then renamed.
-- If `--dependency` specifies a dependency not in the lock file, exit with an error.
+- Reuses `DiscoverFiles`, `ResolveDependencies`, `VendorAllPlugins`, and `BuildLockSignatureVerifier` so `vendor update` and `package solution` share identical resolution and signature-policy semantics without custom graph solvers.
+- Atomic in-memory resolution: `ResolveDependencies` resolves the full sub-solution graph in memory before any disk writes; superseded `.scafctl/vendor/` files and unused lock entries are pruned when updates apply.
+- `--lock-only` updates `solution.lock` without writing `.scafctl/vendor/`; subsequent `scafctl package solution` runs materialize missing locked sub-solutions at their pinned `resolvedVersion` and verify their locked SHA-256 digest.
+- Skips rewriting `solution.lock` when zero updates apply.
+- If `--dependency` specifies a name that matches neither a sub-solution nor a declared plugin, exits with an invalid-input error.
 
 ---
 
@@ -1436,8 +1440,8 @@ plugins:
 - Implement `scafctl vendor update` command
 - Lock file parsing and comparison against registry state
 - Selective update with `--dependency` flag
-- Atomic lock file writes
-- `--dry-run`, `--lock-only`, `--pre-release` flag support
+- Conditional lock file writes (`0600`, skipped when unchanged)
+- `--dry-run`, `--lock-only`, `--pre-release`, `-o`/`--output` flag support
 - CLI integration tests
 
 ### Phase 12: Polish

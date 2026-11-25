@@ -183,13 +183,13 @@ func validateProviderCoverage(sol *solution.Solution, builtins []string, officia
 	)
 }
 
-// buildLockSignatureVerifier returns a VerifySignature callback for the bundler
+// BuildLockSignatureVerifier returns a VerifySignature callback for the bundler
 // when a signature policy is active. It checks the context for an explicit
 // policy override first, then falls back to the app configuration
 // (config.Plugins.Signatures). Returns (nil, nil) when signatures are disabled,
 // which causes VendorAllPlugins to skip verification, or an error when an
 // active policy fails validation.
-func buildLockSignatureVerifier(ctx context.Context, lgr logr.Logger) (func(context.Context, string) (*bundler.LockPluginSignature, error), error) {
+func BuildLockSignatureVerifier(ctx context.Context, lgr logr.Logger) (func(context.Context, string) (*bundler.LockPluginSignature, error), error) {
 	policy := plugin.SignaturePolicyFromContext(ctx)
 	if policy == nil {
 		policy = signaturePolicyFromAppConfig(config.FromContext(ctx), lgr)

@@ -186,6 +186,42 @@ spec:
               value: hello
 ~~~
 
+## Updating Locked Plugins
+
+Once `scafctl package solution` writes `solution.lock`, subsequent builds replay
+pinned plugin versions that still satisfy the constraints in `bundle.plugins` so
+packaging stays reproducible. When a newer compatible plugin release is
+published to a configured catalog, use `scafctl vendor update` to check for and
+apply upgrades without manually editing or deleting `solution.lock`:
+
+~~~bash
+# Preview available plugin and sub-solution upgrades without modifying files
+scafctl vendor update --dry-run
+
+# Emit a structured JSON update report on stdout (progress goes to stderr)
+scafctl vendor update --dry-run -o json
+
+# Upgrade all locked plugins and vendored sub-solutions within their constraints
+scafctl vendor update
+
+# Upgrade a single plugin while keeping all other lock entries pinned as-is
+scafctl vendor update --dependency exec
+
+# Disambiguate when a provider and auth-handler share the same short name
+scafctl vendor update --dependency auth-handler/github
+
+# Include pre-release versions when resolving 'latest' (or use a -0 range such as ^0.1.0-0)
+scafctl vendor update --pre-release
+~~~
+
+`scafctl vendor update` queries live remote catalogs directly (bypassing local
+pull-through cache fallbacks for remote plugins and sub-solutions while still
+honoring locally built artifacts), respects `source.registry`, `source.built`,
+short-name catalog chain priority, and active plugin signature policies, writes
+updated sub-solution files and prunes superseded vendor files (with `--lock-only`
+pins materialized automatically on the next `scafctl package solution` build),
+and leaves `solution.lock` untouched when every dependency is already up to date.
+
 ## Mixing Built-in and External Providers
 
 When a solution uses both built-in and external providers, only declare the

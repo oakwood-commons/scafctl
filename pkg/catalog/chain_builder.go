@@ -4,6 +4,7 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -57,6 +58,7 @@ type ChainCatalogOptions struct {
 	allowedCatalogs      map[string]bool
 	perCatalogArtifacts  map[string]PluginPolicy
 	withoutLocalBuilds   bool
+	withoutRemoteCache   bool
 	localCatalog         *LocalCatalog
 	pluginChainMode      ChainMode
 	hasPluginChainMode   bool
@@ -105,6 +107,24 @@ func WithLocalCatalog(local *LocalCatalog) ChainCatalogOption {
 func WithoutLocalBuilds() ChainCatalogOption {
 	return func(opt *ChainCatalogOptions) {
 		opt.withoutLocalBuilds = true
+	}
+}
+
+// WithoutRemoteCache disables remote pull-through caching and cached-pull
+// shadowing in both BuildPluginFetcher and BuildCatalogChain:
+//   - In BuildPluginFetcher, remote catalogs are not wrapped in
+//     NewCachedRemoteCatalog, while the local catalog remains active for
+//     source.built and locally built short-name probes.
+//   - In BuildCatalogChain, the local catalog serves only locally built
+//     artifacts (excluding remote copies previously pulled or auto-cached into
+//     the local catalog).
+//
+// Operations that check live registry state (such as vendor update) pass this
+// option so remote registries are queried directly without stale cache hits or
+// offline fallbacks.
+func WithoutRemoteCache() ChainCatalogOption {
+	return func(opt *ChainCatalogOptions) {
+		opt.withoutRemoteCache = true
 	}
 }
 
@@ -173,7 +193,11 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 		return nil, err
 	}
 	if localCat != nil && localAllowed {
-		catalogs = append(catalogs, localCat)
+		var cat Catalog = localCat
+		if options.withoutRemoteCache {
+			cat = newBuiltOnlyLocalCatalog(localCat)
+		}
+		catalogs = append(catalogs, cat)
 	}
 
 	// 2-3. Embedder/user catalogs from config, then the official catalog.
@@ -207,11 +231,11 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 // configuration. Source order matches BuildCatalogChain: local built
 // artifacts first (when the local catalog is allowed), then embedder/user
 // catalogs, then the official catalog. Catalogs configured with artifactKinds
-// that include neither provider nor auth-handler are skipped entirely. Each
-// remote is backed by the local catalog as a pull-through cache, so pulled
-// copies are attributed to the remote that served them and remain usable when
-// it is unreachable. The local catalog serves as that cache even when it is
-// not an allowed source itself.
+// that include neither provider nor auth-handler are skipped entirely. Unless
+// WithoutRemoteCache is set, each remote is backed by the local catalog as a
+// pull-through cache, so pulled copies are attributed to the remote that served
+// them and remain usable when it is unreachable. The local catalog serves as
+// that cache even when it is not an allowed source itself.
 func BuildPluginFetcher(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger, opts ...ChainCatalogOption) (*PluginFetcher, error) {
 	options := applyChainCatalogOptions(opts)
 
@@ -230,7 +254,7 @@ func BuildPluginFetcher(cfg *config.Config, authRegistry *auth.Registry, logger 
 	sources := make([]PluginSource, 0, len(remotes))
 	for _, remote := range remotes {
 		var src PluginSource = remote.catalog
-		if localCat != nil {
+		if localCat != nil && !options.withoutRemoteCache {
 			cached, cachedErr := NewCachedRemoteCatalog(localCat, remote.catalog)
 			if cachedErr != nil {
 				return nil, &CatalogBuildError{Catalog: remote.catalog.Name(), Err: cachedErr}
@@ -782,4 +806,145 @@ func isOfficialByURL(cfg *config.Config, url string) bool {
 		return official.Type == config.CatalogTypeOCI && official.URL == url
 	}
 	return url == config.DefaultOfficialCatalogURL
+}
+
+// builtOnlyLocalCatalog wraps a LocalCatalog so read operations return only
+// locally built artifacts (SourceBuilt), ignoring pulled or auto-cached copies
+// from remote catalogs.
+type builtOnlyLocalCatalog struct {
+	local *LocalCatalog
+}
+
+var (
+	_ Catalog              = (*builtOnlyLocalCatalog)(nil)
+	_ PlatformAwareCatalog = (*builtOnlyLocalCatalog)(nil)
+)
+
+func newBuiltOnlyLocalCatalog(local *LocalCatalog) *builtOnlyLocalCatalog {
+	return &builtOnlyLocalCatalog{local: local}
+}
+
+func (c *builtOnlyLocalCatalog) Name() string { return c.local.Name() }
+func (c *builtOnlyLocalCatalog) Path() string { return c.local.Path() }
+
+func (c *builtOnlyLocalCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error) {
+	return c.local.Store(ctx, ref, content, bundleData, annotations, force, extraLayers...)
+}
+
+func (c *builtOnlyLocalCatalog) Delete(ctx context.Context, ref Reference) error {
+	return c.local.Delete(ctx, ref)
+}
+
+func (c *builtOnlyLocalCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	if ref.Remote != "" {
+		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.Name()}
+	}
+	ver := ""
+	if ref.Version != nil {
+		ver = ref.Version.String()
+	}
+	return c.local.Find(ctx, ArtifactQuery{
+		Kind:    ref.Kind,
+		Name:    ref.Name,
+		Version: ver,
+		Digest:  ref.Digest,
+		Source:  SourceSelector{Kind: SourceBuilt},
+	})
+}
+
+func (c *builtOnlyLocalCatalog) FetchByPlatform(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error) {
+	if ref.Remote != "" {
+		return nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.Name()}
+	}
+	return c.local.FetchByPlatform(ctx, sanitizeRefForBuilt(ref), platform)
+}
+
+func (c *builtOnlyLocalCatalog) ListPlatforms(ctx context.Context, ref Reference) ([]string, error) {
+	if ref.Remote != "" {
+		return nil, &ArtifactNotFoundError{Reference: ref, Catalog: c.Name()}
+	}
+	return c.local.ListPlatforms(ctx, sanitizeRefForBuilt(ref))
+}
+
+func (c *builtOnlyLocalCatalog) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
+	if ref.Remote != "" {
+		return ContentDigestInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.Name()}
+	}
+	return c.local.ResolveContentDigest(ctx, sanitizeRefForBuilt(ref), platform, mediaType)
+}
+
+func (c *builtOnlyLocalCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
+	resolved, err := c.Resolve(ctx, ref)
+	if err != nil {
+		return nil, ArtifactInfo{}, err
+	}
+	content, _, fetchErr := c.local.Fetch(ctx, Reference{
+		Kind:   resolved.Reference.Kind,
+		Name:   resolved.Reference.Name,
+		Digest: resolved.Digest,
+		Built:  true,
+	})
+	if fetchErr != nil {
+		return nil, ArtifactInfo{}, fetchErr
+	}
+	return content, resolved, nil
+}
+
+func (c *builtOnlyLocalCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+	resolved, err := c.Resolve(ctx, ref)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, err
+	}
+	content, bundle, _, fetchErr := c.local.FetchWithBundle(ctx, Reference{
+		Kind:   resolved.Reference.Kind,
+		Name:   resolved.Reference.Name,
+		Digest: resolved.Digest,
+		Built:  true,
+	})
+	if fetchErr != nil {
+		return nil, nil, ArtifactInfo{}, fetchErr
+	}
+	return content, bundle, resolved, nil
+}
+
+func (c *builtOnlyLocalCatalog) FetchWithLayer(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+	resolved, err := c.Resolve(ctx, ref)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, err
+	}
+	content, layers, _, fetchErr := c.local.FetchWithLayer(ctx, Reference{
+		Kind:   resolved.Reference.Kind,
+		Name:   resolved.Reference.Name,
+		Digest: resolved.Digest,
+		Built:  true,
+	}, mediaTypes...)
+	if fetchErr != nil {
+		return nil, nil, ArtifactInfo{}, fetchErr
+	}
+	return content, layers, resolved, nil
+}
+
+func (c *builtOnlyLocalCatalog) List(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error) {
+	items, err := c.local.List(ctx, kind, name)
+	if err != nil {
+		return nil, err
+	}
+	built := make([]ArtifactInfo, 0, len(items))
+	for _, item := range items {
+		if item.Reference.Built && item.Annotations[AnnotationSourceCanonical] == "" {
+			built = append(built, item)
+		}
+	}
+	return built, nil
+}
+
+func (c *builtOnlyLocalCatalog) Exists(ctx context.Context, ref Reference) (bool, error) {
+	_, err := c.Resolve(ctx, ref)
+	if err == nil {
+		return true, nil
+	}
+	if IsNotFound(err) {
+		return false, nil
+	}
+	return false, err
 }
