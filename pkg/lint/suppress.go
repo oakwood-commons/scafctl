@@ -6,6 +6,7 @@ package lint
 import (
 	"bufio"
 	"bytes"
+	"path/filepath"
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
@@ -49,9 +50,10 @@ type Directive struct {
 
 // SuppressionSet holds parsed directives and tracks which ones are consumed.
 type SuppressionSet struct {
-	directives []Directive
-	used       []bool
-	sourceMap  *sourcepos.SourceMap
+	directives     []Directive
+	used           []bool
+	sourceMap      *sourcepos.SourceMap
+	fileSourceMaps map[string]*sourcepos.SourceMap
 }
 
 // WithSourceMap attaches a source map to the suppression set, enabling
@@ -63,6 +65,22 @@ func (ss *SuppressionSet) WithSourceMap(sm *sourcepos.SourceMap) *SuppressionSet
 	if ss != nil {
 		ss.sourceMap = sm
 	}
+	return ss
+}
+
+// WithFileSourceMap registers a per-file source map on the suppression set so
+// block-scoped directives in multi-file (composed) solutions resolve blocks
+// exclusively against their own file's SourceMap rather than another file's.
+// Passing a nil sm still registers file (as having no source map) so lookups
+// for that file never fall back to the default sourceMap.
+func (ss *SuppressionSet) WithFileSourceMap(file string, sm *sourcepos.SourceMap) *SuppressionSet {
+	if ss == nil || file == "" {
+		return ss
+	}
+	if ss.fileSourceMaps == nil {
+		ss.fileSourceMaps = make(map[string]*sourcepos.SourceMap)
+	}
+	ss.fileSourceMaps[filepath.Clean(file)] = sm
 	return ss
 }
 
@@ -286,7 +304,7 @@ func (ss *SuppressionSet) isSuppressed(f *Finding) bool {
 			// Block-scoped fallback: when the directive targets a YAML block
 			// key (e.g. `transform:`), suppress findings located within that
 			// block even if the resolved line is deeper than the directive.
-			if ss.locationInBlockAt(f, ss.ignoreTargetLine(d)) {
+			if ss.locationInBlockAt(f, d, ss.ignoreTargetLine(d)) {
 				ss.used[i] = true
 				return true
 			}
@@ -294,7 +312,7 @@ func (ss *SuppressionSet) isSuppressed(f *Finding) bool {
 		case DirectiveDisable:
 			// Find the matching enable directive (or EOF).
 			endLine := ss.findMatchingEnable(i)
-			if f.Line >= d.Line && f.Line <= endLine {
+			if (f.Line >= d.Line && f.Line <= endLine) || (f.Line == 0 && d.Line == 1 && endLine == (1<<31-1)) {
 				ss.used[i] = true
 				return true
 			}
@@ -316,28 +334,176 @@ func (ss *SuppressionSet) ignoreTargetLine(d *Directive) int {
 	return d.Line + 1
 }
 
+// sourceMapFor returns the SourceMap scoped to directive d. When per-file
+// source maps are registered via WithFileSourceMap, a directive with a file
+// resolves exclusively against its own file's map (never falling back to
+// another file's map). Single-file callers using WithSourceMap fall back to
+// ss.sourceMap.
+func (ss *SuppressionSet) sourceMapFor(d *Directive) *sourcepos.SourceMap {
+	if ss == nil {
+		return nil
+	}
+	if d != nil && d.File != "" && ss.fileSourceMaps != nil {
+		if sm, ok := ss.fileSourceMaps[filepath.Clean(d.File)]; ok {
+			return sm
+		}
+		for fileKey, sm := range ss.fileSourceMaps {
+			if sameSourceFile(fileKey, d.File) {
+				return sm
+			}
+		}
+		return nil
+	}
+	return ss.sourceMap
+}
+
 // locationInBlockAt reports whether the finding's logical location falls within
-// a YAML block whose key is recorded at the given source line. It requires a
-// source map; without one it always returns false (preserving line-based
-// behavior). The "spec." prefix on source-map paths is stripped to match lint
-// finding locations.
-func (ss *SuppressionSet) locationInBlockAt(f *Finding, line int) bool {
-	if ss.sourceMap == nil || line <= 0 || f.Location == "" {
+// a YAML block whose key is recorded at the given source line in the directive's
+// file SourceMap. Without an applicable source map it returns false (preserving
+// line-based behavior). When Finding.resolvedPath is populated, it takes
+// precedence over Finding.Location so unindexed schema paths cannot match
+// unrelated sibling entries while directives on list items, map keys, or
+// top-level section headers ("spec:") match consistently.
+func (ss *SuppressionSet) locationInBlockAt(f *Finding, d *Directive, line int) bool {
+	sm := ss.sourceMapFor(d)
+	if sm == nil || line <= 0 || (f.Location == "" && f.resolvedPath == "") {
 		return false
 	}
-	for _, p := range ss.sourceMap.Paths() {
-		pos, ok := ss.sourceMap.Get(p)
+	for _, p := range sm.Paths() {
+		pos, ok := sm.Get(p)
 		if !ok || pos.Line != line {
 			continue
 		}
-		// In compose scenarios, only consider blocks from the same source file.
-		if f.SourceFile != "" && pos.File != "" && f.SourceFile != pos.File {
+		if d != nil && d.File != "" && pos.File != "" && !sameSourceFile(d.File, pos.File) {
 			continue
 		}
-		block := strings.TrimPrefix(p, "spec.")
-		if f.Location == block ||
-			strings.HasPrefix(f.Location, block+".") ||
-			strings.HasPrefix(f.Location, block+"[") {
+		// In compose scenarios, only consider blocks from the same source file.
+		if f.SourceFile != "" && pos.File != "" && !sameSourceFile(f.SourceFile, pos.File) {
+			continue
+		}
+		targetPath := f.Location
+		if f.resolvedPath != "" {
+			targetPath = f.resolvedPath
+		}
+		if pathWithinBlock(targetPath, p) {
+			return true
+		}
+		if parent, ok := structuredWrapperParent(sm, p); ok && sameNormalizedLocation(targetPath, parent) {
+			return true
+		}
+	}
+	return false
+}
+
+// structuredWrapperParent checks whether blockPath is the sole structured
+// wrapper key (.expr/.rslvr/.tmpl/.scrt/.tkn, or .expression on a Condition
+// field) of an enclosing ValueRef or Condition object, returning that parent
+// path when safe. Container maps and multi-key literal maps are rejected so an
+// entry literally named "expr" cannot suppress findings on sibling entries.
+func structuredWrapperParent(sm *sourcepos.SourceMap, blockPath string) (string, bool) {
+	var parent string
+	switch {
+	case strings.HasSuffix(blockPath, ".expression"):
+		candidate := strings.TrimSuffix(blockPath, ".expression")
+		if isConditionFieldPath(candidate) {
+			parent = candidate
+		}
+	default:
+		for _, suffix := range []string{".expr", ".rslvr", ".tmpl", ".scrt", ".tkn"} {
+			if strings.HasSuffix(blockPath, suffix) {
+				parent = strings.TrimSuffix(blockPath, suffix)
+				break
+			}
+		}
+	}
+	if parent == "" {
+		return "", false
+	}
+
+	normParent := normalizeSpecLocation(parent)
+	if normParent == "spec" || isNonSpecRootKey(normParent) || isDynamicMapContainer(normParent) ||
+		normParent == "state.parameters" || strings.HasSuffix(normParent, ".properties") ||
+		strings.HasSuffix(normParent, ".defaults") {
+		return "", false
+	}
+
+	prefix := parent + "."
+	for _, other := range sm.Paths() {
+		if strings.HasPrefix(other, prefix) &&
+			other != blockPath &&
+			!strings.HasPrefix(other, blockPath+".") &&
+			!strings.HasPrefix(other, blockPath+"[") {
+			return "", false
+		}
+	}
+	return parent, true
+}
+
+func isConditionFieldPath(path string) bool {
+	for _, suffix := range []string{"when", "until", "continueOnError", "retryIf"} {
+		if path == suffix || strings.HasSuffix(path, "."+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeSpecLocation(loc string) string {
+	if loc != "" && !strings.HasPrefix(loc, "spec.") && !isNonSpecTopLevel(loc) {
+		return "spec." + loc
+	}
+	return loc
+}
+
+func sameNormalizedLocation(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return normalizeSpecLocation(a) == normalizeSpecLocation(b)
+}
+
+func isNonSpecRootKey(loc string) bool {
+	switch loc {
+	case "(root)", "bundle", "metadata", "state", "catalog", "compose", "apiVersion", "kind":
+		return true
+	default:
+		return false
+	}
+}
+
+func pathWithinBlock(target, blockPath string) bool {
+	if target == "" || blockPath == "" {
+		return false
+	}
+	if matchesBlockPrefix(target, blockPath) {
+		return true
+	}
+	// Non-schema lint findings omit the leading "spec." prefix (e.g.
+	// "resolvers.foo.transform.with[0]"). Normalize against spec-scoped blocks.
+	if !strings.HasPrefix(target, "spec.") && !isNonSpecTopLevel(target) {
+		if matchesBlockPrefix("spec."+target, blockPath) {
+			return true
+		}
+	}
+	if strings.HasPrefix(blockPath, "spec.") {
+		strippedBlock := strings.TrimPrefix(blockPath, "spec.")
+		strippedTarget := strings.TrimPrefix(target, "spec.")
+		if matchesBlockPrefix(strippedTarget, strippedBlock) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesBlockPrefix(target, block string) bool {
+	return target == block ||
+		strings.HasPrefix(target, block+".") ||
+		strings.HasPrefix(target, block+"[")
+}
+
+func isNonSpecTopLevel(loc string) bool {
+	for _, top := range []string{"(root)", "bundle", "metadata", "state", "catalog", "compose", "apiVersion", "kind"} {
+		if loc == top || strings.HasPrefix(loc, top+".") || strings.HasPrefix(loc, top+"[") {
 			return true
 		}
 	}
@@ -354,7 +520,7 @@ func (ss *SuppressionSet) findMatchingEnable(disableIdx int) int {
 		if e.Type != DirectiveEnable {
 			continue
 		}
-		if e.File != d.File {
+		if !sameSourceFile(e.File, d.File) {
 			continue
 		}
 		// Match when enable covers exactly the same rules as disable.
@@ -391,7 +557,50 @@ func directiveMatchesFile(d *Directive, f *Finding) bool {
 	if d.File == "" {
 		return true
 	}
-	return d.File == f.SourceFile
+	return sameSourceFile(d.File, f.SourceFile)
+}
+
+// sameSourceFile reports whether two file paths refer to the same source file,
+// normalizing relative vs. absolute spellings and OS symlink aliases (e.g.
+// macOS /var vs /private/var) when possible.
+func sameSourceFile(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if a == "" || b == "" {
+		return false
+	}
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	if absA == absB {
+		return true
+	}
+	return canonicalFilePath(absA) == canonicalFilePath(absB)
+}
+
+func canonicalFilePath(abs string) string {
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	// Walk up to the deepest existing ancestor directory so non-existent leaf
+	// filenames inside symlinked temp directories (e.g. /var/folders ->
+	// /private/var/folders) still canonicalize identically.
+	dir := filepath.Dir(abs)
+	suffix := filepath.Base(abs)
+	for dir != "" && dir != filepath.Dir(dir) {
+		if resolvedDir, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolvedDir, suffix)
+		}
+		suffix = filepath.Join(filepath.Base(dir), suffix)
+		dir = filepath.Dir(dir)
+	}
+	return abs
 }
 
 // rulesMatch checks if two rule lists match exactly (same set of rules).

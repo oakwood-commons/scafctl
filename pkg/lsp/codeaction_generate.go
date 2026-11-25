@@ -81,11 +81,16 @@ func (s *Server) createMissingResolverActions(entry *DocEntry, params *protocol.
 	if entry.Sol == nil {
 		return nil
 	}
-	result := lint.Solution(entry.Sol, uriToPath(params.TextDocument.URI), s.registry)
+	docPath := uriToPath(params.TextDocument.URI)
+	solPath := entry.Sol.GetPath()
+	result := lint.Solution(entry.Sol, docPath, s.registry)
 
 	var actions []protocol.CodeAction
 	seen := make(map[string]bool)
 	for _, f := range result.Findings {
+		if isForeignSourceFile(f.SourceFile, docPath, solPath) {
+			continue
+		}
 		if f.RuleName != "unknown-resolver-reference" {
 			continue
 		}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -32,6 +33,22 @@ func ValidateSolutionAgainstSchema(data any) ([]Violation, error) {
 	schemaBytes, err := GenerateSolutionSchema()
 	if err != nil {
 		return nil, fmt.Errorf("generating solution schema: %w", err)
+	}
+
+	return ValidateDataAgainstSchema(schemaBytes, data)
+}
+
+// ValidateComposePartAgainstSchema validates raw data parsed from a composed
+// partial YAML/JSON file against the generated compose-part JSON schema.
+// Comment-only or empty partials unmarshal to nil and are treated as valid.
+func ValidateComposePartAgainstSchema(data any) ([]Violation, error) {
+	if data == nil {
+		return nil, nil
+	}
+
+	schemaBytes, err := GenerateComposePartSchema()
+	if err != nil {
+		return nil, fmt.Errorf("generating compose part schema: %w", err)
 	}
 
 	return ValidateDataAgainstSchema(schemaBytes, data)
@@ -160,6 +177,7 @@ func parseValidatingChain(line string) (string, string) {
 		if strings.HasPrefix(segment, "/") {
 			parts := strings.Split(strings.TrimPrefix(segment, "/"), "/")
 			// Extract only property-name segments, skipping structural parts
+			var ptrSegments []string
 			skipNext := false
 			for _, part := range parts {
 				if skipNext {
@@ -173,9 +191,13 @@ func parseValidatingChain(line string) (string, string) {
 				case "properties", "additionalProperties", "items":
 					// structural — skip
 				default:
-					segments = appendDedupe(segments, part)
+					if part != "" {
+						ptrSegments = append(ptrSegments, part)
+					}
 				}
 			}
+			overlap := suffixPrefixOverlap(segments, ptrSegments)
+			segments = append(segments, ptrSegments[overlap:]...)
 			continue
 		}
 
@@ -202,6 +224,20 @@ func appendDedupe(slice []string, s string) []string {
 		return slice
 	}
 	return append(slice, s)
+}
+
+// suffixPrefixOverlap returns the length of the longest suffix of a that
+// equals a prefix of b, collapsing cumulative JSON pointer chains such as
+// "/properties/spec" -> "/properties/spec/properties/workflow" without
+// dropping genuinely nested identically named properties.
+func suffixPrefixOverlap(a, b []string) int {
+	maxOverlap := min(len(a), len(b))
+	for k := maxOverlap; k > 0; k-- {
+		if slices.Equal(a[len(a)-k:], b[:k]) {
+			return k
+		}
+	}
+	return 0
 }
 
 // defsPattern matches JSON schema $defs references like:

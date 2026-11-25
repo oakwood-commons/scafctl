@@ -9,6 +9,7 @@ package lsp
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"unicode/utf8"
 
 	"github.com/oakwood-commons/scafctl/pkg/lint"
@@ -42,11 +43,67 @@ func diagnosticsFromSolution(sol *solution.Solution, content []byte, filePath, s
 	result := lint.Solution(sol, filePath, registry)
 	lines := bytes.Split(content, []byte("\n"))
 
+	solPath := sol.GetPath()
 	diags := make([]protocol.Diagnostic, 0, len(result.Findings))
 	for _, f := range result.Findings {
+		// Publish diagnostics only for the document being edited; findings
+		// originating in composed partial files belong to their own URIs.
+		if isForeignSourceFile(f.SourceFile, filePath, solPath) {
+			continue
+		}
 		diags = append(diags, findingToDiagnostic(f, lines, source))
 	}
 	return diags
+}
+
+func isForeignSourceFile(findingFile, docPath, solPath string) bool {
+	if findingFile == "" {
+		return false
+	}
+	if docPath != "" && sameDiagPath(findingFile, docPath) {
+		return false
+	}
+	if solPath != "" && sameDiagPath(findingFile, solPath) {
+		return false
+	}
+	return true
+}
+
+func sameDiagPath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if a == "" || b == "" {
+		return false
+	}
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	if absA == absB {
+		return true
+	}
+	return canonicalDiagPath(absA) == canonicalDiagPath(absB)
+}
+
+func canonicalDiagPath(abs string) string {
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	dir := filepath.Dir(abs)
+	suffix := filepath.Base(abs)
+	for dir != "" && dir != filepath.Dir(dir) {
+		if resolvedDir, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolvedDir, suffix)
+		}
+		suffix = filepath.Join(filepath.Base(dir), suffix)
+		dir = filepath.Dir(dir)
+	}
+	return abs
 }
 
 // parseErrorDiagnostic reports a whole-document parse failure at the top of the

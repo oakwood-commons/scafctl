@@ -33,6 +33,21 @@ func fixHyphenatedName(sol *solution.Solution, f *Finding) (*Fix, error) {
 	}
 
 	newName := hyphensToCamelCase(name)
+	if _, exists := sol.Spec.Resolvers[newName]; exists {
+		return nil, fmt.Errorf("cannot auto-rename resolver %q to %q: resolver %q already exists: %w", name, newName, newName, ErrNotFixable)
+	}
+	for _, part := range sol.ComposedParts() {
+		if len(part.RawContent) == 0 {
+			continue
+		}
+		var partSol solution.Solution
+		if err := partSol.LoadFromBytesLenient(part.RawContent); err != nil {
+			return nil, fmt.Errorf("cannot auto-rename resolver %q to %q: failed to inspect composed file %s: %w: %w", name, newName, part.Path, err, ErrNotFixable)
+		}
+		if collectReferencedResolvers(&partSol)[name] || testCasesMockResolver(&partSol, name) {
+			return nil, fmt.Errorf("cannot auto-rename resolver %q to %q: referenced in composed file %s: %w", name, newName, part.Path, ErrNotFixable)
+		}
+	}
 	res, err := refactor.RenameResolver(sol, name, newName)
 	if err != nil {
 		// RenameResolver refuses on collision, unlocatable references, or an
@@ -40,11 +55,39 @@ func fixHyphenatedName(sol *solution.Solution, f *Finding) (*Fix, error) {
 		// auto-fixable; record the reason and move on.
 		return nil, fmt.Errorf("cannot auto-rename resolver %q to %q: %w: %w", name, newName, err, ErrNotFixable)
 	}
+	if len(sol.RawContent()) > 0 {
+		preview, applyErr := refactor.Apply(sol.RawContent(), res.Edits)
+		if applyErr != nil {
+			return nil, fmt.Errorf("cannot auto-rename resolver %q to %q: %w: %w", name, newName, applyErr, ErrNotFixable)
+		}
+		var postPrimary solution.Solution
+		if err := postPrimary.LoadFromBytesLenient(preview); err != nil {
+			return nil, fmt.Errorf("cannot auto-rename resolver %q to %q: %w: %w", name, newName, err, ErrNotFixable)
+		}
+		if collectReferencedResolvers(&postPrimary)[name] || testCasesMockResolver(&postPrimary, name) {
+			return nil, fmt.Errorf("cannot auto-rename resolver %q to %q: unrewritten reference remains in solution: %w", name, newName, ErrNotFixable)
+		}
+	}
 
 	return &Fix{
 		Edits:  res.Edits,
 		Detail: fmt.Sprintf("renamed resolver %q -> %q (%d reference(s))", name, newName, len(res.Edits)),
 	}, nil
+}
+
+func testCasesMockResolver(sol *solution.Solution, resolverName string) bool {
+	if sol == nil || sol.Spec.Testing == nil {
+		return false
+	}
+	for _, tc := range sol.Spec.Testing.Cases {
+		if tc == nil {
+			continue
+		}
+		if _, ok := tc.Mocks[resolverName]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // resolverNameFromLocation extracts the resolver name from a finding location

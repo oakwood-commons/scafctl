@@ -8,12 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"gopkg.in/yaml.v3"
 )
 
@@ -47,11 +50,13 @@ func WithReadFileFunc(fn func(string) ([]byte, error)) ComposeOption {
 
 // Compose loads and merges all composed files referenced by the solution.
 // The composed files are expected to contain partial YAML with spec.resolvers,
-// spec.workflow.actions, and/or bundle.include sections.
+// spec.workflow.{actions,finally}, spec.testing, and/or bundle.include sections.
 //
-// Returns a new Solution with all parts merged. The original is not modified.
+// Returns a new Solution with all parts merged and each fragment's path, raw
+// bytes, and SourceMap recorded in ComposedParts() without mutating the primary
+// solution's RawContent or SourceMap. The original is not modified.
 // bundleRoot is the directory containing the root solution YAML — composed file
-// paths are resolved relative to it.
+// paths must stay within bundleRoot and are resolved relative to it.
 //
 // Merge rules:
 //   - Resolvers: merged by name. Duplicate resolver names across files are rejected.
@@ -89,7 +94,13 @@ func Compose(sol *solution.Solution, bundleRoot string, opts ...ComposeOption) (
 		visited[filepath.Clean(sol.GetPath())] = true
 	}
 
+	parts := merged.ComposedParts()
+
 	for _, relPath := range sol.Compose {
+		if err := validateComposeRelPath(relPath); err != nil {
+			return nil, err
+		}
+
 		absPattern := filepath.Join(bundleRoot, relPath)
 
 		// Expand glob patterns (e.g., "tests/*.yaml").
@@ -108,6 +119,10 @@ func Compose(sol *solution.Solution, bundleRoot string, opts ...ComposeOption) (
 
 		for _, absPath := range matches {
 			cleanPath := filepath.Clean(absPath)
+
+			if err := verifyComposeTargetWithinRoot(bundleRoot, cleanPath, relPath); err != nil {
+				return nil, err
+			}
 
 			if visited[cleanPath] {
 				return nil, fmt.Errorf("circular compose reference detected: %s", relPath)
@@ -143,8 +158,17 @@ func Compose(sol *solution.Solution, bundleRoot string, opts ...ComposeOption) (
 			}
 
 			mergeIncludes(merged, part.Bundle.Include)
+
+			partSM, _ := sourcepos.BuildSourceMap(data, cleanPath)
+			parts = append(parts, solution.ComposedPart{
+				Path:       cleanPath,
+				RawContent: data,
+				SourceMap:  partSM,
+			})
 		}
 	}
+
+	merged.SetComposedParts(parts)
 
 	// Clear compose from the merged output — the result is fully composed.
 	merged.Compose = nil
@@ -369,5 +393,48 @@ func deepCopySolution(sol *solution.Solution) (*solution.Solution, error) {
 	// suppressions and line reporting. So we restore both from the source.
 	cp.SetRawContent(sol.RawContent())
 	cp.SetSourceMap(sol.SourceMap())
+	cp.SetComposedParts(sol.ComposedParts())
 	return &cp, nil
+}
+
+func validateComposeRelPath(relPath string) error {
+	if strings.TrimSpace(relPath) == "" {
+		return fmt.Errorf("compose path must not be empty")
+	}
+	slashed := filepath.ToSlash(filepath.Clean(relPath))
+	if filepath.IsAbs(relPath) || strings.HasPrefix(slashed, "/") || scafpath.HasWindowsDrivePrefix(relPath) {
+		return fmt.Errorf("absolute path not allowed in compose: %s", relPath)
+	}
+	if slashed == ".." || strings.HasPrefix(slashed, "../") {
+		return fmt.Errorf("compose path escapes solution directory: %s", relPath)
+	}
+	return nil
+}
+
+func verifyComposeTargetWithinRoot(bundleRoot, cleanPath, relPath string) error {
+	if bundleRoot == "" {
+		return nil
+	}
+	cleanRoot := filepath.Clean(bundleRoot)
+	rel, err := filepath.Rel(cleanRoot, cleanPath)
+	if err != nil || rel == ".." || strings.HasPrefix(filepath.ToSlash(rel), "../") {
+		return fmt.Errorf("compose path escapes solution directory: %s", relPath)
+	}
+
+	// When the target exists on disk, verify symlinks do not escape bundleRoot.
+	resolved, evalErr := filepath.EvalSymlinks(cleanPath)
+	if evalErr == nil {
+		absRoot, rootErr := filepath.EvalSymlinks(cleanRoot)
+		if rootErr != nil {
+			absRoot, _ = filepath.Abs(cleanRoot)
+		} else {
+			absRoot, _ = filepath.Abs(absRoot)
+		}
+		absResolved, _ := filepath.Abs(resolved)
+		relResolved, relErr := filepath.Rel(absRoot, absResolved)
+		if relErr != nil || relResolved == ".." || strings.HasPrefix(filepath.ToSlash(relResolved), "../") {
+			return fmt.Errorf("compose symlink escapes solution directory: %s -> %s", relPath, resolved)
+		}
+	}
+	return nil
 }

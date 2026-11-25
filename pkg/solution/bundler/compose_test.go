@@ -5,6 +5,7 @@ package bundler
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -825,4 +826,133 @@ func TestExtractResolverName(t *testing.T) {
 	assert.Equal(t, "myResolver", ExtractResolverName("myResolver.result"))
 	assert.Equal(t, "myResolver", ExtractResolverName("myResolver.nested.field"))
 	assert.Equal(t, "standalone", ExtractResolverName("standalone"))
+}
+
+func TestCompose_AttachesComposedPartsAndPreservesPrimaryInvariants(t *testing.T) {
+	primaryBytes := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+  version: 1.0.0
+compose:
+  - parts/resolvers.yaml
+  - parts/empty-comments.yaml
+spec:
+  resolvers:
+    rootResolver:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: root
+`)
+	sol := &solution.Solution{}
+	sol.SetPath("/tmp/bundle/solution.yaml")
+	require.NoError(t, sol.UnmarshalFromBytes(primaryBytes))
+	origSM := sol.SourceMap()
+	require.NotNil(t, origSM)
+
+	resolversPart := []byte(`spec:
+  resolvers:
+    childResolver:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: child
+`)
+	commentsPart := []byte("# comment-only partial\n")
+
+	readFile := func(path string) ([]byte, error) {
+		switch filepath.ToSlash(path) {
+		case "/tmp/bundle/parts/resolvers.yaml":
+			return resolversPart, nil
+		case "/tmp/bundle/parts/empty-comments.yaml":
+			return commentsPart, nil
+		default:
+			return nil, fmt.Errorf("file not found: %s", path)
+		}
+	}
+
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+
+	// Original solution is untouched.
+	assert.Nil(t, sol.ComposedParts())
+
+	// Primary RawContent and SourceMap pointer are preserved untouched on result.
+	assert.Equal(t, string(primaryBytes), string(result.RawContent()))
+	assert.Same(t, origSM, result.SourceMap())
+	_, inPrimarySM := result.SourceMap().Get("spec.resolvers.childResolver")
+	assert.False(t, inPrimarySM, "composed resolver must not pollute primary SourceMap")
+
+	// ComposedParts carry each fragment's cleaned path, raw bytes, and SourceMap.
+	parts := result.ComposedParts()
+	require.Len(t, parts, 2)
+
+	assert.Equal(t, filepath.Clean("/tmp/bundle/parts/resolvers.yaml"), parts[0].Path)
+	assert.Equal(t, string(resolversPart), string(parts[0].RawContent))
+	require.NotNil(t, parts[0].SourceMap)
+	pos, ok := parts[0].SourceMap.Get("spec.resolvers.childResolver")
+	require.True(t, ok)
+	assert.Equal(t, 3, pos.Line)
+	assert.Equal(t, filepath.Clean("/tmp/bundle/parts/resolvers.yaml"), pos.File)
+
+	assert.Equal(t, filepath.Clean("/tmp/bundle/parts/empty-comments.yaml"), parts[1].Path)
+	assert.Equal(t, string(commentsPart), string(parts[1].RawContent))
+
+	// deepCopySolution preserves existing ComposedParts.
+	cp, err := deepCopySolution(result)
+	require.NoError(t, err)
+	require.Len(t, cp.ComposedParts(), 2)
+	assert.Equal(t, parts[0].Path, cp.ComposedParts()[0].Path)
+}
+
+func TestCompose_RejectsPathTraversalAndOutsideSymlinks(t *testing.T) {
+	t.Run("rejects absolute and parent-escaping paths", func(t *testing.T) {
+		for _, bad := range []string{"../secret.yaml", "/etc/passwd", "parts/../../outside.yaml", "   "} {
+			sol := baseSolution()
+			sol.Compose = []string{bad}
+			_, err := Compose(sol, "/tmp/bundle")
+			require.Error(t, err, "expected error for compose path %q", bad)
+		}
+	})
+
+	t.Run("rejects symlink escaping solution directory", func(t *testing.T) {
+		outer := t.TempDir()
+		bundleDir := filepath.Join(outer, "bundle")
+		require.NoError(t, os.MkdirAll(bundleDir, 0o700))
+
+		outsideFile := filepath.Join(outer, "outside.yaml")
+		require.NoError(t, os.WriteFile(outsideFile, []byte("spec:\n  resolvers: {}\n"), 0o600))
+
+		escapeLink := filepath.Join(bundleDir, "escape.yaml")
+		if err := os.Symlink(outsideFile, escapeLink); err != nil {
+			t.Skipf("symlinks unsupported: %v", err)
+		}
+
+		sol := baseSolution()
+		sol.SetPath(filepath.Join(bundleDir, "solution.yaml"))
+		sol.Compose = []string{"escape.yaml"}
+
+		_, err := Compose(sol, bundleDir)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "escapes solution directory")
+	})
+
+	t.Run("allows composed target when bundleRoot is filesystem root", func(t *testing.T) {
+		rootPath := string(filepath.Separator)
+		if vol := filepath.VolumeName(t.TempDir()); vol != "" {
+			rootPath = vol + string(filepath.Separator)
+		}
+
+		// Exercise the live EvalSymlinks branch against a real file beneath rootPath.
+		tmpDir := t.TempDir()
+		existingFile := filepath.Join(tmpDir, "part.yaml")
+		require.NoError(t, os.WriteFile(existingFile, []byte("spec:\n  resolvers: {}\n"), 0o600))
+
+		relFromRoot, err := filepath.Rel(rootPath, existingFile)
+		require.NoError(t, err)
+		require.NoError(t, verifyComposeTargetWithinRoot(rootPath, existingFile, relFromRoot))
+	})
 }

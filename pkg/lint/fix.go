@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/refactor"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/pmezard/go-difflib/difflib"
 )
 
@@ -149,23 +150,61 @@ func splitDiffLines(s string) []string {
 	return lines
 }
 
+// LoadComposedFromBytes parses raw solution bytes leniently with filePath
+// recorded on the solution and composes any referenced partials relative to
+// filepath.Dir(filePath). When filePath is empty or raw declares no compose
+// entries, the parsed primary solution is returned directly.
+func LoadComposedFromBytes(raw []byte, filePath string) (*solution.Solution, error) {
+	sol := &solution.Solution{}
+	if filePath != "" {
+		sol.SetPath(filePath)
+	}
+	if err := sol.LoadFromBytesLenient(raw); err != nil {
+		return nil, err
+	}
+	if len(sol.Compose) > 0 && filePath != "" {
+		composed, err := bundler.Compose(sol, filepath.Dir(filePath))
+		if err != nil {
+			return nil, err
+		}
+		composed.SetPath(filePath)
+		return composed, nil
+	}
+	return sol, nil
+}
+
+func isComposedPartFinding(findingFile string, parts []solution.ComposedPart) bool {
+	if findingFile == "" || len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		if part.Path != "" && sameSourceFile(findingFile, part.Path) {
+			return true
+		}
+	}
+	return false
+}
+
 // ComputeFixPlan lints the solution parsed from raw and applies every registered
 // fixer to the fixable findings, producing a FixPlan. It never writes to disk --
 // IO stays in the command layer.
 //
 // Fixes are applied iteratively: each fixer runs against a solution freshly
-// parsed from the current (already-partially-fixed) bytes, so byte offsets stay
-// valid across successive renames. A fixer's wrapped ErrNotFixable is recorded
-// as a skipped outcome and the run continues; any other error aborts the run so
-// a partially-fixed file is never returned.
+// parsed (and composed, when compose entries are present) from the current
+// already-partially-fixed bytes, so byte offsets stay valid across successive
+// renames and off-file references or collisions in composed partials fail safe
+// as skipped outcomes rather than corrupting the primary file. A fixer's wrapped
+// ErrNotFixable is recorded as a skipped outcome and the run continues; any
+// other error aborts the run so a partially-fixed file is never returned.
 func ComputeFixPlan(raw []byte, filePath string, registry *provider.Registry) (*FixPlan, error) {
 	plan := &FixPlan{}
 
-	sol := &solution.Solution{}
-	if err := sol.UnmarshalFromBytes(raw); err != nil {
+	sol, err := LoadComposedFromBytes(raw, filePath)
+	if err != nil {
 		return nil, fmt.Errorf("parse solution: %w", err)
 	}
 	result := Solution(sol, filePath, registry)
+	parts := sol.ComposedParts()
 
 	// Findings originate from ranging over Go maps (e.g. spec.resolvers), so
 	// their order is nondeterministic across runs. Collect the fixable ones and
@@ -188,12 +227,23 @@ func ComputeFixPlan(raw []byte, filePath string, registry *provider.Registry) (*
 
 	current := append([]byte(nil), raw...)
 	for _, f := range fixable {
+		if isComposedPartFinding(f.SourceFile, parts) {
+			plan.Outcomes = append(plan.Outcomes, FixOutcome{
+				RuleName: f.RuleName,
+				Location: f.Location,
+				Applied:  false,
+				Detail:   fmt.Sprintf("defined in composed file %s: %v", f.SourceFile, ErrNotFixable),
+			})
+			continue
+		}
+
 		fx := defaultFixers[f.RuleName]
 
-		// Re-parse the current bytes so the fixer computes edits against
-		// up-to-date offsets after any preceding rename.
-		cur := &solution.Solution{}
-		if err := cur.UnmarshalFromBytes(current); err != nil {
+		// Re-parse (and compose) the current bytes so the fixer computes edits
+		// against up-to-date offsets and full composed symbols after any
+		// preceding rename.
+		cur, err := LoadComposedFromBytes(current, filePath)
+		if err != nil {
 			return nil, fmt.Errorf("re-parse solution before fixing %s at %s: %w", f.RuleName, f.Location, err)
 		}
 

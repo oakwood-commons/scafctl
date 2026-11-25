@@ -5,8 +5,10 @@ package schema
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,11 +21,19 @@ import (
 // SolutionSchemaID is the JSON Schema ID for the solution file format.
 const SolutionSchemaID = "https://scafctl.dev/schemas/v1/solution.json"
 
+// ComposePartSchemaID is the JSON Schema ID for composed partial YAML files.
+const ComposePartSchemaID = "https://scafctl.dev/schemas/v1/compose-part.json"
+
 var (
 	solutionSchemaMu          sync.Mutex
 	solutionSchemaInitialized bool
 	solutionSchemaJSON        []byte
 	solutionSchemaErr         error
+
+	composePartSchemaMu          sync.Mutex
+	composePartSchemaInitialized bool
+	composePartSchemaJSON        []byte
+	composePartSchemaErr         error
 )
 
 // durationAlias is a simple string type used as a Huma type alias for
@@ -124,15 +134,155 @@ func GenerateSolutionSchema() ([]byte, error) {
 	return solutionSchemaJSON, solutionSchemaErr
 }
 
-// resetSolutionSchemaForTesting resets the solution schema state for testing.
-// This is safe for use in tests as it acquires the mutex before resetting.
+// resetSolutionSchemaForTesting resets the solution and compose-part schema
+// caches for testing. Acquires each mutex independently to avoid lock-order
+// coupling.
 // WARNING: This should only be called from tests.
 func resetSolutionSchemaForTesting() {
 	solutionSchemaMu.Lock()
-	defer solutionSchemaMu.Unlock()
 	solutionSchemaInitialized = false
 	solutionSchemaJSON = nil
 	solutionSchemaErr = nil
+	solutionSchemaMu.Unlock()
+
+	composePartSchemaMu.Lock()
+	composePartSchemaInitialized = false
+	composePartSchemaJSON = nil
+	composePartSchemaErr = nil
+	composePartSchemaMu.Unlock()
+}
+
+// GenerateComposePartSchema generates a JSON Schema for a partial YAML file
+// referenced in a solution's compose list. It reuses the patched component
+// $defs from GenerateSolutionSchema and restricts the document envelope to the
+// sections bundler.Compose merges: spec.resolvers, spec.workflow.{actions,finally},
+// spec.testing, and bundle.include, with additionalProperties: false at every
+// wrapper object.
+func GenerateComposePartSchema() ([]byte, error) {
+	composePartSchemaMu.Lock()
+	defer composePartSchemaMu.Unlock()
+	if !composePartSchemaInitialized {
+		composePartSchemaJSON, composePartSchemaErr = buildComposePartSchema()
+		composePartSchemaInitialized = true
+	}
+	if composePartSchemaErr != nil {
+		return nil, composePartSchemaErr
+	}
+	return slices.Clone(composePartSchemaJSON), nil
+}
+
+func buildComposePartSchema() ([]byte, error) {
+	fullBytes, err := GenerateSolutionSchema()
+	if err != nil {
+		return nil, fmt.Errorf("generating base solution schema: %w", err)
+	}
+
+	var baseDoc map[string]any
+	if err := json.Unmarshal(fullBytes, &baseDoc); err != nil {
+		return nil, fmt.Errorf("unmarshalling base solution schema: %w", err)
+	}
+
+	defs, ok := baseDoc["$defs"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("base solution schema missing $defs")
+	}
+
+	specProps, err := defProperties(defs, "SolutionSpec")
+	if err != nil {
+		return nil, err
+	}
+	resolversProp, ok := specProps["resolvers"]
+	if !ok {
+		return nil, fmt.Errorf("SolutionSpec schema missing resolvers property")
+	}
+	testingProp, ok := specProps["testing"]
+	if !ok {
+		return nil, fmt.Errorf("SolutionSpec schema missing testing property")
+	}
+
+	wfProps, err := defProperties(defs, "ActionWorkflow")
+	if err != nil {
+		return nil, err
+	}
+	actionsProp, ok := wfProps["actions"]
+	if !ok {
+		return nil, fmt.Errorf("ActionWorkflow schema missing actions property")
+	}
+	finallyProp, ok := wfProps["finally"]
+	if !ok {
+		return nil, fmt.Errorf("ActionWorkflow schema missing finally property")
+	}
+
+	bundleProps, err := defProperties(defs, "SolutionBundle")
+	if err != nil {
+		return nil, err
+	}
+	includeProp, ok := bundleProps["include"]
+	if !ok {
+		return nil, fmt.Errorf("SolutionBundle schema missing include property")
+	}
+
+	doc := map[string]any{
+		"$schema":              "https://json-schema.org/draft/2020-12/schema",
+		"$id":                  ComposePartSchemaID,
+		"title":                "scafctl Compose Part",
+		"description":          "Schema for a partial YAML file merged into a scafctl solution via compose.",
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"spec": map[string]any{
+				"type":                 "object",
+				"description":          "Partial execution specification contributed by a composed file.",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"resolvers": resolversProp,
+					"workflow": map[string]any{
+						"type":                 "object",
+						"description":          "Partial workflow specification contributed by a composed file.",
+						"additionalProperties": false,
+						"properties": map[string]any{
+							"actions": actionsProp,
+							"finally": finallyProp,
+						},
+					},
+					"testing": testingProp,
+				},
+			},
+			"bundle": map[string]any{
+				"type":                 "object",
+				"description":          "Partial build-time bundling configuration contributed by a composed file.",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"include": includeProp,
+				},
+			},
+		},
+		"$defs": defs,
+	}
+
+	return json.MarshalIndent(doc, "", "  ")
+}
+
+func defProperties(defs map[string]any, name string) (map[string]any, error) {
+	defRaw, ok := defs[name]
+	if !ok {
+		if key := findDefKey(defs, name); key != "" {
+			defRaw = defs[key]
+			ok = true
+		}
+	}
+	if !ok {
+		return nil, fmt.Errorf("schema missing $defs.%s", name)
+	}
+	def, ok := defRaw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("schema $defs.%s is not an object", name)
+	}
+	props, ok := def["properties"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("schema $defs.%s missing properties", name)
+	}
+	return props, nil
 }
 
 // GenerateSolutionSchemaCompact generates a compact (no indentation) JSON Schema.

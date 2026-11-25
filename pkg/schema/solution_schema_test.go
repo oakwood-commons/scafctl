@@ -5,6 +5,7 @@ package schema
 
 import (
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -129,4 +130,93 @@ func TestRewriteRefs(t *testing.T) {
 // resetSolutionSchemaOnce resets the schema state so each test starts clean.
 func resetSolutionSchemaOnce() {
 	resetSolutionSchemaForTesting()
+}
+
+func TestGenerateComposePartSchema(t *testing.T) {
+	t.Run("produces restricted envelope reusing patched defs", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+
+		schemaBytes, err := GenerateComposePartSchema()
+		require.NoError(t, err)
+		require.NotEmpty(t, schemaBytes)
+
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal(schemaBytes, &doc))
+
+		assert.Equal(t, "https://json-schema.org/draft/2020-12/schema", doc["$schema"])
+		assert.Equal(t, ComposePartSchemaID, doc["$id"])
+		assert.Equal(t, "object", doc["type"])
+		assert.Equal(t, false, doc["additionalProperties"])
+
+		rootProps, ok := doc["properties"].(map[string]any)
+		require.True(t, ok)
+		assert.ElementsMatch(t, []string{"spec", "bundle"}, mapKeys(rootProps))
+
+		specSchema, ok := rootProps["spec"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, false, specSchema["additionalProperties"])
+		specProps, ok := specSchema["properties"].(map[string]any)
+		require.True(t, ok)
+		assert.ElementsMatch(t, []string{"resolvers", "workflow", "testing"}, mapKeys(specProps))
+
+		wfSchema, ok := specProps["workflow"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, false, wfSchema["additionalProperties"])
+		wfProps, ok := wfSchema["properties"].(map[string]any)
+		require.True(t, ok)
+		assert.ElementsMatch(t, []string{"actions", "finally"}, mapKeys(wfProps))
+
+		bundleSchema, ok := rootProps["bundle"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, false, bundleSchema["additionalProperties"])
+		bundleProps, ok := bundleSchema["properties"].(map[string]any)
+		require.True(t, ok)
+		assert.ElementsMatch(t, []string{"include"}, mapKeys(bundleProps))
+
+		defs, ok := doc["$defs"].(map[string]any)
+		require.True(t, ok)
+		assert.NotEmpty(t, defs)
+	})
+
+	t.Run("safe under concurrent access", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+
+		const workers = 8
+		results := make([][]byte, workers)
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for i := range workers {
+			go func(idx int) {
+				defer wg.Done()
+				b, err := GenerateComposePartSchema()
+				assert.NoError(t, err)
+				results[idx] = b
+			}(i)
+		}
+		wg.Wait()
+
+		for i := 1; i < workers; i++ {
+			assert.Equal(t, results[0], results[i])
+		}
+	})
+
+	t.Run("returns cloned slice so caller mutation cannot corrupt cache", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+		first, err := GenerateComposePartSchema()
+		require.NoError(t, err)
+		origByte := first[0]
+		first[0] = 'X'
+
+		second, err := GenerateComposePartSchema()
+		require.NoError(t, err)
+		assert.Equal(t, origByte, second[0])
+	})
+}
+
+func mapKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
