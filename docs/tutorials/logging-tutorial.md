@@ -286,6 +286,8 @@ Environment variables are useful for CI/CD pipelines, container environments, an
 | `SCAFCTL_LOG_LEVEL` | Set log level | `SCAFCTL_LOG_LEVEL=info` |
 | `SCAFCTL_LOG_FORMAT` | Set log format | `SCAFCTL_LOG_FORMAT=json` |
 | `SCAFCTL_LOG_PATH` | Write logs to a file | `SCAFCTL_LOG_PATH=/var/log/scafctl.log` |
+| `NO_COLOR` | Disable ANSI colors and emoji/unicode status icons when set to any non-empty value | `NO_COLOR=1` |
+| `SCAFCTL_ACTION_CIOUTPUT` | Control CI log groups and error annotations (`auto`, `none`, `github-actions`) | `SCAFCTL_ACTION_CIOUTPUT=none` |
 
 ### Examples
 
@@ -340,6 +342,28 @@ When multiple sources set the log level, scafctl applies them in this order (hig
 The same pattern applies to format and file path:
 - `--log-format` flag > `SCAFCTL_LOG_FORMAT` env > config `logging.format` > default `"console"`
 - `--log-file` flag > `SCAFCTL_LOG_PATH` env > default (no file)
+
+## Disabling Colors and Status Icons (`NO_COLOR`)
+
+scafctl honors the [no-color.org](https://no-color.org/) convention: setting
+`NO_COLOR` to any non-empty value (or passing `--no-color` / `settings.noColor:
+true`) disables ANSI escape sequences and replaces emoji/unicode status glyphs
+with plain ASCII text across CLI messages, tables, and `--verbose` action
+summaries (`[ok]`, `[skip]`, `[fail]`, `[cancel]`).
+
+Precedence for color control (highest priority first):
+
+1. `--no-color` CLI flag
+2. `settings.noColor` in `config.yaml` or any non-empty `NO_COLOR` environment variable
+3. Default: color enabled when connected to a terminal (unset `NO_COLOR` in your shell to restore full terminal color)
+
+~~~bash
+# Disable color and emoji for a single invocation via NO_COLOR
+NO_COLOR=1 scafctl run action test --verbose
+
+# Re-run with full terminal color when NO_COLOR is set in your shell
+env -u NO_COLOR scafctl run action test --verbose
+~~~
 
 ## Configuration File
 

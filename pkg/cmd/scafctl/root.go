@@ -370,9 +370,12 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				cfg = &config.Config{}
 			}
 
-			// Apply config settings to cliParams (CLI flags take precedence)
+			// Apply config settings and NO_COLOR environment variable to cliParams (CLI flags take precedence)
 			if !cCmd.Flags().Changed("no-color") {
-				cliParams.NoColor = cfg.Settings.NoColor
+				cliParams.NoColor = cfg.Settings.NoColor || settings.IsNoColorEnv()
+			}
+			if cliParams.NoColor {
+				ioStreams.ColorEnabled = false
 			}
 			if !cCmd.Flags().Changed("quiet") {
 				cliParams.IsQuiet = cfg.Settings.Quiet

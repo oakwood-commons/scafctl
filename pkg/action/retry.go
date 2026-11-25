@@ -201,12 +201,13 @@ func (r *RetryExecutor) ExecuteWithRetry(
 	callback RetryCallback,
 ) (*provider.Output, int, error) {
 	maxAttempts := r.MaxAttempts()
+	var lastOutput *provider.Output
 	var lastErr error
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// Check for cancellation before each attempt
 		if ctx.Err() != nil {
-			return nil, attempt - 1, fmt.Errorf("execution cancelled: %w", ctx.Err())
+			return lastOutput, attempt - 1, fmt.Errorf("execution cancelled: %w", ctx.Err())
 		}
 
 		// If this is a retry (not the first attempt), wait and notify callback
@@ -222,7 +223,7 @@ func (r *RetryExecutor) ExecuteWithRetry(
 			if delay > 0 {
 				select {
 				case <-ctx.Done():
-					return nil, attempt - 1, fmt.Errorf("execution cancelled during retry delay: %w", ctx.Err())
+					return lastOutput, attempt - 1, fmt.Errorf("execution cancelled during retry delay: %w", ctx.Err())
 				case <-time.After(delay):
 					// Continue with retry
 				}
@@ -234,6 +235,9 @@ func (r *RetryExecutor) ExecuteWithRetry(
 		if err == nil {
 			return output, attempt, nil
 		}
+		if output != nil {
+			lastOutput = output
+		}
 
 		lastErr = err
 
@@ -241,21 +245,21 @@ func (r *RetryExecutor) ExecuteWithRetry(
 		shouldRetry, retryErr := r.ShouldRetry(ctx, err, attempt)
 		if retryErr != nil {
 			// Expression evaluation failed - fail the action with both errors
-			return nil, attempt, fmt.Errorf("action failed and retryIf evaluation failed: %w (original error: %w)", retryErr, err)
+			return lastOutput, attempt, fmt.Errorf("action failed and retryIf evaluation failed: %w (original error: %w)", retryErr, err)
 		}
 		if !shouldRetry {
 			// Return actual attempt count, not maxAttempts
-			return nil, attempt, fmt.Errorf("action failed after %d attempt(s): %w", attempt, lastErr)
+			return lastOutput, attempt, fmt.Errorf("action failed after %d attempt(s): %w", attempt, lastErr)
 		}
 	}
 
-	return nil, maxAttempts, fmt.Errorf("action failed after %d attempt(s): %w", maxAttempts, lastErr)
+	return lastOutput, maxAttempts, fmt.Errorf("action failed after %d attempt(s): %w", maxAttempts, lastErr)
 }
 
 // RetryResult contains information about a retry execution.
 type RetryResult struct {
-	// Output is the successful output (nil if all attempts failed)
-	Output *provider.Output `json:"output,omitempty" yaml:"output,omitempty" doc:"Successful output (nil if all attempts failed)"`
+	// Output is the output from the successful attempt, or the last non-nil output when all attempts fail
+	Output *provider.Output `json:"output,omitempty" yaml:"output,omitempty" doc:"Output from the successful attempt or last attempt producing output"`
 
 	// Attempts is the total number of attempts made
 	Attempts int `json:"attempts" yaml:"attempts" doc:"Total number of attempts made" maximum:"100" example:"3"`
@@ -326,6 +330,9 @@ func (r *RetryExecutor) ExecuteWithRetryDetailed(
 			result.Output = output
 			result.FinalError = nil
 			return result
+		}
+		if output != nil {
+			result.Output = output
 		}
 
 		result.AttemptErrors = append(result.AttemptErrors, err)

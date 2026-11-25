@@ -53,6 +53,15 @@ func New(ioStreams *terminal.IOStreams, cliParams *settings.Run, opts ...Option)
 	return w
 }
 
+// WithIOStreams returns an Option that replaces the Writer's underlying IOStreams.
+// Intended for use with Clone when wrapping streams (for example, synchronizing
+// concurrent stderr/stdout writes) while preserving exitFunc and humanToStderr.
+func WithIOStreams(ioStreams *terminal.IOStreams) Option {
+	return func(w *Writer) {
+		w.ioStreams = ioStreams
+	}
+}
+
 // Clone returns a copy of the writer with the given options applied on top of
 // its existing configuration. Unlike New, it preserves the current fields
 // (streams, CLI params, exit function, human routing) so a derived writer does
@@ -68,10 +77,10 @@ func (w *Writer) Clone(opts ...Option) *Writer {
 // Success writes a success message to stdout (or stderr when WithHumanToStderr is set).
 // Respects --quiet and --no-color flags.
 func (w *Writer) Success(msg string) {
-	if w.cliParams.IsQuiet {
+	if w.IsQuiet() {
 		return
 	}
-	fmt.Fprintln(w.humanOut(), output.SuccessMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.humanOut(), output.SuccessMessage(msg, w.NoColor()))
 }
 
 // Successf writes a formatted success message to stdout.
@@ -84,10 +93,10 @@ func (w *Writer) Successf(format string, args ...any) {
 // Use this for status confirmations that must not corrupt structured command
 // output (e.g., -o json). Respects --quiet and --no-color flags.
 func (w *Writer) SuccessStderr(msg string) {
-	if w.cliParams.IsQuiet {
+	if w.IsQuiet() {
 		return
 	}
-	fmt.Fprintln(w.ioStreams.ErrOut, output.SuccessMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.ioStreams.ErrOut, output.SuccessMessage(msg, w.NoColor()))
 }
 
 // SuccessStderrf writes a formatted success message to stderr.
@@ -100,10 +109,10 @@ func (w *Writer) SuccessStderrf(format string, args ...any) {
 // Warning writes a warning message to stdout (or stderr when WithHumanToStderr is set).
 // Respects --quiet and --no-color flags.
 func (w *Writer) Warning(msg string) {
-	if w.cliParams.IsQuiet {
+	if w.IsQuiet() {
 		return
 	}
-	fmt.Fprintln(w.humanOut(), output.WarningMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.humanOut(), output.WarningMessage(msg, w.NoColor()))
 }
 
 // Warningf writes a formatted warning message to stdout.
@@ -117,10 +126,10 @@ func (w *Writer) Warningf(format string, args ...any) {
 // structured command output (e.g., -o json).
 // Respects --quiet and --no-color flags.
 func (w *Writer) WarnStderr(msg string) {
-	if w.cliParams.IsQuiet {
+	if w.IsQuiet() {
 		return
 	}
-	fmt.Fprintln(w.ioStreams.ErrOut, output.WarningMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.ioStreams.ErrOut, output.WarningMessage(msg, w.NoColor()))
 }
 
 // WarnStderrf writes a formatted warning message to stderr.
@@ -135,7 +144,7 @@ func (w *Writer) WarnStderrf(format string, args ...any) {
 // Does NOT respect --quiet (errors should always be visible).
 // Respects --no-color flag.
 func (w *Writer) Error(msg string) {
-	fmt.Fprintln(w.ioStreams.ErrOut, output.ErrorMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.ioStreams.ErrOut, output.ErrorMessage(msg, w.NoColor()))
 }
 
 // Errorf writes a formatted error message to stderr.
@@ -177,10 +186,10 @@ func (w *Writer) ErrorWithCodef(code int, format string, args ...any) {
 // Info writes an informational message to stdout (or stderr when WithHumanToStderr is set).
 // Respects --quiet and --no-color flags.
 func (w *Writer) Info(msg string) {
-	if w.cliParams.IsQuiet {
+	if w.IsQuiet() {
 		return
 	}
-	fmt.Fprintln(w.humanOut(), output.InfoMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.humanOut(), output.InfoMessage(msg, w.NoColor()))
 }
 
 // Infof writes a formatted informational message to stdout.
@@ -192,20 +201,20 @@ func (w *Writer) Infof(format string, args ...any) {
 // SectionHeader writes a bold section header to stdout (or stderr when WithHumanToStderr is set).
 // Respects --quiet and --no-color flags.
 func (w *Writer) SectionHeader(msg string) {
-	if w.cliParams.IsQuiet {
+	if w.IsQuiet() {
 		return
 	}
-	fmt.Fprintln(w.humanOut(), output.SectionHeaderMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.humanOut(), output.SectionHeaderMessage(msg, w.NoColor()))
 }
 
 // Debug writes a debug message to stdout (or stderr when WithHumanToStderr is set).
 // Respects --quiet and --no-color flags.
 // Only writes if log level indicates debug output is enabled (debug, trace, or numeric V-level).
 func (w *Writer) Debug(msg string) {
-	if w.cliParams.IsQuiet || !logger.IsDebugLevel(w.cliParams.MinLogLevel) {
+	if w.IsQuiet() || w.cliParams == nil || !logger.IsDebugLevel(w.cliParams.MinLogLevel) {
 		return
 	}
-	fmt.Fprintln(w.humanOut(), output.DebugMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.humanOut(), output.DebugMessage(msg, w.NoColor()))
 }
 
 // Debugf writes a formatted debug message to stdout.
@@ -220,10 +229,10 @@ func (w *Writer) Debugf(format string, args ...any) {
 // Respects --quiet flag but ignores log level (always prints when not quiet).
 // Writes to stderr so it doesn't pollute piped stdout output.
 func (w *Writer) DebugOut(msg string) {
-	if w.cliParams.IsQuiet {
+	if w.IsQuiet() {
 		return
 	}
-	fmt.Fprintln(w.ioStreams.ErrOut, output.DebugMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.ioStreams.ErrOut, output.DebugMessage(msg, w.NoColor()))
 }
 
 // DebugOutf writes a formatted debug output message to stderr.
@@ -236,17 +245,17 @@ func (w *Writer) DebugOutf(format string, args ...any) {
 
 // VerboseEnabled returns true if verbose output is active (--verbose is set and --quiet is not).
 func (w *Writer) VerboseEnabled() bool {
-	return w.cliParams.Verbose && !w.cliParams.IsQuiet
+	return w != nil && w.cliParams != nil && w.cliParams.Verbose && !w.cliParams.IsQuiet
 }
 
 // Verbose writes a verbose diagnostic message to stderr.
 // Only prints when --verbose is enabled. Respects --quiet.
 // Writes to stderr so it doesn't pollute piped stdout output (e.g., -o json).
 func (w *Writer) Verbose(msg string) {
-	if w.cliParams.IsQuiet || !w.cliParams.Verbose {
+	if !w.VerboseEnabled() {
 		return
 	}
-	fmt.Fprintln(w.ioStreams.ErrOut, output.VerboseMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.ioStreams.ErrOut, output.VerboseMessage(msg, w.NoColor()))
 }
 
 // Verbosef writes a formatted verbose diagnostic message to stderr.
@@ -259,7 +268,7 @@ func (w *Writer) Verbosef(format string, args ...any) {
 // Plain writes a plain message to stdout (or stderr when WithHumanToStderr is set) without any styling or newline.
 // Respects --quiet flag only.
 func (w *Writer) Plain(msg string) {
-	if w.cliParams.IsQuiet {
+	if w.IsQuiet() {
 		return
 	}
 	fmt.Fprint(w.humanOut(), msg)
@@ -274,7 +283,7 @@ func (w *Writer) Plainf(format string, args ...any) {
 // Plainln writes a plain message to stdout (or stderr when WithHumanToStderr is set) with a newline, without any styling.
 // Respects --quiet flag only.
 func (w *Writer) Plainln(msg string) {
-	if w.cliParams.IsQuiet {
+	if w.IsQuiet() {
 		return
 	}
 	fmt.Fprintln(w.humanOut(), msg)
@@ -291,7 +300,7 @@ func (w *Writer) Plainlnf(format string, args ...any) {
 // but also does not warrant warning/error formatting.
 // Respects --quiet flag only.
 func (w *Writer) PlainStderr(msg string) {
-	if w.cliParams.IsQuiet {
+	if w.IsQuiet() {
 		return
 	}
 	fmt.Fprintln(w.ioStreams.ErrOut, msg)
@@ -301,6 +310,53 @@ func (w *Writer) PlainStderr(msg string) {
 // Respects --quiet flag only.
 func (w *Writer) PlainStderrf(format string, args ...any) {
 	w.PlainStderr(fmt.Sprintf(format, args...))
+}
+
+// Stderrln writes an unstyled line to stderr regardless of --quiet.
+// Use this for machine-consumed CI error annotations or failure diagnostics
+// that must remain visible even when progress output is silenced.
+func (w *Writer) Stderrln(msg string) {
+	if w == nil || w.ioStreams == nil || w.ioStreams.ErrOut == nil {
+		return
+	}
+	fmt.Fprintln(w.ioStreams.ErrOut, msg)
+}
+
+// Stderrlnf writes a formatted unstyled line to stderr regardless of --quiet.
+func (w *Writer) Stderrlnf(format string, args ...any) {
+	w.Stderrln(fmt.Sprintf(format, args...))
+}
+
+type directiveLineWriter interface {
+	WriteDirectiveLine(line string) error
+}
+
+// PlainStderrDirective writes a CI workflow directive (such as ::group:: or
+// ::endgroup::) on its own stderr line when --quiet is not enabled, aligning to
+// column 0 if preceding output did not end with a newline.
+func (w *Writer) PlainStderrDirective(line string) {
+	if line == "" || w.IsQuiet() || w == nil || w.ioStreams == nil || w.ioStreams.ErrOut == nil {
+		return
+	}
+	if dlw, ok := w.ioStreams.ErrOut.(directiveLineWriter); ok {
+		_ = dlw.WriteDirectiveLine(line)
+		return
+	}
+	fmt.Fprintln(w.ioStreams.ErrOut, line)
+}
+
+// StderrDirective writes a CI workflow directive (such as ::error) on its own
+// stderr line regardless of --quiet, aligning to column 0 if preceding output
+// did not end with a newline.
+func (w *Writer) StderrDirective(line string) {
+	if line == "" || w == nil || w.ioStreams == nil || w.ioStreams.ErrOut == nil {
+		return
+	}
+	if dlw, ok := w.ioStreams.ErrOut.(directiveLineWriter); ok {
+		_ = dlw.WriteDirectiveLine(line)
+		return
+	}
+	fmt.Fprintln(w.ioStreams.ErrOut, line)
 }
 
 // IOStreams returns the underlying IOStreams.
@@ -317,10 +373,10 @@ func (w *Writer) CliParams() *settings.Run {
 
 // NoColor returns true if color output is disabled.
 func (w *Writer) NoColor() bool {
-	return w.cliParams.NoColor
+	return w != nil && w.cliParams != nil && w.cliParams.NoColor
 }
 
 // IsQuiet returns true if quiet mode is enabled.
 func (w *Writer) IsQuiet() bool {
-	return w.cliParams.IsQuiet
+	return w != nil && w.cliParams != nil && w.cliParams.IsQuiet
 }

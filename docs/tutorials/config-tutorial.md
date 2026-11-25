@@ -169,7 +169,7 @@ scafctl config get httpClient.timeout
 
 ### Write Values
 
-> **Warning (`config.d` drop-in fragments):** When non-empty `config.d/*.yaml` fragments are loaded, `scafctl config set` only persists `logging.level`, `logging.format`, `logging.timestamps`, `logging.enableProfiling`, `settings.quiet`, `settings.noColor`, `settings.defaultCatalog`, `httpClient.allowPrivateIPs`, `httpClient.trustProxyResolution`, `httpClient.trustedProxy`, `httpClient.allowedPrivateCIDRs`, and `auth.browser` to `config.yaml`. For any other key (such as `settings.disableOfficialAuthHandlers`, `apiServer.*`, `resolver.*`, or `httpClient.timeout`), edit `config.yaml` or a `config.d/*.yaml` fragment directly so changes survive reload.
+> **Warning (`config.d` drop-in fragments):** When non-empty `config.d/*.yaml` fragments are loaded, `scafctl config set` only persists `logging.level`, `logging.format`, `logging.timestamps`, `logging.enableProfiling`, `settings.quiet`, `settings.noColor`, `settings.defaultCatalog`, `httpClient.allowPrivateIPs`, `httpClient.trustProxyResolution`, `httpClient.trustedProxy`, `httpClient.allowedPrivateCIDRs`, `action.ciOutput`, and `auth.browser` to `config.yaml`. For any other key (such as `settings.disableOfficialAuthHandlers`, `apiServer.*`, `resolver.*`, or `httpClient.timeout`), edit `config.yaml` or a `config.d/*.yaml` fragment directly so changes survive reload.
 
 {{< tabs "config-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
@@ -462,6 +462,7 @@ shown as `(not present)`.
 | `resolver.concurrency` | int | `4` | Max parallel resolver execution |
 | `action.timeout` | duration | `10m` | Overall action timeout |
 | `action.concurrency` | int | `4` | Max parallel action execution |
+| `action.ciOutput` | string | `auto` | CI output format for action execution (`auto`, `none`, `github-actions`; overridden by `--ci-output` or `SCAFCTL_ACTION_CIOUTPUT`) |
 | `plugins.grpcMaxMessageSize` | int | `67108864` | Max gRPC message size in bytes for plugin communication (64 MB default). Increase for very large provider inputs/outputs |
 | `plugins.fetchCooldown` | duration | `5m` | Cooldown between failed plugin auto-fetch retries |
 | `settings.disableOfficialAuthHandlers` | bool | `false` | Disable auto-resolution of the official auth handlers (`entra`, `github`, `gcp`) |

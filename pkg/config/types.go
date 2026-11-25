@@ -606,6 +606,11 @@ type ActionConfig struct {
 	// When set, actions resolve relative paths against this directory instead of CWD.
 	// Can be overridden by the --output-dir CLI flag.
 	OutputDir string `json:"outputDir,omitempty" yaml:"outputDir,omitempty" mapstructure:"outputDir" doc:"Default target directory for action file operations" maxLength:"4096" example:"/tmp/output"`
+
+	// CIOutput controls CI workflow annotations and log grouping during action execution.
+	// Supported values: "auto" (detect GITHUB_ACTIONS=true), "none", "github-actions".
+	// Can be overridden by the --ci-output CLI flag or <PREFIX>_ACTION_CIOUTPUT.
+	CIOutput string `json:"ciOutput,omitempty" yaml:"ciOutput,omitempty" mapstructure:"ciOutput" doc:"CI output format for action execution (auto|none|github-actions)" enum:"auto,none,github-actions" example:"auto" maxLength:"32"`
 }
 
 // MaxAuthBrowserLength is the maximum length in bytes allowed for auth.browser

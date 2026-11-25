@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
@@ -282,9 +283,16 @@ func (e *ForEachExecutor) executeIteration(
 
 	// Execute the iteration
 	output, err := execute(ctx, item, index)
+	tracker := redact.FromContext(ctx)
 
 	endTime := time.Now()
 	result.EndTime = &endTime
+	if output != nil {
+		result.Results = output.Data
+		if (ctx.Err() != nil || err != nil) && result.Results != nil && tracker != nil {
+			result.Results = tracker.RedactAny(result.Results)
+		}
+	}
 
 	if ctx.Err() == context.DeadlineExceeded {
 		result.Status = StatusTimeout
@@ -298,6 +306,9 @@ func (e *ForEachExecutor) executeIteration(
 	}
 
 	if err != nil {
+		if tracker != nil {
+			err = tracker.RedactError(err)
+		}
 		result.Status = StatusFailed
 		result.Error = err.Error()
 		return result
@@ -305,9 +316,6 @@ func (e *ForEachExecutor) executeIteration(
 
 	// Success
 	result.Status = StatusSucceeded
-	if output != nil {
-		result.Results = output.Data
-	}
 
 	return result
 }

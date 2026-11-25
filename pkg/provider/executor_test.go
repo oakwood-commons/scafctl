@@ -1089,3 +1089,63 @@ func TestValidateWriteOperation_GuardsAndZeroAllocFastPaths(t *testing.T) {
 	assert.NotContains(t, errTabOp.Error(), "cred")
 	assert.Contains(t, errTabOp.Error(), `operation "op_[REDACTED]"`)
 }
+
+func TestExecutor_Execute_PreservesNonNilOutputOnError(t *testing.T) {
+	t.Parallel()
+
+	executor := NewExecutor()
+	p := newMockExecutableProvider("exec", func(_ context.Context, _ any) (*Output, error) {
+		return &Output{
+			Data: map[string]any{
+				"stdout":   "--- FAIL: TestWidget secret-tok\n",
+				"exitCode": 1,
+			},
+			Warnings: []string{"warn secret-tok"},
+			Metadata: map[string]any{"key": "secret-tok"},
+		}, fmt.Errorf("exec: command exited with code 1")
+	})
+
+	tracker := redact.NewTracker()
+	tracker.Track("secret-tok")
+	ctx := redact.WithTracker(WithExecutionMode(context.Background(), CapabilityFrom), tracker)
+
+	result, err := executor.Execute(ctx, p, map[string]any{"input1": "secret-tok"})
+	require.Error(t, err)
+	assert.Equal(t, "provider execution failed: exec: command exited with code 1", err.Error())
+	require.NotNil(t, result, "non-nil provider output must be preserved on error")
+	assert.Equal(t, "--- FAIL: TestWidget [REDACTED]\n", result.Output.Data.(map[string]any)["stdout"])
+	assert.Equal(t, []string{"warn [REDACTED]"}, result.Output.Warnings)
+	assert.Equal(t, "[REDACTED]", result.Output.Metadata["key"])
+	assert.Equal(t, "[REDACTED]", result.ResolvedInputs["input1"])
+}
+
+func TestCapturedStreamSink_AndMergeIntoData(t *testing.T) {
+	t.Parallel()
+
+	var nilSink *CapturedStreamSink
+	nilSink.Set("ignored", "ignored")
+	assert.True(t, nilSink.Logs().Empty())
+
+	_, ok := CapturedStreamSinkFromContext(context.Background())
+	assert.False(t, ok)
+
+	sink := &CapturedStreamSink{}
+	ctx := WithCapturedStreamSink(context.Background(), sink)
+	gotSink, ok := CapturedStreamSinkFromContext(ctx)
+	require.True(t, ok)
+	assert.Same(t, sink, gotSink)
+
+	sink.Set("out\n", "err\n")
+	logs := sink.Logs()
+	assert.False(t, logs.Empty())
+	assert.Equal(t, map[string]any{"stdout": "out\n", "stderr": "err\n"}, logs.MergeIntoData(nil))
+
+	orig := map[string]any{"id": 1}
+	merged := logs.MergeIntoData(orig).(map[string]any)
+	assert.Equal(t, map[string]any{"id": 1}, orig, "MergeIntoData must not mutate caller map")
+	assert.Equal(t, map[string]any{"id": 1, "stdout": "out\n", "stderr": "err\n"}, merged)
+
+	existing := map[string]any{"stdout": []string{"structured"}, "stderr": "kept\n"}
+	assert.Equal(t, existing, logs.MergeIntoData(existing))
+	assert.Equal(t, "scalar", logs.MergeIntoData("scalar"))
+}

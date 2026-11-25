@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -73,6 +75,9 @@ type ActionOptions struct {
 	// success exits 0 (non-breaking).
 	DetailedExitCode bool
 
+	// CIOutput controls CI workflow annotations and log grouping ("auto", "none", "github-actions").
+	CIOutput string
+
 	// DynamicArgs are resolver parameters from positional key=value syntax.
 	DynamicArgs []string
 
@@ -81,6 +86,13 @@ type ActionOptions struct {
 	// can embed its diagnostics and resolved values in the success envelope.
 	validationWarn          error
 	validationWarnResolvers map[string]any
+
+	// progressPrintedFailure records whether ActionProgressCallback already
+	// emitted a failure/timeout line during execution so writeActionOutputDefault
+	// does not repeat it.
+	progressPrintedFailure bool
+	hasProgressCallback    bool
+	ciDialect              output.CIDialect
 }
 
 // CommandAction creates the 'run action' subcommand.
@@ -143,7 +155,8 @@ FAILURE OUTPUT (json/yaml):
   receiving empty stdout. Setup and resolver-phase failures emit a
   {status: "failed", diagnostics: [...]} envelope; an action-execution failure
   emits the full action result envelope (status: "failed" with per-action error
-  detail). Human formats (table/quiet) keep the prior stderr-only behavior.
+  detail). In default human output, buffered stdout/stderr from a failing action
+  is flushed before the failure diagnostic on stderr; --quiet suppresses stdout.
 
 EXIT CODES:
   0   Success (also partial success unless --detailed-exit-code is set)
@@ -213,6 +226,7 @@ Examples:
 	// Detailed exit code: opt-in distinct exit code (12) on partial success.
 	// Defaults from cliParams (embedder/config); the flag overrides it.
 	cCmd.Flags().BoolVar(&options.DetailedExitCode, "detailed-exit-code", cliParams.DetailedExitCode, "Return a distinct exit code (12) when the run completes with partial success (some continueOnError actions failed); default off (partial success exits 0)")
+	cCmd.Flags().StringVar(&options.CIOutput, "ci-output", settings.DefaultActionCIOutput, "CI output format for action banners and annotations (auto|none|github-actions)")
 
 	return cCmd
 }
@@ -228,10 +242,15 @@ func parseActionArgs(args []string, options *ActionOptions) {
 // getEffectiveActionConfig returns action config values, using app config
 // as defaults when CLI flags weren't explicitly set.
 func (o *ActionOptions) getEffectiveActionConfig(ctx context.Context) config.ActionConfigValues {
+	ciOutput := o.CIOutput
+	if ciOutput == "" {
+		ciOutput = settings.DefaultActionCIOutput
+	}
 	result := config.ActionConfigValues{
 		DefaultTimeout: o.ActionTimeout,
 		GracePeriod:    settings.DefaultGracePeriod,
 		MaxConcurrency: o.MaxActionConcurrency,
+		CIOutput:       ciOutput,
 	}
 
 	cfg := config.FromContext(ctx)
@@ -256,6 +275,11 @@ func (o *ActionOptions) getEffectiveActionConfig(ctx context.Context) config.Act
 		if !o.flagsChanged["output-dir"] {
 			result.OutputDir = configValues.OutputDir
 		}
+		if !o.flagsChanged["ci-output"] {
+			result.CIOutput = configValues.CIOutput
+		}
+	} else if o.CIOutput == "" {
+		result.CIOutput = configValues.CIOutput
 	}
 
 	result.GracePeriod = configValues.GracePeriod
@@ -273,6 +297,9 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	// options instance is reused in-process (e.g. an embedder re-executing).
 	o.validationWarn = nil
 	o.validationWarnResolvers = nil
+	o.progressPrintedFailure = false
+	o.hasProgressCallback = false
+	o.ciDialect = nil
 
 	// Include pre-release versions in catalog resolution when --pre-release is set.
 	if o.PreRelease {
@@ -297,14 +324,18 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
+	actionCfg := o.getEffectiveActionConfig(ctx)
+	ciDialect, err := output.ResolveCIDialect(actionCfg.CIOutput, os.Getenv)
+	if err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+	o.ciDialect = ciDialect
+
 	lgr := logger.FromContext(ctx)
 
 	// Apply config default for output-dir
-	if o.flagsChanged != nil && !o.flagsChanged["output-dir"] {
-		actionCfg := o.getEffectiveActionConfig(ctx)
-		if actionCfg.OutputDir != "" {
-			o.OutputDir = actionCfg.OutputDir
-		}
+	if o.flagsChanged != nil && !o.flagsChanged["output-dir"] && actionCfg.OutputDir != "" {
+		o.OutputDir = actionCfg.OutputDir
 	}
 
 	// --force shorthand
@@ -569,6 +600,9 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	// Build action graph from filtered workflow
 	graph, err := action.BuildGraph(ctx, workflow, resolverData, nil)
 	if err != nil {
+		if t := redact.FromContext(ctx); t != nil {
+			err = t.RedactError(err)
+		}
 		return o.exitWithCode(ctx, fmt.Errorf("failed to build action graph: %w", err), exitcode.InvalidInput)
 	}
 
@@ -580,12 +614,17 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	// Action banners are always enabled (default-on like go-task/make); suppressed by --quiet.
 	// writer.FromContext returns nil when no writer is in context (e.g. direct Run calls in tests);
 	// in that case we skip the callback so the executor's nil-guard suppresses output safely.
+	actionStreams := o.getActionIOStreams()
+	var progressCB *ActionProgressCallback
 	var actionProgressCallback action.ProgressCallback
-	if w := writer.FromContext(ctx); w != nil {
-		actionProgressCallback = NewActionProgressCallback(w)
+	if w := writer.FromContext(ctx); w != nil && o.Output != "quiet" {
+		cbWriter, syncedStreams := synchronizeActionStreams(w, actionStreams)
+		actionStreams = syncedStreams
+		actionCtx = writer.WithWriter(actionCtx, cbWriter)
+		progressCB = NewActionProgressCallbackWithDialect(cbWriter, ciDialect)
+		actionProgressCallback = progressCB
 	}
 
-	actionCfg := o.getEffectiveActionConfig(ctx)
 	resolverExecutionData := execute.BuildExecutionData(resolverCtx, resolvers, resolverElapsed)
 
 	funcBinder, err := sol.TemplateFuncBinder()
@@ -602,7 +641,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		action.WithDefaultTimeout(actionCfg.DefaultTimeout),
 		action.WithGracePeriod(actionCfg.GracePeriod),
 		action.WithMaxConcurrency(actionCfg.MaxConcurrency),
-		action.WithIOStreams(o.getActionIOStreams()),
+		action.WithIOStreams(actionStreams),
 		action.WithCwd(originalCwd),
 		action.WithFingerprintChecker(fingerprint.NewChecker(stateData)),
 		action.WithNoCache(o.SkipFingerprint),
@@ -613,23 +652,42 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	}
 
 	result, err := actionExecutor.Execute(actionCtx, workflow)
+	if progressCB != nil {
+		o.hasProgressCallback = true
+		o.progressPrintedFailure = progressCB.PrintedFailure()
+	}
 	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
+		var executionData map[string]any
+		if o.ShowExecution {
+			executionData = resolverExecutionData
+		}
+		alreadyPrinted := o.progressPrintedFailure && result.FinalStatus != action.ExecutionCancelled
+		errMsg := fmt.Sprintf("action execution failed: %v", err)
+		if ciDialect != nil {
+			errMsg = ciDialect.SanitizeMultiline(errMsg)
+		}
 		// An action failed hard. In structured output emit the full action
 		// envelope (status:"failed", per-action error, failedActions) before
 		// returning the non-zero exit so stdout stays parseable.
 		if o.isStructuredOutput() {
-			var executionData map[string]any
-			if o.ShowExecution {
-				executionData = resolverExecutionData
-			}
 			if writeErr := o.writeActionOutput(ctx, result, executionData); writeErr == nil {
-				if w := writer.FromContext(ctx); w != nil {
-					w.Errorf("action execution failed: %v", err)
+				if !alreadyPrinted {
+					if w := writer.FromContext(ctx); w != nil {
+						w.Error(errMsg)
+					}
 				}
 				return exitcode.WithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 			}
+		} else {
+			_ = o.writeActionOutput(ctx, result, executionData)
 		}
-		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
+		if alreadyPrinted {
+			return exitcode.WithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
+		}
+		if w := writer.FromContext(ctx); w != nil {
+			w.Error(errMsg)
+		}
+		return exitcode.WithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
 
 	// State lifecycle: write every save target after successful action
@@ -742,6 +800,9 @@ func (o *ActionOptions) writeActionOutput(ctx context.Context, result *action.Ex
 		ShowExecution:           o.ShowExecution,
 		validationWarn:          o.validationWarn,
 		validationWarnResolvers: o.validationWarnResolvers,
+		progressPrintedFailure:  o.progressPrintedFailure,
+		hasProgressCallback:     o.hasProgressCallback,
+		ciDialect:               o.ciDialect,
 	}
 	return s.writeActionOutput(ctx, result, executionData)
 }

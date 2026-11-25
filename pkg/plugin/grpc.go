@@ -138,6 +138,11 @@ func (s *GRPCServer) ExecuteProvider(ctx context.Context, req *proto.ExecuteProv
 			Error:    err.Error(),
 			ExitCode: safeIntToInt32(exitcode.GetCode(err)),
 		}
+		if output != nil {
+			if outputBytes, mErr := json.Marshal(output); mErr == nil {
+				resp.Output = outputBytes
+			}
+		}
 		resp.Diagnostics = errorToDiagnostics(err)
 		return resp, nil
 	}
@@ -558,29 +563,46 @@ func (c *GRPCClient) ExecuteProvider(ctx context.Context, providerName string, i
 	}
 
 	if resp.Error != "" {
-		err := fmt.Errorf("provider execution failed: %s", resp.Error)
+		out, _ := decodeProviderOutput(resp.Output)
+		err := errors.New(resp.Error)
 		// Prefer diagnostics for richer context, fall back to plain error
 		if diagErr := diagnosticsToError(ctx, resp.Diagnostics); diagErr != nil {
 			err = diagErr
 		}
 		// Reconstruct ExitError when the plugin transmitted a non-zero exit code
 		if resp.ExitCode != 0 {
-			return nil, exitcode.WithCode(err, int(resp.ExitCode))
+			return out, exitcode.WithCode(err, int(resp.ExitCode))
 		}
-		return nil, err
+		return out, err
 	}
 
-	// Decode output using UseNumber to preserve integer types across the
-	// JSON round-trip (standard json.Unmarshal converts all numbers to float64).
+	output, err := decodeProviderOutput(resp.Output)
+	if err != nil {
+		return nil, err
+	}
+	if output == nil {
+		return &provider.Output{}, nil
+	}
+
+	return output, nil
+}
+
+// decodeProviderOutput decodes JSON-encoded provider.Output bytes while
+// preserving integer types via json.Decoder.UseNumber. Empty or JSON "null"
+// payloads return (nil, nil).
+func decodeProviderOutput(raw []byte) (*provider.Output, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
 	var output provider.Output
-	dec := json.NewDecoder(bytes.NewReader(resp.Output))
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
 	dec.UseNumber()
 	if err := dec.Decode(&output); err != nil {
 		return nil, fmt.Errorf("failed to decode output: %w", err)
 	}
 	output.Data = normalizeJSONNumbers(output.Data)
 	output.Metadata = normalizeJSONNumbersMap(output.Metadata)
-
 	return &output, nil
 }
 
@@ -658,8 +680,11 @@ func (c *GRPCClient) ExecuteProviderStream(ctx context.Context, providerName str
 			cb(StreamChunk{Stderr: v.Stderr})
 		case *proto.ExecuteProviderStreamChunk_Result:
 			if v.Result.Error != "" {
+				if out, decErr := decodeProviderOutput(v.Result.Output); decErr == nil && out != nil {
+					cb(StreamChunk{Result: out})
+				}
 				cb(StreamChunk{Error: v.Result.Error})
-				err := fmt.Errorf("provider execution failed: %s", v.Result.Error)
+				err := errors.New(v.Result.Error)
 				// Prefer diagnostics for richer context, fall back to plain error
 				if diagErr := diagnosticsToError(ctx, v.Result.Diagnostics); diagErr != nil {
 					err = diagErr
@@ -670,15 +695,14 @@ func (c *GRPCClient) ExecuteProviderStream(ctx context.Context, providerName str
 				}
 				return err
 			}
-			var output provider.Output
-			decStream := json.NewDecoder(bytes.NewReader(v.Result.Output))
-			decStream.UseNumber()
-			if err := decStream.Decode(&output); err != nil {
-				return fmt.Errorf("failed to decode output: %w", err)
+			output, decErr := decodeProviderOutput(v.Result.Output)
+			if decErr != nil {
+				return decErr
 			}
-			output.Data = normalizeJSONNumbers(output.Data)
-			output.Metadata = normalizeJSONNumbersMap(output.Metadata)
-			cb(StreamChunk{Result: &output})
+			if output == nil {
+				output = &provider.Output{}
+			}
+			cb(StreamChunk{Result: output})
 		}
 	}
 }

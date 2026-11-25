@@ -6,7 +6,10 @@ package provider
 import (
 	"context"
 	"fmt"
+	"io"
+	"maps"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -289,8 +292,8 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	}
 
 	// Wrap IOStreams (or install redacting fallback streams for nil destinations)
-	// and lazily emit GitHub Actions workflow mask commands when streaming starts.
-	execCtx, flushStreams := WrapRedactingIOStreams(ctx, tracker, provider)
+	// and lazily emit column-0-aligned GitHub Actions workflow mask commands when streaming starts.
+	execCtx, flushStreams := WrapDirectiveAlignedRedactingIOStreams(ctx, tracker, provider)
 
 	// Execute the provider with either typed input or map
 	outputPtr, err := provider.Execute(execCtx, executionInput)
@@ -303,10 +306,29 @@ func (e *Executor) Execute(ctx context.Context, provider Provider, inputs map[st
 	GlobalMetrics.Record(ctx, desc.Name, executionDuration, err == nil)
 
 	if err != nil {
-		redactedErr := tracker.RedactError(fmt.Errorf("provider execution failed: %w", err))
+		wrappedErr := err
+		if !strings.HasPrefix(err.Error(), "provider execution failed:") && err.Error() != "provider execution failed" {
+			wrappedErr = fmt.Errorf("provider execution failed: %w", err)
+		}
+		redactedErr := tracker.RedactError(wrappedErr)
 		span.RecordError(redactedErr)
 		span.SetStatus(codes.Error, redactedErr.Error())
-		return nil, redactedErr
+		if outputPtr == nil {
+			return nil, redactedErr
+		}
+		output := *outputPtr
+		if output.Data != nil {
+			output.Data = tracker.RedactAny(output.Data)
+		}
+		output.Warnings = tracker.RedactSlice(output.Warnings)
+		output.Metadata = tracker.RedactMap(output.Metadata)
+		return &ExecutionResult{
+			Provider:          provider,
+			Output:            output,
+			DryRun:            dryRun,
+			ExecutionDuration: executionDuration,
+			ResolvedInputs:    tracker.RedactMap(resolvedInputs),
+		}, redactedErr
 	}
 	if outputPtr == nil {
 		nilErr := fmt.Errorf("provider returned nil output")
@@ -373,4 +395,190 @@ func GetGlobalExecutor() *Executor {
 // This is primarily for testing purposes.
 func ResetGlobalExecutor() {
 	globalExecutor = NewExecutor()
+}
+
+// CapturedStreamLogs holds redacted stdout/stderr stream chunks captured when
+// executing an action without live terminal IOStreams (such as -o json / -o yaml).
+// Keeping captured stream chunks separate from Output.Data during provider
+// execution allows callers to validate the provider's structured result against
+// strict resultSchema definitions (e.g. additionalProperties: false) before
+// merging captured logs into the final action output envelope.
+type CapturedStreamLogs struct {
+	Stdout string
+	Stderr string
+}
+
+// Empty reports whether neither stdout nor stderr chunks were captured.
+func (c CapturedStreamLogs) Empty() bool {
+	return c.Stdout == "" && c.Stderr == ""
+}
+
+func isEmptyCapturedSlot(m map[string]any, key string) bool {
+	val, exists := m[key]
+	if !exists || val == nil {
+		return true
+	}
+	s, ok := val.(string)
+	return ok && s == ""
+}
+
+// MergeIntoData returns data augmented with captured stdout/stderr strings when
+// data is nil or a map[string]any with empty or missing stdout/stderr slots.
+// Existing non-empty values and non-map data types (scalars, slices) are
+// preserved without mutating the input map.
+func (c CapturedStreamLogs) MergeIntoData(data any) any {
+	if c.Empty() {
+		return data
+	}
+	switch d := data.(type) {
+	case nil:
+		merged := make(map[string]any, 2)
+		if c.Stdout != "" {
+			merged["stdout"] = c.Stdout
+		}
+		if c.Stderr != "" {
+			merged["stderr"] = c.Stderr
+		}
+		return merged
+	case map[string]any:
+		needOut := c.Stdout != "" && isEmptyCapturedSlot(d, "stdout")
+		needErr := c.Stderr != "" && isEmptyCapturedSlot(d, "stderr")
+		if !needOut && !needErr {
+			return d
+		}
+		cloned := make(map[string]any, len(d)+2)
+		maps.Copy(cloned, d)
+		if needOut {
+			cloned["stdout"] = c.Stdout
+		}
+		if needErr {
+			cloned["stderr"] = c.Stderr
+		}
+		return cloned
+	default:
+		return data
+	}
+}
+
+// CapturedStreamSink collects CapturedStreamLogs across a single provider
+// execution when attached to context via WithCapturedStreamSink.
+type CapturedStreamSink struct {
+	mu   sync.Mutex
+	logs CapturedStreamLogs
+}
+
+// Set records captured stdout and stderr strings in the sink.
+func (s *CapturedStreamSink) Set(stdout, stderr string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.logs = CapturedStreamLogs{Stdout: stdout, Stderr: stderr}
+	s.mu.Unlock()
+}
+
+// Logs returns a snapshot of the captured stdout and stderr strings.
+func (s *CapturedStreamSink) Logs() CapturedStreamLogs {
+	if s == nil {
+		return CapturedStreamLogs{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.logs
+}
+
+const capturedStreamSinkKey scafctlContextKey = "scafctl.provider.capturedStreamSink"
+
+// WithCapturedStreamSink attaches sink to ctx so streaming plugin wrappers can
+// report captured non-TTY stdout/stderr chunks separately from Output.Data.
+func WithCapturedStreamSink(ctx context.Context, sink *CapturedStreamSink) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, capturedStreamSinkKey, sink)
+}
+
+// CapturedStreamSinkFromContext retrieves the CapturedStreamSink from ctx, if present.
+func CapturedStreamSinkFromContext(ctx context.Context) (*CapturedStreamSink, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	sink, ok := ctx.Value(capturedStreamSinkKey).(*CapturedStreamSink)
+	return sink, ok && sink != nil
+}
+
+type directiveLineTarget interface {
+	WriteDirectiveLine(line string) error
+}
+
+type directiveMaskAdapter struct {
+	dlw directiveLineTarget
+}
+
+func (a directiveMaskAdapter) Write(p []byte) (int, error) {
+	text := strings.TrimRight(string(p), "\r\n")
+	if text == "" {
+		return len(p), nil
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if line == "" {
+			continue
+		}
+		if err := a.dlw.WriteDirectiveLine(line); err != nil {
+			return 0, err
+		}
+	}
+	return len(p), nil
+}
+
+type lazyMaskWriter struct {
+	out     io.Writer
+	dlw     directiveLineTarget
+	tracker *redact.Tracker
+}
+
+func (m *lazyMaskWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if m.tracker != nil && m.tracker.Count() > 0 {
+		m.tracker.EmitGitHubActionsMasks(directiveMaskAdapter{dlw: m.dlw})
+	}
+	return m.out.Write(p)
+}
+
+// WrapDirectiveAlignedRedactingIOStreams wraps IOStreams with secret-redacting
+// StreamWriters and, when Out implements WriteDirectiveLine, emits lazy
+// GitHub Actions ::add-mask:: directives via WriteDirectiveLine on the first
+// secret-bearing write so masks align to column 0 after unterminated output
+// without polluting silent actions.
+func WrapDirectiveAlignedRedactingIOStreams(ctx context.Context, tracker *redact.Tracker, prov any) (context.Context, func()) {
+	noop := func() {}
+	if tracker == nil {
+		return ctx, noop
+	}
+	origStreams, hasIO := IOStreamsFromContext(ctx)
+	if hasIO && origStreams != nil && origStreams.Out != nil {
+		if _, already := origStreams.Out.(*lazyMaskWriter); already {
+			return ctx, noop
+		}
+		if dlw, ok := origStreams.Out.(directiveLineTarget); ok && !redact.SuppressGitHubActionsMasksFromContext(ctx) {
+			wrappedCtx, flush := WrapRedactingIOStreams(redact.WithSuppressGitHubActionsMasks(ctx), tracker, prov)
+			wrappedStreams, wOK := IOStreamsFromContext(wrappedCtx)
+			if !wOK || wrappedStreams == nil || wrappedStreams.Out == origStreams.Out {
+				return ctx, flush
+			}
+			cp := *wrappedStreams
+			cp.Out = &lazyMaskWriter{
+				out:     wrappedStreams.Out,
+				dlw:     dlw,
+				tracker: tracker,
+			}
+			return WithIOStreams(wrappedCtx, &cp), flush
+		}
+	}
+	return WrapRedactingIOStreams(ctx, tracker, prov)
 }

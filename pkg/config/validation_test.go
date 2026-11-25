@@ -900,3 +900,21 @@ func TestHTTPClientConfig_Validate_AllowedPrivateCIDRs(t *testing.T) {
 		assert.Contains(t, err.Error(), fmt.Sprintf("%d", settings.MaxAllowedPrivateCIDRs))
 	})
 }
+
+func TestActionConfig_Validate_CIOutput(t *testing.T) {
+	t.Parallel()
+
+	for _, valid := range []string{"", "auto", "none", "github-actions", "AUTO"} {
+		cfg := &ActionConfig{CIOutput: valid}
+		assert.NoError(t, cfg.Validate(), "ciOutput %q should be valid", valid)
+	}
+
+	invalid := &ActionConfig{CIOutput: "circle-ci"}
+	err := invalid.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ciOutput")
+	assert.Contains(t, err.Error(), "valid: auto, none, github-actions")
+
+	_, valErr := invalid.ToActionValues()
+	require.Error(t, valErr)
+}

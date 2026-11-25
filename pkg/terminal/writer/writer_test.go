@@ -560,3 +560,116 @@ func TestClone(t *testing.T) {
 		assert.Contains(t, outBuf.String(), "original")
 	})
 }
+
+func TestNilCliParamsSafety(t *testing.T) {
+	t.Parallel()
+	outBuf := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	w := New(&terminal.IOStreams{Out: outBuf, ErrOut: errBuf}, nil)
+
+	assert.False(t, w.NoColor())
+	assert.False(t, w.IsQuiet())
+	assert.False(t, w.VerboseEnabled())
+
+	var nilWriter *Writer
+	assert.False(t, nilWriter.NoColor())
+	assert.False(t, nilWriter.IsQuiet())
+	assert.False(t, nilWriter.VerboseEnabled())
+	nilWriter.Stderrln("ignored")
+
+	w.Success("ok")
+	w.Error("err")
+	w.Debug("ignored-debug")
+	assert.Contains(t, outBuf.String(), "ok")
+	assert.Contains(t, errBuf.String(), "err")
+	assert.NotContains(t, outBuf.String(), "ignored-debug")
+}
+
+func TestStderrln_NotSuppressedByQuiet(t *testing.T) {
+	t.Parallel()
+	w, outBuf, errBuf := newTestWriter()
+	w.cliParams.IsQuiet = true
+
+	w.Stderrln("::error title=build::exit status 1")
+	w.Stderrlnf("code=%d", 6)
+
+	assert.Empty(t, outBuf.String())
+	assert.Equal(t, "::error title=build::exit status 1\ncode=6\n", errBuf.String())
+}
+
+func TestClone_WithIOStreams_PreservesOptions(t *testing.T) {
+	t.Parallel()
+	var origOut, origErr, newOut, newErr bytes.Buffer
+	var exitCode int
+	base := New(
+		&terminal.IOStreams{Out: &origOut, ErrOut: &origErr},
+		&settings.Run{NoColor: true, ExitOnError: true},
+		WithHumanToStderr(),
+		WithExitFunc(func(code int) { exitCode = code }),
+	)
+
+	cloned := base.Clone(WithIOStreams(&terminal.IOStreams{Out: &newOut, ErrOut: &newErr}))
+	cloned.Success("routed-to-new-stderr")
+	cloned.ErrorWithCode(7, "fatal")
+
+	assert.Empty(t, origOut.String())
+	assert.Empty(t, origErr.String())
+	assert.Empty(t, newOut.String())
+	assert.Contains(t, newErr.String(), "routed-to-new-stderr")
+	assert.Contains(t, newErr.String(), "fatal")
+	assert.Equal(t, 7, exitCode)
+}
+
+type mockDirectiveBuffer struct {
+	buf         bytes.Buffer
+	atLineStart bool
+}
+
+func (m *mockDirectiveBuffer) Write(p []byte) (int, error) {
+	n, err := m.buf.Write(p)
+	if n > 0 {
+		m.atLineStart = p[n-1] == '\n'
+	}
+	return n, err
+}
+
+func (m *mockDirectiveBuffer) WriteDirectiveLine(line string) error {
+	if !m.atLineStart {
+		_, _ = m.buf.Write([]byte{'\n'})
+	}
+	_, err := m.buf.WriteString(strings.TrimRight(line, "\r\n") + "\n")
+	m.atLineStart = true
+	return err
+}
+
+func TestDirectiveStderr_AlignsViaDirectiveLineWriterAndRespectsQuiet(t *testing.T) {
+	t.Parallel()
+
+	mdb := &mockDirectiveBuffer{atLineStart: true}
+	cliParams := &settings.Run{NoColor: true}
+	w := New(&terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: mdb}, cliParams)
+
+	_, err := mdb.Write([]byte("unterminated"))
+	assert.NoError(t, err)
+	w.PlainStderrDirective("::endgroup::")
+	assert.Equal(t, "unterminated\n::endgroup::\n", mdb.buf.String())
+
+	// Quiet suppresses PlainStderrDirective, while StderrDirective remains visible.
+	cliParams.IsQuiet = true
+	w.PlainStderrDirective("::group::ignored")
+	_, err = mdb.Write([]byte("tail"))
+	assert.NoError(t, err)
+	w.StderrDirective("::error title=test::boom")
+	assert.Equal(t, "unterminated\n::endgroup::\ntail\n::error title=test::boom\n", mdb.buf.String())
+
+	// Fallback path when ErrOut does not implement WriteDirectiveLine.
+	var plainErr bytes.Buffer
+	wPlain := New(&terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &plainErr}, &settings.Run{NoColor: true})
+	wPlain.PlainStderrDirective("::group::step")
+	wPlain.StderrDirective("::error title=step::fail")
+	assert.Equal(t, "::group::step\n::error title=step::fail\n", plainErr.String())
+
+	var nilWriter *Writer
+	nilWriter.PlainStderrDirective("::group::noop")
+	nilWriter.StderrDirective("::error::noop")
+}
