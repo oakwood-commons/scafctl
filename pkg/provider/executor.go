@@ -6,7 +6,9 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
@@ -94,20 +96,25 @@ func isReadOnlyResolverMode(mode Capability) bool {
 }
 
 // ValidateWriteOperation checks whether a write operation is being used in a
-// read-only resolver context. Providers with Descriptor.WriteOperations
-// populated declare which operations mutate state; these are rejected only in
-// the read-only resolver phases (CapabilityFrom, CapabilityTransform,
+// read-only resolver context. Providers classify mutating operations via
+// Descriptor.Operations (IsWrite) or Descriptor.WriteOperations, resolved
+// through Descriptor.EffectiveWriteOperations. Write operations are rejected
+// only in read-only resolver modes (CapabilityFrom, CapabilityTransform,
 // CapabilityValidation) and permitted in every other mode (CapabilityAction,
 // CapabilityState, CapabilityKubeconfig, CapabilityAuthentication).
 //
 // Semantics follow the SDK convention:
-//   - nil WriteOperations: provider cannot classify (no enforcement)
+//   - nil EffectiveWriteOperations: provider cannot classify (no enforcement)
 //   - empty []string{}: all operations are reads (everything allowed)
-//   - populated: listed operations are blocked only in read-only resolver modes
+//   - populated: listed operations are blocked in read-only resolver modes,
+//     including the operation's description in the error when available
 func ValidateWriteOperation(ctx context.Context, p Provider, resolvedInputs map[string]any) error {
+	if p == nil {
+		return nil
+	}
 	desc := p.Descriptor()
-	if desc == nil || desc.WriteOperations == nil {
-		return nil // provider cannot classify operations — no enforcement
+	if desc == nil {
+		return nil
 	}
 
 	execMode, ok := ExecutionModeFromContext(ctx)
@@ -120,11 +127,82 @@ func ValidateWriteOperation(ctx context.Context, p Provider, resolvedInputs map[
 		return nil
 	}
 
+	if desc.EffectiveWriteOperations() == nil {
+		return nil // provider cannot classify operations -- no enforcement
+	}
+
 	if desc.IsWriteOperation(operation) {
-		return fmt.Errorf("operation %q is a write operation and cannot be used in read-only execution mode %q; use a workflow action instead", operation, execMode)
+		tracker := redact.FromContext(ctx)
+		safeOp := tracker.RedactString(operation)
+		var err error
+		if op := desc.GetOperation(operation); op != nil {
+			rawDesc := tracker.RedactString(op.Description)
+			if opDesc := sanitizeInlineDescription(rawDesc); opDesc != "" {
+				err = fmt.Errorf("operation %q (%s) is a write operation and cannot be used in read-only execution mode %q; use a workflow action instead", safeOp, opDesc, execMode)
+			}
+		}
+		if err == nil {
+			err = fmt.Errorf("operation %q is a write operation and cannot be used in read-only execution mode %q; use a workflow action instead", safeOp, execMode)
+		}
+		return tracker.RedactError(err)
 	}
 
 	return nil
+}
+
+// sanitizeInlineDescription strips ANSI CSI/OSC escape sequences and C0/C1
+// control characters from an operation description and collapses whitespace
+// runs into single spaces so single-line error messages cannot inject terminal
+// escapes or newline-delimited CI workflow commands.
+func sanitizeInlineDescription(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b {
+			i++
+			if i < len(s) {
+				switch s[i] {
+				case '[':
+					i++
+					for i < len(s) && s[i] >= 0x20 && s[i] <= 0x3f {
+						i++
+					}
+					if i < len(s) && s[i] >= 0x40 && s[i] <= 0x7e {
+						i++
+					}
+				case ']':
+					i++
+					for i < len(s) {
+						if s[i] == 0x07 {
+							i++
+							break
+						}
+						if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '\\' {
+							i += 2
+							break
+						}
+						i++
+					}
+				default:
+					if s[i] >= 0x20 && s[i] <= 0x7e {
+						i++
+					}
+				}
+			}
+			continue
+		}
+		r, width := utf8.DecodeRuneInString(s[i:])
+		i += width
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			b.WriteByte(' ')
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
+			// Drop C0/C1 control characters.
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 // Execute executes a provider with the given inputs and context.

@@ -1398,3 +1398,194 @@ func TestHandleRunProvider_VersionMatch_Proceeds(t *testing.T) {
 		assert.NotContains(t, text, "VERSION_MISMATCH")
 	}
 }
+
+func TestHandleGetProviderSchema_Operations(t *testing.T) {
+	t.Parallel()
+
+	buildOpsProvider := func() provider.Provider {
+		return &versionMismatchProvider{
+			desc: &provider.Descriptor{
+				Name:         "scm-ops",
+				DisplayName:  "SCM Ops",
+				Description:  "Multi-operation SCM provider",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.2.0"),
+				Capabilities: []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+				Operations: []provider.OperationDescriptor{
+					{
+						Name:         "get_repo",
+						Description:  "Get repository metadata",
+						Capabilities: []provider.Capability{provider.CapabilityFrom},
+						IsWrite:      false,
+						InputSchema: &jsonschema.Schema{
+							Type:                 "object",
+							AdditionalProperties: &jsonschema.Schema{Type: "string"},
+						},
+					},
+					{
+						Name:         "create_issue",
+						Description:  "Create a new issue",
+						Capabilities: []provider.Capability{provider.CapabilityAction},
+						IsWrite:      true,
+						InputSchema: &jsonschema.Schema{
+							Type:     "object",
+							Required: []string{"issue"},
+							Properties: map[string]*jsonschema.Schema{
+								"issue": {
+									Type:     "object",
+									Required: []string{"title"},
+									Properties: map[string]*jsonschema.Schema{
+										"title": {Type: "string"},
+									},
+								},
+							},
+						},
+						OutputSchema: &jsonschema.Schema{
+							Type: "object",
+							Properties: map[string]*jsonschema.Schema{
+								"number":      {Type: "integer"},
+								"snowflakeId": {Type: "integer", Default: json.RawMessage(`9007199254740993`)},
+							},
+						},
+					},
+				},
+				Schema: &jsonschema.Schema{
+					Type:       "object",
+					Properties: map[string]*jsonschema.Schema{"operation": {Type: "string"}},
+				},
+				OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+					provider.CapabilityFrom:   {Type: "object"},
+					provider.CapabilityAction: {Type: "object", Properties: map[string]*jsonschema.Schema{"success": {Type: "boolean"}}},
+				},
+			},
+		}
+	}
+
+	t.Run("full_schema_includes_operations_and_writeOperations", func(t *testing.T) {
+		t.Parallel()
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(buildOpsProvider()))
+		srv, err := NewServer(WithServerRegistry(reg), WithServerVersion("test"))
+		require.NoError(t, err)
+		srv.descriptorCache = plugin.NewDescriptorCache(t.TempDir(), time.Hour)
+
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "get_provider_schema"
+		req.Params.Arguments = map[string]any{"name": "scm-ops"}
+
+		res, err := srv.handleGetProviderSchema(context.Background(), req)
+		require.NoError(t, err)
+		require.False(t, res.IsError)
+
+		rawMCPText := res.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, rawMCPText, "9007199254740993")
+		assert.NotContains(t, rawMCPText, "9007199254740992")
+		var got map[string]any
+		require.NoError(t, json.Unmarshal([]byte(rawMCPText), &got))
+		assert.Equal(t, []any{"create_issue"}, got["writeOperations"])
+		ops, ok := got["operations"].([]any)
+		require.True(t, ok)
+		require.Len(t, ops, 2)
+	})
+
+	t.Run("operation_parameter_returns_single_operation_and_cached_fallback", func(t *testing.T) {
+		t.Parallel()
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(buildOpsProvider()))
+		cacheDir := t.TempDir()
+		srv, err := NewServer(WithServerRegistry(reg), WithServerVersion("test"))
+		require.NoError(t, err)
+		srv.descriptorCache = plugin.NewDescriptorCache(cacheDir, time.Hour)
+
+		// Live lookup for write operation (also populates descriptorCache).
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "get_provider_schema"
+		req.Params.Arguments = map[string]any{"name": "scm-ops", "operation": "create_issue"}
+
+		res, err := srv.handleGetProviderSchema(context.Background(), req)
+		require.NoError(t, err)
+		require.False(t, res.IsError)
+
+		rawMCPText := res.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, rawMCPText, "9007199254740993")
+		assert.NotContains(t, rawMCPText, "9007199254740992")
+		var got map[string]any
+		require.NoError(t, json.Unmarshal([]byte(rawMCPText), &got))
+		assert.Equal(t, "scm-ops", got["provider"])
+		assert.Equal(t, "builtin", got["source"])
+		assert.Equal(t, "create_issue", got["name"])
+		assert.Equal(t, true, got["isWrite"])
+		assert.NotNil(t, got["outputSchema"])
+		inSchema, ok := got["inputSchema"].(map[string]any)
+		require.True(t, ok)
+		issueObj := inSchema["properties"].(map[string]any)["issue"].(map[string]any)
+		assert.Equal(t, []any{"title"}, issueObj["required"])
+
+		// Cached fallback for read operation when live registry does not have the provider.
+		offlineSrv, err := NewServer(WithServerRegistry(provider.NewRegistry()), WithServerVersion("test"))
+		require.NoError(t, err)
+		offlineSrv.descriptorCache = plugin.NewDescriptorCache(cacheDir, time.Hour)
+
+		cachedReq := mcp.CallToolRequest{}
+		cachedReq.Params.Name = "get_provider_schema"
+		cachedReq.Params.Arguments = map[string]any{"name": "scm-ops", "operation": "get_repo"}
+
+		cachedRes, err := offlineSrv.handleGetProviderSchema(context.Background(), cachedReq)
+		require.NoError(t, err)
+		require.False(t, cachedRes.IsError)
+
+		var cachedGot map[string]any
+		require.NoError(t, json.Unmarshal([]byte(cachedRes.Content[0].(mcp.TextContent).Text), &cachedGot))
+		assert.Equal(t, "cached", cachedGot["source"])
+		assert.Equal(t, "get_repo", cachedGot["name"])
+		assert.Equal(t, false, cachedGot["isWrite"])
+		cachedInSchema, ok := cachedGot["inputSchema"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "string", cachedInSchema["additionalProperties"].(map[string]any)["type"])
+	})
+
+	t.Run("operation_parameter_errors_on_unknown_op_non_op_provider_and_unfetched_official", func(t *testing.T) {
+		t.Parallel()
+		reg, err := builtin.DefaultRegistry(context.Background())
+		require.NoError(t, err)
+		require.NoError(t, reg.Register(buildOpsProvider()))
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "github", CatalogRef: "github-plugin", DefaultVersion: "latest"},
+		})
+		ctx := official.WithRegistry(context.Background(), officialReg)
+
+		srv, err := NewServer(
+			WithServerName("mycli"),
+			WithServerRegistry(reg),
+			WithServerContext(ctx),
+			WithServerVersion("test"),
+		)
+		require.NoError(t, err)
+		srv.descriptorCache = plugin.NewDescriptorCache(t.TempDir(), time.Hour)
+
+		// Unknown operation on an operation-aware provider.
+		reqUnknown := mcp.CallToolRequest{}
+		reqUnknown.Params.Arguments = map[string]any{"name": "scm-ops", "operation": "missing_op"}
+		resUnknown, err := srv.handleGetProviderSchema(context.Background(), reqUnknown)
+		require.NoError(t, err)
+		assert.True(t, resUnknown.IsError)
+		assert.Contains(t, resUnknown.Content[0].(mcp.TextContent).Text, "get_repo, create_issue")
+
+		// Provider without per-operation metadata.
+		reqNoOps := mcp.CallToolRequest{}
+		reqNoOps.Params.Arguments = map[string]any{"name": "cel", "operation": "eval"}
+		resNoOps, err := srv.handleGetProviderSchema(context.Background(), reqNoOps)
+		require.NoError(t, err)
+		assert.True(t, resNoOps.IsError)
+		assert.Contains(t, resNoOps.Content[0].(mcp.TextContent).Text, "does not declare per-operation metadata")
+
+		// Unfetched official plugin with operation parameter uses configured binary name in suggestion.
+		reqOfficial := mcp.CallToolRequest{}
+		reqOfficial.Params.Arguments = map[string]any{"name": "github", "operation": "create_issue"}
+		resOfficial, err := srv.handleGetProviderSchema(context.Background(), reqOfficial)
+		require.NoError(t, err)
+		assert.True(t, resOfficial.IsError)
+		assert.Contains(t, resOfficial.Content[0].(mcp.TextContent).Text, "mycli plugins install github-plugin")
+	})
+}

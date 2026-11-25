@@ -422,3 +422,33 @@ func BenchmarkExecutor_ExecuteByName_Parallel(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkValidateWriteOperation_ActionFastPath(b *testing.B) {
+	p := newMockOperationsProvider([]OperationDescriptor{
+		{Name: "get_repo", Description: "Get repo", IsWrite: false},
+		{Name: "create_issue", Description: "Create issue", IsWrite: true},
+	})
+	ctx := WithExecutionMode(context.Background(), CapabilityAction)
+	inputs := map[string]any{"operation": "create_issue"}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_ = ValidateWriteOperation(ctx, p, inputs)
+	}
+}
+
+func BenchmarkValidateWriteOperation_ReadOperation(b *testing.B) {
+	p := newMockOperationsProvider([]OperationDescriptor{
+		{Name: "get_repo", Description: "Get repo", IsWrite: false},
+		{Name: "create_issue", Description: "Create issue", IsWrite: true},
+	})
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
+	inputs := map[string]any{"operation": "get_repo"}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_ = ValidateWriteOperation(ctx, p, inputs)
+	}
+}

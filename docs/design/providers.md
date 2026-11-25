@@ -37,6 +37,7 @@ Providers are never invoked implicitly. A provider runs only when explicitly ref
 | Built-in Providers | Implemented | `pkg/provider/builtin/` |
 | Official Provider Registry | Implemented | `pkg/provider/official/` |
 | Capability-required output fields | Implemented | `CapabilityRequiredOutputFields` |
+| Per-operation metadata and write guard | Implemented | `OperationDescriptor`, `ValidateWriteOperation` (`pkg/provider/executor.go`, `pkg/provider/detail/detail.go`) |
 | Secret handling (`SensitiveFields`) | Implemented | Redaction via `SecretMask` |
 | Iteration Context | Implemented | `__item`, `__index`, aliases |
 
@@ -394,6 +395,17 @@ Providers declare their supported execution contexts through capabilities. Capab
   - Catalog filtering and discovery
   - IDE/CLI autocomplete and validation
   - Runtime checks to ensure providers are used in valid contexts
+
+### Operation Metadata and Write-Operation Guard
+
+Multi-operation providers (such as API or SCM plugin providers that dispatch on an `operation` input) can declare rich per-operation metadata via `Descriptor.Operations` (`[]OperationDescriptor`):
+
+- **Discovery metadata**: Each `OperationDescriptor` carries `Name`, `DisplayName`, `Description`, `Capabilities` (a subset of the provider's `Capabilities`), `IsWrite`, `InputSchema`, `OutputSchema`, `Examples`, `Tags`, `IsDeprecated`, and `DeprecationMessage`. Per-operation schemas are discovery/documentation metadata; `Descriptor.Schema` remains the runtime validation authority.
+- **Write classification (`EffectiveWriteOperations`)**: `Descriptor.EffectiveWriteOperations()` returns `Descriptor.WriteOperations` when non-nil, and otherwise derives the write set from `Operations` entries with `IsWrite: true`. A `nil` slice means the provider cannot classify operations (no write guard); an empty non-nil slice (`[]string{}`) means all operations are reads; a populated slice blocks listed operations in read-only resolver modes.
+- **Runtime enforcement (`ValidateWriteOperation`)**: When `ExecutionModeFromContext` reports a read-only resolver mode (`from`, `transform`, `validation`), `ValidateWriteOperation` rejects any operation where `Descriptor.IsWriteOperation(op)` is true, sanitizing and including the operation's description when present:
+  `operation "create_issue" (Create a new issue in the repository) is a write operation and cannot be used in read-only execution mode "from"; use a workflow action instead`
+  Modes that legitimately perform writes (`action`, `state`, `kubeconfig`, `authentication`) bypass the guard without allocating.
+- **Inspection surfaces**: Operation metadata is exposed consistently across `scafctl get provider <name>` (and `--operation <op>`), MCP `get_provider_schema` (with optional `operation` parameter), and `GET /v1/providers/{name}`.
 
 ### Future Extensibility
 

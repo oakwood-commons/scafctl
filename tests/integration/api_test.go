@@ -3149,3 +3149,88 @@ spec:
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer "+apiSecret+":94", string(gotBytes))
 }
+
+type apiOpsTestProvider struct {
+	desc *provider.Descriptor
+}
+
+func (p *apiOpsTestProvider) Descriptor() *provider.Descriptor { return p.desc }
+func (p *apiOpsTestProvider) Execute(_ context.Context, _ any) (*provider.Output, error) {
+	return &provider.Output{Data: map[string]any{"success": true}}, nil
+}
+
+// TestAPI_ProviderDetail_OperationsMetadata verifies GET /v1/providers/{name}
+// returns per-operation metadata and derived writeOperations while keeping
+// /v1/openapi.json generation valid.
+func TestAPI_ProviderDetail_OperationsMetadata(t *testing.T) {
+	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+
+	baseFileDesc := fileprovider.NewFileProvider().Descriptor()
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&apiOpsTestProvider{
+		desc: &provider.Descriptor{
+			Name:          "ops-api-test",
+			DisplayName:   "Ops API Test",
+			Description:   "Provider exposing OperationDescriptor metadata",
+			APIVersion:    "v1",
+			Version:       semver.MustParse("1.0.0"),
+			Capabilities:  []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+			Schema:        baseFileDesc.Schema,
+			OutputSchemas: baseFileDesc.OutputSchemas,
+			Operations: []provider.OperationDescriptor{
+				{
+					Name:         "get_record",
+					Description:  "Read a record",
+					Capabilities: []provider.Capability{provider.CapabilityFrom},
+					IsWrite:      false,
+				},
+				{
+					Name:         "create_record",
+					Description:  "Create a new record",
+					Capabilities: []provider.Capability{provider.CapabilityAction},
+					IsWrite:      true,
+				},
+			},
+		},
+	}))
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+		api.WithServerCompositeRegistry(provider.NewCompositeRegistryFromBase(reg)),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+	endpoints.RegisterAll(srv.API(), srv.Router(), srv.HandlerCtx())
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	detail := e.GET("/v1/providers/ops-api-test").
+		Expect().
+		Status(http.StatusOK).
+		JSON().Object()
+
+	detail.Value("name").IsEqual("ops-api-test")
+	detail.Value("writeOperations").Array().IsEqual([]string{"create_record"})
+	ops := detail.Value("operations").Array()
+	ops.Length().IsEqual(2)
+	ops.Value(0).Object().HasValue("name", "get_record").HasValue("isWrite", false)
+	ops.Value(1).Object().HasValue("name", "create_record").HasValue("isWrite", true)
+
+	e.GET("/v1/openapi.json").
+		Expect().
+		Status(http.StatusOK).
+		HasContentType("application/openapi+json")
+}
