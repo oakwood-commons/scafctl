@@ -161,13 +161,7 @@ func walkResolvePhase(v *Visitor, resolvePath, resolverName string, rp *resolver
 			}
 		}
 
-		if src.When != nil && src.When.Expr != nil {
-			if err := visitCondition(v, srcPath+".when", "when", src.When.Expr); err != nil {
-				return err
-			}
-		}
-
-		if err := walkInputs(v, srcPath+".inputs", src.Inputs); err != nil {
+		if err := walkResolverStepFields(v, srcPath, src.Args, src.When, src.ContinueOnError, src.ForEach, src.Inputs); err != nil {
 			return err
 		}
 	}
@@ -198,24 +192,41 @@ func walkTransformPhase(v *Visitor, transformPath, resolverName string, tp *reso
 			}
 		}
 
-		if t.When != nil && t.When.Expr != nil {
-			if err := visitCondition(v, tPath+".when", "when", t.When.Expr); err != nil {
-				return err
-			}
-		}
-
-		if t.ForEach != nil {
-			if err := walkForEach(v, tPath+".forEach", t.ForEach); err != nil {
-				return err
-			}
-		}
-
-		if err := walkInputs(v, tPath+".inputs", t.Inputs); err != nil {
+		if err := walkResolverStepFields(v, tPath, t.Args, t.When, t.ContinueOnError, t.ForEach, t.Inputs); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func walkResolverStepFields(
+	v *Visitor,
+	stepPath string,
+	args map[string]*spec.ValueRef,
+	when, continueOnError *resolver.Condition,
+	forEach *spec.ForEachClause,
+	inputs map[string]*spec.ValueRef,
+) error {
+	if err := walkInputs(v, stepPath+".args", args); err != nil {
+		return err
+	}
+	if when != nil && when.Expr != nil {
+		if err := visitCondition(v, stepPath+".when", "when", when.Expr); err != nil {
+			return err
+		}
+	}
+	if continueOnError != nil && continueOnError.Expr != nil {
+		if err := visitCondition(v, stepPath+".continueOnError", "continueOnError", continueOnError.Expr); err != nil {
+			return err
+		}
+	}
+	if forEach != nil {
+		if err := walkForEach(v, stepPath+".forEach", forEach); err != nil {
+			return err
+		}
+	}
+	return walkInputs(v, stepPath+".inputs", inputs)
 }
 
 func walkValidatePhase(v *Visitor, validatePath, resolverName string, vp *resolver.ValidatePhase) error {
@@ -237,6 +248,16 @@ func walkValidatePhase(v *Visitor, validatePath, resolverName string, vp *resolv
 
 		if v.ProviderValidation != nil {
 			if err := v.ProviderValidation(pvPath, pv); err != nil {
+				return err
+			}
+		}
+
+		if err := walkInputs(v, pvPath+".args", pv.Args); err != nil {
+			return err
+		}
+
+		if pv.When != nil && pv.When.Expr != nil {
+			if err := visitCondition(v, pvPath+".when", "when", pv.When.Expr); err != nil {
 				return err
 			}
 		}
@@ -300,6 +321,12 @@ func walkActions(v *Visitor, basePath, section string, actions map[string]*actio
 			}
 		}
 
+		if act.ContinueOnError != nil && act.ContinueOnError.Expr != nil {
+			if err := visitCondition(v, path+".continueOnError", "continueOnError", act.ContinueOnError.Expr); err != nil {
+				return err
+			}
+		}
+
 		if act.ForEach != nil {
 			if err := walkForEach(v, path+".forEach", act.ForEach); err != nil {
 				return err
@@ -310,6 +337,10 @@ func walkActions(v *Visitor, basePath, section string, actions map[string]*actio
 			if err := visitCondition(v, path+".retry.retryIf", "when", act.Retry.RetryIf); err != nil {
 				return err
 			}
+		}
+
+		if err := walkInputs(v, path+".args", act.Args); err != nil {
+			return err
 		}
 
 		if err := walkInputs(v, path+".inputs", act.Inputs); err != nil {
@@ -393,6 +424,12 @@ func walkForEach(v *Visitor, path string, fe *spec.ForEachClause) error {
 
 	if fe.In != nil {
 		if err := visitValueRef(v, path+".in", fe.In); err != nil {
+			return err
+		}
+	}
+
+	if fe.ContinueOnError != nil && fe.ContinueOnError.Expr != nil {
+		if err := visitCondition(v, path+".continueOnError", "continueOnError", fe.ContinueOnError.Expr); err != nil {
 			return err
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/gotmplprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2231,4 +2232,290 @@ func TestExtractHardCelRefsFromValueRef_NilMapIsNoOp(t *testing.T) {
 	t.Parallel()
 	// Must not panic when the destination map is nil.
 	ExtractHardCelRefsFromValueRef(&ValueRef{Expr: celExpPtr(`_.greeting`)}, nil)
+}
+
+func TestExtractValidateDependencies(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil resolver or nil validate phase returns nil", func(t *testing.T) {
+		t.Parallel()
+		assert.Nil(t, ExtractValidateDependencies(nil, nil))
+		assert.Nil(t, ExtractValidateDependencies(&Resolver{Name: "r1"}, nil))
+	})
+
+	t.Run("self-only validation rule returns nil", func(t *testing.T) {
+		t.Parallel()
+		r := &Resolver{
+			Name: "port",
+			Validate: &ValidatePhase{
+				With: []ProviderValidation{{
+					Provider: "cel",
+					Inputs: map[string]*ValueRef{
+						"expression": {Expr: celExpPtr("__self > 0 && _.port < 65536")},
+					},
+				}},
+			},
+		}
+		assert.Nil(t, ExtractValidateDependencies(r, nil))
+	})
+
+	t.Run("extracts foreign refs from phase when, rule args, rule when, inputs, and message", func(t *testing.T) {
+		t.Parallel()
+		r := &Resolver{
+			Name: "endpoint",
+			Validate: &ValidatePhase{
+				When: &Condition{Expr: celExpPtr("_.phaseGate == true")},
+				With: []ProviderValidation{{
+					Provider: "cel",
+					Args: map[string]*ValueRef{
+						"limit": {Resolver: stringPtr("argDep")},
+					},
+					When: &Condition{Expr: celExpPtr("_.ruleGate != ''")},
+					Inputs: map[string]*ValueRef{
+						"data":     {Literal: map[string]any{"localKey": "v"}},
+						"template": {Literal: "{{ .localKey }} {{ ._.tmplDep }}"},
+						"wrapped":  {Tmpl: tmplPtr("{{ .localKey }}")},
+						"check":    {Expr: celExpPtr("__self != _.inputDep")},
+					},
+					Message: &ValueRef{Tmpl: tmplPtr("invalid against {{ ._.msgDep }}")},
+				}},
+			},
+		}
+
+		got := ExtractValidateDependencies(r, nil)
+		assert.Equal(t, []string{"argDep", "inputDep", "localKey", "msgDep", "phaseGate", "ruleGate", "tmplDep"}, got)
+		// Resolution dependency extraction keeps validate-phase refs out of the resolve DAG.
+		assert.Empty(t, ExtractDependencies(r, nil))
+
+		// Verify raw literal template excludes data key when no explicit tmpl wrapper references it.
+		rRawOnly := &Resolver{
+			Name: "endpoint",
+			Validate: &ValidatePhase{
+				With: []ProviderValidation{{
+					Provider: "custom-tmpl",
+					Inputs: map[string]*ValueRef{
+						"data":     {Literal: map[string]any{"localKey": "v"}},
+						"template": {Literal: "{{ .localKey }} {{ .foreignKey }}"},
+					},
+				}},
+			},
+		}
+		assert.Equal(t, []string{"foreignKey"}, ExtractValidateDependencies(rRawOnly, nil))
+	})
+
+	t.Run("explicit tmpl wrapper on template key ignores sibling data exclusions with and without provider lookup", func(t *testing.T) {
+		t.Parallel()
+		goTmplDesc := gotmplprovider.NewGoTemplateProvider().Descriptor()
+		lookup := func(name string) *provider.Descriptor {
+			if name == gotmplprovider.ProviderName {
+				return goTmplDesc
+			}
+			return nil
+		}
+
+		rValidate := &Resolver{
+			Name: "endpoint",
+			Validate: &ValidatePhase{
+				With: []ProviderValidation{{
+					Provider: gotmplprovider.ProviderName,
+					Inputs: map[string]*ValueRef{
+						"data":     {Literal: map[string]any{"localKey": "v"}},
+						"template": {Tmpl: tmplPtr("{{ .localKey }}")},
+					},
+				}},
+			},
+		}
+		assert.Equal(t, []string{"localKey"}, ExtractValidateDependencies(rValidate, nil))
+		assert.Equal(t, []string{"localKey"}, ExtractValidateDependencies(rValidate, lookup))
+
+		rResolve := &Resolver{
+			Name: "rendered",
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{{
+					Provider: gotmplprovider.ProviderName,
+					ForEach:  &ForEachClause{Item: "itemAlias", In: &ValueRef{Literal: []any{"a"}}},
+					Args: map[string]*ValueRef{
+						"callArg": {Tmpl: tmplPtr("{{ .argDep }} {{ .itemAlias }}")},
+					},
+					Inputs: map[string]*ValueRef{
+						"data": {Literal: map[string]any{
+							"localKey":   "v",
+							"nested":     map[string]any{"rslvr": "localKeyNested"},
+							"nestedTmpl": map[string]any{"tmpl": "{{ .localKey }} {{ .localKeyNestedTmpl }} {{ .itemAlias }}"},
+						}},
+						"template": {Tmpl: tmplPtr("{{ .localKey }} {{ .itemAlias }}")},
+					},
+				}},
+			},
+		}
+		assert.ElementsMatch(t, []string{"argDep", "localKey", "localKeyNested", "localKeyNestedTmpl"}, ExtractDependencies(rResolve, nil))
+		assert.ElementsMatch(t, []string{"argDep", "localKey", "localKeyNested", "localKeyNestedTmpl"}, ExtractDependencies(rResolve, lookup))
+
+		// A render-tree resolver containing only raw entries returns an empty slice
+		// rather than falling back to generic literal scanning.
+		rRawTree := &Resolver{
+			Name: "rawTree",
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{{
+					Provider: gotmplprovider.ProviderName,
+					Inputs: map[string]*ValueRef{
+						"operation": {Literal: "render-tree"},
+						"entries": {Literal: []any{
+							map[string]any{"path": "verbatim.txt", "raw": true, "content": "{{ .broken }}"},
+						}},
+					},
+				}},
+			},
+		}
+		assert.Empty(t, ExtractDependencies(rRawTree, lookup))
+	})
+
+	t.Run("whole-namespace CEL and wrapper extraction helpers", func(t *testing.T) {
+		t.Parallel()
+		assert.False(t, ExpressionReferencesWholeNamespace(`_.host + _["my-key"] + _.?opt.orValue("x")`))
+		assert.False(t, ExpressionReferencesWholeNamespace(`[1, 2].map(_, _ + 1)`))
+		assert.True(t, ExpressionReferencesWholeNamespace(`size(_)`))
+		assert.True(t, ExpressionReferencesWholeNamespace(`_[__item]`))
+		assert.True(t, ExpressionReferencesWholeNamespace(`cel.bind(_, _, size(_))`))
+
+		deps := make(map[string]bool)
+		whole := ExtractWrapperRefsFromValueRef(&ValueRef{
+			Literal: map[string]any{
+				"inertPath": "./{{ .broken }}.json and _.broken",
+				"wrapped":   map[string]any{"rslvr": "realDep"},
+				"all":       map[string]any{"tmpl": `{{ printf "%v" ._ }}`},
+			},
+		}, deps)
+		assert.True(t, whole)
+		assert.Equal(t, map[string]bool{"realDep": true}, deps)
+
+		// Literal validation messages do not invent template/CEL dependencies,
+		// while whole-namespace validation rules defer and report whole-namespace access.
+		rLiteralMsg := &Resolver{
+			Name: "port",
+			Validate: &ValidatePhase{
+				With: []ProviderValidation{{
+					Provider: "cel",
+					Inputs:   map[string]*ValueRef{"expression": {Literal: "__self > 0"}},
+					Message:  &ValueRef{Literal: "literal {{ .broken }} and _.broken"},
+				}},
+			},
+		}
+		assert.Nil(t, ExtractValidateDependencies(rLiteralMsg, nil))
+		assert.False(t, ValidateReferencesWholeNamespace(rLiteralMsg))
+		partInline := PartitionValidatePhase(rLiteralMsg, nil)
+		assert.Equal(t, []int{0}, partInline.InlineRules)
+		assert.Empty(t, partInline.DeferredRules)
+
+		rWholeVal := &Resolver{
+			Name: "target",
+			Validate: &ValidatePhase{
+				With: []ProviderValidation{{
+					Provider: "cel",
+					Inputs:   map[string]*ValueRef{"expression": {Literal: "size(_) == 3"}},
+				}},
+			},
+		}
+		assert.True(t, ValidateReferencesWholeNamespace(rWholeVal))
+		partDeferred := PartitionValidatePhase(rWholeVal, nil)
+		assert.Empty(t, partDeferred.InlineRules)
+		assert.Equal(t, []int{0}, partDeferred.DeferredRules)
+
+		rValidationProv := &Resolver{
+			Name: "target2",
+			Validate: &ValidatePhase{
+				With: []ProviderValidation{{
+					Provider: "validation",
+					Inputs:   map[string]*ValueRef{"failWhen": {Literal: "size(_) != 3"}},
+				}},
+			},
+		}
+		assert.True(t, ValidateReferencesWholeNamespace(rValidationProv))
+		assert.Equal(t, []int{0}, PartitionValidatePhase(rValidationProv, nil).DeferredRules)
+
+		goTmplDesc := gotmplprovider.NewGoTemplateProvider().Descriptor()
+		goTmplLookup := func(name string) *provider.Descriptor {
+			if name == gotmplprovider.ProviderName {
+				return goTmplDesc
+			}
+			return nil
+		}
+
+		// go-template validation rules respect rawGlobs and ignored template regions
+		// when detecting whole-namespace access.
+		rGoTmplRawGlob := &Resolver{
+			Name: "bundle",
+			Validate: &ValidatePhase{
+				With: []ProviderValidation{{
+					Provider: gotmplprovider.ProviderName,
+					Inputs: map[string]*ValueRef{
+						"operation": {Literal: "render-tree"},
+						"rawGlobs":  {Literal: []any{"*.bin"}},
+						"entries": {Literal: []any{
+							map[string]any{"path": "blob.bin", "content": "{{ ._ }}"},
+						}},
+					},
+				}},
+			},
+		}
+		assert.False(t, ValidateReferencesWholeNamespace(rGoTmplRawGlob))
+		assert.Equal(t, []int{0}, PartitionValidatePhase(rGoTmplRawGlob, goTmplLookup).InlineRules)
+
+		rGoTmplIgnored := &Resolver{
+			Name: "rendered",
+			Validate: &ValidatePhase{
+				With: []ProviderValidation{{
+					Provider: gotmplprovider.ProviderName,
+					Inputs: map[string]*ValueRef{
+						"ignoredBlocks": {Literal: []any{map[string]any{"line": "# verbatim"}}},
+						"template":      {Literal: "{{/* scafctl:ignore:start */}}{{ ._ }}{{/* scafctl:ignore:end */}}\n# verbatim {{ ._ }}\n"},
+					},
+				}},
+			},
+		}
+		assert.False(t, ValidateReferencesWholeNamespace(rGoTmplIgnored))
+		assert.Equal(t, []int{0}, PartitionValidatePhase(rGoTmplIgnored, goTmplLookup).InlineRules)
+
+		// Per-entry raw: false overrides rawGlobs so active whole-namespace templates
+		// are still detected and deferred.
+		rGoTmplActiveOverride := &Resolver{
+			Name: "activeTree",
+			Validate: &ValidatePhase{
+				With: []ProviderValidation{{
+					Provider: gotmplprovider.ProviderName,
+					Inputs: map[string]*ValueRef{
+						"operation": {Literal: "render-tree"},
+						"rawGlobs":  {Literal: []any{"*.bin"}},
+						"entries": {Literal: []any{
+							map[string]any{"path": "blob.bin", "raw": false, "content": "{{ ._ }}"},
+						}},
+					},
+				}},
+			},
+		}
+		assert.True(t, ValidateReferencesWholeNamespace(rGoTmplActiveOverride))
+		assert.Equal(t, []int{0}, PartitionValidatePhase(rGoTmplActiveOverride, goTmplLookup).DeferredRules)
+	})
+}
+
+func BenchmarkExtractValidateDependencies(b *testing.B) {
+	r := &Resolver{
+		Name: "endpoint",
+		Validate: &ValidatePhase{
+			When: &Condition{Expr: celExpPtr("_.phaseGate == true")},
+			With: []ProviderValidation{{
+				Provider: "cel",
+				Args:     map[string]*ValueRef{"limit": {Resolver: stringPtr("argDep")}},
+				When:     &Condition{Expr: celExpPtr("_.ruleGate != ''")},
+				Inputs:   map[string]*ValueRef{"expression": {Expr: celExpPtr("__self != _.inputDep")}},
+				Message:  &ValueRef{Tmpl: tmplPtr("invalid against {{ ._.msgDep }}")},
+			}},
+		},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_ = ExtractValidateDependencies(r, nil)
+	}
 }

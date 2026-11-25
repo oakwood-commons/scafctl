@@ -1247,6 +1247,12 @@ scafctl run resolver -f conditional-demo.yaml -r environment=staging
 
 # Run specific resolvers for inspection
 scafctl run resolver config -f conditional-demo.yaml -r environment=staging
+
+# Run specific action(s); executes only the resolvers those actions need
+scafctl run action setup -f conditional-demo.yaml
+
+# Force all resolvers to execute even when scoping to specific actions
+scafctl run action setup --resolve-all -f conditional-demo.yaml
 ```
 
 {{% /tab %}}
@@ -1276,10 +1282,18 @@ scafctl run resolver -f conditional-demo.yaml -r environment=staging
 
 # Run specific resolvers for inspection
 scafctl run resolver config -f conditional-demo.yaml -r environment=staging
+
+# Run specific action(s); executes only the resolvers those actions need
+scafctl run action setup -f conditional-demo.yaml
+
+# Force all resolvers to execute even when scoping to specific actions
+scafctl run action setup --resolve-all -f conditional-demo.yaml
 ```
 
 {{% /tab %}}
 {{< /tabs >}}
+
+When you select specific actions with `scafctl run action <name...>` or `scafctl run solution --action <name>`, scafctl automatically scopes the resolver phase to only the resolvers referenced by the selected actions, their transitive `dependsOn` actions, `finally` actions, and active state configuration (including transitive resolver and cross-resolver validation dependencies). Unrelated slow, failing, or side-effecting resolvers do not execute. Pass `--resolve-all` to execute every resolver in the solution regardless of action selection.
 
 ### Render Mode
 

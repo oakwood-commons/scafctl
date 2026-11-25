@@ -153,6 +153,101 @@ func TestFilterResolversWithDependencies_ExplicitDepPreserved(t *testing.T) {
 	assert.Equal(t, "app", result[1].Name)
 }
 
+func TestFilterResolversWithDependencies_IncludesCrossResolverValidateDeps(t *testing.T) {
+	t.Parallel()
+
+	valExpr := celexp.Expression("__self in _.allowedEnvs")
+	srcExpr := celexp.Expression("_.rawRegions")
+	resolvers := []*resolver.Resolver{
+		{
+			Name: "rawRegions",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*resolver.ValueRef{"value": {Literal: []any{"dev", "prod"}}}}},
+			},
+		},
+		{
+			Name: "allowedEnvs",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "cel", Inputs: map[string]*resolver.ValueRef{"expression": {Expr: &srcExpr}}}},
+			},
+		},
+		{
+			Name: "targetEnv",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*resolver.ValueRef{"value": {Literal: "dev"}}}},
+			},
+			Validate: &resolver.ValidatePhase{
+				With: []resolver.ProviderValidation{{
+					Provider: "cel",
+					Inputs:   map[string]*resolver.ValueRef{"expression": {Expr: &valExpr}},
+				}},
+			},
+		},
+		{
+			Name: "unrelated",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*resolver.ValueRef{"value": {Literal: "skip"}}}},
+			},
+		},
+	}
+
+	result := FilterResolversWithDependencies(resolvers, []string{"targetEnv"}, nil)
+	gotNames := make([]string, 0, len(result))
+	for _, r := range result {
+		gotNames = append(gotNames, r.Name)
+	}
+	assert.Equal(t, []string{"rawRegions", "allowedEnvs", "targetEnv"}, gotNames)
+
+	// BuildPhases continues to keep targetEnv independent of allowedEnvs during resolution.
+	plan, err := resolver.BuildPhases(result, nil)
+	require.NoError(t, err)
+	require.Len(t, plan.DeferredWork, 1)
+	assert.Equal(t, "targetEnv", plan.DeferredWork[0].ResolverName)
+	assert.Equal(t, []string{"allowedEnvs"}, plan.DeferredWork[0].DependsOn)
+
+	// When validation is skipped, validate-only dependencies are omitted.
+	skippedTargeted := FilterResolversWithDependencies(resolvers, []string{"targetEnv"}, nil, WithSkipValidationDeps(true))
+	require.Len(t, skippedTargeted, 1)
+	assert.Equal(t, "targetEnv", skippedTargeted[0].Name)
+
+	// Also verify the empty-targetNames branch omits explicit validate-only dependencies when skipped.
+	explicitValidateDepResolvers := []*resolver.Resolver{
+		{
+			Name:     "explicitValDep",
+			Explicit: true,
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*resolver.ValueRef{"value": {Literal: []any{"dev"}}}}},
+			},
+		},
+		{
+			Name: "mainResolver",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*resolver.ValueRef{"value": {Literal: "dev"}}}},
+			},
+			Validate: &resolver.ValidatePhase{
+				With: []resolver.ProviderValidation{{
+					Provider: "cel",
+					Inputs:   map[string]*resolver.ValueRef{"expression": {Expr: func() *celexp.Expression { e := celexp.Expression("__self in _.explicitValDep"); return &e }()}},
+				}},
+			},
+		},
+	}
+	assert.Len(t, FilterResolversWithDependencies(explicitValidateDepResolvers, nil, nil), 2)
+	skippedBare := FilterResolversWithDependencies(explicitValidateDepResolvers, nil, nil, WithSkipValidationDeps(true))
+	require.Len(t, skippedBare, 1)
+	assert.Equal(t, "mainResolver", skippedBare[0].Name)
+
+	// Whole-namespace validation rule retains all defined resolvers unless validation is skipped.
+	wholeValExpr := celexp.Expression("__self == _.expected && size(_) == 3")
+	wholeValResolvers := []*resolver.Resolver{
+		{Name: "target", Validate: &resolver.ValidatePhase{With: []resolver.ProviderValidation{{Provider: "cel", Inputs: map[string]*resolver.ValueRef{"expression": {Expr: &wholeValExpr}}}}}},
+		{Name: "expected"},
+		{Name: "extra"},
+	}
+	assert.Len(t, FilterResolversWithDependencies(wholeValResolvers, []string{"target"}, nil), 3)
+	assert.Len(t, FilterResolversWithDependencies(wholeValResolvers, []string{"target"}, nil, WithSkipValidationDeps(true)), 1)
+}
+
 func TestBuildExecutionData(t *testing.T) {
 	t.Parallel()
 

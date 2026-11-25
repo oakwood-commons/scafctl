@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1259,4 +1260,139 @@ func TestCommandSolution_ForceAndActionFlags(t *testing.T) {
 	// Verify --action flag exists
 	actionFlag := flags.Lookup("action")
 	require.NotNil(t, actionFlag)
+}
+
+func TestSolutionOptions_Run_ActionFlagScopesResolversAndResolveAll(t *testing.T) {
+	t.Parallel()
+
+	solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: solution-action-scoped
+  version: 1.0.0
+spec:
+  resolvers:
+    broken:
+      resolve:
+        with:
+          - provider: broken-from
+  workflow:
+    actions:
+      clean:
+        provider: message
+        inputs:
+          message: "echo clean"
+      deploy:
+        provider: message
+        inputs:
+          message:
+            rslvr: broken
+`
+
+	t.Run("--action clean executes 0 resolvers and skips broken resolver", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte(solYAML), 0o600))
+
+		var brokenCalls atomic.Int32
+		var stdout, stderr bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.ExitOnError = false
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+
+		opts := &SolutionOptions{
+			ActionNames:   []string{"clean"},
+			ActionTimeout: 10 * time.Second,
+			ShowExecution: true,
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams:       streams,
+				CliParams:       cliParams,
+				File:            solPath,
+				KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+				ResolverTimeout: 10 * time.Second,
+				PhaseTimeout:    30 * time.Second,
+				registry: actionScopedTestRegistry(
+					newCountingFailResolverProvider(&brokenCalls),
+				),
+			},
+		}
+
+		w := writer.New(streams, cliParams)
+		ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), w)
+		require.NoError(t, opts.Run(ctx))
+		assert.Zero(t, brokenCalls.Load())
+		assert.Contains(t, stdout.String(), `"resolverCount": 0`)
+	})
+
+	t.Run("--action clean --resolve-all executes all resolvers and fails on broken", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte(solYAML), 0o600))
+
+		var brokenCalls atomic.Int32
+		var stdout, stderr bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.ExitOnError = false
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+
+		opts := &SolutionOptions{
+			ActionNames:   []string{"clean"},
+			ActionTimeout: 10 * time.Second,
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams:       streams,
+				CliParams:       cliParams,
+				File:            solPath,
+				ResolveAll:      true,
+				KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+				ResolverTimeout: 10 * time.Second,
+				PhaseTimeout:    30 * time.Second,
+				registry: actionScopedTestRegistry(
+					newCountingFailResolverProvider(&brokenCalls),
+				),
+			},
+		}
+
+		w := writer.New(streams, cliParams)
+		ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), w)
+		err := opts.Run(ctx)
+		require.Error(t, err)
+		assert.Equal(t, int32(1), brokenCalls.Load())
+	})
+
+	t.Run("--action clean --dry-run skips broken resolver", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte(solYAML), 0o600))
+
+		var brokenCalls atomic.Int32
+		var stdout, stderr bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.ExitOnError = false
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+
+		opts := &SolutionOptions{
+			ActionNames:   []string{"clean"},
+			ActionTimeout: 10 * time.Second,
+			DryRun:        true,
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams:       streams,
+				CliParams:       cliParams,
+				File:            solPath,
+				KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+				ResolverTimeout: 10 * time.Second,
+				PhaseTimeout:    30 * time.Second,
+				registry: actionScopedTestRegistry(
+					newCountingFailResolverProvider(&brokenCalls),
+				),
+			},
+		}
+
+		w := writer.New(streams, cliParams)
+		ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), w)
+		require.NoError(t, opts.Run(ctx))
+		assert.Zero(t, brokenCalls.Load())
+	})
 }

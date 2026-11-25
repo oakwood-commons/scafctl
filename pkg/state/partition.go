@@ -5,6 +5,7 @@ package state
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -68,15 +69,18 @@ func (p *Partition) IsKnown(name string) bool {
 type configRefLocation struct {
 	location string
 	refs     map[string]bool
+	whole    bool
 }
 
 // stateConfigRefLocations extracts the resolver references made by each state
-// config field that is evaluated at load time (enabled and every load input).
-// Save targets are excluded: they are resolved only at save time, after
-// resolvers have run, so they may freely reference any resolver. The result is
-// ordered deterministically (enabled first, then load inputs sorted by key).
+// config field that is evaluated at load time (enabled and every load input),
+// inspecting only explicit ValueRef wrappers and skipping statically disabled
+// configs. Save targets are excluded: they are resolved only at save time,
+// after resolvers have run, so they may freely reference any resolver. The
+// result is ordered deterministically (enabled first, then load inputs sorted
+// by key).
 func stateConfigRefLocations(cfg *Config) []configRefLocation {
-	if cfg == nil {
+	if cfg == nil || isStaticallyDisabledValueRef(cfg.Enabled) {
 		return nil
 	}
 
@@ -84,9 +88,10 @@ func stateConfigRefLocations(cfg *Config) []configRefLocation {
 
 	if cfg.Enabled != nil {
 		refs := make(map[string]bool)
-		resolver.ExtractRefsFromValueRef(cfg.Enabled, refs)
-		if len(refs) > 0 {
-			locations = append(locations, configRefLocation{location: "state.enabled", refs: refs})
+		whole := resolver.ExtractWrapperRefsFromValueRef(cfg.Enabled, refs)
+		delete(refs, "")
+		if len(refs) > 0 || whole {
+			locations = append(locations, configRefLocation{location: "state.enabled", refs: refs, whole: whole})
 		}
 	}
 
@@ -105,11 +110,13 @@ func stateConfigRefLocations(cfg *Config) []configRefLocation {
 			continue
 		}
 		refs := make(map[string]bool)
-		resolver.ExtractRefsFromValueRef(vr, refs)
-		if len(refs) > 0 {
+		whole := resolver.ExtractWrapperRefsFromValueRef(vr, refs)
+		delete(refs, "")
+		if len(refs) > 0 || whole {
 			locations = append(locations, configRefLocation{
 				location: "state.load.inputs." + key,
 				refs:     refs,
+				whole:    whole,
 			})
 		}
 	}
@@ -134,6 +141,13 @@ func ValidateStateRefs(cfg *Config, part *Partition) error {
 				dependent = append(dependent, ref)
 			}
 		}
+		if loc.whole && part != nil {
+			for ref := range part.stateDependent {
+				if !loc.refs[ref] {
+					dependent = append(dependent, ref)
+				}
+			}
+		}
 		if len(unknown) > 0 {
 			sort.Strings(unknown)
 			return &UnknownStateRefError{Location: loc.location, Refs: unknown}
@@ -154,6 +168,13 @@ func ValidateStateRefs(cfg *Config, part *Partition) error {
 func PhaseARoots(cfg *Config, part *Partition) map[string]bool {
 	roots := make(map[string]bool)
 	for _, loc := range stateConfigRefLocations(cfg) {
+		if loc.whole && part != nil {
+			for ref := range part.known {
+				if !part.IsStateDependent(ref) {
+					roots[ref] = true
+				}
+			}
+		}
 		for ref := range loc.refs {
 			if part.IsKnown(ref) && !part.IsStateDependent(ref) {
 				roots[ref] = true
@@ -161,4 +182,93 @@ func PhaseARoots(cfg *Config, part *Partition) map[string]bool {
 		}
 	}
 	return roots
+}
+
+// ExtractConfigResolverRefs returns the sorted, deduplicated set of resolver
+// names referenced via explicit ValueRef wrappers across active state config
+// fields: state.enabled, state.load.inputs, and every non-statically-disabled
+// state.save target's enabled condition and inputs (after materializing any
+// extends: load inheritance). Plain literal strings in state inputs are left
+// untouched, matching Manager.resolveInputs. Returns nil when cfg is nil,
+// statically disabled, or references no resolvers.
+func ExtractConfigResolverRefs(cfg *Config) []string {
+	refs, _ := scanConfigResolverRefs(cfg)
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(refs))
+	for name := range refs {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ConfigReferencesWholeNamespace reports whether any active expression or
+// template wrapper in cfg accesses the root resolver namespace as a whole.
+func ConfigReferencesWholeNamespace(cfg *Config) bool {
+	_, whole := scanConfigResolverRefs(cfg)
+	return whole
+}
+
+func scanConfigResolverRefs(cfg *Config) (map[string]bool, bool) {
+	if cfg == nil {
+		return nil, false
+	}
+
+	materialized := materializeExtends(cfg)
+	if isStaticallyDisabledValueRef(materialized.Enabled) {
+		return nil, false
+	}
+
+	refs := make(map[string]bool)
+	whole := false
+
+	if materialized.Enabled != nil {
+		if resolver.ExtractWrapperRefsFromValueRef(materialized.Enabled, refs) {
+			whole = true
+		}
+	}
+	if materialized.Load != nil {
+		for _, vr := range materialized.Load.Inputs {
+			if resolver.ExtractWrapperRefsFromValueRef(vr, refs) {
+				whole = true
+			}
+		}
+	}
+	for i := range materialized.Save {
+		target := &materialized.Save[i]
+		if isStaticallyDisabledValueRef(target.Enabled) {
+			continue
+		}
+		if target.Enabled != nil {
+			if resolver.ExtractWrapperRefsFromValueRef(target.Enabled, refs) {
+				whole = true
+			}
+		}
+		for _, vr := range target.Inputs {
+			if resolver.ExtractWrapperRefsFromValueRef(vr, refs) {
+				whole = true
+			}
+		}
+	}
+
+	delete(refs, "")
+	return refs, whole
+}
+
+func isStaticallyDisabledValueRef(vr *spec.ValueRef) bool {
+	if vr == nil {
+		return false
+	}
+	if vr.Resolver != nil || vr.Tmpl != nil || vr.Secret != nil || vr.Token != nil {
+		return false
+	}
+	if vr.Expr != nil {
+		return strings.TrimSpace(string(*vr.Expr)) == "false"
+	}
+	if m, ok := vr.Literal.(map[string]any); ok && spec.IsValueRefMap(m) {
+		return false
+	}
+	return !isTruthy(vr.Literal)
 }

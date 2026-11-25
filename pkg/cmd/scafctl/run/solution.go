@@ -87,8 +87,9 @@ type SolutionOptions struct {
 	Backup bool
 
 	// ActionNames is the list of action names to execute selectively.
-	// When set, only the specified actions and their transitive dependsOn
-	// dependencies are executed. Finally actions always run.
+	// When set, only the specified actions, their transitive dependsOn
+	// dependencies, and the resolvers required by the filtered workflow are
+	// executed (unless --resolve-all is set). Finally actions always run.
 	ActionNames []string
 
 	// positionalPathErr is set in PreRun when the user passes a local file
@@ -143,7 +144,7 @@ The solution MUST define a workflow with actions. If no workflow is defined,
 the command will error and suggest using 'scafctl run resolver' instead.
 
 The execution proceeds in two phases:
-1. RESOLVER PHASE: All resolvers execute in dependency order (concurrent within phases)
+1. RESOLVER PHASE: Resolvers execute in dependency order (concurrent within phases; scoped to the selected actions when --action is set, unless --resolve-all is passed)
 2. ACTION PHASE: Actions execute using resolved data
 
 To execute resolvers only without actions (for debugging/inspection), use:
@@ -269,7 +270,7 @@ Examples:
 	cCmd.Flags().IntVar(&options.MaxActionConcurrency, "max-action-concurrency", 0, "Maximum concurrent actions (0=unlimited)")
 	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Validate and show what would be executed without running")
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata in output (phases, timing, dependencies, providers)")
-	cCmd.Flags().StringSliceVar(&options.ActionNames, "action", nil, "Run only the named action(s) and their transitive dependencies (repeatable)")
+	cCmd.Flags().StringSliceVar(&options.ActionNames, "action", nil, "Run only the named action(s), their transitive dependencies, and the resolvers they require (repeatable)")
 
 	// File conflict strategy flags
 	cCmd.Flags().StringVar(&options.OnConflict, "on-conflict", "", "Conflict strategy for file writes (error|overwrite|skip|skip-unchanged|append) (default: error)")
@@ -549,9 +550,11 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// even in dry-run mode (resolvers need context) but never saved.
 	// params are passed so that state load inputs can reference CLI
 	// parameters via __params in CEL expressions (e.g. __params.appName).
+	allResolvers := sol.Spec.ResolversToSlice()
 	var stateMgr *state.Manager
 	var stateData *state.Data
 	var stateSeed map[string]*resolver.ExecutionResult
+	var effectiveStateCfg *state.Config
 	stateCfg, stateCfgErr := o.resolveStateConfig(ctx, sol)
 	if stateCfgErr != nil {
 		return o.exitWithCode(ctx, stateCfgErr, exitcode.InvalidInput)
@@ -565,11 +568,12 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		if loadErr != nil {
 			return o.handleStateLoadError(ctx, loadErr)
 		}
-		if err := o.checkMissingLocks(ctx, loadResult.LoadResult, sol.Spec.ResolversToSlice(), o.DryRun); err != nil {
+		if err := o.checkMissingLocks(ctx, loadResult.LoadResult, allResolvers, o.DryRun); err != nil {
 			return err
 		}
 		stateSeed = loadResult.Seed
 		if !loadResult.Skipped {
+			effectiveStateCfg = stateCfg
 			ctx = loadResult.Ctx
 			actionCtx = state.WithState(actionCtx, loadResult.Data)
 			stateData = loadResult.Data
@@ -579,16 +583,29 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		reportStateLoaded(ctx, loadResult.LoadResult)
 	}
 
+	// Scope resolver execution to the selected actions when --action is set and
+	// --resolve-all is not set.
+	resolvers := allResolvers
+	if len(o.ActionNames) > 0 && !o.ResolveAll {
+		var lookup resolver.DescriptorLookup
+		if reg != nil {
+			lookup = reg.DescriptorLookup()
+		}
+		skipValidation := validationPolicy == settings.ValidationIgnore || o.SkipTransform
+		resolvers = execute.ResolversForWorkflow(sol, workflow, effectiveStateCfg, lookup, execute.WithSkipValidationDeps(skipValidation))
+		lgr.V(1).Info("resolver execution scoped to selected actions",
+			"targets", o.ActionNames,
+			"selectedResolvers", len(resolvers),
+			"totalResolvers", len(allResolvers))
+	}
+
 	// Dry run — execute resolvers with ctx (CWD by default, or base-dir when
 	// --base-dir is explicitly set) so resolver paths resolve accordingly. The
 	// action-phase WhatIf report uses actionCtx which has the working-dir
 	// override for accurate output-dir resolution.
 	if o.DryRun {
-		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow, stateData, originalCwd, stateSeed)
+		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow, resolvers, stateData, originalCwd, stateSeed)
 	}
-
-	// Execute resolvers if present
-	resolvers := sol.Spec.ResolversToSlice()
 
 	// Track timing for execution metadata
 	start := time.Now()
@@ -750,7 +767,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 // override) so resolver paths resolve relative to the solution file.
 // actionCtx carries CLI overrides (output-dir, on-conflict, backup, working-dir)
 // so that dryrun.Generate / WhatIf sees the same context as real execution.
-func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg providerLookup, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
+func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg providerLookup, params map[string]any, workflow *action.Workflow, resolvers []*resolver.Resolver, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
 	// Never touch keyrings or mint live tokens during --dry-run.
 	resolverCtx = spec.WithCredentialResolver(resolverCtx, spec.PlaceholderCredentialResolver())
 	actionCtx = spec.WithCredentialResolver(actionCtx, spec.PlaceholderCredentialResolver())
@@ -758,7 +775,9 @@ func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, 
 	// callbacks, and CLI-flag-driven config are wired identically to the
 	// live execution path. Resolver providers are side-effect-free, so we
 	// get real data for WhatIf message generation safely.
-	resolvers := sol.Spec.ResolversToSlice()
+	if resolvers == nil {
+		resolvers = sol.Spec.ResolversToSlice()
+	}
 	resolverData, resExecCtx, err := o.executeResolvers(resolverCtx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if err != nil {
 		// Non-fatal — report will include warnings about missing resolver data.

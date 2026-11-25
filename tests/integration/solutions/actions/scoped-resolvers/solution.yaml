@@ -1,0 +1,235 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-scoped-resolvers
+  version: 1.0.0
+  description: |
+    Integration tests for action-scoped resolver execution and --resolve-all.
+    Verifies that selecting specific actions runs only the resolvers required
+    by the filtered workflow (selected actions, transitive dependsOn actions,
+    finally actions, and cross-resolver validate dependencies), skipping
+    unrelated failing resolvers unless --resolve-all is passed.
+
+spec:
+  resolvers:
+    baseVersion:
+      description: Base semantic version
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "1.2.0"
+
+    releaseTag:
+      description: Version tag derived from baseVersion
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'v' + _.baseVersion"
+
+    allowedPrefix:
+      description: Allowed tag prefix for cross-resolver validation
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "v1."
+
+    validatedTag:
+      description: Tag validated against allowedPrefix in deferred validation
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.releaseTag"
+      validate:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.startsWith(_.allowedPrefix)"
+            message: "Tag must start with allowed prefix"
+
+    cleanupNote:
+      description: Note emitted by finally action
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "cleanup-complete"
+
+    brokenDeploySecret:
+      description: Unrelated resolver that fails at runtime if executed
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "string(1 / 0)"
+
+    dynamicRenderData:
+      description: Dynamic map input omitting fallbackHost
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                port: 8080
+
+    fallbackHost:
+      description: Fallback host resolver used when dynamicRenderData omits fallbackHost
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "fallback.example.com"
+
+    shadowedHost:
+      description: Failing resolver shadowed by guaranteed local entry data
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "string(1 / 0)"
+
+  workflow:
+    actions:
+      clean:
+        description: Clean workspace with zero direct resolver references
+        provider: message
+        inputs:
+          message: "workspace cleaned"
+
+      prepare:
+        description: Prepare build metadata
+        provider: message
+        inputs:
+          message:
+            expr: "'preparing ' + _.baseVersion"
+
+      package:
+        description: Package release artifact
+        provider: message
+        dependsOn: [prepare]
+        inputs:
+          message:
+            expr: "'packaging ' + _.validatedTag"
+
+      deploy:
+        description: Deploy using brokenDeploySecret and shadowedHost
+        provider: message
+        dependsOn: [package]
+        inputs:
+          message:
+            expr: "'deploying with ' + _.brokenDeploySecret + ' on ' + _.shadowedHost"
+
+      renderDynamicFallback:
+        description: Render tree using dynamic data fallback while excluding guaranteed shadowed key
+        provider: go-template
+        inputs:
+          operation: render-tree
+          data:
+            rslvr: dynamicRenderData
+          entries:
+            - path: endpoint.txt
+              data:
+                shadowedHost: local.example.com
+              content: "{{ .shadowedHost }}:{{ .fallbackHost }}:{{ .port }}"
+
+    finally:
+      finish:
+        description: Always-run completion message
+        provider: message
+        inputs:
+          message:
+            rslvr: cleanupNote
+
+  testing:
+    config:
+      skipBuiltins: [resolve-defaults]
+
+    cases:
+      run-action-clean-skips-broken:
+        description: run action clean executes only finally's resolver and skips brokenDeploySecret
+        command: [run, action]
+        args: ["clean", "--show-execution", "-o", "json"]
+        tags: [action, resolver, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.__execution.summary.resolverCount == 1
+          - expression: "'cleanupNote' in __output.__execution.resolvers"
+          - expression: "!('brokenDeploySecret' in __output.__execution.resolvers)"
+
+      run-action-package-includes-transitive-and-validate-deps:
+        description: run action package pulls transitive action, resolver, finally, and validate deps
+        command: [run, action]
+        args: ["package", "--show-execution", "-o", "json"]
+        tags: [action, resolver]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.__execution.summary.resolverCount == 5
+          - expression: "'baseVersion' in __output.__execution.resolvers"
+          - expression: "'releaseTag' in __output.__execution.resolvers"
+          - expression: "'allowedPrefix' in __output.__execution.resolvers"
+          - expression: "'validatedTag' in __output.__execution.resolvers"
+          - expression: "'cleanupNote' in __output.__execution.resolvers"
+          - expression: "!('brokenDeploySecret' in __output.__execution.resolvers)"
+
+      run-action-resolve-all-executes-broken:
+        description: --resolve-all executes all resolvers including brokenDeploySecret
+        command: [run, action]
+        args: ["clean", "--resolve-all", "-o", "json"]
+        tags: [action, resolver]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode == 1
+          - expression: __output.status == "failed"
+
+      run-solution-action-flag-scopes-resolvers:
+        description: run solution --action clean scopes resolvers identically to run action clean
+        command: [run, solution]
+        args: ["--action", "clean", "--show-execution", "-o", "json"]
+        tags: [action, resolver]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.__execution.summary.resolverCount == 1
+
+      run-action-dry-run-scopes-resolvers:
+        description: run action --dry-run scopes resolvers to selected actions
+        command: [run, action]
+        args: ["package", "--dry-run", "-o", "json"]
+        tags: [action, resolver, dryrun]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.dryRun == true
+
+      run-action-dynamic-data-fallback-and-shadowed-key:
+        description: run action renders fallback resolver omitted from dynamic data while skipping shadowed failing and unrelated resolvers
+        command: [run, action]
+        args: ["renderDynamicFallback", "--show-execution", "-o", "json"]
+        tags: [action, resolver, go-template]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["renderDynamicFallback"].status == "succeeded"
+          - expression: __output.actions["renderDynamicFallback"].results[0].path == "endpoint.txt"
+          - expression: __output.actions["renderDynamicFallback"].results[0].content == "local.example.com:fallback.example.com:8080"
+          - expression: __output.__execution.summary.resolverCount == 3
+          - expression: "'dynamicRenderData' in __output.__execution.resolvers"
+          - expression: "'fallbackHost' in __output.__execution.resolvers"
+          - expression: "'cleanupNote' in __output.__execution.resolvers"
+          - expression: "!('shadowedHost' in __output.__execution.resolvers)"
+          - expression: "!('brokenDeploySecret' in __output.__execution.resolvers)"
+          - expression: "!('baseVersion' in __output.__execution.resolvers)"

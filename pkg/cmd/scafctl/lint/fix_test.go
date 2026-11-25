@@ -597,7 +597,7 @@ spec:
 		assert.Contains(t, errBuf.String(), "skipped")
 	})
 
-	t.Run("skips rename when primary file holds unrewritten source forEach.in reference", func(t *testing.T) {
+	t.Run("rewrites source forEach.in reference in primary file", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		solPath := filepath.Join(tmpDir, "solution.yaml")
 
@@ -631,6 +631,50 @@ spec:
 `
 		require.NoError(t, os.WriteFile(solPath, []byte(primary), 0o600))
 
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		ctx := testContext(ioStreams)
+		opts := fixOptions(solPath, ioStreams)
+		opts.Fix = true
+
+		require.NoError(t, runLintFix(ctx, opts))
+
+		gotPrimary, rerr := os.ReadFile(solPath) //nolint:gosec // test-controlled path
+		require.NoError(t, rerr)
+		assert.Contains(t, string(gotPrimary), "myItems:")
+		assert.Contains(t, string(gotPrimary), "rslvr: myItems")
+	})
+
+	t.Run("skips rename when primary file holds unrewritten bundle.plugins defaults reference", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+
+		primary := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fix-primary-plugin-defaults
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: custom
+      kind: provider
+      version: ^1.0.0
+      defaults:
+        items:
+          rslvr: my-items
+spec:
+  resolvers:
+    my-items:
+      description: Item list
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - a
+                - b
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(primary), 0o600))
+
 		ioStreams, _, errBuf := terminal.NewTestIOStreams()
 		ctx := testContext(ioStreams)
 		opts := fixOptions(solPath, ioStreams)
@@ -640,7 +684,7 @@ spec:
 
 		gotPrimary, rerr := os.ReadFile(solPath) //nolint:gosec // test-controlled path
 		require.NoError(t, rerr)
-		assert.Equal(t, primary, string(gotPrimary), "must not rewrite primary when unindexed source forEach.in reference remains")
+		assert.Equal(t, primary, string(gotPrimary), "must not rewrite primary when unindexed bundle.plugins defaults reference remains")
 		assert.Contains(t, errBuf.String(), "unrewritten reference remains in solution")
 	})
 

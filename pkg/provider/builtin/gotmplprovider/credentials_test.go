@@ -14,6 +14,7 @@ func TestIsValueRefShapedData_Credentials(t *testing.T) {
 
 	assert.True(t, isValueRefShapedData(map[string]any{"scrt": "my-secret"}))
 	assert.True(t, isValueRefShapedData(map[string]any{"tkn": "github"}))
+	assert.False(t, isValueRefShapedData(map[string]any{"scrt": "my-secret", "extra": "literal"}))
 	assert.False(t, isValueRefShapedData(map[string]any{"secret": "literal"}))
 	assert.False(t, isValueRefShapedData(map[string]any{"appName": "demo"}))
 }

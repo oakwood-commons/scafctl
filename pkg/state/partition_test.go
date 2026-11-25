@@ -203,3 +203,113 @@ func TestStateRefs_SaveTargetsAreNotLoadTime(t *testing.T) {
 	assert.NoError(t, ValidateStateRefs(cfg, part), "save targets are never validated as load-time fields")
 	assert.Equal(t, []string{"region"}, sortedKeys(PhaseARoots(cfg, part)))
 }
+
+func TestExtractConfigResolverRefs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil or empty config returns nil", func(t *testing.T) {
+		t.Parallel()
+		assert.Nil(t, ExtractConfigResolverRefs(nil))
+		assert.Nil(t, ExtractConfigResolverRefs(&Config{Enabled: &spec.ValueRef{Literal: true}}))
+	})
+
+	t.Run("extracts from enabled, load inputs, save enabled, save inputs, and extends load", func(t *testing.T) {
+		t.Parallel()
+		cfg := &Config{
+			Enabled: rslvrRef("stateEnabled"),
+			Load: &LoadConfig{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": {Expr: exprPtr(`_.loadDir + "/state.json"`)},
+				},
+			},
+			Save: []SaveTarget{
+				{
+					Extends: ExtendsLoad,
+					Enabled: rslvrRef("saveGate"),
+				},
+				{
+					Provider: "file",
+					Inputs: map[string]*spec.ValueRef{
+						"path": rslvrRef("auditPath"),
+					},
+				},
+			},
+		}
+
+		assert.Equal(t, []string{"auditPath", "loadDir", "saveGate", "stateEnabled"}, ExtractConfigResolverRefs(cfg))
+	})
+
+	t.Run("ignores statically disabled save targets and inert literal strings in load and save inputs", func(t *testing.T) {
+		t.Parallel()
+		assert.Nil(t, ExtractConfigResolverRefs(&Config{
+			Enabled: &spec.ValueRef{Literal: false},
+			Load:    &LoadConfig{Provider: "file", Inputs: map[string]*spec.ValueRef{"path": rslvrRef("broken")}},
+		}))
+
+		cfg := &Config{
+			Load: &LoadConfig{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": {Literal: "./{{ .brokenLoad }}.json"},
+					"meta": {Literal: map[string]any{
+						"inert":   "_.brokenLoadExpr",
+						"wrapped": map[string]any{"rslvr": "activeLoadDep"},
+					}},
+				},
+			},
+			Save: []SaveTarget{
+				{
+					Provider: "file",
+					Enabled:  &spec.ValueRef{Literal: false},
+					Inputs:   map[string]*spec.ValueRef{"path": rslvrRef("disabledTargetDep")},
+				},
+				{
+					Provider: "file",
+					Enabled:  &spec.ValueRef{Expr: exprPtr("false")},
+					Inputs:   map[string]*spec.ValueRef{"path": rslvrRef("disabledExprTargetDep")},
+				},
+				{
+					Provider: "file",
+					Inputs: map[string]*spec.ValueRef{
+						"path": {Literal: "./{{ .brokenSave }}.json"},
+						"nested": {Literal: []any{
+							"_.brokenSaveExpr",
+							map[string]any{"rslvr": "activeSaveDep"},
+						}},
+					},
+				},
+			},
+		}
+		assert.Equal(t, []string{"activeLoadDep", "activeSaveDep"}, ExtractConfigResolverRefs(cfg))
+		assert.False(t, ConfigReferencesWholeNamespace(cfg))
+
+		wholeCfg := &Config{
+			Save: []SaveTarget{{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"meta": {Expr: exprPtr("size(_)")},
+				},
+			}},
+		}
+		assert.True(t, ConfigReferencesWholeNamespace(wholeCfg))
+
+		// Verify ValidateStateRefs and PhaseARoots also ignore inert load-path
+		// literals, skip statically disabled state.enabled, and handle whole-namespace load refs.
+		part := BuildPartition([]*resolver.Resolver{staticResolver("indep")}, nil, nil, ReadProviderName)
+		literalLoadCfg := &Config{
+			Load: &LoadConfig{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "./{{ .broken }}.json"}},
+			},
+		}
+		assert.NoError(t, ValidateStateRefs(literalLoadCfg, part))
+		assert.Empty(t, PhaseARoots(literalLoadCfg, part))
+
+		wholeLoadCfg := &Config{
+			Enabled: &spec.ValueRef{Expr: exprPtr("size(_) > 0")},
+		}
+		assert.NoError(t, ValidateStateRefs(wholeLoadCfg, part))
+		assert.Equal(t, []string{"indep"}, sortedKeys(PhaseARoots(wholeLoadCfg, part)))
+	})
+}

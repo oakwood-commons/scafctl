@@ -2690,6 +2690,7 @@ func TestGoTemplateProvider_RenderTree_FanOut_DryRunPreview(t *testing.T) {
 func TestExtractDependencies_FanOut(t *testing.T) {
 	t.Run("forEach.in rslvr is a dependency", func(t *testing.T) {
 		deps := extractDependencies(map[string]any{
+			"operation": "render-tree",
 			"forEach": map[string]any{
 				"item": "env",
 				"in":   map[string]any{"rslvr": "envs.list"},
@@ -2702,6 +2703,7 @@ func TestExtractDependencies_FanOut(t *testing.T) {
 
 	t.Run("forEach.in expr references are dependencies", func(t *testing.T) {
 		deps := extractDependencies(map[string]any{
+			"operation": "render-tree",
 			"forEach": map[string]any{
 				"item": "e",
 				"in":   map[string]any{"expr": "_.cfg.envs"},
@@ -2713,6 +2715,7 @@ func TestExtractDependencies_FanOut(t *testing.T) {
 
 	t.Run("pathTemplate resolver refs are dependencies, aliases excluded", func(t *testing.T) {
 		deps := extractDependencies(map[string]any{
+			"operation": "render-tree",
 			"forEach": map[string]any{
 				"item": "env",
 				"in":   []any{"dev"},
@@ -2723,10 +2726,253 @@ func TestExtractDependencies_FanOut(t *testing.T) {
 		assert.NotContains(t, deps, "env")
 	})
 
-	t.Run("no forEach yields no fan-out deps", func(t *testing.T) {
+	t.Run("no forEach yields no fan-out deps and ignores unused pathTemplate", func(t *testing.T) {
 		deps := extractDependencies(map[string]any{
-			"entries": map[string]any{"rslvr": "files"},
+			"operation":    "render-tree",
+			"entries":      map[string]any{"rslvr": "files"},
+			"pathTemplate": "{{ ._.unusedNoForEach }}",
 		})
 		assert.Equal(t, []string{"files"}, deps)
+
+		renderIgnored := extractDependencies(map[string]any{
+			"template":     "ok",
+			"forEach":      map[string]any{"item": "e", "in": []any{"dev"}},
+			"pathTemplate": "{{ ._.unusedOnRender }}",
+		})
+		assert.Empty(t, renderIgnored)
+	})
+
+	t.Run("render-tree entries scan non-raw content with data scope, aliases, delimiters, rawGlobs, and ignoredBlocks", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"operation":  "render-tree",
+			"leftDelim":  "[[",
+			"rightDelim": "]]",
+			"rawGlobs":   []any{"*.bin"},
+			"ignoredBlocks": []any{
+				map[string]any{"line": "# raw-line"},
+			},
+			"data": map[string]any{"rslvr": "config"},
+			"forEach": map[string]any{
+				"item": "env",
+				"in":   []any{"dev"},
+			},
+			"pathTemplate": "[[ .env ]]/[[ .__fileName ]]",
+			"entries": []any{
+				map[string]any{
+					"path":    "a.txt",
+					"content": "host=[[ ._.host ]] local=[[ .ambiguous ]] alias=[[ .env ]]\n[[ ._.ignoredRef ]] # raw-line",
+				},
+				map[string]any{
+					"path":    "skip.bin",
+					"content": "[[ ._.rawGlobSkipped ]]",
+				},
+				map[string]any{
+					"path":    "verbatim.txt",
+					"raw":     true,
+					"content": "[[ ._.explicitRawSkipped ]]",
+				},
+				map[string]any{
+					"path":    "override.bin",
+					"raw":     false,
+					"data":    map[string]any{"rslvr": "entryCfg"},
+					"content": "[[ ._.forcedRenderDep ]]",
+				},
+			},
+		})
+		assert.ElementsMatch(t, []string{"config", "host", "entryCfg", "forcedRenderDep"}, deps)
+	})
+
+	t.Run("render-tree entry CEL map-literal data preserves known keys and AST CEL parsing ignores quoted underscore text", func(t *testing.T) {
+		rawInputs := map[string]any{
+			"operation": "render-tree",
+			"data":      map[string]any{"expr": `{"sharedKey": "literal _.notADep", "fromBracket": _["hyphen-dep"], "opt": _.?optDep.orValue("x")}`},
+			"entries": []any{
+				map[string]any{
+					"path":    "cfg.yaml",
+					"data":    map[string]any{"expr": `{"entryKey": _.entrySrc}`},
+					"content": "{{ .sharedKey }} {{ .entryKey }} {{ .bareResolverDep }}",
+				},
+			},
+		}
+		assert.ElementsMatch(t, []string{"hyphen-dep", "optDep", "entrySrc", "bareResolverDep"}, ExtractDependencies(rawInputs))
+		assert.Equal(t, []string{"bareResolverDep"}, ExtractRawTemplateDependencies(rawInputs))
+	})
+
+	t.Run("render operation skips unused entries while dynamic operation scans conservatively", func(t *testing.T) {
+		defaultRenderDeps := ExtractDependencies(map[string]any{
+			"template": "ok",
+			"entries": []any{
+				map[string]any{"path": "unused.txt", "content": "{{ ._.broken }}"},
+			},
+		})
+		assert.NotNil(t, defaultRenderDeps)
+		assert.Empty(t, defaultRenderDeps)
+
+		explicitRenderDeps := ExtractDependencies(map[string]any{
+			"operation": "render",
+			"template":  "ok",
+			"entries": []any{
+				map[string]any{"path": "unused.txt", "content": "{{ ._.broken }}"},
+			},
+		})
+		assert.NotNil(t, explicitRenderDeps)
+		assert.Empty(t, explicitRenderDeps)
+
+		dynamicOpDeps := ExtractDependencies(map[string]any{
+			"operation": map[string]any{"rslvr": "chosenOp"},
+			"template":  "ok",
+			"entries": []any{
+				map[string]any{"path": "used.txt", "content": "{{ ._.needed }}"},
+			},
+		})
+		assert.ElementsMatch(t, []string{"chosenOp", "needed"}, dynamicOpDeps)
+	})
+
+	t.Run("raw-only render-tree returns non-nil empty slice and pathTemplate respects per-entry data scope", func(t *testing.T) {
+		rawOnly := ExtractDependencies(map[string]any{
+			"operation": "render-tree",
+			"entries": []any{
+				map[string]any{"path": "raw.txt", "raw": true, "content": "{{ .broken }}"},
+			},
+		})
+		assert.NotNil(t, rawOnly, "must return non-nil empty slice so graph builder does not fall back to generic literal scan")
+		assert.Empty(t, rawOnly)
+
+		perEntryRoute := ExtractDependencies(map[string]any{
+			"operation":    "render-tree",
+			"forEach":      map[string]any{"item": "env", "in": []any{"dev"}},
+			"pathTemplate": "{{ .route }}/{{ .env }}/{{ .__fileName }}",
+			"entries": []any{
+				map[string]any{
+					"path":    "app.yaml",
+					"content": "ok",
+					"data":    map[string]any{"route": "local"},
+				},
+			},
+		})
+		assert.NotNil(t, perEntryRoute)
+		assert.Empty(t, perEntryRoute, "per-entry data key route should not be reported as a resolver dependency")
+
+		assert.True(t, ReferencesWholeNamespace(map[string]any{
+			"template": `{{ printf "%v" ._ }}`,
+		}))
+		assert.False(t, ReferencesWholeNamespace(map[string]any{
+			"template": `{{ ._.specific }}`,
+		}))
+		assert.True(t, ReferencesWholeNamespace(map[string]any{
+			"template": map[string]any{"rslvr": "dynamicTemplate"},
+		}))
+		assert.True(t, ReferencesWholeNamespace(map[string]any{
+			"operation": "render-tree",
+			"entries":   map[string]any{"rslvr": "dynamicEntries"},
+		}))
+		assert.False(t, ReferencesWholeNamespace(map[string]any{
+			"template": "ok",
+			"entries":  map[string]any{"rslvr": "unusedOnRender"},
+		}))
+		assert.False(t, ReferencesWholeNamespace(map[string]any{
+			"operation": "render-tree",
+			"rawGlobs":  []any{"*.bin"},
+			"entries": []any{
+				map[string]any{"path": "blob.bin", "content": "{{ ._ }}"},
+			},
+		}))
+		assert.True(t, ReferencesWholeNamespace(map[string]any{
+			"operation": "render-tree",
+			"rawGlobs":  []any{"*"},
+			"entries": []any{
+				map[string]any{"path": map[string]any{"rslvr": "dynPath"}, "content": "{{ ._ }}"},
+			},
+		}))
+		assert.False(t, ReferencesWholeNamespace(map[string]any{
+			"template": "{{/* scafctl:ignore:start */}}{{ ._ }}{{/* scafctl:ignore:end */}}",
+		}))
+
+		hardDeps, candidateDeps := ExtractRawTemplateDependenciesWithCandidates(map[string]any{
+			"operation": OperationRenderTree,
+			"entries": []any{
+				map[string]any{
+					"path":    "first.txt",
+					"data":    map[string]any{"rslvr": "config"},
+					"content": "{{ .host }} {{ .fallbackOnly }}",
+				},
+				map[string]any{
+					"path":    "second.txt",
+					"content": "{{ ._.host }}",
+				},
+			},
+		})
+		assert.Equal(t, []string{"host"}, hardDeps)
+		assert.Equal(t, []string{"fallbackOnly"}, candidateDeps)
+
+		dynSharedHard, dynSharedCandidates := ExtractRawTemplateDependenciesWithCandidates(map[string]any{
+			"operation":    OperationRenderTree,
+			"data":         map[string]any{"rslvr": "config"},
+			"forEach":      map[string]any{"item": "env", "in": []any{"dev"}},
+			"pathTemplate": "{{ .host }}/{{ .routeFallback }}/{{ .env }}/{{ .__fileName }}",
+			"entries": []any{
+				map[string]any{
+					"path":    "app.yaml",
+					"data":    map[string]any{"host": "local"},
+					"content": "{{ .host }} {{ .contentFallback }}",
+				},
+			},
+		})
+		assert.Empty(t, dynSharedHard)
+		assert.Equal(t, []string{"routeFallback", "contentFallback"}, dynSharedCandidates)
+
+		staticSharedHard, staticSharedCandidates := ExtractRawTemplateDependenciesWithCandidates(map[string]any{
+			"operation":    OperationRenderTree,
+			"data":         map[string]any{"host": "local"},
+			"forEach":      map[string]any{"item": "env", "in": []any{"dev"}},
+			"pathTemplate": "{{ .host }}/{{ .routeFallback }}/{{ .env }}/{{ .__fileName }}",
+			"entries": []any{
+				map[string]any{
+					"path":    "app.yaml",
+					"data":    map[string]any{"rslvr": "entryCfg"},
+					"content": "{{ .host }} {{ .contentFallback }}",
+				},
+			},
+		})
+		assert.Empty(t, staticSharedHard)
+		assert.Equal(t, []string{"routeFallback", "contentFallback"}, staticSharedCandidates)
+
+		dynSharedCelEntryHard, dynSharedCelEntryCandidates := ExtractRawTemplateDependenciesWithCandidates(map[string]any{
+			"operation": OperationRenderTree,
+			"data":      map[string]any{"rslvr": "config"},
+			"entries": []any{
+				map[string]any{
+					"path":    "app.yaml",
+					"data":    map[string]any{"expr": `{"host": "local"}`},
+					"content": "{{ .host }} {{ .contentFallback }}",
+				},
+			},
+		})
+		assert.Empty(t, dynSharedCelEntryHard)
+		assert.Equal(t, []string{"contentFallback"}, dynSharedCelEntryCandidates)
+
+		multiKeyEntryHard, multiKeyEntryCandidates := ExtractRawTemplateDependenciesWithCandidates(map[string]any{
+			"operation":    OperationRenderTree,
+			"forEach":      map[string]any{"item": "env", "in": []any{"dev"}},
+			"pathTemplate": "{{ .host }}/{{ .expr }}/{{ .env }}/{{ .__fileName }}",
+			"entries": []any{
+				map[string]any{
+					"path":    "app.yaml",
+					"data":    map[string]any{"expr": "text", "host": "local"},
+					"content": "{{ .host }} {{ .expr }} {{ .neededDep }}",
+				},
+			},
+		})
+		assert.Equal(t, []string{"neededDep"}, multiKeyEntryHard)
+		assert.Empty(t, multiKeyEntryCandidates)
+
+		multiKeySharedInputs := map[string]any{
+			"data":     map[string]any{"rslvr": "fakeRslvr", "expr": "_.fakeExpr", "host": "local"},
+			"template": "{{ .host }} {{ .rslvr }} {{ .expr }} {{ .neededDep }}",
+		}
+		assert.Equal(t, []string{"neededDep"}, ExtractDependencies(multiKeySharedInputs))
+		multiKeySharedHard, multiKeySharedCandidates := ExtractRawTemplateDependenciesWithCandidates(multiKeySharedInputs)
+		assert.Equal(t, []string{"neededDep"}, multiKeySharedHard)
+		assert.Empty(t, multiKeySharedCandidates)
 	})
 }

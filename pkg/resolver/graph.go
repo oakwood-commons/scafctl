@@ -11,9 +11,13 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/cel-go/cel"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/gotmplprovider"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
+	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 )
 
 // IsTransitiveDependency checks if candidateName is a direct or transitive dependency
@@ -65,6 +69,122 @@ func ExtractDependencies(r *Resolver, lookup DescriptorLookup) []string {
 // This is useful for detecting redundant dependsOn declarations.
 func ExtractInferredDependencies(r *Resolver, lookup DescriptorLookup) []string {
 	return extractInferredDependencies(r, lookup)
+}
+
+// ExtractValidateDependencies extracts all foreign resolver references from a
+// resolver's validate phase (phase-level when, and per-rule args, when,
+// provider inputs, and message), excluding self-references. Results are sorted
+// for deterministic output.
+//
+// Validate-phase references are intentionally excluded from ExtractDependencies
+// and BuildPhases so cross-resolver validation rules defer to the
+// post-resolution phase without creating resolution-order edges or cycles.
+// Callers that prune which resolvers execute (such as
+// execute.FilterResolversWithDependencies) traverse these references so
+// deferred validation always has values for the resolvers it inspects.
+func ExtractValidateDependencies(r *Resolver, lookup DescriptorLookup) []string {
+	if r == nil || r.Validate == nil {
+		return nil
+	}
+	deps := make(map[string]bool)
+	extractDepsFromValidatePhase(r.Validate, deps, lookup)
+	delete(deps, r.Name)
+	delete(deps, "")
+	if len(deps) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(deps))
+	for dep := range deps {
+		result = append(result, dep)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// ValidateReferencesWholeNamespace reports whether r's validate phase accesses
+// the "_" resolver namespace as a whole (for example via size(_), _[dynKey],
+// {{ ._ }}, or dynamically supplied expression/template content) so callers
+// pruning resolvers must retain all defined resolvers when validation is active.
+func ValidateReferencesWholeNamespace(r *Resolver) bool {
+	if r == nil || r.Validate == nil {
+		return false
+	}
+	if r.Validate.When != nil && r.Validate.When.Expr != nil &&
+		ExpressionReferencesWholeNamespace(string(*r.Validate.When.Expr)) {
+		return true
+	}
+	for i := range r.Validate.With {
+		if validationRuleReferencesWholeNamespace(r.Validate.With[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+func validationRuleReferencesWholeNamespace(v ProviderValidation) bool {
+	if v.When != nil && v.When.Expr != nil &&
+		ExpressionReferencesWholeNamespace(string(*v.When.Expr)) {
+		return true
+	}
+	for _, arg := range v.Args {
+		if ExtractWrapperRefsFromValueRef(arg, nil) {
+			return true
+		}
+	}
+	if ExtractWrapperRefsFromValueRef(v.Message, nil) {
+		return true
+	}
+	for _, inRef := range v.Inputs {
+		if ExtractWrapperRefsFromValueRef(inRef, nil) {
+			return true
+		}
+	}
+	switch v.Provider {
+	case "cel", "debug":
+		if exprRef := v.Inputs["expression"]; exprRef != nil {
+			if exprStr, ok := exprRef.Literal.(string); ok {
+				return ExpressionReferencesWholeNamespace(exprStr)
+			}
+			if exprRef.Resolver != nil || exprRef.Tmpl != nil {
+				return true
+			}
+		}
+	case "validation":
+		for _, key := range []string{"expression", "failWhen"} {
+			if ref := v.Inputs[key]; ref != nil {
+				if exprStr, ok := ref.Literal.(string); ok {
+					if ExpressionReferencesWholeNamespace(exprStr) {
+						return true
+					}
+				} else if ref.Resolver != nil || ref.Tmpl != nil {
+					return true
+				}
+			}
+		}
+		if msgRef := v.Inputs["message"]; msgRef != nil {
+			if msgStr, ok := msgRef.Literal.(string); ok {
+				switch {
+				case strings.HasPrefix(msgStr, "expr:"):
+					if ExpressionReferencesWholeNamespace(strings.TrimSpace(strings.TrimPrefix(msgStr, "expr:"))) {
+						return true
+					}
+				case strings.HasPrefix(msgStr, "tmpl:"):
+					if gotmpl.ReferencesWholeResolverNamespace(gotmpl.ResolverDepsInput{
+						Template: strings.TrimSpace(strings.TrimPrefix(msgStr, "tmpl:")),
+					}) {
+						return true
+					}
+				}
+			} else if msgRef.Resolver != nil {
+				return true
+			}
+		}
+	case gotmplprovider.ProviderName:
+		if gotmplprovider.ReferencesWholeNamespace(buildProviderRawInputs(v.Inputs, nil)) {
+			return true
+		}
+	}
+	return false
 }
 
 func extractInferredDependencies(r *Resolver, lookup DescriptorLookup) []string {
@@ -371,6 +491,10 @@ func extractHardDepsFromExpression(expr string, deps map[string]bool) {
 
 // extractDepsFromValueRef extracts dependencies from a ValueRef
 func extractDepsFromValueRef(ref *ValueRef, deps map[string]bool) {
+	extractDepsFromValueRefWithAliases(ref, deps, nil)
+}
+
+func extractDepsFromValueRefWithAliases(ref *ValueRef, deps, aliases map[string]bool) {
 	if ref == nil {
 		return
 	}
@@ -389,14 +513,14 @@ func extractDepsFromValueRef(ref *ValueRef, deps map[string]bool) {
 
 	// Template
 	if ref.Tmpl != nil {
-		extractDepsFromTemplate(string(*ref.Tmpl), deps)
+		extractDepsFromTemplateCtx(string(*ref.Tmpl), deps, tmplScanCtx{aliases: aliases})
 		return
 	}
 
 	// Literal string - check if it contains CEL-like expressions (_.resolverName patterns)
 	// This handles cases where provider inputs contain expressions as literal strings
 	if ref.Literal != nil {
-		extractDepsFromLiteral(ref.Literal, deps)
+		extractDepsFromLiteralWithScan(ref.Literal, deps, nil, aliases)
 	}
 }
 
@@ -426,6 +550,193 @@ func ExtractRefsFromValueRef(ref *ValueRef, deps map[string]bool) {
 		return
 	}
 	extractDepsFromValueRef(ref, deps)
+}
+
+// ExtractWrapperRefsFromValueRef extracts resolver references from explicit
+// ValueRef wrappers only (top-level rslvr/expr/tmpl and nested single-key
+// ValueRef maps inside map/slice literals), leaving plain literal strings
+// untouched. It returns true when any scanned expression or template accesses
+// the root resolver namespace as a whole (e.g. CEL _ or Go template ._ / .).
+func ExtractWrapperRefsFromValueRef(ref *ValueRef, deps map[string]bool) bool {
+	if ref == nil {
+		return false
+	}
+	whole := false
+	extractWrapperRefsDepth(ref, deps, &whole, 0)
+	return whole
+}
+
+const maxWrapperRefScanDepth = 32
+
+func extractWrapperRefsDepth(ref *ValueRef, deps map[string]bool, whole *bool, depth int) {
+	if ref == nil || depth > maxWrapperRefScanDepth {
+		return
+	}
+	switch {
+	case ref.Resolver != nil:
+		if deps != nil && *ref.Resolver != "" {
+			deps[*ref.Resolver] = true
+		}
+	case ref.Expr != nil:
+		exprStr := string(*ref.Expr)
+		if deps != nil {
+			extractDepsFromExpression(exprStr, deps)
+		}
+		if ExpressionReferencesWholeNamespace(exprStr) {
+			*whole = true
+		}
+	case ref.Tmpl != nil:
+		tmplStr := string(*ref.Tmpl)
+		in := gotmpl.ResolverDepsInput{Template: tmplStr}
+		if deps != nil {
+			for _, name := range gotmpl.ExtractResolverDeps(in) {
+				deps[name] = true
+			}
+		}
+		if gotmpl.ReferencesWholeResolverNamespace(in) {
+			*whole = true
+		}
+	case ref.Literal != nil:
+		extractWrapperRefsLiteral(ref.Literal, deps, whole, depth)
+	}
+}
+
+func extractWrapperRefsLiteral(val any, deps map[string]bool, whole *bool, depth int) {
+	if depth > maxWrapperRefScanDepth || val == nil {
+		return
+	}
+	switch v := val.(type) {
+	case map[string]any:
+		if spec.IsValueRefMap(v) {
+			if rslvr, ok := v["rslvr"].(string); ok && rslvr != "" && deps != nil {
+				deps[rslvr] = true
+			}
+			if expr, ok := v["expr"].(string); ok {
+				if deps != nil {
+					extractDepsFromExpression(expr, deps)
+				}
+				if ExpressionReferencesWholeNamespace(expr) {
+					*whole = true
+				}
+			}
+			if tmpl, ok := v["tmpl"].(string); ok {
+				in := gotmpl.ResolverDepsInput{Template: tmpl}
+				if deps != nil {
+					for _, name := range gotmpl.ExtractResolverDeps(in) {
+						deps[name] = true
+					}
+				}
+				if gotmpl.ReferencesWholeResolverNamespace(in) {
+					*whole = true
+				}
+			}
+			return
+		}
+		for _, child := range v {
+			extractWrapperRefsLiteral(child, deps, whole, depth+1)
+		}
+	case []any:
+		for _, elem := range v {
+			extractWrapperRefsLiteral(elem, deps, whole, depth+1)
+		}
+	}
+}
+
+// ExpressionReferencesWholeNamespace reports whether a CEL expression accesses
+// the "_" resolver map as a whole or via a dynamic key (for example
+// json.marshal(_), size(_), or _[dynKey]) rather than solely through static
+// field/key accesses (_.name, _["name"], _.?name, _[?"name"]).
+func ExpressionReferencesWholeNamespace(exprStr string) bool {
+	if !strings.Contains(exprStr, "_") {
+		return false
+	}
+	env, err := celexp.NewParseEnv(context.Background())
+	if err != nil {
+		return false
+	}
+	parsed, issues := env.Parse(exprStr)
+	if issues != nil && issues.Err() != nil {
+		return false
+	}
+	parsedExpr, err := cel.AstToParsedExpr(parsed)
+	if err != nil {
+		return false
+	}
+	return astReferencesWholeUnderscore(parsedExpr.GetExpr(), nil)
+}
+
+func astReferencesWholeUnderscore(expr *exprpb.Expr, shadowed map[string]bool) bool {
+	if expr == nil {
+		return false
+	}
+	switch expr.GetExprKind().(type) {
+	case *exprpb.Expr_IdentExpr:
+		name := expr.GetIdentExpr().GetName()
+		return name == "_" && !shadowed["_"]
+	case *exprpb.Expr_SelectExpr:
+		op := expr.GetSelectExpr().GetOperand()
+		if op != nil && op.GetIdentExpr() != nil && op.GetIdentExpr().GetName() == "_" && !shadowed["_"] {
+			return false
+		}
+		return astReferencesWholeUnderscore(op, shadowed)
+	case *exprpb.Expr_CallExpr:
+		call := expr.GetCallExpr()
+		fn := call.GetFunction()
+		args := call.GetArgs()
+		if (fn == "_[_]" || fn == "_[?_]" || fn == "_?._") && len(args) == 2 {
+			if args[0].GetIdentExpr() != nil && args[0].GetIdentExpr().GetName() == "_" && !shadowed["_"] {
+				if c := args[1].GetConstExpr(); c != nil {
+					if _, isStr := c.GetConstantKind().(*exprpb.Constant_StringValue); isStr {
+						return false
+					}
+				}
+			}
+		}
+		if astReferencesWholeUnderscore(call.GetTarget(), shadowed) {
+			return true
+		}
+		for _, arg := range args {
+			if astReferencesWholeUnderscore(arg, shadowed) {
+				return true
+			}
+		}
+	case *exprpb.Expr_ListExpr:
+		for _, elem := range expr.GetListExpr().GetElements() {
+			if astReferencesWholeUnderscore(elem, shadowed) {
+				return true
+			}
+		}
+	case *exprpb.Expr_StructExpr:
+		for _, entry := range expr.GetStructExpr().GetEntries() {
+			if astReferencesWholeUnderscore(entry.GetMapKey(), shadowed) ||
+				astReferencesWholeUnderscore(entry.GetValue(), shadowed) {
+				return true
+			}
+		}
+	case *exprpb.Expr_ComprehensionExpr:
+		comp := expr.GetComprehensionExpr()
+		if astReferencesWholeUnderscore(comp.GetIterRange(), shadowed) ||
+			astReferencesWholeUnderscore(comp.GetAccuInit(), shadowed) {
+			return true
+		}
+		local := make(map[string]bool, len(shadowed)+3)
+		for k, v := range shadowed {
+			local[k] = v
+		}
+		if v := comp.GetIterVar(); v != "" {
+			local[v] = true
+		}
+		if v := comp.GetIterVar2(); v != "" {
+			local[v] = true
+		}
+		if v := comp.GetAccuVar(); v != "" {
+			local[v] = true
+		}
+		return astReferencesWholeUnderscore(comp.GetLoopCondition(), local) ||
+			astReferencesWholeUnderscore(comp.GetLoopStep(), local) ||
+			astReferencesWholeUnderscore(comp.GetResult(), local)
+	}
+	return false
 }
 
 // ExtractOptionalRefsFromValueRef collects resolver names that a ValueRef
@@ -587,17 +898,10 @@ func addOptionalFromExpression(expr string, optional map[string]bool) {
 	}
 }
 
-// extractDepsFromLiteral recursively extracts dependencies from literal values
-// that may contain CEL expression strings or Go template syntax
-func extractDepsFromLiteral(literal any, deps map[string]bool) {
-	extractDepsFromLiteralWithExclusions(literal, deps, nil)
-}
-
-// extractDepsFromLiteralWithExclusions works like extractDepsFromLiteral but
-// allows excluding certain names from being treated as resolver dependencies.
-// This is used when a sibling "data" map provides template context variables
-// that should not be interpreted as resolver references.
-func extractDepsFromLiteralWithExclusions(literal any, deps, exclude map[string]bool) {
+// extractDepsFromLiteralWithScan recursively extracts dependencies from literal
+// values, applying data-key exclusions to raw template strings and alias
+// exclusions to both raw templates and nested single-key ValueRef wrappers.
+func extractDepsFromLiteralWithScan(literal any, deps, exclude, aliases map[string]bool) {
 	switch v := literal.(type) {
 	case string:
 		// Check if the string contains CEL-like expressions (_.something or _["something"] patterns)
@@ -607,35 +911,25 @@ func extractDepsFromLiteralWithExclusions(literal any, deps, exclude map[string]
 		// Check if the string contains Go template syntax ({{ and }})
 		// This handles cases like go-template provider inputs with {{.resolverName}} patterns
 		if strings.Contains(v, "{{") && strings.Contains(v, "}}") {
-			extractDepsFromTemplateCtx(v, deps, scanCtxFromExclude(exclude))
+			scan := scanCtxFromExclude(exclude)
+			scan.aliases = aliases
+			extractDepsFromTemplateCtx(v, deps, scan)
 		}
 	case map[string]any:
-		// Check if this map represents a nested ValueRef ({rslvr: x}, {expr: "..."}, {tmpl: "..."}).
-		// This handles inputs like: env: {APP: {rslvr: appName}}
-		// We check for ValueRef-like keys and extract deps, but do NOT
-		// early-return — sibling fields may also contain references.
-		isValueRef := false
-		if rslvr, ok := v["rslvr"].(string); ok {
-			if !exclude[rslvr] {
+		// Check if this map is an explicit single-key nested ValueRef
+		// ({rslvr: x}, {expr: "..."}, {tmpl: "..."}, {scrt: ...}, {tkn: ...}).
+		// Explicit wrappers are evaluated before provider data context applies,
+		// so sibling data-key exclusions do not apply while forEach aliases do.
+		if spec.IsValueRefMap(v) {
+			if rslvr, ok := v["rslvr"].(string); ok {
 				deps[rslvr] = true
 			}
-			isValueRef = true
-		}
-		if expr, ok := v["expr"].(string); ok {
-			extractDepsFromExpression(expr, deps)
-			isValueRef = true
-		}
-		if tmpl, ok := v["tmpl"].(string); ok {
-			extractDepsFromTemplateCtx(tmpl, deps, scanCtxFromExclude(exclude))
-			isValueRef = true
-		}
-		if _, ok := v["scrt"]; ok && len(v) == 1 {
-			isValueRef = true
-		}
-		if _, ok := v["tkn"]; ok && len(v) == 1 {
-			isValueRef = true
-		}
-		if isValueRef {
+			if expr, ok := v["expr"].(string); ok {
+				extractDepsFromExpression(expr, deps)
+			}
+			if tmpl, ok := v["tmpl"].(string); ok {
+				extractDepsFromTemplateCtx(tmpl, deps, tmplScanCtx{aliases: aliases})
+			}
 			return
 		}
 
@@ -651,15 +945,15 @@ func extractDepsFromLiteralWithExclusions(literal any, deps, exclude map[string]
 		// for template strings in the same map
 		for key, mapVal := range v {
 			if key == "template" && dataKeys != nil {
-				extractDepsFromLiteralWithExclusions(mapVal, deps, dataKeys)
+				extractDepsFromLiteralWithScan(mapVal, deps, dataKeys, aliases)
 			} else {
-				extractDepsFromLiteralWithExclusions(mapVal, deps, exclude)
+				extractDepsFromLiteralWithScan(mapVal, deps, exclude, aliases)
 			}
 		}
 	case []any:
 		// Recursively check array elements
 		for _, arrVal := range v {
-			extractDepsFromLiteralWithExclusions(arrVal, deps, exclude)
+			extractDepsFromLiteralWithScan(arrVal, deps, exclude, aliases)
 		}
 	}
 }
@@ -715,6 +1009,23 @@ func extractDepsFromTemplateCtx(tmplContent string, deps map[string]bool, scan t
 	}
 }
 
+func forEachAliases(forEach *ForEachClause) map[string]bool {
+	if forEach == nil {
+		return nil
+	}
+	aliases := make(map[string]bool, 2)
+	if forEach.Item != "" {
+		aliases[forEach.Item] = true
+	}
+	if forEach.Index != "" {
+		aliases[forEach.Index] = true
+	}
+	if len(aliases) == 0 {
+		return nil
+	}
+	return aliases
+}
+
 // buildTmplScanCtx computes the template scan context for a set of provider
 // inputs and an optional forEach clause. The data input's key set is derived
 // from a literal map or a statically analysable CEL map-literal expression;
@@ -722,18 +1033,8 @@ func extractDepsFromTemplateCtx(tmplContent string, deps map[string]bool, scan t
 // incomplete key set, which causes bare {{ .field }} accessors to be treated as
 // local data context rather than resolver dependencies.
 func buildTmplScanCtx(inputs map[string]*ValueRef, forEach *ForEachClause) tmplScanCtx {
-	var scan tmplScanCtx
-	if forEach != nil {
-		aliases := make(map[string]bool, 2)
-		if forEach.Item != "" {
-			aliases[forEach.Item] = true
-		}
-		if forEach.Index != "" {
-			aliases[forEach.Index] = true
-		}
-		if len(aliases) > 0 {
-			scan.aliases = aliases
-		}
+	scan := tmplScanCtx{
+		aliases: forEachAliases(forEach),
 	}
 	if dataRef, ok := inputs["data"]; ok && dataRef != nil {
 		scan.hasData = true
@@ -833,13 +1134,28 @@ func extractDepsFromProviderInputs(providerName string, inputs map[string]*Value
 		return false
 	}
 
-	// Convert ValueRef inputs to raw map for the provider's ExtractDependencies function
-	rawInputs := make(map[string]any)
+	rawInputs := buildProviderRawInputs(inputs, forEach)
+
+	// Call the provider's ExtractDependencies function.
+	// A nil return signals that extraction failed (e.g. plugin RPC error)
+	// and generic extraction should be used instead.
+	providerDeps := desc.ExtractDependencies(rawInputs)
+	if providerDeps == nil {
+		return false
+	}
+	for _, dep := range providerDeps {
+		deps[dep] = true
+	}
+
+	return true
+}
+
+func buildProviderRawInputs(inputs map[string]*ValueRef, forEach *ForEachClause) map[string]any {
+	rawInputs := make(map[string]any, len(inputs))
 	for key, ref := range inputs {
 		if ref == nil {
 			continue
 		}
-		// Extract the actual value from the ValueRef
 		switch {
 		case ref.Literal != nil:
 			rawInputs[key] = ref.Literal
@@ -865,19 +1181,7 @@ func extractDepsFromProviderInputs(providerName string, inputs map[string]*Value
 		DataKeysComplete: scan.dataKeysComplete,
 		Aliases:          scan.aliases,
 	}
-
-	// Call the provider's ExtractDependencies function.
-	// A nil return signals that extraction failed (e.g. plugin RPC error)
-	// and generic extraction should be used instead.
-	providerDeps := desc.ExtractDependencies(rawInputs)
-	if providerDeps == nil {
-		return false
-	}
-	for _, dep := range providerDeps {
-		deps[dep] = true
-	}
-
-	return true
+	return rawInputs
 }
 
 // extractDepsFromResolvePhase extracts dependencies from a resolve phase
@@ -898,42 +1202,62 @@ func extractDepsFromResolvePhase(phase *ResolvePhase, deps map[string]bool, look
 
 	// Extract from each source
 	for _, source := range phase.With {
-		// Extract from call-site args (a call source references resolvers via args).
-		for _, arg := range source.Args {
-			extractDepsFromValueRef(arg, deps)
-		}
+		extractDepsFromPhaseStep(
+			source.Provider,
+			source.Args,
+			source.Inputs,
+			source.When,
+			source.ContinueOnError,
+			source.ForEach,
+			deps,
+			lookup,
+		)
+	}
+}
 
-		// Extract from when condition
-		if source.When != nil && source.When.Expr != nil {
-			extractDepsFromExpression(string(*source.When.Expr), deps)
-		}
+func extractDepsFromPhaseStep(
+	providerName string,
+	args map[string]*ValueRef,
+	inputs map[string]*ValueRef,
+	when *Condition,
+	continueOnError *Condition,
+	forEach *ForEachClause,
+	deps map[string]bool,
+	lookup DescriptorLookup,
+) {
+	aliases := forEachAliases(forEach)
+	for _, arg := range args {
+		extractDepsFromValueRefWithAliases(arg, deps, aliases)
+	}
 
-		// Extract from continueOnError condition
-		if source.ContinueOnError != nil && source.ContinueOnError.Expr != nil {
-			extractDepsFromExpression(string(*source.ContinueOnError.Expr), deps)
-		}
+	if when != nil && when.Expr != nil {
+		extractDepsFromExpression(string(*when.Expr), deps)
+	}
 
-		// Extract from forEach.In (if using forEach with custom source)
-		if source.ForEach != nil && source.ForEach.In != nil {
-			extractDepsFromValueRef(source.ForEach.In, deps)
-		}
+	if continueOnError != nil && continueOnError.Expr != nil {
+		extractDepsFromExpression(string(*continueOnError.Expr), deps)
+	}
 
-		// Try provider-specific extraction first
-		if extractDepsFromProviderInputs(source.Provider, source.Inputs, source.ForEach, deps, lookup) {
-			continue
-		}
+	if forEach != nil && forEach.In != nil {
+		extractDepsFromValueRef(forEach.In, deps)
+	}
 
-		// Fall back to generic extraction from inputs.
-		// Compute the template scan context (data keys + forEach aliases) so that
-		// template {{ .field }} accessors are correctly disambiguated from resolver
-		// references.
-		scan := buildTmplScanCtx(source.Inputs, source.ForEach)
-		for key, input := range source.Inputs {
-			if key == "template" {
-				extractDepsFromValueRefTmpl(input, deps, scan)
-			} else {
-				extractDepsFromValueRef(input, deps)
-			}
+	if extractDepsFromProviderInputs(providerName, inputs, forEach, deps, lookup) {
+		return
+	}
+
+	extractFallbackInputDeps(inputs, forEach, deps)
+}
+
+func extractFallbackInputDeps(inputs map[string]*ValueRef, forEach *ForEachClause, deps map[string]bool) {
+	// Apply sibling data-key exclusions only when template is a raw provider
+	// string; explicit tmpl: wrappers and nested ValueRefs exclude only aliases.
+	scan := buildTmplScanCtx(inputs, forEach)
+	for key, input := range inputs {
+		if key == "template" && input != nil && input.Literal != nil {
+			extractDepsFromValueRefTmpl(input, deps, scan)
+		} else {
+			extractDepsFromValueRefWithAliases(input, deps, scan.aliases)
 		}
 	}
 }
@@ -965,7 +1289,7 @@ func extractDepsFromValueRefTmpl(ref *ValueRef, deps map[string]bool, scan tmplS
 		return
 	}
 
-	// Literal string with CEL or template syntax.
+	// Literal string with CEL or template syntax, or nested ValueRef structures.
 	if ref.Literal != nil {
 		if s, ok := ref.Literal.(string); ok {
 			if strings.Contains(s, "_.") || strings.Contains(s, "_[") {
@@ -974,6 +1298,8 @@ func extractDepsFromValueRefTmpl(ref *ValueRef, deps map[string]bool, scan tmplS
 			if strings.Contains(s, "{{") && strings.Contains(s, "}}") {
 				extractDepsFromTemplateCtx(s, deps, scan)
 			}
+		} else {
+			extractDepsFromLiteralWithScan(ref.Literal, deps, nil, scan.aliases)
 		}
 	}
 }
@@ -991,40 +1317,16 @@ func extractDepsFromTransformPhase(phase *TransformPhase, deps map[string]bool, 
 
 	// Extract from each transform step
 	for _, transform := range phase.With {
-		// Extract from call-site args (a call transform references resolvers via args).
-		for _, arg := range transform.Args {
-			extractDepsFromValueRef(arg, deps)
-		}
-
-		// Extract from when condition
-		if transform.When != nil && transform.When.Expr != nil {
-			extractDepsFromExpression(string(*transform.When.Expr), deps)
-		}
-
-		// Extract from continueOnError condition
-		if transform.ContinueOnError != nil && transform.ContinueOnError.Expr != nil {
-			extractDepsFromExpression(string(*transform.ContinueOnError.Expr), deps)
-		}
-
-		// Extract from forEach.In (if using forEach with custom source)
-		if transform.ForEach != nil && transform.ForEach.In != nil {
-			extractDepsFromValueRef(transform.ForEach.In, deps)
-		}
-
-		// Try provider-specific extraction first
-		if extractDepsFromProviderInputs(transform.Provider, transform.Inputs, transform.ForEach, deps, lookup) {
-			continue
-		}
-
-		// Fall back to generic extraction from inputs
-		scan := buildTmplScanCtx(transform.Inputs, transform.ForEach)
-		for key, input := range transform.Inputs {
-			if key == "template" {
-				extractDepsFromValueRefTmpl(input, deps, scan)
-			} else {
-				extractDepsFromValueRef(input, deps)
-			}
-		}
+		extractDepsFromPhaseStep(
+			transform.Provider,
+			transform.Args,
+			transform.Inputs,
+			transform.When,
+			transform.ContinueOnError,
+			transform.ForEach,
+			deps,
+			lookup,
+		)
 	}
 }
 
@@ -1057,30 +1359,21 @@ func extractDepsFromValidatePhase(phase *ValidatePhase, deps map[string]bool, lo
 // extraction the full-phase helper uses so a rule is classified identically
 // regardless of provider.
 func extractDepsFromValidationRule(v ProviderValidation, deps map[string]bool, lookup DescriptorLookup) {
-	// Extract from call-site args (a call validation references resolvers via args).
-	for _, arg := range v.Args {
-		extractDepsFromValueRef(arg, deps)
-	}
+	extractDepsFromPhaseStep(
+		v.Provider,
+		v.Args,
+		v.Inputs,
+		v.When,
+		nil,
+		nil,
+		deps,
+		lookup,
+	)
 
-	// Extract from the rule-level when condition
-	if v.When != nil && v.When.Expr != nil {
-		extractDepsFromExpression(string(*v.When.Expr), deps)
-	}
-
-	// Try provider-specific extraction first
-	if extractDepsFromProviderInputs(v.Provider, v.Inputs, nil, deps, lookup) {
-		// Still extract from message even if the provider handled inputs
-		extractDepsFromValueRef(v.Message, deps)
-		return
-	}
-
-	// Fall back to generic extraction from inputs
-	for _, input := range v.Inputs {
-		extractDepsFromValueRef(input, deps)
-	}
-
-	// Extract from message
-	extractDepsFromValueRef(v.Message, deps)
+	// Extract from message using wrappers-only traversal: ValueRef.Resolve leaves
+	// plain literal message strings unchanged, so only explicit rslvr/expr/tmpl
+	// wrappers contribute dependencies.
+	ExtractWrapperRefsFromValueRef(v.Message, deps)
 }
 
 // ValidatePartition classifies a resolver's validation rules into those that run
@@ -1155,11 +1448,14 @@ func partitionValidatePhaseFor(phase *ValidatePhase, selfName string, lookup Des
 	// entire block to defer (the guard cannot be evaluated until that resolver
 	// has resolved).
 	phaseWhen := make(map[string]bool)
+	phaseWhenWhole := false
 	if phase.When != nil && phase.When.Expr != nil {
-		extractDepsFromExpression(string(*phase.When.Expr), phaseWhen)
+		whenStr := string(*phase.When.Expr)
+		extractDepsFromExpression(whenStr, phaseWhen)
+		phaseWhenWhole = ExpressionReferencesWholeNamespace(whenStr)
 	}
 	delete(phaseWhen, selfName)
-	if len(phaseWhen) > 0 {
+	if len(phaseWhen) > 0 || phaseWhenWhole {
 		part.PhaseWhenDeferred = true
 		for ref := range phaseWhen {
 			part.DeferredRefs[ref] = true
@@ -1168,7 +1464,7 @@ func partitionValidatePhaseFor(phase *ValidatePhase, selfName string, lookup Des
 
 	for i := range phase.With {
 		foreign := classifyValidationRule(phase.With[i], selfName, lookup)
-		if part.PhaseWhenDeferred || len(foreign) > 0 {
+		if part.PhaseWhenDeferred || len(foreign) > 0 || validationRuleReferencesWholeNamespace(phase.With[i]) {
 			part.DeferredRules = append(part.DeferredRules, i)
 			for ref := range foreign {
 				part.DeferredRefs[ref] = true
