@@ -7,9 +7,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -18,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -179,6 +183,39 @@ func TestCommandProvider(t *testing.T) {
 				flag := cmd.Flags().Lookup("interactive")
 				assert.NotNil(t, flag)
 				assert.Equal(t, "i", flag.Shorthand)
+			},
+		},
+		{
+			name: "has_operation_flag_and_keeps_positional_provider_name",
+			validate: func(t *testing.T) {
+				ioStreams, _, _ := terminal.NewTestIOStreams()
+				cliParams := &settings.Run{BinaryName: "mycli"}
+				cmd := CommandProvider(cliParams, ioStreams, "get")
+
+				opFlag := cmd.Flags().Lookup("operation")
+				require.NotNil(t, opFlag)
+				assert.Empty(t, opFlag.Shorthand)
+				assert.Nil(t, cmd.Flags().Lookup("operations"))
+				assert.Nil(t, cmd.Flags().ShorthandLookup("n"))
+				assert.Contains(t, cmd.Long, "mycli get provider github --operation create_issue")
+			},
+		},
+		{
+			name: "rejects_operation_flag_without_provider_name_argument",
+			validate: func(t *testing.T) {
+				var outBuf bytes.Buffer
+				ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+				cliParams := &settings.Run{BinaryName: "mycli"}
+				w := writer.New(ioStreams, cliParams)
+				ctx := writer.WithWriter(context.Background(), w)
+
+				cmd := CommandProvider(cliParams, ioStreams, "get")
+				cmd.SetContext(ctx)
+				cmd.SetArgs([]string{"--operation", "create_issue"})
+				err := cmd.Execute()
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "--operation requires a provider name argument")
+				assert.Contains(t, err.Error(), "mycli get provider <name> --operation create_issue")
 			},
 		},
 	}
@@ -1522,4 +1559,495 @@ func TestBuildProviderDetail_Delegate(t *testing.T) {
 	}
 	detail := BuildProviderDetail(desc)
 	assert.Equal(t, "test", detail["name"])
+}
+
+var ansiEscapeRE = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func newMockOperationsCatalogProvider() *mockProvider {
+	return &mockProvider{
+		descriptor: &provider.Descriptor{
+			Name:         "scm",
+			DisplayName:  "SCM Provider",
+			Description:  "Source control operations provider",
+			APIVersion:   "v1",
+			Version:      semver.MustParse("1.4.0"),
+			Capabilities: []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+			Operations: []provider.OperationDescriptor{
+				{
+					Name:         "get_repo",
+					DisplayName:  "Get Repository",
+					Description:  "Get repository metadata and settings",
+					Capabilities: []provider.Capability{provider.CapabilityFrom},
+					IsWrite:      false,
+					Tags:         []string{"repos", "read"},
+					InputSchema: &jsonschema.Schema{
+						Type:     "object",
+						Required: []string{"repo"},
+						Properties: map[string]*jsonschema.Schema{
+							"repo": {Type: "string", Description: "Repository name"},
+						},
+					},
+					OutputSchema: &jsonschema.Schema{
+						Type: "object",
+						Properties: map[string]*jsonschema.Schema{
+							"defaultBranch": {Type: "string", Description: "Default branch name"},
+						},
+					},
+				},
+				{
+					Name:               "create_issue",
+					DisplayName:        "Create Issue",
+					Description:        "Create a new issue in the repository",
+					Capabilities:       []provider.Capability{provider.CapabilityAction},
+					IsWrite:            true,
+					IsDeprecated:       true,
+					DeprecationMessage: "Use create_work_item instead",
+					InputSchema: &jsonschema.Schema{
+						Type:     "object",
+						Required: []string{"title"},
+						Properties: map[string]*jsonschema.Schema{
+							"title":  {Type: "string", Description: "Issue title"},
+							"state":  {Type: "string", Default: []byte(`"open"`), Enum: []any{"open", "closed"}},
+							"labels": {Type: "array", Description: "Issue labels"},
+						},
+					},
+					OutputSchema: &jsonschema.Schema{
+						Type: "object",
+						Properties: map[string]*jsonschema.Schema{
+							"number": {Type: "integer", Description: "Created issue number"},
+						},
+					},
+					Examples: []provider.Example{
+						{
+							Name:        "Open bug",
+							Description: "Create a bug report",
+							YAML:        "provider: scm\ninputs:\n  operation: create_issue\n  title: Broken build",
+						},
+					},
+				},
+				{
+					Name:         "merge_pull_request",
+					Description:  "Merge a pull request",
+					Capabilities: []provider.Capability{provider.CapabilityAction},
+					IsWrite:      true,
+				},
+			},
+			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
+				"operation": schemahelper.StringProp("Operation name"),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom:   schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{"result": schemahelper.AnyProp("")}),
+				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{"success": schemahelper.BoolProp("")}),
+			},
+		},
+	}
+}
+
+func TestPrintProviderDetail_OperationsAndAlignment(t *testing.T) {
+	t.Parallel()
+
+	t.Run("renders_aligned_operations_table_with_and_without_ansi_colors", func(t *testing.T) {
+		t.Parallel()
+		mp := newMockOperationsCatalogProvider()
+
+		for _, noColor := range []bool{true, false} {
+			var outBuf bytes.Buffer
+			ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+			cliParams := &settings.Run{NoColor: noColor}
+			w := writer.New(ioStreams, cliParams)
+			ctx := writer.WithWriter(context.Background(), w)
+
+			err := (&Options{IOStreams: ioStreams, CliParams: cliParams}).printProviderDetail(ctx, mp.Descriptor())
+			require.NoError(t, err)
+
+			plain := ansiEscapeRE.ReplaceAllString(outBuf.String(), "")
+			assert.Contains(t, plain, "Operations:")
+			assert.Contains(t, plain, "get_repo")
+			assert.Contains(t, plain, "create_issue")
+			assert.Contains(t, plain, "merge_pull_request")
+			assert.Contains(t, plain, "(write)")
+			assert.Contains(t, plain, "(deprecated)")
+			assert.Contains(t, plain, "Get repository metadata and settings")
+
+			// Verify every operation description starts at the exact same visual column.
+			descCols := make([]int, 0, 3)
+			for _, line := range strings.Split(plain, "\n") {
+				for _, descText := range []string{
+					"Get repository metadata and settings",
+					"Create a new issue in the repository",
+					"Merge a pull request",
+				} {
+					if idx := strings.Index(line, descText); idx >= 0 {
+						descCols = append(descCols, idx)
+					}
+				}
+			}
+			require.Len(t, descCols, 3, "expected all three operation descriptions in output:\n%s", plain)
+			assert.Equal(t, descCols[0], descCols[1], "columns must align regardless of ANSI styling (noColor=%v):\n%s", noColor, plain)
+			assert.Equal(t, descCols[1], descCols[2], "columns must align regardless of ANSI styling (noColor=%v):\n%s", noColor, plain)
+		}
+	})
+
+	t.Run("falls_back_to_write_operations_when_operations_empty", func(t *testing.T) {
+		t.Parallel()
+		mp := newMockProvider("legacy-ops", "Legacy classifier provider", []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction})
+		mp.descriptor.WriteOperations = []string{"write_file", "delete_file"}
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{NoColor: true}
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		err := (&Options{IOStreams: ioStreams, CliParams: cliParams}).printProviderDetail(ctx, mp.Descriptor())
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		assert.NotContains(t, output, "\nOperations:\n")
+		assert.Contains(t, output, "Write Operations:")
+		assert.Contains(t, output, "  write_file")
+		assert.Contains(t, output, "  delete_file")
+	})
+}
+
+func TestOptions_RunGetProvider_SingleOperation(t *testing.T) {
+	t.Parallel()
+
+	setupReg := func() *provider.Registry {
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+		_ = reg.Register(newMockOperationsCatalogProvider())
+		_ = reg.Register(newMockProvider("plain-prov", "No operations", []provider.Capability{provider.CapabilityFrom}))
+		return reg
+	}
+
+	t.Run("renders_human_detail_for_write_operation", func(t *testing.T) {
+		t.Parallel()
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{NoColor: true}
+		opts := &Options{
+			IOStreams: ioStreams,
+			CliParams: cliParams,
+			Operation: "create_issue",
+			registry:  setupReg(),
+		}
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		require.NoError(t, opts.RunGetProvider(ctx, "scm"))
+		out := outBuf.String()
+		assert.Contains(t, out, "Provider: scm")
+		assert.Contains(t, out, "Operation: create_issue")
+		assert.Contains(t, out, "Display Name: Create Issue")
+		assert.Contains(t, out, "Write: yes")
+		assert.Contains(t, out, "[action]")
+		assert.Contains(t, out, "DEPRECATED: Use create_work_item instead")
+		assert.Contains(t, out, "Input Schema:")
+		assert.Contains(t, out, "title (string) *")
+		assert.Contains(t, out, "Output Schema:")
+		assert.Contains(t, out, "number (integer)")
+		assert.Contains(t, out, "Examples:")
+		assert.Contains(t, out, "Open bug")
+	})
+
+	t.Run("renders_json_for_single_operation_and_cel_filter", func(t *testing.T) {
+		t.Parallel()
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{NoColor: true}
+		opts := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			Operation:      "get_repo",
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+			registry:       setupReg(),
+		}
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		require.NoError(t, opts.RunGetProvider(ctx, "scm"))
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &got))
+		assert.Equal(t, "scm", got["provider"])
+		assert.Equal(t, "builtin", got["source"])
+		assert.Equal(t, "get_repo", got["name"])
+		assert.Equal(t, false, got["isWrite"])
+
+		// Verify CEL expression filtering over operations works without -o and with -o json.
+		outBuf.Reset()
+		defaultExprOpts := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "", Expression: "size(_.operations.filter(o, o.isWrite))"},
+			registry:       setupReg(),
+		}
+		require.NoError(t, defaultExprOpts.RunGetProvider(ctx, "scm"))
+		assert.Equal(t, "2", strings.TrimSpace(outBuf.String()))
+
+		outBuf.Reset()
+		exprOpts := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json", Expression: "_.operations.filter(o, o.isWrite).map(o, o.name)"},
+			registry:       setupReg(),
+		}
+		require.NoError(t, exprOpts.RunGetProvider(ctx, "scm"))
+		var writeNames []string
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &writeNames))
+		assert.Equal(t, []string{"create_issue", "merge_pull_request"}, writeNames)
+	})
+
+	t.Run("errors_when_provider_has_no_operations_or_operation_missing", func(t *testing.T) {
+		t.Parallel()
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{NoColor: true}
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		noOps := &Options{IOStreams: ioStreams, CliParams: cliParams, Operation: "read", registry: setupReg()}
+		err := noOps.RunGetProvider(ctx, "plain-prov")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `provider "plain-prov" does not declare per-operation metadata`)
+
+		missingOp := &Options{IOStreams: ioStreams, CliParams: cliParams, Operation: "nonexistent", registry: setupReg()}
+		err = missingOp.RunGetProvider(ctx, "scm")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `operation "nonexistent" not found on provider "scm"`)
+		assert.Contains(t, err.Error(), "get_repo, create_issue, merge_pull_request")
+
+		// Escape sequences and newlines in available operation names are sanitized on stderr and in error strings.
+		outBuf.Reset()
+		dirtyReg := provider.NewRegistry()
+		dirtyProv := newMockProvider("dirty-prov", "Untrusted ops", []provider.Capability{provider.CapabilityFrom})
+		dirtyProv.descriptor.Operations = []provider.OperationDescriptor{
+			{Name: "safe_op", Capabilities: []provider.Capability{provider.CapabilityFrom}},
+			{Name: "\x1b[31minjected_op\x1b[0m\r\n::error::spoofed", Capabilities: []provider.Capability{provider.CapabilityFrom}},
+		}
+		require.NoError(t, dirtyReg.Register(dirtyProv))
+
+		dirtyMissing := &Options{IOStreams: ioStreams, CliParams: cliParams, Operation: "missing", registry: dirtyReg}
+		dirtyErr := dirtyMissing.RunGetProvider(ctx, "dirty-prov")
+		require.Error(t, dirtyErr)
+		assert.NotContains(t, dirtyErr.Error(), "\x1b")
+		assert.NotContains(t, dirtyErr.Error(), "\n")
+		assert.NotContains(t, outBuf.String(), "\x1b")
+		assert.Contains(t, dirtyErr.Error(), "safe_op, injected_op ::error::spoofed")
+	})
+
+	t.Run("renders_nested_array_and_dynamic_key_operation_schemas_in_human_and_json", func(t *testing.T) {
+		t.Parallel()
+		reg := provider.NewRegistry()
+		complexProv := newMockProvider("complex-ops", "Complex schemas", []provider.Capability{provider.CapabilityAction})
+		complexProv.descriptor.OutputSchemas = map[provider.Capability]*jsonschema.Schema{
+			provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"success": schemahelper.BoolProp("Success"),
+			}),
+		}
+		complexProv.descriptor.Operations = []provider.OperationDescriptor{
+			{
+				Name:         "apply_config",
+				Capabilities: []provider.Capability{provider.CapabilityAction},
+				IsWrite:      true,
+				InputSchema: &jsonschema.Schema{
+					Type:                 "object",
+					AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}}, // "additionalProperties": false
+					Required:             []string{"spec"},
+					Properties: map[string]*jsonschema.Schema{
+						"spec": {
+							Type:                 "object",
+							AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}},
+							Required:             []string{"endpoint"},
+							Properties: map[string]*jsonschema.Schema{
+								"endpoint": {Type: "string", Description: "Target URL"},
+							},
+						},
+						"targets": {
+							Type:  "array",
+							Items: &jsonschema.Schema{Type: "string"},
+						},
+						"matrix": {
+							Type: "array",
+							Items: &jsonschema.Schema{
+								Type: "array",
+								Items: &jsonschema.Schema{
+									Type:     "object",
+									Required: []string{"cellValue"},
+									Properties: map[string]*jsonschema.Schema{
+										"cellValue": {Type: "string"},
+									},
+								},
+							},
+						},
+						"snowflakeId": {
+							Type:    "integer",
+							Default: json.RawMessage(`9007199254740993`),
+							Enum:    []any{int64(9007199254740993)},
+						},
+					},
+					PatternProperties: map[string]*jsonschema.Schema{
+						"^env_": {
+							Type: "array",
+							Items: &jsonschema.Schema{
+								Type:     "object",
+								Required: []string{"varName"},
+								Properties: map[string]*jsonschema.Schema{
+									"varName": {Type: "string"},
+								},
+							},
+						},
+					},
+				},
+				OutputSchema: &jsonschema.Schema{
+					Type: "object",
+					AdditionalProperties: &jsonschema.Schema{
+						Type:        "array",
+						Description: "Applied rules per environment",
+						Items: &jsonschema.Schema{
+							Type:     "object",
+							Required: []string{"ruleId"},
+							Properties: map[string]*jsonschema.Schema{
+								"ruleId": {Type: "string"},
+							},
+						},
+					},
+				},
+			},
+			{
+				Name:         "strict_empty",
+				Capabilities: []provider.Capability{provider.CapabilityAction},
+				InputSchema: &jsonschema.Schema{
+					Type:                 "object",
+					AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}}, // empty strict object
+				},
+				OutputSchema: &jsonschema.Schema{
+					Type: "string",
+					Enum: []any{"queued", "applied"},
+				},
+			},
+		}
+		require.NoError(t, reg.Register(complexProv))
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{NoColor: true}
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		humanOpts := &Options{IOStreams: ioStreams, CliParams: cliParams, Operation: "apply_config", registry: reg}
+		require.NoError(t, humanOpts.RunGetProvider(ctx, "complex-ops"))
+		humanOut := outBuf.String()
+		assert.Contains(t, humanOut, "spec (object) *")
+		assert.Contains(t, humanOut, "endpoint (string) *")
+		assert.Contains(t, humanOut, "Items: (string)")
+		assert.Contains(t, humanOut, "matrix (array)")
+		assert.Contains(t, humanOut, "Items: (array)")
+		assert.Contains(t, humanOut, "cellValue (string) *")
+		assert.Contains(t, humanOut, "^env_ (array)")
+		assert.Contains(t, humanOut, "varName (string) *")
+		assert.Contains(t, humanOut, "<key> (array)")
+		assert.Contains(t, humanOut, "ruleId (string)")
+		assert.NotContains(t, humanOut, "ruleId (string) *")
+		assert.NotContains(t, humanOut, "<key> (any)", "additionalProperties: false must not render as <key> (any)")
+
+		// Strict empty object omits Input Schema heading; scalar OutputSchema renders top-level Enum.
+		outBuf.Reset()
+		strictOpts := &Options{IOStreams: ioStreams, CliParams: cliParams, Operation: "strict_empty", registry: reg}
+		require.NoError(t, strictOpts.RunGetProvider(ctx, "complex-ops"))
+		strictOut := outBuf.String()
+		assert.NotContains(t, strictOut, "Input Schema:")
+		assert.NotContains(t, strictOut, "<key>")
+		assert.Contains(t, strictOut, "Output Schema:")
+		assert.Contains(t, strictOut, "Enum: queued, applied")
+
+		outBuf.Reset()
+		jsonOpts := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			Operation:      "apply_config",
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+			registry:       reg,
+		}
+		require.NoError(t, jsonOpts.RunGetProvider(ctx, "complex-ops"))
+		jsonStr := outBuf.String()
+		assert.Contains(t, jsonStr, "9007199254740993")
+		assert.NotContains(t, jsonStr, "9007199254740992")
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &got))
+		inSchema := got["inputSchema"].(map[string]any)
+		specProp := inSchema["properties"].(map[string]any)["spec"].(map[string]any)
+		assert.Equal(t, []any{"endpoint"}, specProp["required"])
+		outSchema := got["outputSchema"].(map[string]any)
+		assert.Equal(t, "array", outSchema["additionalProperties"].(map[string]any)["type"])
+
+		// YAML and CEL also retain exact numeric type/precision above 2^53.
+		outBuf.Reset()
+		yamlOpts := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			Operation:      "apply_config",
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "yaml"},
+			registry:       reg,
+		}
+		require.NoError(t, yamlOpts.RunGetProvider(ctx, "complex-ops"))
+		assert.Contains(t, outBuf.String(), "default: 9007199254740993\n")
+		assert.NotContains(t, outBuf.String(), `"9007199254740993"`)
+
+		outBuf.Reset()
+		celOpts := &Options{
+			IOStreams: ioStreams,
+			CliParams: cliParams,
+			Operation: "apply_config",
+			KvxOutputFlags: flags.KvxOutputFlags{
+				Expression: "_.inputSchema.properties.snowflakeId.default == 9007199254740993",
+			},
+			registry: reg,
+		}
+		require.NoError(t, celOpts.RunGetProvider(ctx, "complex-ops"))
+		assert.Equal(t, "true", strings.TrimSpace(outBuf.String()))
+	})
+}
+
+func TestOptions_RunGetProvider_SingleOperation_UncachedOfficial(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheDir)
+	xdg.Reload()
+	t.Cleanup(xdg.Reload)
+
+	names := make([]string, 20)
+	for i := range names {
+		names[i] = fmt.Sprintf("op_%02d", i)
+	}
+	formatted := provdetail.FormatAvailableOperations(names)
+	assert.Contains(t, formatted, "... (20 total)")
+
+	var outBuf bytes.Buffer
+	ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+	cliParams := &settings.Run{BinaryName: "mycli", NoColor: true}
+	w := writer.New(ioStreams, cliParams)
+	ctx := official.WithRegistry(writer.WithWriter(context.Background(), w), official.NewRegistryFrom([]official.Provider{
+		{Name: "github", CatalogRef: "github-plugin", DefaultVersion: "latest"},
+	}))
+
+	opts := &Options{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		BinaryName: "mycli",
+		Operation:  "create_issue",
+		registry:   provider.NewRegistry(),
+	}
+	err := opts.RunGetProvider(ctx, "github")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mycli plugins install github-plugin")
+
+	// When a cached binary exists for the official plugin but descriptor probing fails,
+	// --operation reports the probe failure rather than claiming the plugin is uncached.
+	cache := plugin.NewCache(settings.PluginCacheDirFor("mycli"))
+	_, putErr := cache.Put("github-plugin", "1.0.0", plugin.CurrentPlatform(), []byte("invalid-plugin"))
+	require.NoError(t, putErr)
+
+	errCachedBroken := opts.RunGetProvider(ctx, "github")
+	require.Error(t, errCachedBroken)
+	assert.Contains(t, errCachedBroken.Error(), "failed to load cached plugin descriptor")
+	assert.NotContains(t, errCachedBroken.Error(), "plugin is not cached locally")
 }

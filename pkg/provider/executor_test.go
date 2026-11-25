@@ -11,6 +11,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -870,4 +871,221 @@ func TestValidateWriteOperation_AllowsWriteInState(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
+}
+
+// newMockOperationsProvider creates a provider that classifies operations exclusively
+// via Descriptor.Operations (leaving legacy WriteOperations nil).
+func newMockOperationsProvider(ops []OperationDescriptor) *mockExecutableProvider {
+	version := semver.MustParse("1.0.0")
+	return &mockExecutableProvider{
+		descriptor: &Descriptor{
+			Name:        "ops-provider",
+			APIVersion:  "v1",
+			Version:     version,
+			Description: "Mock provider with OperationDescriptor entries",
+			Capabilities: []Capability{
+				CapabilityFrom,
+				CapabilityTransform,
+				CapabilityValidation,
+				CapabilityAction,
+			},
+			Operations: ops,
+			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
+				"operation": schemahelper.StringProp("Operation to perform"),
+			}),
+			OutputSchemas: map[Capability]*jsonschema.Schema{
+				CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result": schemahelper.StringProp(""),
+				}),
+				CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result": schemahelper.StringProp(""),
+				}),
+				CapabilityValidation: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"valid":  schemahelper.BoolProp(""),
+					"errors": schemahelper.ArrayProp(""),
+				}),
+				CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"success": schemahelper.BoolProp(""),
+				}),
+			},
+		},
+	}
+}
+
+func TestValidateWriteOperation_OperationsDescriptor(t *testing.T) {
+	t.Parallel()
+
+	richOps := []OperationDescriptor{
+		{
+			Name:         "get_repo",
+			Description:  "Get repository metadata and settings",
+			Capabilities: []Capability{CapabilityFrom},
+			IsWrite:      false,
+		},
+		{
+			Name:         "create_issue",
+			Description:  "  Create a new issue in the repository  ",
+			Capabilities: []Capability{CapabilityAction},
+			IsWrite:      true,
+		},
+		{
+			Name:         "delete_issue",
+			Description:  "   ",
+			Capabilities: []Capability{CapabilityAction},
+			IsWrite:      true,
+		},
+	}
+
+	tests := []struct {
+		name        string
+		ops         []OperationDescriptor
+		mode        Capability
+		operation   string
+		wantErr     bool
+		wantErrText string
+	}{
+		{
+			name:        "blocks_write_in_from_with_trimmed_description",
+			ops:         richOps,
+			mode:        CapabilityFrom,
+			operation:   "create_issue",
+			wantErr:     true,
+			wantErrText: `operation "create_issue" (Create a new issue in the repository) is a write operation and cannot be used in read-only execution mode "from"; use a workflow action instead`,
+		},
+		{
+			name:        "blocks_write_in_transform_with_description",
+			ops:         richOps,
+			mode:        CapabilityTransform,
+			operation:   "create_issue",
+			wantErr:     true,
+			wantErrText: `operation "create_issue" (Create a new issue in the repository) is a write operation and cannot be used in read-only execution mode "transform"; use a workflow action instead`,
+		},
+		{
+			name:        "blocks_write_in_validation_with_description",
+			ops:         richOps,
+			mode:        CapabilityValidation,
+			operation:   "create_issue",
+			wantErr:     true,
+			wantErrText: `operation "create_issue" (Create a new issue in the repository) is a write operation and cannot be used in read-only execution mode "validation"; use a workflow action instead`,
+		},
+		{
+			name:        "blocks_write_without_empty_parentheses_when_description_blank",
+			ops:         richOps,
+			mode:        CapabilityFrom,
+			operation:   "delete_issue",
+			wantErr:     true,
+			wantErrText: `operation "delete_issue" is a write operation and cannot be used in read-only execution mode "from"; use a workflow action instead`,
+		},
+		{
+			name:      "allows_read_operation_in_from",
+			ops:       richOps,
+			mode:      CapabilityFrom,
+			operation: "get_repo",
+			wantErr:   false,
+		},
+		{
+			name:      "allows_write_operation_in_action",
+			ops:       richOps,
+			mode:      CapabilityAction,
+			operation: "create_issue",
+			wantErr:   false,
+		},
+		{
+			name: "allows_all_operations_when_operations_are_all_reads",
+			ops: []OperationDescriptor{
+				{Name: "get_repo", IsWrite: false},
+				{Name: "list_branches", IsWrite: false},
+			},
+			mode:      CapabilityFrom,
+			operation: "get_repo",
+			wantErr:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := newMockOperationsProvider(tc.ops)
+			require.Nil(t, p.Descriptor().WriteOperations)
+
+			executor := NewExecutor()
+			ctx := WithExecutionMode(context.Background(), tc.mode)
+			res, err := executor.Execute(ctx, p, map[string]any{"operation": tc.operation})
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantErrText, err.Error())
+				assert.False(t, p.executeCalled, "blocked write operation must not invoke Execute")
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, res)
+				assert.True(t, p.executeCalled)
+			}
+		})
+	}
+}
+
+func TestValidateWriteOperation_GuardsAndZeroAllocFastPaths(t *testing.T) {
+	ctxFrom := WithExecutionMode(context.Background(), CapabilityFrom)
+	ctxAction := WithExecutionMode(context.Background(), CapabilityAction)
+
+	// Nil provider and nil descriptor guards.
+	require.NoError(t, ValidateWriteOperation(ctxFrom, nil, map[string]any{"operation": "write"}))
+	require.NoError(t, ValidateWriteOperation(ctxFrom, &mockExecutableProvider{descriptor: nil}, map[string]any{"operation": "write"}))
+
+	// Missing execution mode in context.
+	p := newMockOperationsProvider([]OperationDescriptor{{Name: "create_issue", IsWrite: true}})
+	require.NoError(t, ValidateWriteOperation(context.Background(), p, map[string]any{"operation": "create_issue"}))
+
+	// Empty or missing operation input.
+	require.NoError(t, ValidateWriteOperation(ctxFrom, p, nil))
+	require.NoError(t, ValidateWriteOperation(ctxFrom, p, map[string]any{}))
+	require.NoError(t, ValidateWriteOperation(ctxFrom, p, map[string]any{"operation": ""}))
+
+	// Action mode and non-operation providers must not allocate EffectiveWriteOperations slices.
+	actionInputs := map[string]any{"operation": "create_issue"}
+	allocsAction := testing.AllocsPerRun(100, func() {
+		_ = ValidateWriteOperation(ctxAction, p, actionInputs)
+	})
+	assert.Zero(t, allocsAction, "expected zero allocations in action mode")
+
+	nonOpInputs := map[string]any{"url": "https://example.com"}
+	allocsNonOp := testing.AllocsPerRun(100, func() {
+		_ = ValidateWriteOperation(ctxFrom, p, nonOpInputs)
+	})
+	assert.Zero(t, allocsNonOp, "expected zero allocations when operation input is absent")
+
+	// Control characters, ANSI CSI/OSC sequences, and newlines in plugin descriptions
+	// are stripped/collapsed, and tracked secrets (including whitespace-bearing and
+	// ANSI-split credentials) are redacted before and after normalization.
+	tracker := redact.NewTracker()
+	tracker.Track("tok_secret_value_123")
+	tracker.Track("cred\twith   spaces")
+	tracker.Track("ansi_split_secret")
+	ctxRedacted := redact.WithTracker(ctxFrom, tracker)
+	untrustedProv := newMockOperationsProvider([]OperationDescriptor{
+		{
+			Name:        "write_tok_secret_value_123",
+			Description: "\x1b[31mMutate\x1b[0m\x1b]0;title\x07\r\n::add-mask::injected\tstate using cred\twith   spaces and ansi_\x1b[0msplit_secret",
+			IsWrite:     true,
+		},
+		{
+			Name:        "op_cred\twith   spaces",
+			Description: "Tab secret in operation name",
+			IsWrite:     true,
+		},
+	})
+	err := ValidateWriteOperation(ctxRedacted, untrustedProv, map[string]any{"operation": "write_tok_secret_value_123"})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "\x1b")
+	assert.NotContains(t, err.Error(), "\n")
+	assert.NotContains(t, err.Error(), "tok_secret_value_123")
+	assert.NotContains(t, err.Error(), "cred\twith   spaces")
+	assert.NotContains(t, err.Error(), "cred with spaces")
+	assert.NotContains(t, err.Error(), "ansi_split_secret")
+	assert.Contains(t, err.Error(), "(Mutate ::add-mask::injected state using [REDACTED] and [REDACTED])")
+
+	errTabOp := ValidateWriteOperation(ctxRedacted, untrustedProv, map[string]any{"operation": "op_cred\twith   spaces"})
+	require.Error(t, errTabOp)
+	assert.NotContains(t, errTabOp.Error(), "cred")
+	assert.Contains(t, errTabOp.Error(), `operation "op_[REDACTED]"`)
 }

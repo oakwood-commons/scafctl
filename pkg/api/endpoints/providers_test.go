@@ -445,3 +445,111 @@ func TestGetProviderSchema_AutoResolve_Adopted(t *testing.T) {
 	resp := testAPI.Get("/v1/providers/exec/schema")
 	assert.Equal(t, http.StatusNotFound, resp.Code)
 }
+
+func TestRegisterProviderEndpoints_DetailWithOperations(t *testing.T) {
+	t.Parallel()
+
+	_, testAPI := humatest.New(t)
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&testProvider{
+		desc: &provider.Descriptor{
+			Name:         "ops-provider",
+			DisplayName:  "Ops Provider",
+			Description:  "Provider with rich operation descriptors",
+			APIVersion:   "v1",
+			Version:      semver.MustParse("1.5.0"),
+			Capabilities: []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+			Operations: []provider.OperationDescriptor{
+				{
+					Name:         "get_item",
+					Description:  "Fetch an item",
+					Capabilities: []provider.Capability{provider.CapabilityFrom},
+					IsWrite:      false,
+					InputSchema:  schemahelper.ObjectSchema([]string{"id"}, map[string]*jsonschema.Schema{"id": schemahelper.StringProp("Item ID")}),
+				},
+				{
+					Name:         "create_item",
+					Description:  "Create an item",
+					Capabilities: []provider.Capability{provider.CapabilityAction},
+					IsWrite:      true,
+					InputSchema: &jsonschema.Schema{
+						Type:     "object",
+						Required: []string{"payload"},
+						Properties: map[string]*jsonschema.Schema{
+							"payload": {
+								Type:     "object",
+								Required: []string{"title"},
+								Properties: map[string]*jsonschema.Schema{
+									"title":       {Type: "string"},
+									"snowflakeId": {Type: "integer", Default: []byte(`9007199254740993`)},
+								},
+							},
+						},
+					},
+					OutputSchema: &jsonschema.Schema{
+						Type:                 "object",
+						AdditionalProperties: &jsonschema.Schema{Type: "string"},
+					},
+					Examples: []provider.Example{{Name: "Basic", Description: "Create item", YAML: "operation: create_item\n"}},
+				},
+			},
+			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
+				"operation": schemahelper.StringProp("Operation name"),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom:   schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{"item": schemahelper.StringProp("Item")}),
+				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{"success": schemahelper.BoolProp("Success")}),
+			},
+		},
+	}))
+
+	require.NoError(t, reg.Register(&testProvider{
+		desc: &provider.Descriptor{
+			Name:         "read-only-ops",
+			DisplayName:  "Read Only Ops",
+			Description:  "Provider whose operations are all reads",
+			APIVersion:   "v1",
+			Version:      semver.MustParse("1.0.0"),
+			Capabilities: []provider.Capability{provider.CapabilityFrom},
+			Operations: []provider.OperationDescriptor{
+				{Name: "get_item", Description: "Read item", Capabilities: []provider.Capability{provider.CapabilityFrom}, IsWrite: false},
+			},
+			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
+				"operation": schemahelper.StringProp("Operation name"),
+			}),
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{"item": schemahelper.StringProp("Item")}),
+			},
+		},
+	}))
+
+	var shutting int32
+	hctx := &api.HandlerContext{
+		Config:           &config.Config{},
+		IsShuttingDown:   &shutting,
+		StartTime:        time.Now(),
+		ProviderRegistry: reg,
+	}
+	RegisterProviderEndpoints(testAPI, hctx, "/v1")
+
+	resp := testAPI.Get("/v1/providers/ops-provider")
+	require.Equal(t, http.StatusOK, resp.Code)
+	body := resp.Body.String()
+	assert.Contains(t, body, `"writeOperations":["create_item"]`)
+	assert.Contains(t, body, `"name":"get_item"`)
+	assert.Contains(t, body, `"isWrite":false`)
+	assert.Contains(t, body, `"name":"create_item"`)
+	assert.Contains(t, body, `"isWrite":true`)
+	assert.Contains(t, body, `"required":["title"]`)
+	assert.Contains(t, body, `"additionalProperties":{"type":"string"}`)
+	assert.Contains(t, body, `9007199254740993`)
+	assert.NotContains(t, body, `9007199254740992`)
+
+	// All-reads classifier preserves empty non-nil writeOperations: [].
+	respReadOnly := testAPI.Get("/v1/providers/read-only-ops")
+	require.Equal(t, http.StatusOK, respReadOnly.Code)
+	assert.Contains(t, respReadOnly.Body.String(), `"writeOperations":[]`)
+
+	// Verify OpenAPI spec generation succeeds without schema panics.
+	assert.NotNil(t, testAPI.OpenAPI())
+}

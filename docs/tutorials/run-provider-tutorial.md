@@ -607,7 +607,38 @@ scafctl get provider http
 {{% /tab %}}
 {{< /tabs >}}
 
-This shows the provider's schema, capabilities, examples, and auto-generated CLI usage examples. If the provider is not found in the built-in registry, scafctl falls back to the official provider registry and displays catalog information.
+This shows the provider's operations (when declared), schema, capabilities, examples, and auto-generated CLI usage examples. If the provider is not found in the built-in registry, scafctl falls back to the official provider registry and displays catalog information (or full schema and operations when the plugin is cached locally).
+
+### Inspect Provider Operations
+
+Multi-operation providers (such as plugin providers exposing an `operation` input) declare per-operation descriptions, capabilities, write indicators, schemas, and examples. Use `scafctl get provider <name>` to see the full operations table, or pass `--operation <op>` to inspect a single operation in detail:
+
+{{< tabs "run-provider-tutorial-cmd-16b" >}}
+{{% tab "Bash" %}}
+```bash
+# View all operations and schema for a cached plugin provider
+scafctl get provider github
+
+# Inspect a single operation's input/output schemas and examples
+scafctl get provider github --operation create_issue
+
+# Filter write operations as JSON using a CEL expression
+scafctl get provider github -o json -e "_.operations.filter(o, o.isWrite)"
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# View all operations and schema for a cached plugin provider
+scafctl get provider github
+
+# Inspect a single operation's input/output schemas and examples
+scafctl get provider github --operation create_issue
+
+# Filter write operations as JSON using a CEL expression
+scafctl get provider github -o json -e '_.operations.filter(o, o.isWrite)'
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### Dynamic Help for Provider Inputs
 

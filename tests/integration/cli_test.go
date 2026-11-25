@@ -18608,3 +18608,219 @@ settings:
 		assert.NotContains(t, payload, "groups_resolved")
 	})
 }
+
+const opsDemoPluginSource = `package main
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
+	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
+	sdkprovider "github.com/oakwood-commons/scafctl-plugin-sdk/provider"
+	sdkhelper "github.com/oakwood-commons/scafctl-plugin-sdk/provider/schemahelper"
+)
+
+type OpsDemoPlugin struct{}
+
+func (p *OpsDemoPlugin) GetProviders(_ context.Context) ([]string, error) {
+	return []string{"opsdemo"}, nil
+}
+
+func (p *OpsDemoPlugin) GetProviderDescriptor(_ context.Context, name string) (*sdkprovider.Descriptor, error) {
+	if name != "opsdemo" {
+		return nil, fmt.Errorf("unknown provider: %s", name)
+	}
+	return &sdkprovider.Descriptor{
+		Name:         "opsdemo",
+		DisplayName:  "Ops Demo Provider",
+		Description:  "Multi-operation demo plugin provider",
+		APIVersion:   "v1",
+		Version:      semver.MustParse("1.0.0"),
+		Capabilities: []sdkprovider.Capability{sdkprovider.CapabilityFrom, sdkprovider.CapabilityAction},
+		Operations: []sdkprovider.OperationDescriptor{
+			{
+				Name:         "get_item",
+				DisplayName:  "Get Item",
+				Description:  "Fetch a single item by ID",
+				Capabilities: []sdkprovider.Capability{sdkprovider.CapabilityFrom},
+				IsWrite:      false,
+				InputSchema: sdkhelper.ObjectSchema([]string{"id"}, map[string]*jsonschema.Schema{
+					"id": sdkhelper.StringProp("Item identifier"),
+				}),
+			},
+			{
+				Name:         "create_item",
+				DisplayName:  "Create Item",
+				Description:  "Create a new item in storage",
+				Capabilities: []sdkprovider.Capability{sdkprovider.CapabilityAction},
+				IsWrite:      true,
+				InputSchema: sdkhelper.ObjectSchema([]string{"title"}, map[string]*jsonschema.Schema{
+					"title": sdkhelper.StringProp("Item title"),
+				}),
+				OutputSchema: sdkhelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"id": sdkhelper.StringProp("Created item ID"),
+				}),
+				Examples: []sdkprovider.Example{
+					{Name: "Create widget", Description: "Create a widget item", YAML: "operation: create_item\ntitle: widget"},
+				},
+			},
+		},
+		Schema: sdkhelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
+			"operation": sdkhelper.StringProp("Operation to execute"),
+			"id":        sdkhelper.StringProp("Item identifier"),
+			"title":     sdkhelper.StringProp("Item title"),
+		}),
+		OutputSchemas: map[sdkprovider.Capability]*jsonschema.Schema{
+			sdkprovider.CapabilityFrom: sdkhelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"id": sdkhelper.StringProp("Item ID"),
+			}),
+			sdkprovider.CapabilityAction: sdkhelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"success": sdkhelper.BoolProp("Operation succeeded"),
+			}),
+		},
+	}, nil
+}
+
+func (p *OpsDemoPlugin) ExecuteProvider(_ context.Context, _ string, input map[string]any) (*sdkprovider.Output, error) {
+	op, _ := input["operation"].(string)
+	if op == "create_item" {
+		return &sdkprovider.Output{Data: map[string]any{"success": true, "id": "item-1"}}, nil
+	}
+	return &sdkprovider.Output{Data: map[string]any{"id": "item-1"}}, nil
+}
+
+func (p *OpsDemoPlugin) DescribeWhatIf(_ context.Context, _ string, _ map[string]any) (string, error) {
+	return "Would execute opsdemo", nil
+}
+func (p *OpsDemoPlugin) ConfigureProvider(_ context.Context, _ string, _ sdkplugin.ProviderConfig) error {
+	return nil
+}
+func (p *OpsDemoPlugin) ExecuteProviderStream(_ context.Context, _ string, _ map[string]any, _ func(sdkplugin.StreamChunk)) error {
+	return sdkplugin.ErrStreamingNotSupported
+}
+func (p *OpsDemoPlugin) ExtractDependencies(_ context.Context, _ string, _ map[string]any) ([]string, error) {
+	return nil, nil
+}
+func (p *OpsDemoPlugin) StopProvider(_ context.Context, _ string) error { return nil }
+
+func main() {
+	sdkplugin.Serve(&OpsDemoPlugin{})
+}
+`
+
+func TestIntegration_ProviderOperations_DisplayAndEnforcement(t *testing.T) {
+	t.Parallel()
+
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "main.go")
+	require.NoError(t, os.WriteFile(srcPath, []byte(opsDemoPluginSource), 0o600))
+
+	cacheHome := t.TempDir()
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	binName := "opsdemo"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	cachedDir := filepath.Join(cacheHome, "scafctl", "plugins", "opsdemo", "1.0.0", platform)
+	require.NoError(t, os.MkdirAll(cachedDir, 0o700))
+	cachedBin := filepath.Join(cachedDir, binName)
+
+	buildCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(buildCtx, "go", "build", "-o", cachedBin, srcPath) //nolint:gosec // test helper
+	cmd.Dir = findProjectRoot()
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	buildOut, buildErr := cmd.CombinedOutput()
+	require.NoError(t, buildErr, "failed to build opsdemo plugin:\n%s", string(buildOut))
+
+	// Link into a dedicated binary-only directory for --plugin-dir so Windows
+	// plugin discovery never sees main.go alongside the compiled executable.
+	pluginDir := t.TempDir()
+	require.NoError(t, os.Link(cachedBin, filepath.Join(pluginDir, binName)))
+
+	env := map[string]string{"XDG_CACHE_HOME": cacheHome}
+
+	// 1. Human detail view renders Operations table with capabilities, (write), and descriptions.
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "get", "provider", "opsdemo")
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr)
+	assert.Contains(t, stdout, "Operations:")
+	assert.Contains(t, stdout, "get_item")
+	assert.Contains(t, stdout, "Fetch a single item by ID")
+	assert.Contains(t, stdout, "create_item")
+	assert.Contains(t, stdout, "(write)")
+	assert.Contains(t, stdout, "Create a new item in storage")
+
+	// 2. Single-operation human and JSON inspection (--operation <op>).
+	opOut, opErr, opExit := runScafctlWithEnv(t, env, "get", "provider", "opsdemo", "--operation", "create_item", "--no-color")
+	require.Equal(t, 0, opExit, "stderr: %s", opErr)
+	assert.Contains(t, opOut, "Operation: create_item")
+	assert.Contains(t, opOut, "Create a new item in storage")
+	assert.Contains(t, opOut, "Input Schema:")
+	assert.Contains(t, opOut, "title (string) *")
+	assert.Contains(t, opOut, "Create widget")
+
+	opJSON, opJSONErr, opJSONExit := runScafctlWithEnv(t, env, "get", "provider", "opsdemo", "--operation", "get_item", "-o", "json")
+	require.Equal(t, 0, opJSONExit, "stderr: %s", opJSONErr)
+	var opMap map[string]any
+	require.NoError(t, json.Unmarshal([]byte(opJSON), &opMap))
+	assert.Equal(t, "get_item", opMap["name"])
+	assert.Equal(t, false, opMap["isWrite"])
+
+	// 3. Positive read execution in from mode and write auto-promotion in direct run provider.
+	readOut, readErr, readExit := runScafctl(t, "run", "provider", "opsdemo",
+		"--plugin-dir", pluginDir,
+		"--capability", "from",
+		"operation=get_item",
+		"id=item-1",
+		"-o", "json")
+	require.Equal(t, 0, readExit, "stderr: %s", readErr)
+	assert.Contains(t, readOut, `"item-1"`)
+
+	writeOut, writeErr, writeExit := runScafctl(t, "run", "provider", "opsdemo",
+		"--plugin-dir", pluginDir,
+		"operation=create_item",
+		"title=widget",
+		"-o", "json")
+	require.Equal(t, 0, writeExit, "stderr: %s", writeErr)
+	assert.Contains(t, writeOut, `"success": true`)
+
+	// 4. Rejects write operation in read-only resolver mode with operation description, even when WriteOperations is nil.
+	_, runErr, runExit := runScafctl(t, "run", "provider", "opsdemo",
+		"--plugin-dir", pluginDir,
+		"--capability", "from",
+		"operation=create_item",
+		"title=blocked")
+	assert.NotEqual(t, 0, runExit)
+	assert.Contains(t, runErr, `operation "create_item" (Create a new item in storage) is a write operation and cannot be used in read-only execution mode "from"; use a workflow action instead`)
+
+	// 5. MCP get_provider_schema with operation parameter via cached descriptor.
+	mcpCacheHome := t.TempDir()
+	schemaCacheDir := filepath.Join(mcpCacheHome, "scafctl", "provider-schemas")
+	require.NoError(t, os.MkdirAll(schemaCacheDir, 0o700))
+	cacheEntry := fmt.Sprintf(`{
+		"cachedAt": %q,
+		"descriptor": {
+			"name": "opsdemo",
+			"apiVersion": "v1",
+			"version": "1.0.0",
+			"description": "Cached opsdemo",
+			"capabilities": ["from", "action"],
+			"operations": [
+				{"name": "get_item", "description": "Read item", "capabilities": ["from"]},
+				{"name": "create_item", "description": "Create item", "capabilities": ["action"], "isWrite": true}
+			],
+			"schema": {"type": "object", "properties": {"operation": {"type": "string"}}}
+		}
+	}`, time.Now().UTC().Format(time.RFC3339))
+	require.NoError(t, os.WriteFile(filepath.Join(schemaCacheDir, "opsdemo.json"), []byte(cacheEntry), 0o600))
+
+	mcpResp := runMCPServeSession(t, map[string]string{"XDG_CACHE_HOME": mcpCacheHome}, []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_provider_schema","arguments":{"name":"opsdemo","operation":"create_item"}}}`,
+	}, 2)
+	assert.Contains(t, mcpResp, `"create_item"`)
+	assert.Contains(t, mcpResp, `"isWrite":true`)
+}

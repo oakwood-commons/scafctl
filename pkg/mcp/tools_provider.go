@@ -81,7 +81,7 @@ func (s *Server) registerProviderTools() {
 
 	// get_provider_schema
 	getProviderSchemaTool := mcp.NewTool("get_provider_schema",
-		mcp.WithDescription("Get comprehensive information about a provider: input schema (properties with types, required/optional, defaults, validation), output schemas per capability, YAML usage examples, CLI usage examples, capabilities, and version info. Works for both builtin providers and official plugin providers (directory, env, exec, git, github, hcl, identity, metadata, secret, sleep) — plugin providers are auto-resolved from the catalog on first request and their schemas are cached locally for offline access. ALWAYS call this before writing action or resolver YAML to verify exact field names, types, and which fields are required."),
+		mcp.WithDescription("Get comprehensive information about a provider: input schema (properties with types, required/optional, defaults, validation), output schemas per capability, per-operation metadata and write classification, YAML usage examples, CLI usage examples, capabilities, and version info. Pass the optional 'operation' parameter to inspect a single operation's description, capabilities, write status, input/output schemas, and examples. Works for both builtin providers and official plugin providers (directory, env, exec, git, github, hcl, identity, metadata, secret, sleep) -- plugin providers are auto-resolved from the catalog on first request and their schemas are cached locally for offline access. ALWAYS call this before writing action or resolver YAML to verify exact field names, types, and which fields are required."),
 		mcp.WithTitleAnnotation("Get Provider Schema"),
 		mcp.WithToolIcons(toolIcons["provider"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -91,6 +91,9 @@ func (s *Server) registerProviderTools() {
 		mcp.WithString("name",
 			mcp.Required(),
 			mcp.Description("Provider name (e.g., http, static, file, cel, parameter)"),
+		),
+		mcp.WithString("operation",
+			mcp.Description("Optional operation name to return metadata, capabilities, write classification, input/output schemas, and examples for a single operation (e.g., create_issue, get_repo). Omit to return the full provider descriptor including all operations."),
 		),
 	)
 	s.addTool(getProviderSchemaTool, s.handleGetProviderSchema)
@@ -247,9 +250,10 @@ func (s *Server) handleListProviders(_ context.Context, request mcp.CallToolRequ
 }
 
 // handleGetProviderSchema returns comprehensive provider information including
-// input schema with required/optional annotations, output schemas, examples,
-// CLI usage, and capabilities. Uses the same structured format as
-// `scafctl get provider <name> -o json`.
+// input schema with required/optional annotations, output schemas, operations,
+// examples, CLI usage, and capabilities. Uses the same structured format as
+// `get provider <name> -o json` (or `get provider <name> --operation <op> -o json`
+// when the optional operation parameter is set).
 func (s *Server) handleGetProviderSchema(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := request.RequireString("name")
 	if err != nil {
@@ -259,6 +263,7 @@ func (s *Server) handleGetProviderSchema(ctx context.Context, request mcp.CallTo
 			WithRelatedTools("list_providers"),
 		), nil
 	}
+	operation := request.GetString("operation", "")
 
 	desc, err := inspect.LookupProvider(s.ctx, name, s.registry)
 	if err != nil {
@@ -281,6 +286,9 @@ func (s *Server) handleGetProviderSchema(ctx context.Context, request mcp.CallTo
 		// Try the descriptor cache before falling back to metadata-only
 		if s.descriptorCache != nil {
 			if cached := s.descriptorCache.Get(name); cached != nil {
+				if operation != "" {
+					return buildOperationSchemaResult(cached, "cached", operation)
+				}
 				detail := provdetail.BuildProviderDetail(*cached)
 				detail["source"] = "cached"
 				return mcp.NewToolResultJSON(detail)
@@ -290,6 +298,14 @@ func (s *Server) handleGetProviderSchema(ctx context.Context, request mcp.CallTo
 		// Check official provider registry before returning error
 		if officialReg := official.RegistryFromContext(s.ctx); officialReg != nil {
 			if op, found := officialReg.Get(name); found {
+				if operation != "" {
+					return newStructuredError(ErrCodeNotFound,
+						fmt.Sprintf("cannot inspect operation %q for official provider %q: full descriptor is unavailable because the plugin could not be auto-fetched", operation, name),
+						WithField("operation"),
+						WithSuggestion(fmt.Sprintf("Run '%s plugins install %s' to fetch the plugin manually", s.name, op.CatalogRef)),
+						WithRelatedTools("get_provider_schema"),
+					), nil
+				}
 				detail := official.Detail(op)
 				detail["schemaAvailable"] = false
 				detail["hint"] = fmt.Sprintf(
@@ -316,15 +332,50 @@ func (s *Server) handleGetProviderSchema(ctx context.Context, request mcp.CallTo
 		), nil
 	}
 
+	source := s.providerSource(name)
+	if operation != "" {
+		return buildOperationSchemaResult(desc, source, operation)
+	}
+
 	// Use BuildProviderDetail for a structured, AI-friendly response that includes:
 	// - schema with per-property "required" annotations (easier than parsing JSON Schema required array)
 	// - output schemas per capability
+	// - operations and writeOperations metadata
 	// - examples with YAML
 	// - CLI usage examples
 	// - version, capabilities, category, tags, links, maintainers
 	detail := provdetail.BuildProviderDetail(*desc)
-	detail["source"] = s.providerSource(name)
+	detail["source"] = source
 
+	return mcp.NewToolResultJSON(detail)
+}
+
+// buildOperationSchemaResult extracts and formats details for a single named
+// operation from a resolved provider descriptor.
+func buildOperationSchemaResult(desc *provider.Descriptor, source, operation string) (*mcp.CallToolResult, error) {
+	if len(desc.Operations) == 0 {
+		return newStructuredError(ErrCodeNotFound,
+			fmt.Sprintf("provider %q does not declare per-operation metadata", desc.Name),
+			WithField("operation"),
+			WithSuggestion("Omit the operation parameter to inspect the provider-level schema"),
+			WithRelatedTools("get_provider_schema"),
+		), nil
+	}
+
+	op := desc.GetOperation(operation)
+	if op == nil {
+		avail := provdetail.FormatAvailableOperations(desc.OperationNames())
+		return newStructuredError(ErrCodeNotFound,
+			fmt.Sprintf("operation %q not found on provider %q (available: %s)", operation, desc.Name, avail),
+			WithField("operation"),
+			WithSuggestion("Call get_provider_schema without the operation parameter to list all operations"),
+			WithRelatedTools("get_provider_schema"),
+		), nil
+	}
+
+	detail := provdetail.BuildOperationDetail(*op)
+	detail["provider"] = desc.Name
+	detail["source"] = source
 	return mcp.NewToolResultJSON(detail)
 }
 

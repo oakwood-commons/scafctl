@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
@@ -63,13 +64,15 @@ type ProviderListResponse struct {
 // ProviderDetailResponse wraps a single provider's details.
 type ProviderDetailResponse struct {
 	Body struct {
-		Name          string   `json:"name" maxLength:"255" example:"http" doc:"Provider name"`
-		Version       string   `json:"version,omitempty" maxLength:"50" doc:"Provider version"`
-		Capabilities  []string `json:"capabilities,omitempty" maxItems:"10" doc:"Provider capabilities"`
-		Category      string   `json:"category,omitempty" maxLength:"50" doc:"Provider category"`
-		Description   string   `json:"description,omitempty" maxLength:"1000" doc:"Provider description"`
-		InputSchema   any      `json:"inputSchema,omitempty" doc:"Input JSON schema"`
-		OutputSchemas any      `json:"outputSchemas,omitempty" doc:"Output schemas by operation"`
+		Name            string    `json:"name" maxLength:"255" example:"http" doc:"Provider name"`
+		Version         string    `json:"version,omitempty" maxLength:"50" doc:"Provider version"`
+		Capabilities    []string  `json:"capabilities,omitempty" maxItems:"10" doc:"Provider capabilities"`
+		Category        string    `json:"category,omitempty" maxLength:"50" doc:"Provider category"`
+		Description     string    `json:"description,omitempty" maxLength:"1000" doc:"Provider description"`
+		InputSchema     any       `json:"inputSchema,omitempty" doc:"Input JSON schema"`
+		OutputSchemas   any       `json:"outputSchemas,omitempty" doc:"Output schemas by operation"`
+		WriteOperations *[]string `json:"writeOperations,omitempty" maxItems:"500" doc:"Operation names that mutate external state"`
+		Operations      any       `json:"operations,omitempty" doc:"Per-operation metadata"`
 	}
 }
 
@@ -158,6 +161,12 @@ func RegisterProviderEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		resp.Body.Category = desc.Category
 		resp.Body.InputSchema = desc.Schema
 		resp.Body.OutputSchemas = desc.OutputSchemas
+		if writeOps := desc.EffectiveWriteOperations(); writeOps != nil {
+			resp.Body.WriteOperations = &writeOps
+		}
+		if ops := provdetail.BuildOperationsOutput(desc.Operations); len(ops) > 0 {
+			resp.Body.Operations = ops
+		}
 		return resp, nil
 	})
 
