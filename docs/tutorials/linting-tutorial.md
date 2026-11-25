@@ -168,6 +168,7 @@ This shows:
 | missing-description | warning | best-practice | Solution should have a description |
 | unused-resolver | warning | usage | Resolver is defined but never referenced (reported at `info` in workflow-less solutions -- see below) |
 | unknown-resolver-reference | error | dependency | An unambiguous reference (`_.name`, `rslvr:`, `{{ ._.name }}` / `{{ ._name }}`) names a resolver that is not defined |
+| exec-source-without-fail-on-error | warning | provider | Non-final `exec` source in `resolve.with` does not set `failOnError: true`, preventing fallback sources from running on non-zero exit codes |
 | parameter-numeric-matches | warning | type-inference | Numeric `parameter` default without an explicit `type` is used with `matches()`, which fails at runtime because inference coerces it to an integer |
 | deferred-validation-not-fail-fast | info | validation | Resolver has a cross-resolver validation rule that runs in the deferred phase rather than failing fast |
 | ... | ... | ... | ... |
@@ -857,6 +858,63 @@ If `_.environment` is `"dev"`, neither condition matches and the resolver fails.
 ```
 
 The unconditional source acts as a default when no other condition is satisfied.
+
+### Exec Sources in Fallback Chains
+
+The `exec-source-without-fail-on-error` rule warns when an `exec` source in `resolve.with` is followed by another source without setting `failOnError: true`. For the `from` and `transform` capabilities, `exec` defaults `failOnError` to `false` so callers can inspect exit codes. In a fallback chain, however, a non-zero exit code therefore "succeeds" with empty output and prevents subsequent fallback sources from running:
+
+```yaml
+# WARNING: failing exec source succeeds with "" instead of falling back to env
+spec:
+  resolvers:
+    token:
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: some-cli create token
+              raw: true
+          - provider: env
+            inputs:
+              operation: get
+              name: FEDERATED_TOKEN
+```
+
+**Fix**: Set `failOnError: true` on the `exec` source (or via `bundle.plugins[].defaults.failOnError: true` for direct `provider: exec` steps; when invoking a reusable call via `call:`, set `failOnError: true` in `spec.calls.<name>.inputs`) so non-zero exit codes fall through to the next source:
+
+```yaml
+    token:
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: some-cli create token
+              raw: true
+              failOnError: true
+          - provider: env
+            inputs:
+              operation: get
+              name: FEDERATED_TOKEN
+```
+
+For more details:
+
+{{< tabs "linting-tutorial-cmd-exec-fallback" >}}
+{{% tab "Bash" %}}
+
+```bash
+scafctl lint rule exec-source-without-fail-on-error
+```
+
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+
+```powershell
+scafctl lint rule exec-source-without-fail-on-error
+```
+
+{{% /tab %}}
+{{< /tabs >}}
 
 ## 9. Transform Shape Mismatch
 

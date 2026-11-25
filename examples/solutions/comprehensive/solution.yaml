@@ -116,6 +116,7 @@ spec:
                 - rev-parse
                 - --abbrev-ref
                 - HEAD
+              failOnError: true
           - provider: static
             inputs:
               value: main
@@ -136,6 +137,7 @@ spec:
                 - rev-parse
                 - --short
                 - HEAD
+              failOnError: true
           - provider: static
             inputs:
               value: "0000000"

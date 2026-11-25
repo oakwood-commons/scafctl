@@ -153,6 +153,7 @@ func Solution(sol *solution.Solution, filePath string, registry providerLookup) 
 		lintCredentials(sol, result)
 		lintDeprecatedFields(sol, result)
 		lintBundlePlugins(sol, result)
+		lintExecFallbackSources(sol, result)
 	}
 
 	// Apply suppression directives parsed from inline YAML comments in the

@@ -507,6 +507,17 @@ var KnownRules = map[string]RuleMeta{
 			"# Wrong — dynamic value in command string:\nprovider: exec\ninputs:\n  command:\n    expr: \"'echo ' + _.userInput\"\n\n# Correct — static command, dynamic args:\nprovider: exec\ninputs:\n  command: echo\n  args:\n    - expr: \"_.userInput\"",
 		},
 	},
+	ruleExecSourceWithoutFailOnError: {
+		Rule:        ruleExecSourceWithoutFailOnError,
+		Severity:    string(SeverityWarning),
+		Category:    "provider",
+		Description: "An exec source in a resolver's resolve.with fallback chain is followed by another source but does not set 'failOnError: true'.",
+		Why:         "For the 'from' and 'transform' capabilities, the exec provider defaults 'failOnError' to false so callers can inspect non-zero exit codes. In a multi-source resolve.with fallback chain, however, a failing command therefore succeeds with empty stdout instead of returning an error, so subsequent fallback sources never run.",
+		Fix:         "Add 'failOnError: true' to the exec source's inputs (or set 'defaults.failOnError: true' on the exec entry in bundle.plugins for direct provider steps). When the source invokes a reusable call via 'call:', set 'failOnError: true' on 'spec.calls.<name>.inputs' because bundle.plugins defaults do not apply to call definitions.",
+		Examples: []string{
+			"# Problem: failing exec command succeeds with empty output; env fallback never runs\nresolvers:\n  token:\n    resolve:\n      with:\n        - provider: exec\n          inputs:\n            command: some-cli create token\n            raw: true\n        - provider: env\n          inputs:\n            operation: get\n            name: FEDERATED_TOKEN\n\n# Fix: set failOnError: true so non-zero exit codes trigger the fallback\nresolvers:\n  token:\n    resolve:\n      with:\n        - provider: exec\n          inputs:\n            command: some-cli create token\n            raw: true\n            failOnError: true\n        - provider: env\n          inputs:\n            operation: get\n            name: FEDERATED_TOKEN",
+		},
+	},
 	"tmpl-underscore-prefix": {
 		Rule:        "tmpl-underscore-prefix",
 		Severity:    string(SeverityInfo),
