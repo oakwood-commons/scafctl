@@ -573,10 +573,9 @@ func TestWrapProviderError_AvoidsDuplicatePrefixAndPreservesChain(t *testing.T) 
 }
 
 func TestProviderWrapper_Execute_PreservesOutputAndStreamedOnFailure(t *testing.T) {
-	t.Parallel()
+	t.Setenv("GITHUB_ACTIONS", "")
 
 	t.Run("streaming failure preserves partial output, marks Streamed, and avoids double prefix", func(t *testing.T) {
-		t.Parallel()
 		mock := &MockProviderPlugin{
 			providers: []string{"exec"},
 			descriptors: map[string]*provider.Descriptor{
@@ -617,7 +616,6 @@ func TestProviderWrapper_Execute_PreservesOutputAndStreamedOnFailure(t *testing.
 	})
 
 	t.Run("unary fallback failure preserves buffered output and scrubs metadata", func(t *testing.T) {
-		t.Parallel()
 		mock := &MockProviderPlugin{
 			providers: []string{"exec"},
 			descriptors: map[string]*provider.Descriptor{
@@ -653,7 +651,6 @@ func TestProviderWrapper_Execute_PreservesOutputAndStreamedOnFailure(t *testing.
 	})
 
 	t.Run("action mode without IOStreams uses ExecuteProviderStream to preserve SDK failure result with Streamed=false", func(t *testing.T) {
-		t.Parallel()
 		mock := &MockProviderPlugin{
 			providers: []string{"exec"},
 			descriptors: map[string]*provider.Descriptor{
@@ -688,7 +685,6 @@ func TestProviderWrapper_Execute_PreservesOutputAndStreamedOnFailure(t *testing.
 	})
 
 	t.Run("mixed streamed stderr progress with buffered stdout preserves Streamed=false on success and failure", func(t *testing.T) {
-		t.Parallel()
 		for _, shouldFail := range []bool{false, true} {
 			mock := &MockProviderPlugin{
 				providers: []string{"exec"},
@@ -733,7 +729,6 @@ func TestProviderWrapper_Execute_PreservesOutputAndStreamedOnFailure(t *testing.
 	})
 
 	t.Run("action mode without IOStreams captures and redacts chunk-only logs without duplicating provider Data", func(t *testing.T) {
-		t.Parallel()
 		mock := &MockProviderPlugin{
 			providers: []string{"exec"},
 			descriptors: map[string]*provider.Descriptor{
@@ -776,7 +771,6 @@ func TestProviderWrapper_Execute_PreservesOutputAndStreamedOnFailure(t *testing.
 	})
 
 	t.Run("mergeCapturedStreamChunks handles nil output nil Data structured fields and success without IOStreams", func(t *testing.T) {
-		t.Parallel()
 
 		// 1. Nil output with captured chunks synthesizes Output.Data.
 		fromNil := mergeCapturedStreamChunks(nil, "out\n", "err\n")
@@ -836,7 +830,6 @@ func TestProviderWrapper_Execute_PreservesOutputAndStreamedOnFailure(t *testing.
 	})
 
 	t.Run("WithCapturedStreamSink keeps Output.Data unmodified for strict schema validation", func(t *testing.T) {
-		t.Parallel()
 		mock := &MockProviderPlugin{
 			providers: []string{"exec"},
 			descriptors: map[string]*provider.Descriptor{
