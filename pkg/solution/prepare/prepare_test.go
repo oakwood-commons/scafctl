@@ -2089,6 +2089,39 @@ func TestSubSolutionLoader_Get(t *testing.T) {
 	})
 }
 
+func TestSubSolutionLoader_GetWithBundle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns solution and raw bundle bytes", func(t *testing.T) {
+		t.Parallel()
+		wantBundle := []byte("raw-tar-bytes")
+		fl := &fakeLoader{sol: minimalSolution(), bundle: wantBundle}
+		sol, bundle, err := subSolutionLoader{loader: fl}.GetWithBundle(context.Background(), "reusable-workflow@1.0.0")
+		require.NoError(t, err)
+		assert.Equal(t, "test-solution", sol.Metadata.Name)
+		assert.Equal(t, wantBundle, bundle)
+		assert.Equal(t, source.KindBareName, fl.got.Kind)
+	})
+
+	t.Run("returns nil bundle for unbundled local file", func(t *testing.T) {
+		t.Parallel()
+		fl := &fakeLoader{sol: minimalSolution()}
+		sol, bundle, err := subSolutionLoader{loader: fl}.GetWithBundle(context.Background(), "./child.yaml")
+		require.NoError(t, err)
+		assert.Equal(t, "test-solution", sol.Metadata.Name)
+		assert.Nil(t, bundle)
+		assert.Equal(t, source.KindLocalFile, fl.got.Kind)
+	})
+
+	t.Run("rejects stdin", func(t *testing.T) {
+		t.Parallel()
+		fl := &fakeLoader{sol: minimalSolution()}
+		_, _, err := subSolutionLoader{loader: fl}.GetWithBundle(context.Background(), "-")
+		require.ErrorIs(t, err, load.ErrSourceNotEnabled)
+		assert.Equal(t, source.KindUnknown, fl.got.Kind)
+	})
+}
+
 func TestSolutionFromLoader_ProviderCtxInjectsSubSolutionLoader(t *testing.T) {
 	fl := &fakeLoader{sol: minimalSolution()}
 	result, err := SolutionFromLoader(context.Background(), fl, source.Classification{Kind: source.KindLocalFile, Ref: "test.yaml"})
@@ -2098,6 +2131,8 @@ func TestSolutionFromLoader_ProviderCtxInjectsSubSolutionLoader(t *testing.T) {
 
 	l := solutionprovider.LoaderFromContext(result.ProviderCtx(context.Background()))
 	require.IsType(t, subSolutionLoader{}, l)
+	_, implementsBundleLoader := l.(solutionprovider.BundleLoader)
+	assert.True(t, implementsBundleLoader, "injected loader must implement BundleLoader")
 	assert.Same(t, fl, l.(subSolutionLoader).loader)
 }
 

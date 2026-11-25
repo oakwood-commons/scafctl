@@ -29,11 +29,14 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 )
@@ -947,11 +950,14 @@ func TestExecute_ContextIsolation(t *testing.T) {
 	ctx = provider.WithPreResolvedInputs(ctx)
 	ctx = provider.WithDeclaredScalarType(ctx, "int")
 	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+	ctx = provider.WithWorkingDirectory(ctx, "/parent/work")
+	ctx = provider.WithSolutionDirectory(ctx, "/parent/solution")
+	ctx = provider.WithOutputDirectory(ctx, "/parent/output")
 	parentResCtx := resolver.NewContext()
 	parentResCtx.Set("parent_res", "secret")
 	ctx = resolver.WithContext(ctx, parentResCtx)
 
-	subCtx := buildIsolatedContext(ctx, "child", map[string]any{"param1": "value1"})
+	subCtx := buildIsolatedContext(ctx, "child", map[string]any{"param1": "value1"}, "/child/solution")
 
 	// Sub-context has empty resolver context.
 	resolverCtx, ok := provider.ResolverContextFromContext(subCtx)
@@ -962,6 +968,20 @@ func TestExecute_ContextIsolation(t *testing.T) {
 	params, ok := provider.ParametersFromContext(subCtx)
 	require.True(t, ok)
 	assert.Equal(t, map[string]any{"param1": "value1"}, params)
+
+	// Parent working directory is masked; solution directory is replaced with child's;
+	// parent output directory remains visible for child action writes.
+	workDir, hasWork := provider.WorkingDirectoryFromContext(subCtx)
+	assert.False(t, hasWork)
+	assert.Empty(t, workDir)
+
+	solDir, hasSol := provider.SolutionDirectoryFromContext(subCtx)
+	assert.True(t, hasSol)
+	assert.Equal(t, "/child/solution", solDir)
+
+	outDir, hasOut := provider.OutputDirectoryFromContext(subCtx)
+	assert.True(t, hasOut)
+	assert.Equal(t, "/parent/output", outDir)
 
 	// Parent iteration context, template func binder, state data, and step metadata are stripped.
 	iterCtx, ok := provider.IterationContextFromContext(subCtx)
@@ -994,16 +1014,19 @@ func TestExecute_ContextIsolation(t *testing.T) {
 
 func TestExecute_ContextIsolation_NilParams(t *testing.T) {
 	ctx := provider.WithParameters(testContext(), map[string]any{"parent_param": "leaked"})
-	subCtx := buildIsolatedContext(ctx, "child", nil)
+	ctx = provider.WithSolutionDirectory(ctx, "/parent/solution")
+	subCtx := buildIsolatedContext(ctx, "child", nil, "")
 
 	// Resolver context should be empty.
 	resolverCtx, ok := provider.ResolverContextFromContext(subCtx)
 	require.True(t, ok)
 	assert.Empty(t, resolverCtx)
 
-	// Parent parameters are stripped and no nil map is installed.
+	// Parent parameters and parent solution directory are stripped when childSolutionDir is empty.
 	_, ok = provider.ParametersFromContext(subCtx)
 	assert.False(t, ok)
+	_, hasSol := provider.SolutionDirectoryFromContext(subCtx)
+	assert.False(t, hasSol)
 }
 
 // --- Composition, Workflow Filtering & Inheritance Tests ---
@@ -2342,7 +2365,7 @@ func TestExtractRefsFromValue_Default(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-func TestIsFilePath(t *testing.T) {
+func TestIsLocalFileSource(t *testing.T) {
 	tests := []struct {
 		name   string
 		source string
@@ -2353,13 +2376,20 @@ func TestIsFilePath(t *testing.T) {
 		{"relative parent", "../sibling/child.yaml", true},
 		{"yaml extension", "child.yaml", true},
 		{"yml extension", "child.yml", true},
+		{"json extension", "child.json", true},
+		{"subpath without extension", "sub/child", true},
+		{"https url ending in yaml", "https://example.com/sol.yaml", false},
+		{"http url ending in json", "http://example.com/sol.json", false},
+		{"oci remote ref", "ghcr.io/example-org/deploy@2.0.0", false},
+		{"oci scheme ref", "oci://ghcr.io/example-org/deploy:latest", false},
 		{"catalog reference", "deploy-to-k8s@2.0.0", false},
 		{"bare name", "my-solution", false},
 		{"catalog with version", "infra-config@1.0.0", false},
+		{"stdin", "-", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isFilePath(tt.source))
+			assert.Equal(t, tt.want, isLocalFileSource(tt.source))
 		})
 	}
 }
@@ -2571,4 +2601,730 @@ func TestAutoResolveChildProviders_Close(t *testing.T) {
 	p := New(WithRegistry(provider.NewRegistry()))
 	p.Close() // should not panic
 	assert.Empty(t, p.childClients)
+}
+
+// --- Child Path Resolution & Bundle Extraction Tests ---
+
+type mockBundleLoader struct {
+	solutions map[string]*solution.Solution
+	bundles   map[string][]byte
+	err       error
+	gotPaths  []string
+}
+
+func (m *mockBundleLoader) Get(ctx context.Context, path string) (*solution.Solution, error) {
+	sol, _, err := m.GetWithBundle(ctx, path)
+	return sol, err
+}
+
+func (m *mockBundleLoader) GetWithBundle(_ context.Context, path string) (*solution.Solution, []byte, error) {
+	m.gotPaths = append(m.gotPaths, path)
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	sol, ok := m.solutions[path]
+	if !ok {
+		return nil, nil, fmt.Errorf("solution %q not found", path)
+	}
+	return sol, m.bundles[path], nil
+}
+
+func buildTestBundleTar(t testing.TB, entries map[string]string) []byte {
+	t.Helper()
+	root := t.TempDir()
+	fileEntries := make([]bundler.FileEntry, 0, len(entries))
+	for rel, content := range entries {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o750))
+		require.NoError(t, os.WriteFile(full, []byte(content), 0o600))
+		fileEntries = append(fileEntries, bundler.FileEntry{RelPath: rel})
+	}
+	snap, err := bundler.ReadFileSnapshot(root, fileEntries)
+	require.NoError(t, err)
+	tarData, _, err := bundler.CreateBundleTar(snap, nil)
+	require.NoError(t, err)
+	return tarData
+}
+
+func TestExecute_ChildPathResolution_TwoPhaseAndThreeLevel(t *testing.T) {
+	parentDir := t.TempDir()
+	childDir := filepath.Join(parentDir, "sub")
+	grandDir := filepath.Join(childDir, "grand")
+	workDir := t.TempDir()
+	outDir := t.TempDir()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(childDir, "templates"), 0o750))
+	require.NoError(t, os.MkdirAll(filepath.Join(grandDir, "templates"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(childDir, "templates", "child.tmpl"), []byte("from-child-dir"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(grandDir, "templates", "grand.tmpl"), []byte("from-grand-dir"), 0o600))
+
+	// Pre-create an existing file in outDir so ConflictStrategy=overwrite + Backup=true are exercised.
+	require.NoError(t, os.WriteFile(filepath.Join(outDir, "written.txt"), []byte("previous"), 0o600))
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
+	solProv := New(WithRegistry(reg))
+	require.NoError(t, reg.Register(solProv))
+
+	grandPath := filepath.Join(grandDir, "grandchild.yaml")
+	grandSol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "grandchild"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"grand_tmpl": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "file",
+							Inputs: map[string]*spec.ValueRef{
+								"operation": {Literal: "read"},
+								"path":      {Literal: "templates/grand.tmpl"},
+							},
+						}},
+					},
+				},
+			},
+		},
+	}
+	grandSol.SetPath(grandPath)
+
+	childPath := filepath.Join(childDir, "child.yaml")
+	childTmplRef := "child_tmpl"
+	childSol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "child"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"child_tmpl": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "file",
+							Inputs: map[string]*spec.ValueRef{
+								"operation": {Literal: "read"},
+								"path":      {Literal: "templates/child.tmpl"},
+							},
+						}},
+					},
+				},
+				"grand": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: ProviderName,
+							Inputs: map[string]*spec.ValueRef{
+								"source": {Literal: "./grand/grandchild.yaml"},
+							},
+						}},
+					},
+				},
+			},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"write_out": {
+						Provider: "file",
+						Inputs: map[string]*spec.ValueRef{
+							"operation": {Literal: "write"},
+							"path":      {Literal: "written.txt"},
+							"content":   {Resolver: &childTmplRef},
+						},
+					},
+				},
+			},
+		},
+	}
+	childSol.SetPath(childPath)
+
+	solProv.Configure(WithLoader(&mockLoader{
+		solutions: map[string]*solution.Solution{
+			childPath: childSol,
+			grandPath: grandSol,
+		},
+	}))
+
+	// Simulate parent action context: WorkingDirectory AND SolutionDirectory are both set!
+	// Without masking parentWorkingDirectoryKey in isolatedContext, child resolver reads
+	// would hit workDir instead of childDir.
+	ctx := testContext()
+	ctx = provider.WithWorkingDirectory(ctx, workDir)
+	ctx = provider.WithSolutionDirectory(ctx, parentDir)
+	ctx = provider.WithOutputDirectory(ctx, outDir)
+	ctx = provider.WithConflictStrategy(ctx, "overwrite")
+	ctx = provider.WithBackup(ctx, true)
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+	// Child write_out references child_tmpl.content via CEL expression.
+	contentExpr := celexp.Expression("_.child_tmpl.content + ':' + _.grand.resolvers.grand_tmpl.content")
+	childSol.Spec.Workflow.Actions["write_out"].Inputs["content"] = &spec.ValueRef{Expr: &contentExpr}
+
+	out, err := solProv.Execute(ctx, &Input{Source: "./sub/child.yaml"})
+	require.NoError(t, err)
+
+	data := out.Data.(map[string]any)
+	assert.Equal(t, "success", data["status"])
+	assert.Equal(t, true, data["success"])
+
+	written, err := os.ReadFile(filepath.Join(outDir, "written.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "from-child-dir:from-grand-dir", string(written))
+	assert.FileExists(t, filepath.Join(outDir, "written.txt.bak"), "parent Backup setting must propagate to child action writes")
+	assert.NoFileExists(t, filepath.Join(workDir, "written.txt"))
+	assert.NoFileExists(t, filepath.Join(childDir, "written.txt"))
+}
+
+func TestExecute_URLSource_NotCorruptedByParentSolutionDirectory(t *testing.T) {
+	var childObservedSolDir string
+	var childHasSolDir bool
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&callbackProvider{
+		name: "probe",
+		fn: func(ctx context.Context, _ any) (*provider.Output, error) {
+			childObservedSolDir, childHasSolDir = provider.SolutionDirectoryFromContext(ctx)
+			return &provider.Output{Data: "ok"}, nil
+		},
+	}))
+
+	urlSrc := "https://example.com/reusable/sol.yaml"
+	urlSol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "url-child"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"check": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "probe"}},
+					},
+				},
+			},
+		},
+	}
+
+	loader := &mockBundleLoader{
+		solutions: map[string]*solution.Solution{urlSrc: urlSol},
+	}
+	p := New(WithLoader(loader), WithRegistry(reg))
+
+	ctx := testContext()
+	ctx = provider.WithSolutionDirectory(ctx, "/parent/solution")
+	ctx = provider.WithWorkingDirectory(ctx, "/parent/work")
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityFrom)
+
+	out, err := p.Execute(ctx, &Input{Source: urlSrc})
+	require.NoError(t, err)
+	assert.Equal(t, []string{urlSrc}, loader.gotPaths, "URL source must not be joined with parent SolutionDirectory")
+	assert.False(t, childHasSolDir, "URL child must not inherit parent SolutionDirectory")
+	assert.Empty(t, childObservedSolDir)
+	assert.Equal(t, "success", out.Data.(map[string]any)["status"])
+}
+
+func TestExecute_BundleLoader_ExtractionCleanupAndDryRun(t *testing.T) {
+	t.Run("extracts bundle with custom binary name, resolves child files, writes to parent cwd, and removes temp dir", func(t *testing.T) {
+		bundleData := buildTestBundleTar(t, map[string]string{
+			"templates/msg.tmpl": "bundled-hello",
+		})
+		parentWorkDir := t.TempDir()
+
+		var capturedResolverSolDir string
+		var capturedResolverWorkDir string
+		var capturedResolverHasWork bool
+		var capturedActionWorkDir string
+		var capturedActionSolDir string
+
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "ctx-inspector",
+			fn: func(ctx context.Context, _ any) (*provider.Output, error) {
+				mode, _ := provider.ExecutionModeFromContext(ctx)
+				if mode == provider.CapabilityFrom {
+					capturedResolverSolDir, _ = provider.SolutionDirectoryFromContext(ctx)
+					capturedResolverWorkDir, capturedResolverHasWork = provider.WorkingDirectoryFromContext(ctx)
+					return &provider.Output{Data: "inspected"}, nil
+				}
+				capturedActionWorkDir, _ = provider.WorkingDirectoryFromContext(ctx)
+				capturedActionSolDir, _ = provider.SolutionDirectoryFromContext(ctx)
+				return &provider.Output{Data: map[string]any{"success": true}}, nil
+			},
+		}))
+
+		contentExpr := celexp.Expression("_.tmpl.content")
+		childSol := &solution.Solution{
+			Metadata: solution.Metadata{Name: "bundled-child"},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"inspect": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "ctx-inspector"}},
+						},
+					},
+					"tmpl": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "file",
+								Inputs: map[string]*spec.ValueRef{
+									"operation": {Literal: "read"},
+									"path":      {Literal: "templates/msg.tmpl"},
+								},
+							}},
+						},
+					},
+				},
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"inspect_action": {Provider: "ctx-inspector"},
+						"write_file": {
+							Provider: "file",
+							Inputs: map[string]*spec.ValueRef{
+								"operation": {Literal: "write"},
+								"path":      {Literal: "out.txt"},
+								"content":   {Expr: &contentExpr},
+							},
+						},
+					},
+				},
+			},
+		}
+		childSol.SetPath("catalog:reusable@1.0.0")
+
+		loader := &mockBundleLoader{
+			solutions: map[string]*solution.Solution{"reusable@1.0.0": childSol},
+			bundles:   map[string][]byte{"reusable@1.0.0": bundleData},
+		}
+		p := New(WithLoader(loader), WithRegistry(reg))
+
+		// Verify embedder custom BinaryName is honored in temp directory prefix.
+		ctx := settings.IntoContext(testContext(), &settings.Run{BinaryName: "mycli"})
+		ctx = provider.WithWorkingDirectory(ctx, parentWorkDir)
+		ctx = provider.WithSolutionDirectory(ctx, "/parent/irrelevant")
+		ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+		out, err := p.Execute(ctx, &Input{Source: "reusable@1.0.0"})
+		require.NoError(t, err)
+		assert.Equal(t, "success", out.Data.(map[string]any)["status"])
+
+		// Resolver saw child bundle dir with WorkingDirectory masked.
+		require.NotEmpty(t, capturedResolverSolDir)
+		assert.Contains(t, filepath.Base(capturedResolverSolDir), "mycli-bundle-")
+		assert.False(t, capturedResolverHasWork)
+		assert.Empty(t, capturedResolverWorkDir)
+
+		// Action saw restored parentWorkDir alongside child SolutionDirectory.
+		assert.Equal(t, parentWorkDir, capturedActionWorkDir)
+		assert.Equal(t, capturedResolverSolDir, capturedActionSolDir)
+
+		// Action write landed in parentWorkDir, and ephemeral bundle dir was cleaned up.
+		written, err := os.ReadFile(filepath.Join(parentWorkDir, "out.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "bundled-hello", string(written))
+		assert.NoDirExists(t, capturedResolverSolDir, "bundle temp dir must be cleaned up when Execute returns")
+	})
+
+	t.Run("cleans up bundle temp dir when child fails or context cancels", func(t *testing.T) {
+		bundleData := buildTestBundleTar(t, map[string]string{"data.txt": "val"})
+		var observedBundleDir string
+
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "fail-after-capture",
+			fn: func(ctx context.Context, _ any) (*provider.Output, error) {
+				observedBundleDir, _ = provider.SolutionDirectoryFromContext(ctx)
+				return nil, errors.New("boom")
+			},
+		}))
+
+		childSol := &solution.Solution{
+			Metadata: solution.Metadata{Name: "failing-bundled-child"},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "fail-after-capture"}},
+						},
+					},
+				},
+			},
+		}
+
+		p := New(
+			WithLoader(&mockBundleLoader{
+				solutions: map[string]*solution.Solution{"fail-pkg@1.0.0": childSol},
+				bundles:   map[string][]byte{"fail-pkg@1.0.0": bundleData},
+			}),
+			WithRegistry(reg),
+		)
+
+		ctx := provider.WithExecutionMode(testContext(), provider.CapabilityFrom)
+		_, err := p.Execute(ctx, &Input{Source: "fail-pkg@1.0.0"})
+		require.Error(t, err)
+		require.NotEmpty(t, observedBundleDir)
+		assert.NoDirExists(t, observedBundleDir, "bundle temp dir must be removed on child error")
+	})
+
+	t.Run("corrupt bundle tar honors propagateErrors and cleans up temp dir", func(t *testing.T) {
+		childSol := newTestSolution(nil, nil)
+		p := New(
+			WithLoader(&mockBundleLoader{
+				solutions: map[string]*solution.Solution{"bad-bundle@1.0.0": childSol},
+				bundles:   map[string][]byte{"bad-bundle@1.0.0": []byte("corrupt-tar-bytes")},
+			}),
+			WithRegistry(provider.NewRegistry()),
+		)
+
+		ctx := provider.WithExecutionMode(testContext(), provider.CapabilityFrom)
+
+		// propagateErrors: true returns error.
+		_, err := p.Execute(ctx, &Input{Source: "bad-bundle@1.0.0"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "extracting bundle")
+
+		// propagateErrors: false returns degraded envelope with _loader error.
+		out, err := p.Execute(ctx, &Input{
+			Source:          "bad-bundle@1.0.0",
+			PropagateErrors: boolPtr(false),
+		})
+		require.NoError(t, err)
+		data := out.Data.(map[string]any)
+		assert.Equal(t, "failed", data["status"])
+		errs := data["errors"].([]map[string]any)
+		require.Len(t, errs, 1)
+		assert.Equal(t, "_loader", errs[0]["resolver"])
+		require.NotEmpty(t, out.Warnings)
+	})
+
+	t.Run("dry-run returns before extracting bundle archive", func(t *testing.T) {
+		// Pass deliberately invalid tar bytes: if DryRun attempted bundle extraction,
+		// Execute would fail with a tar parse error instead of succeeding.
+		childSol := newTestSolution(nil, nil)
+		p := New(
+			WithLoader(&mockBundleLoader{
+				solutions: map[string]*solution.Solution{"dry-pkg@1.0.0": childSol},
+				bundles:   map[string][]byte{"dry-pkg@1.0.0": []byte("invalid-tar-must-not-extract-in-dry-run")},
+			}),
+			WithRegistry(provider.NewRegistry()),
+		)
+
+		ctx := provider.WithDryRun(testContext(), true)
+		ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+		out, err := p.Execute(ctx, &Input{Source: "dry-pkg@1.0.0"})
+		require.NoError(t, err)
+		data := out.Data.(map[string]any)
+		assert.Equal(t, true, data["dryRun"])
+		assert.Equal(t, "success", data["status"])
+	})
+
+	t.Run("merges child bundle plugin defaults across nil inputs, finally actions, and concurrent runs", func(t *testing.T) {
+		var mu sync.Mutex
+		var resolverSeen []map[string]any
+		var finallySeen []map[string]any
+
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "custom-prov",
+			fn: func(ctx context.Context, input any) (*provider.Output, error) {
+				m, _ := input.(map[string]any)
+				copied := make(map[string]any, len(m))
+				for k, v := range m {
+					copied[k] = v
+				}
+				mode, _ := provider.ExecutionModeFromContext(ctx)
+				mu.Lock()
+				if mode == provider.CapabilityFrom {
+					resolverSeen = append(resolverSeen, copied)
+				} else {
+					finallySeen = append(finallySeen, copied)
+				}
+				mu.Unlock()
+				if mode == provider.CapabilityAction {
+					return &provider.Output{Data: map[string]any{"success": true}}, nil
+				}
+				return &provider.Output{Data: "ok"}, nil
+			},
+		}))
+
+		childSol := &solution.Solution{
+			Metadata: solution.Metadata{Name: "plugin-defaults-child"},
+			Bundle: solution.Bundle{
+				Plugins: []solution.PluginDependency{{
+					Name:    "custom-prov",
+					Kind:    solution.PluginKindProvider,
+					Version: "^1.0.0",
+					Defaults: map[string]*spec.ValueRef{
+						"region": {Literal: "us-west-2"},
+						"tier":   {Literal: "default-tier"},
+					},
+				}},
+			},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"with_override": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "custom-prov",
+								Inputs: map[string]*spec.ValueRef{
+									"tier": {Literal: "inline-override"},
+								},
+							}},
+						},
+					},
+					"nil_inputs": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "custom-prov",
+								// Inputs omitted (nil) -- must still receive plugin defaults.
+							}},
+						},
+					},
+				},
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"act": {Provider: "custom-prov"},
+					},
+					Finally: map[string]*action.Action{
+						"cleanup": {Provider: "custom-prov"},
+					},
+				},
+			},
+		}
+
+		p := New(
+			WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"defaults@1.0.0": childSol}}),
+			WithRegistry(reg),
+		)
+
+		// Concurrent executions sharing the same *solution.Solution must be race-free.
+		var wg sync.WaitGroup
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+				out, err := p.Execute(ctx, &Input{Source: "defaults@1.0.0"})
+				assert.NoError(t, err)
+				if out != nil {
+					assert.Equal(t, "success", out.Data.(map[string]any)["status"])
+				}
+			}()
+		}
+		wg.Wait()
+
+		assert.Len(t, resolverSeen, 8)
+		for _, seen := range resolverSeen {
+			assert.Equal(t, "us-west-2", seen["region"])
+			assert.Contains(t, []any{"default-tier", "inline-override"}, seen["tier"])
+		}
+		assert.Len(t, finallySeen, 8)
+		for _, seen := range finallySeen {
+			assert.Equal(t, "us-west-2", seen["region"])
+			assert.Equal(t, "default-tier", seen["tier"])
+		}
+
+		// Nil action entry in a synthetic solution must not panic normalizeSolutionNames.
+		nilActionSol := &solution.Solution{
+			Bundle: childSol.Bundle,
+			Spec: solution.Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{"nil_entry": nil},
+					Finally: map[string]*action.Action{"nil_finally": nil},
+				},
+			},
+		}
+		p.normalizeSolutionNames(nilActionSol)
+	})
+
+	t.Run("relative sol.GetPath resolves against parent SolutionDirectory before WorkingDirectory", func(t *testing.T) {
+		parentDir := t.TempDir()
+		childDir := filepath.Join(parentDir, "sub")
+		otherWorkDir := t.TempDir()
+
+		var gotSolDir string
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "dir-probe",
+			fn: func(ctx context.Context, _ any) (*provider.Output, error) {
+				gotSolDir, _ = provider.SolutionDirectoryFromContext(ctx)
+				return &provider.Output{Data: "ok"}, nil
+			},
+		}))
+
+		childSol := &solution.Solution{
+			Metadata: solution.Metadata{Name: "rel-path-child"},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "dir-probe"}},
+						},
+					},
+				},
+			},
+		}
+		childSol.SetPath("./sub/child.yaml")
+
+		resolvedPath := filepath.Join(childDir, "child.yaml")
+		p := New(
+			WithLoader(&mockLoader{solutions: map[string]*solution.Solution{resolvedPath: childSol}}),
+			WithRegistry(reg),
+		)
+
+		ctx := testContext()
+		ctx = provider.WithWorkingDirectory(ctx, otherWorkDir)
+		ctx = provider.WithSolutionDirectory(ctx, parentDir)
+		ctx = provider.WithExecutionMode(ctx, provider.CapabilityFrom)
+
+		out, err := p.Execute(ctx, &Input{Source: "./sub/child.yaml"})
+		require.NoError(t, err)
+		assert.Equal(t, "success", out.Data.(map[string]any)["status"])
+		assert.Equal(t, childDir, gotSolDir)
+	})
+}
+
+func TestExecute_ChildWorkflowActionReads_LocalAndBundled_WithAndWithoutOutputDir(t *testing.T) {
+	buildActionReadChild := func(name string) *solution.Solution {
+		writeExpr := celexp.Expression("__actions['read_tmpl'].results.content + ':exists=' + string(__actions['check_tmpl'].results.exists)")
+		return &solution.Solution{
+			Metadata: solution.Metadata{Name: name},
+			Spec: solution.Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"check_tmpl": {
+							Provider: "file",
+							Inputs: map[string]*spec.ValueRef{
+								"operation":  {Literal: "exists"},
+								"path":       {Literal: "templates/action.tmpl"},
+								"relativeTo": {Literal: "solution"},
+							},
+						},
+						"read_tmpl": {
+							Provider:  "file",
+							DependsOn: []string{"check_tmpl"},
+							Inputs: map[string]*spec.ValueRef{
+								"operation":  {Literal: "read"},
+								"path":       {Literal: "templates/action.tmpl"},
+								"relativeTo": {Literal: "solution"},
+							},
+						},
+						"write_out": {
+							Provider:  "file",
+							DependsOn: []string{"read_tmpl"},
+							Inputs: map[string]*spec.ValueRef{
+								"operation": {Literal: "write"},
+								"path":      {Literal: "action-read-result.txt"},
+								"content":   {Expr: &writeExpr},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("local child workflow reads relativeTo solution with and without output-dir", func(t *testing.T) {
+		parentDir := t.TempDir()
+		childDir := filepath.Join(parentDir, "sub")
+		require.NoError(t, os.MkdirAll(filepath.Join(childDir, "templates"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(childDir, "templates", "action.tmpl"), []byte("local-action-tmpl"), 0o600))
+
+		childPath := filepath.Join(childDir, "child.yaml")
+		childSol := buildActionReadChild("local-action-read")
+		childSol.SetPath(childPath)
+
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
+		p := New(
+			WithLoader(&mockLoader{solutions: map[string]*solution.Solution{childPath: childSol}}),
+			WithRegistry(reg),
+		)
+
+		// Without --output-dir: writes land in workDir, read comes from childDir.
+		workDir := t.TempDir()
+		ctxNoOut := testContext()
+		ctxNoOut = provider.WithWorkingDirectory(ctxNoOut, workDir)
+		ctxNoOut = provider.WithSolutionDirectory(ctxNoOut, parentDir)
+		ctxNoOut = provider.WithExecutionMode(ctxNoOut, provider.CapabilityAction)
+
+		out, err := p.Execute(ctxNoOut, &Input{Source: "./sub/child.yaml"})
+		require.NoError(t, err)
+		assert.Equal(t, "success", out.Data.(map[string]any)["status"])
+		gotNoOut, err := os.ReadFile(filepath.Join(workDir, "action-read-result.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "local-action-tmpl:exists=true", string(gotNoOut))
+
+		// With --output-dir: writes land in outDir, read still succeeds from childDir.
+		outDir := t.TempDir()
+		ctxWithOut := provider.WithOutputDirectory(ctxNoOut, outDir)
+		out, err = p.Execute(ctxWithOut, &Input{Source: "./sub/child.yaml"})
+		require.NoError(t, err)
+		assert.Equal(t, "success", out.Data.(map[string]any)["status"])
+		gotWithOut, err := os.ReadFile(filepath.Join(outDir, "action-read-result.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "local-action-tmpl:exists=true", string(gotWithOut))
+	})
+
+	t.Run("bundled catalog child workflow reads relativeTo solution with and without output-dir and blocks escape", func(t *testing.T) {
+		bundleData := buildTestBundleTar(t, map[string]string{
+			"templates/action.tmpl": "bundled-action-tmpl",
+		})
+
+		childSol := buildActionReadChild("bundled-action-read")
+		childSol.SetPath("catalog:action-pkg@1.0.0")
+
+		escapeSol := &solution.Solution{
+			Metadata: solution.Metadata{Name: "bundled-escape-read"},
+			Spec: solution.Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"escape_read": {
+							Provider: "file",
+							Inputs: map[string]*spec.ValueRef{
+								"operation":  {Literal: "read"},
+								"path":       {Literal: "../outside.txt"},
+								"relativeTo": {Literal: "solution"},
+							},
+						},
+					},
+				},
+			},
+		}
+		escapeSol.SetPath("catalog:escape-pkg@1.0.0")
+
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
+		p := New(
+			WithLoader(&mockBundleLoader{
+				solutions: map[string]*solution.Solution{
+					"action-pkg@1.0.0": childSol,
+					"escape-pkg@1.0.0": escapeSol,
+				},
+				bundles: map[string][]byte{
+					"action-pkg@1.0.0": bundleData,
+					"escape-pkg@1.0.0": bundleData,
+				},
+			}),
+			WithRegistry(reg),
+		)
+
+		workDir := t.TempDir()
+		outDir := t.TempDir()
+		baseCtx := testContext()
+		baseCtx = provider.WithWorkingDirectory(baseCtx, workDir)
+		baseCtx = provider.WithExecutionMode(baseCtx, provider.CapabilityAction)
+
+		// Without --output-dir.
+		out, err := p.Execute(baseCtx, &Input{Source: "action-pkg@1.0.0"})
+		require.NoError(t, err)
+		assert.Equal(t, "success", out.Data.(map[string]any)["status"])
+		gotNoOut, err := os.ReadFile(filepath.Join(workDir, "action-read-result.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "bundled-action-tmpl:exists=true", string(gotNoOut))
+
+		// With --output-dir.
+		out, err = p.Execute(provider.WithOutputDirectory(baseCtx, outDir), &Input{Source: "action-pkg@1.0.0"})
+		require.NoError(t, err)
+		assert.Equal(t, "success", out.Data.(map[string]any)["status"])
+		gotWithOut, err := os.ReadFile(filepath.Join(outDir, "action-read-result.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "bundled-action-tmpl:exists=true", string(gotWithOut))
+
+		// Traversal out of extracted bundle dir fails containment.
+		_, err = p.Execute(provider.WithOutputDirectory(baseCtx, outDir), &Input{Source: "escape-pkg@1.0.0"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "outside solution directory")
+	})
 }

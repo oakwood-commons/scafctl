@@ -520,30 +520,36 @@ func SolutionFromLoader(ctx context.Context, loader load.Loader, c source.Classi
 	return result, nil
 }
 
-// subSolutionLoader adapts a load.Loader to solutionprovider.Loader so the
-// solution provider can load sub-solutions through the load package. It
-// returns only the solution: the sub-solution's bundle and lock are not used.
-// Stdin is rejected because the parent solution owns it.
+// subSolutionLoader adapts a load.Loader to solutionprovider.BundleLoader so
+// the solution provider can load sub-solutions (and any bundled files) through
+// the load package. Stdin is rejected because the parent solution owns it.
 type subSolutionLoader struct {
 	loader load.Loader
 }
 
-var _ solutionprovider.Loader = subSolutionLoader{}
+var _ solutionprovider.BundleLoader = subSolutionLoader{}
 
 // Get classifies path and loads it with the wrapped loader.
 func (s subSolutionLoader) Get(ctx context.Context, path string) (*solution.Solution, error) {
+	sol, _, err := s.GetWithBundle(ctx, path)
+	return sol, err
+}
+
+// GetWithBundle classifies path and loads both the solution and its raw bundle
+// tar archive (nil when unbundled) with the wrapped loader.
+func (s subSolutionLoader) GetWithBundle(ctx context.Context, path string) (*solution.Solution, []byte, error) {
 	c, err := source.Classify(path)
 	if err != nil {
-		return nil, fmt.Errorf("classifying sub-solution %q: %w", path, err)
+		return nil, nil, fmt.Errorf("classifying sub-solution %q: %w", path, err)
 	}
 	if c.Kind == source.KindStdin {
-		return nil, fmt.Errorf("sub-solution %q: %w: stdin is reserved for the parent solution", path, load.ErrSourceNotEnabled)
+		return nil, nil, fmt.Errorf("sub-solution %q: %w: stdin is reserved for the parent solution", path, load.ErrSourceNotEnabled)
 	}
 	ms, err := s.loader.Load(ctx, c)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return ms.Solution, nil
+	return ms.Solution, ms.Bundle, nil
 }
 
 // resolveSolutionDir determines the directory used for relative path

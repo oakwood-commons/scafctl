@@ -12,9 +12,15 @@ spec:
       type: string
       resolve:
         with:
+          - provider: file
+            inputs:
+              operation: read
+              path: "templates/child.tmpl"
+      transform:
+        with:
           - provider: cel
             inputs:
-              expression: "'child template content'"
+              expression: "__self.content"
 
     child-greeting:
       type: string
@@ -23,3 +29,11 @@ spec:
           - provider: cel
             inputs:
               expression: "'hello from child'"
+
+    grandchild-result:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "./grandsub/grandchild.yaml"
