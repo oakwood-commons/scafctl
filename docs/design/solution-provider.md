@@ -140,6 +140,21 @@ resolvers:
     execution time when only a subset of the child's values is needed.
     An error is returned if any listed name does not exist in the child.
 
+actions:
+  type: array
+  required: false
+  maxItems: 100
+  items:
+    type: string
+  description: >
+    Action names or aliases to execute from the child workflow with their
+    transitive dependsOn dependencies and finally actions (action capability
+    only). Allows targeting explicit: true entry points in reusable child
+    workflows. When omitted or empty, all non-explicit actions run. When
+    non-empty and resolvers is omitted, child resolver execution is scoped to
+    resolvers referenced by the selected actions and finally section. Passing
+    actions outside action capability always returns a Go error.
+
 timeout:
   type: string
   required: false
@@ -349,7 +364,7 @@ This ensures failures appear in logs even if the parent doesn't inspect the enve
 
 ### Always a Go Error
 
-Circular reference detection and max depth violations always return a Go error regardless of `propagateErrors`, since these are programming mistakes.
+Circular reference detection, max depth violations, exceeding `actions` `maxItems` (100), and supplying `actions` outside `action` capability (such as in `from` capability) always return a Go error regardless of `propagateErrors`, since these are caller configuration mistakes.
 
 ---
 
@@ -495,14 +510,22 @@ Execute(ctx, input) -> *Output
 
 ### `action` Capability (Workflow Context)
 
-Same as above through step 10, then:
+Same as above through step 5, then:
 
 ~~~
-  11. If child defines no `spec.workflow`, emit `BuildActionEnvelope` with `success: true`
+   6. Validate `timeout` duration (when set), and when `actions` is non-empty validate that the child defines `spec.workflow` and resolve target action names/aliases + transitive `dependsOn` closure (`action.FilterWorkflowActions(workflow, actions)`) ahead of dry-run and bundle extraction
+   7. Short-circuit if `provider.DryRunFromContext(ctx)` (returns dry-run action envelope without extracting bundle)
+   8. Extract non-empty bundle tar to `<binaryName>-bundle-*` temp dir (`defer` cleanup), compute `childSolutionDir` / `parentWorkDir`, and build isolated context
+   9. Select child resolvers:
+      - If `resolvers` is explicitly provided (including `resolvers: []` to run all child resolvers) -> `filterResolvers`
+      - Else if `actions` is non-empty -> `execute.ResolversForWorkflow` over the filtered child workflow
+      - Else -> all child resolvers (`sol.Spec.ResolversToSlice()`)
+  10. Execute selected child resolvers via `execute.Resolvers(...)`
+  11. If child defines no `spec.workflow` (and `actions` is empty), emit `BuildActionEnvelope` with `success: true`
   12. Restore `provider.WithWorkingDirectory(childActionCtx, parentWorkDir)` alongside inherited `OutputDirectory`, `ConflictStrategy`, and `Backup`; inherit parent `action.Executor` settings (`InheritedExecutorConfig`: default timeout, grace period, max concurrency, IOStreams, Cwd) and wrap parent `ProgressCallback` with `[solution:<canonicalName>] ` prefix
-  13. Execute child workflow via `execute.Actions(...)`:
+  13. Execute child workflow via `execute.Actions(...)` with `TargetActions: in.Actions`:
       - Validate workflow (`action.ValidateWorkflow`)
-      - Filter explicit actions (`action.FilterWorkflowActions(workflow, nil)`, excluding standalone `explicit: true` actions while keeping transitive `dependsOn` dependencies and `finally` actions)
+      - Filter actions (`action.FilterWorkflowActions(workflow, actions)` -- narrowing to requested targets + transitive `dependsOn` closure + `finally`, or excluding standalone `explicit: true` actions when `actions` is empty)
       - Inject child `SolutionMetadata`, `__execution` metadata, `spec.functions`, and parent-capped CEL cost limit
   14. Build `action` envelope with resolver values + workflow summary (recording `PartialResult` or `_workflow` error when `propagateErrors: false`)
   15. If sub-solution failed AND `propagateErrors` -> return Go error
@@ -528,7 +551,7 @@ The parent resolver/action `Timeout` field also applies to the entire provider e
 
 ### Resolver Filtering
 
-The provider accepts an optional `resolvers` input — a list of resolver names to execute from the child solution. When omitted or empty, all resolvers in the child solution run (default behaviour). When specified, only the listed resolvers are executed, which reduces execution time when only a subset of the child's values is needed.
+The provider accepts an optional `resolvers` input -- a list of resolver names to execute from the child solution. When omitted (with `actions` empty) or explicitly set to `[]`, all resolvers in the child solution run (default behavior; when `actions` is non-empty and `resolvers` is omitted, resolvers are scoped automatically to those referenced by the selected actions and `finally` section). When non-empty, only the listed resolvers are executed, which reduces execution time when only a subset of the child's values is needed.
 
 An error is returned if any listed name does not exist in the child solution. This catches typos early rather than silently returning partial results.
 
@@ -545,11 +568,34 @@ child-config:
             - cache-ttl
 ~~~
 
+### Action Target Filtering
+
+In `action` capability mode, the provider accepts an optional `actions` input (up to `MaxActionTargets = 100` action names or aliases) mirroring `scafctl run solution --action` and `scafctl run action`:
+
+- **Target closure:** Each entry resolves by action name or `alias` in `spec.workflow.actions` (including `explicit: true` entry points) and pulls in its transitive `dependsOn` dependencies. `spec.workflow.finally` actions always run.
+- **Resolver scoping:** When `actions` is non-empty and `resolvers` is omitted, child resolver execution is scoped via `execute.ResolversForWorkflow` to only the resolvers referenced by the filtered child workflow (plus their transitive dependencies), preventing unrelated child entry points with unset parameters or credentials from failing. Supplying `resolvers` explicitly (including `resolvers: []` to execute all child resolvers) overrides automatic scoping.
+- **Error routing:** Targeting an unknown action or targeting actions on a child solution without `spec.workflow` fails before child resolvers execute (and during provider dry-run when `provider.DryRunFromContext` is set), returning a Go error by default or recording a `_workflow` entry in `errors` when `propagateErrors: false`.
+- **Capability guard:** Supplying `actions` (even `actions: []`) outside `action` capability returns a Go error immediately regardless of `propagateErrors`.
+- **WhatIf:** When `actions` is non-empty, `WhatIf` includes the target list: `Would execute solution "deploy-app@2.0.0" (actions: deploy)`.
+
+~~~yaml
+workflow:
+  actions:
+    deploy:
+      provider: solution
+      inputs:
+        source: "deploy-app@2.0.0"
+        actions:
+          - deploy
+        inputs:
+          environment: prod
+~~~
+
 ### Dry Run (WhatIf)
 
 In dry-run mode, the solution provider's `WhatIf` function generates a description of what execution would do (e.g., `Would execute solution "infra-config@1.0.0"`). The provider is **not invoked** during dry-run — only its WhatIf description is included in the report.
 
-The WhatIf function extracts the `source` from the inputs to provide a context-specific message. When source information is unavailable, it falls back to a generic description.
+The WhatIf function extracts `source` (and `actions` when non-empty) from the inputs to provide a context-specific message. When source information is unavailable, it falls back to a generic description.
 
 Example WhatIf output in the dry-run report:
 
@@ -856,6 +902,12 @@ properties:
     items:
       type: string
     description: "Resolver names to execute; when empty all resolvers run"
+  actions:
+    type: array
+    maxItems: 100
+    items:
+      type: string
+    description: "Action names or aliases to execute from the child workflow with transitive dependsOn and finally actions (action capability only)"
   timeout:
     type: string
     description: "Maximum duration for sub-solution execution (e.g. 30s, 5m)"

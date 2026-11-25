@@ -2641,11 +2641,14 @@ Execute a sub-solution and return its results as a structured envelope. Supports
 | Field | Type | Required | Description |
 | ------- | ------ | :--------: | ------------- |
 | `source` | string | Yes | Sub-solution location: file path, catalog reference (e.g. `deploy-to-k8s@2.0.0`), or URL |
-| `inputs` | object | ❌ | Parameters passed to the sub-solution's `parameter` provider |
-| `resolvers` | array | ❌ | Resolver names to execute from the child solution; when empty all resolvers run |
-| `propagateErrors` | bool | ❌ | Whether sub-solution failures cause a Go error (default: `true`) |
-| `maxDepth` | int | ❌ | Maximum nesting depth for recursive composition, 1--100 (default: `10`) |
-| `timeout` | string | ❌ | Maximum duration for sub-solution execution (Go duration, e.g. `30s`, `5m`) |
+| `inputs` | object | No | Parameters passed to the sub-solution's `parameter` provider |
+| `resolvers` | array | No | Resolver names to execute from the child solution; when empty all resolvers run |
+| `actions` | array | No | Action names or aliases to execute from the child workflow with their transitive `dependsOn` dependencies and `finally` actions (`action` capability only, max `100`); when empty all non-explicit actions run |
+| `propagateErrors` | bool | No | Whether sub-solution failures cause a Go error (default: `true`) |
+| `maxDepth` | int | No | Maximum nesting depth for recursive composition, 1--100 (default: `10`) |
+| `timeout` | string | No | Maximum duration for sub-solution execution (Go duration, e.g. `30s`, `5m`) |
+
+> **Action target selection (`actions`):** `actions` is supported only in `action` capability; passing `actions` in `from` capability always returns an error regardless of `propagateErrors`. Target entries match child `workflow.actions` names or aliases (including `explicit: true` actions) and automatically include their transitive `dependsOn` dependencies plus all `workflow.finally` actions. When `actions` is non-empty and `resolvers` is omitted, child resolver execution is scoped automatically to resolvers referenced by the selected actions and `finally` section; specifying `resolvers` explicitly (including `resolvers: []` to run all child resolvers) overrides automatic scoping.
 
 ### Output
 
@@ -2680,15 +2683,28 @@ resolve:
           environment: "production"
 
 # Execute child solution with workflow (action capability)
-action:
-  with:
-    - provider: solution
+workflow:
+  actions:
+    deploy-infra:
+      provider: solution
       inputs:
         source: "deploy-to-k8s@2.0.0"
         inputs:
           cluster: prod-east
           replicas: 3
         timeout: "5m"
+
+# Execute a specific child workflow target action (plus dependsOn closure + finally)
+workflow:
+  actions:
+    deploy-prod:
+      provider: solution
+      inputs:
+        source: "deploy-to-k8s@2.0.0"
+        actions:
+          - deploy
+        inputs:
+          environment: "production"
 
 # Select specific resolvers from child solution
 resolve:

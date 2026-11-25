@@ -69,6 +69,88 @@ spec:
           operation: exists
           path: ./finally.txt
 
+      runTargetedChild:
+        description: Execute explicit child target action via alias with resolver scoping
+        explicit: true
+        provider: solution
+        inputs:
+          source: "./child.yaml"
+          actions:
+            - deploy
+          inputs:
+            env: "prod"
+            unusedMode: "fail"
+
+      checkTargetedPrep:
+        description: Verify transitive dependsOn prep action ran for targeted child
+        explicit: true
+        dependsOn: [runTargetedChild]
+        provider: file
+        inputs:
+          operation: read
+          path: ./prep.txt
+
+      checkTargetedDeploy:
+        description: Verify targeted explicit action ran via alias
+        explicit: true
+        dependsOn: [runTargetedChild]
+        provider: file
+        inputs:
+          operation: read
+          path: ./targeted-deploy.txt
+
+      checkTargetedBuildSkipped:
+        description: Verify unselected non-explicit build action did not run
+        explicit: true
+        dependsOn: [runTargetedChild]
+        provider: file
+        inputs:
+          operation: exists
+          path: ./build.txt
+
+      checkTargetedFinally:
+        description: Verify child finally action still ran under targeted execution
+        explicit: true
+        dependsOn: [runTargetedChild]
+        provider: file
+        inputs:
+          operation: exists
+          path: ./finally.txt
+
+      verifyTargetedRun:
+        description: Aggregate target for verifying selective child action execution
+        explicit: true
+        dependsOn:
+          - checkTargetedPrep
+          - checkTargetedDeploy
+          - checkTargetedBuildSkipped
+          - checkTargetedFinally
+        provider: message
+        inputs:
+          message: "targeted-child-verified"
+
+      runUnknownActionSoft:
+        description: Verify unknown child action target produces failed _workflow envelope when propagateErrors is false
+        explicit: true
+        provider: solution
+        inputs:
+          source: "./child.yaml"
+          actions:
+            - nonexistent
+          propagateErrors: false
+          inputs:
+            unusedMode: "fail"
+
+      runWorkflowlessTargetedSoft:
+        description: Verify targeting actions on a workflow-less child produces failed _workflow envelope when propagateErrors is false
+        explicit: true
+        provider: solution
+        inputs:
+          source: "./resolver-only-child.yaml"
+          actions:
+            - deploy
+          propagateErrors: false
+
   testing:
     cases:
       composed-workflow-explicit-and-finally:
@@ -98,3 +180,65 @@ spec:
           - expression: __stderr.contains("] prep:")
           - expression: __stderr.contains("] build:")
           - expression: "!__stderr.contains(\"] optionalDeploy\")"
+
+      targeted-explicit-alias-and-resolver-scoping:
+        description: Verify actions input runs targeted explicit action via alias plus dependsOn closure and finally while scoping child resolvers
+        command: [run, solution]
+        args: ["--action", "verifyTargetedRun", "-o", "json"]
+        tags: [provider, solution-provider, action]
+        files: ["child.yaml", "resolver-only-child.yaml"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["runTargetedChild"].results.success == true
+          - expression: __output.actions["runTargetedChild"].results.workflow.finalStatus == "succeeded"
+          - expression: __output.actions["runTargetedChild"].results.resolvers.env == "prod"
+          - expression: '!("unusedCheck" in __output.actions["runTargetedChild"].results.resolvers)'
+            message: "Unreferenced child resolver must be skipped when actions scopes execution"
+          - expression: __output.actions["checkTargetedPrep"].results.content == "prep:prod"
+            message: "Transitive explicit dependency of targeted child action must run"
+          - expression: __output.actions["checkTargetedDeploy"].results.content == "deploy:prod"
+            message: "Targeted explicit child action must run via its alias"
+          - expression: __output.actions["checkTargetedBuildSkipped"].results.exists == false
+            message: "Unselected non-explicit child action must not run when actions is specified"
+          - expression: __output.actions["checkTargetedFinally"].results.exists == true
+            message: "Child finally action must always run"
+
+      targeted-unknown-action-soft-error:
+        description: Verify unknown child target action reports _workflow error in failed envelope without running child resolvers
+        command: [run, solution]
+        args: ["--action", "runUnknownActionSoft", "-o", "json"]
+        tags: [provider, solution-provider, action]
+        files: ["child.yaml", "resolver-only-child.yaml"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.actions["runUnknownActionSoft"].results.success == false
+          - expression: __output.actions["runUnknownActionSoft"].results.status == "failed"
+          - expression: size(__output.actions["runUnknownActionSoft"].results.errors) == 1
+          - expression: __output.actions["runUnknownActionSoft"].results.errors[0].resolver == "_workflow"
+          - expression: __output.actions["runUnknownActionSoft"].results.errors[0].message.contains("not found in workflow")
+
+      targeted-workflowless-child-soft-error:
+        description: Verify targeting actions on a workflow-less child reports _workflow error in failed envelope
+        command: [run, solution]
+        args: ["--action", "runWorkflowlessTargetedSoft", "-o", "json"]
+        tags: [provider, solution-provider, action]
+        files: ["child.yaml", "resolver-only-child.yaml"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.actions["runWorkflowlessTargetedSoft"].results.success == false
+          - expression: __output.actions["runWorkflowlessTargetedSoft"].results.status == "failed"
+          - expression: size(__output.actions["runWorkflowlessTargetedSoft"].results.errors) == 1
+          - expression: __output.actions["runWorkflowlessTargetedSoft"].results.errors[0].resolver == "_workflow"
+          - expression: __output.actions["runWorkflowlessTargetedSoft"].results.errors[0].message.contains("has no workflow defined")
+
+      targeted-dry-run-whatif:
+        description: Verify dry-run WhatIf description includes selected child action names
+        command: [run, solution]
+        args: ["--action", "runTargetedChild", "--dry-run", "-o", "json"]
+        tags: [provider, solution-provider, action]
+        files: ["child.yaml", "resolver-only-child.yaml"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.dryRun == true
+          - expression: '__output.actionPlan[0].wouldDo.contains("(actions: deploy)")'
