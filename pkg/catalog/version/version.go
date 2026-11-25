@@ -7,10 +7,82 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 )
+
+// NewConstraint parses a semver constraint string and configures whether range
+// comparisons include pre-release versions. The "latest" alias
+// (case-insensitive) is accepted as a wildcard ("*").
+func NewConstraint(constraint string, includePreRelease bool) (*semver.Constraints, error) {
+	trimmed := strings.TrimSpace(constraint)
+	if trimmed == "" {
+		return nil, fmt.Errorf("invalid version constraint %q: constraint cannot be empty", constraint)
+	}
+	if strings.EqualFold(trimmed, "latest") {
+		trimmed = "*"
+	}
+	c, err := semver.NewConstraint(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("invalid version constraint %q: %w", constraint, err)
+	}
+	c.IncludePrerelease = includePreRelease
+	return c, nil
+}
+
+// CheckConstraint reports whether resolvedVersion satisfies constraint. When
+// includePreRelease is true, range constraints match pre-release versions in
+// addition to stable releases.
+func CheckConstraint(constraint, resolvedVersion string, includePreRelease bool) (bool, error) {
+	c, err := NewConstraint(constraint, includePreRelease)
+	if err != nil {
+		return false, err
+	}
+	v, err := semver.NewVersion(resolvedVersion)
+	if err != nil {
+		return false, fmt.Errorf("invalid resolved version %q: %w", resolvedVersion, err)
+	}
+	return c.Check(v), nil
+}
+
+// FilterArtifacts filters catalog artifacts by a semver constraint, returning
+// matching artifacts sorted by version descending (newest first). An empty
+// constraint returns artifacts unchanged. Artifacts with nil versions are
+// excluded when a non-empty constraint is provided.
+func FilterArtifacts(artifacts []catalog.ArtifactInfo, constraint string, includePreRelease bool) ([]catalog.ArtifactInfo, error) {
+	if constraint == "" {
+		return artifacts, nil
+	}
+	c, err := NewConstraint(constraint, includePreRelease)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]catalog.ArtifactInfo, 0, len(artifacts))
+	for _, a := range artifacts {
+		if a.Reference.Version == nil {
+			continue
+		}
+		if c.Check(a.Reference.Version) {
+			result = append(result, a)
+		}
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		vi := result[i].Reference.Version
+		vj := result[j].Reference.Version
+		if vi == nil {
+			return false
+		}
+		if vj == nil {
+			return true
+		}
+		return vj.LessThan(vi)
+	})
+	return result, nil
+}
 
 // FilterVersions filters a list of version strings by a semver constraint string.
 // Non-semver strings (e.g., "latest", "stable") are silently excluded.

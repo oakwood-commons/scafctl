@@ -180,6 +180,249 @@ func TestValidateConstraint(t *testing.T) {
 	assert.Error(t, ValidateConstraint("bad!!!"))
 }
 
+func TestNewConstraint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		constraint        string
+		includePreRelease bool
+		checkVer          string
+		wantMatch         bool
+		wantErr           bool
+	}{
+		{
+			name:              "range excludes pre-release by default",
+			constraint:        ">=0.4.0",
+			includePreRelease: false,
+			checkVer:          "0.5.0-dev",
+			wantMatch:         false,
+		},
+		{
+			name:              "range includes pre-release when opted in",
+			constraint:        ">=0.4.0",
+			includePreRelease: true,
+			checkVer:          "0.5.0-dev",
+			wantMatch:         true,
+		},
+		{
+			name:              "latest alias treated as wildcard excluding pre-release",
+			constraint:        "latest",
+			includePreRelease: false,
+			checkVer:          "0.5.0-dev",
+			wantMatch:         false,
+		},
+		{
+			name:              "LATEST alias case-insensitive with pre-release",
+			constraint:        "  LATEST  ",
+			includePreRelease: true,
+			checkVer:          "0.5.0-dev",
+			wantMatch:         true,
+		},
+		{
+			name:       "empty constraint rejected",
+			constraint: "   ",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid constraint rejected",
+			constraint: "not-valid!!!",
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, err := NewConstraint(tt.constraint, tt.includePreRelease)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.includePreRelease, c.IncludePrerelease)
+			assert.Equal(t, tt.wantMatch, c.Check(semver.MustParse(tt.checkVer)))
+		})
+	}
+}
+
+func TestCheckConstraint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		constraint        string
+		resolvedVersion   string
+		includePreRelease bool
+		want              bool
+		wantErr           bool
+	}{
+		{
+			name:              "stable matches range without pre-release",
+			constraint:        ">=0.4.0",
+			resolvedVersion:   "0.4.0",
+			includePreRelease: false,
+			want:              true,
+		},
+		{
+			name:              "prerelease excluded from range without pre-release",
+			constraint:        ">=0.4.0",
+			resolvedVersion:   "0.5.0-dev",
+			includePreRelease: false,
+			want:              false,
+		},
+		{
+			name:              "prerelease included in range with pre-release",
+			constraint:        ">=0.4.0",
+			resolvedVersion:   "0.5.0-dev",
+			includePreRelease: true,
+			want:              true,
+		},
+		{
+			name:              "semver 2.0 bound semantics 0.5.0-dev is less than 0.5.0",
+			constraint:        ">=0.5.0",
+			resolvedVersion:   "0.5.0-dev",
+			includePreRelease: true,
+			want:              false,
+		},
+		{
+			name:              "exact prerelease constraint matches without includePreRelease",
+			constraint:        "0.5.0-dev",
+			resolvedVersion:   "0.5.0-dev",
+			includePreRelease: false,
+			want:              true,
+		},
+		{
+			name:              "wildcard with pre-release matches 0.5.0-dev",
+			constraint:        "*",
+			resolvedVersion:   "0.5.0-dev",
+			includePreRelease: true,
+			want:              true,
+		},
+		{
+			name:            "invalid constraint returns error",
+			constraint:      ">>>bad<<<",
+			resolvedVersion: "1.0.0",
+			wantErr:         true,
+		},
+		{
+			name:            "invalid resolved version returns error",
+			constraint:      "^1.0.0",
+			resolvedVersion: "not-a-semver",
+			wantErr:         true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := CheckConstraint(tt.constraint, tt.resolvedVersion, tt.includePreRelease)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestFilterArtifacts(t *testing.T) {
+	t.Parallel()
+
+	art := func(ver string) catalog.ArtifactInfo {
+		var sv *semver.Version
+		if ver != "" {
+			sv = semver.MustParse(ver)
+		}
+		return catalog.ArtifactInfo{
+			Reference: catalog.Reference{
+				Kind:    catalog.ArtifactKindProvider,
+				Name:    "exec",
+				Version: sv,
+			},
+		}
+	}
+
+	mixed := []catalog.ArtifactInfo{
+		art(""),
+		art("0.3.0"),
+		art("0.4.0"),
+		art("0.5.0-dev"),
+	}
+
+	t.Run("empty constraint returns input unchanged", func(t *testing.T) {
+		t.Parallel()
+		got, err := FilterArtifacts(mixed, "", false)
+		require.NoError(t, err)
+		assert.Equal(t, mixed, got)
+	})
+
+	t.Run("range without pre-release excludes 0.5.0-dev and nil versions", func(t *testing.T) {
+		t.Parallel()
+		got, err := FilterArtifacts(mixed, ">=0.4.0", false)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, "0.4.0", got[0].Reference.Version.String())
+	})
+
+	t.Run("range with pre-release includes 0.5.0-dev sorted newest first", func(t *testing.T) {
+		t.Parallel()
+		got, err := FilterArtifacts(mixed, ">=0.4.0", true)
+		require.NoError(t, err)
+		require.Len(t, got, 2)
+		assert.Equal(t, "0.5.0-dev", got[0].Reference.Version.String())
+		assert.Equal(t, "0.4.0", got[1].Reference.Version.String())
+	})
+
+	t.Run("wildcard with pre-release orders all semver artifacts descending", func(t *testing.T) {
+		t.Parallel()
+		got, err := FilterArtifacts(mixed, "*", true)
+		require.NoError(t, err)
+		require.Len(t, got, 3)
+		assert.Equal(t, "0.5.0-dev", got[0].Reference.Version.String())
+		assert.Equal(t, "0.4.0", got[1].Reference.Version.String())
+		assert.Equal(t, "0.3.0", got[2].Reference.Version.String())
+	})
+
+	t.Run("invalid constraint returns error", func(t *testing.T) {
+		t.Parallel()
+		_, err := FilterArtifacts(mixed, "invalid!!!", false)
+		require.Error(t, err)
+	})
+}
+
+func BenchmarkFilterArtifacts(b *testing.B) {
+	raw := []string{
+		"0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0-dev",
+		"1.0.0", "1.1.0", "1.2.0-rc.1", "1.2.0", "2.0.0-alpha.1",
+	}
+	artifacts := make([]catalog.ArtifactInfo, 0, len(raw))
+	for _, v := range raw {
+		artifacts = append(artifacts, catalog.ArtifactInfo{
+			Reference: catalog.Reference{
+				Kind:    catalog.ArtifactKindProvider,
+				Name:    "exec",
+				Version: semver.MustParse(v),
+			},
+		})
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = FilterArtifacts(artifacts, ">=0.4.0", true)
+	}
+}
+
+func BenchmarkCheckConstraint(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = CheckConstraint(">=0.4.0", "0.5.0-dev", true)
+	}
+}
+
 func BenchmarkFilterVersions(b *testing.B) {
 	versions := []string{
 		"0.1.0", "0.2.0", "0.3.0", "1.0.0", "1.0.1", "1.0.2",

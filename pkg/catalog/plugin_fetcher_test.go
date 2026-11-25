@@ -708,3 +708,168 @@ func BenchmarkPluginSourceChain_BestEffortFallback(b *testing.B) {
 		}
 	}
 }
+
+func TestPluginFetcher_PreReleaseResolution(t *testing.T) {
+	t.Parallel()
+
+	local := newTestLocalCatalog(t)
+	for _, ver := range []string{"0.4.0", "0.5.0-dev"} {
+		_, err := local.StoreMultiPlatform(t.Context(), testRef("exec", ver), []PlatformBinary{
+			{Platform: "linux/amd64", Data: []byte("local-" + ver)},
+		}, nil, false)
+		require.NoError(t, err)
+	}
+
+	remoteCat, ts := newTestRemoteCatalog(t)
+	t.Cleanup(ts.Close)
+	for _, ver := range []string{"0.4.0", "0.5.0-rc.1"} {
+		_, err := remoteCat.Store(t.Context(), testRef("remote-only", ver), []byte("remote-"+ver), nil, nil, false)
+		require.NoError(t, err)
+	}
+	cachedRemote, err := NewCachedRemoteCatalog(local, remoteCat)
+	require.NoError(t, err)
+
+	fetcher, err := NewPluginFetcher(logr.Discard(), local, cachedRemote)
+	require.NoError(t, err)
+
+	baseCtx := t.Context()
+	preCtx := WithIncludePreRelease(baseCtx)
+
+	t.Run("local unpinned skips pre-release without opt-in", func(t *testing.T) {
+		t.Parallel()
+		info, err := fetcher.ResolvePlugin(baseCtx, "exec", ArtifactKindProvider, "")
+		require.NoError(t, err)
+		assert.Equal(t, "0.4.0", info.Reference.Version.String())
+	})
+
+	t.Run("local unpinned selects pre-release with opt-in", func(t *testing.T) {
+		t.Parallel()
+		info, err := fetcher.ResolvePlugin(preCtx, "exec", ArtifactKindProvider, "")
+		require.NoError(t, err)
+		assert.Equal(t, "0.5.0-dev", info.Reference.Version.String())
+	})
+
+	t.Run("local range constraint skips pre-release without opt-in", func(t *testing.T) {
+		t.Parallel()
+		info, err := fetcher.ResolvePlugin(baseCtx, "exec", ArtifactKindProvider, ">=0.4.0")
+		require.NoError(t, err)
+		assert.Equal(t, "0.4.0", info.Reference.Version.String())
+	})
+
+	t.Run("local range constraint selects pre-release with opt-in", func(t *testing.T) {
+		t.Parallel()
+		info, err := fetcher.ResolvePlugin(preCtx, "exec", ArtifactKindProvider, ">=0.4.0")
+		require.NoError(t, err)
+		assert.Equal(t, "0.5.0-dev", info.Reference.Version.String())
+	})
+
+	t.Run("exact pre-release resolves without opt-in", func(t *testing.T) {
+		t.Parallel()
+		info, err := fetcher.ResolvePlugin(baseCtx, "exec", ArtifactKindProvider, "0.5.0-dev")
+		require.NoError(t, err)
+		assert.Equal(t, "0.5.0-dev", info.Reference.Version.String())
+	})
+
+	t.Run("remote Find with range constraint honors WithIncludePreRelease", func(t *testing.T) {
+		t.Parallel()
+		query := ArtifactQuery{Name: "remote-only", Kind: ArtifactKindProvider, Version: ">=0.4.0"}
+		stableInfo, err := fetcher.Find(baseCtx, query)
+		require.NoError(t, err)
+		assert.Equal(t, "0.4.0", stableInfo.Reference.Version.String())
+
+		preInfo, err := fetcher.Find(preCtx, query)
+		require.NoError(t, err)
+		assert.Equal(t, "0.5.0-rc.1", preInfo.Reference.Version.String())
+	})
+
+	t.Run("LATEST and whitespace selectors normalize before stable-first filtering", func(t *testing.T) {
+		t.Parallel()
+		for _, sel := range []string{"LATEST", " latest ", "   "} {
+			stableInfo, err := fetcher.ResolvePlugin(baseCtx, "exec", ArtifactKindProvider, sel)
+			require.NoError(t, err)
+			assert.Equal(t, "0.4.0", stableInfo.Reference.Version.String(), "selector %q without opt-in", sel)
+
+			preInfo, err := fetcher.ResolvePlugin(preCtx, "exec", ArtifactKindProvider, sel)
+			require.NoError(t, err)
+			assert.Equal(t, "0.5.0-dev", preInfo.Reference.Version.String(), "selector %q with opt-in", sel)
+		}
+	})
+
+	t.Run("corrupt local pre-release candidate halts chain when pre-release range matching is enabled", func(t *testing.T) {
+		t.Parallel()
+		corruptLocal := newTestLocalCatalog(t)
+		storeCorruptPlugin(t, corruptLocal, "exec", "0.5.0-dev")
+		remote := okSource("remote")
+
+		corruptFetcher, err := NewPluginFetcher(logr.Discard(), corruptLocal, remote)
+		require.NoError(t, err)
+
+		_, err = corruptFetcher.ResolvePlugin(preCtx, "exec", ArtifactKindProvider, ">=0.4.0")
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrArtifactNotFound)
+		assert.Zero(t, remote.calls, "corrupt local pre-release matching range must fail closed before remote")
+
+		// Without pre-release opt-in, 0.5.0-dev is not a candidate for >=0.4.0, so the chain falls through cleanly.
+		info, err := corruptFetcher.ResolvePlugin(baseCtx, "exec", ArtifactKindProvider, ">=0.4.0")
+		require.NoError(t, err)
+		assert.Equal(t, "remote", info.Catalog)
+		assert.Equal(t, 1, remote.calls)
+	})
+
+	t.Run("withPreReleaseConstraint handles compound and open forms", func(t *testing.T) {
+		t.Parallel()
+		cases := []struct {
+			constraint string
+			matchVer   string
+			rejectVer  string
+		}{
+			{constraint: ">=0.4.0", matchVer: "0.5.0-dev", rejectVer: "0.3.0-dev"},
+			{constraint: "^0.4.0", matchVer: "0.4.1-dev", rejectVer: "0.5.0-dev"},
+			{constraint: "*", matchVer: "0.5.0-dev", rejectVer: ""},
+			{constraint: "1.x", matchVer: "1.2.0-dev", rejectVer: "0.5.0-dev"},
+			{constraint: "0.4.0 - 1.0.0", matchVer: "0.5.0-dev", rejectVer: "0.3.0-dev"},
+			{constraint: ">=0.4.0 <1.0.0 || >=2.0.0", matchVer: "2.1.0-rc.1", rejectVer: "1.5.0-rc.1"},
+		}
+		for _, tc := range cases {
+			rewritten := withPreReleaseConstraint(tc.constraint)
+			assert.Equal(t, rewritten, withPreReleaseConstraint(rewritten), "withPreReleaseConstraint must be idempotent")
+			var vc VersionOrConstraint
+			vc.Set(rewritten)
+			assert.Equal(t, IsConstraint, vc.Type(), "constraint %q -> %q", tc.constraint, rewritten)
+			assert.True(t, vc.Satisfies(tc.matchVer), "constraint %q -> %q should match %s", tc.constraint, rewritten, tc.matchVer)
+			if tc.rejectVer != "" {
+				assert.False(t, vc.Satisfies(tc.rejectVer), "constraint %q -> %q must reject %s", tc.constraint, rewritten, tc.rejectVer)
+			}
+		}
+		for _, unchanged := range []string{"", "latest", "0.5.0-dev", "1.0.0", "not-a-constraint!"} {
+			assert.Equal(t, unchanged, withPreReleaseConstraint(unchanged))
+		}
+	})
+
+	t.Run("CachedRemoteCatalog offline range fallback honors WithIncludePreRelease", func(t *testing.T) {
+		t.Parallel()
+		offlineLocal := newTestLocalCatalog(t)
+		offlineRemote, offlineTS := newTestRemoteCatalog(t)
+		_, err := offlineRemote.Store(t.Context(), testRef("cached-pre", "0.5.0-rc.1"), []byte("remote-0.5.0-rc.1"), nil, nil, false)
+		require.NoError(t, err)
+
+		offlineCached, err := NewCachedRemoteCatalog(offlineLocal, offlineRemote)
+		require.NoError(t, err)
+		offlineFetcher, err := NewPluginFetcher(logr.Discard(), offlineLocal, offlineCached)
+		require.NoError(t, err)
+
+		// Pull remote pre-release into local catalog (with remote provenance), then shut down the remote registry.
+		_, err = offlineRemote.CopyToLocal(t.Context(), testRef("cached-pre", "0.5.0-rc.1"), offlineLocal, CopyOptions{})
+		require.NoError(t, err)
+		offlineTS.Close()
+
+		// Without pre-release opt-in, pulled 0.5.0-rc.1 does not satisfy >=0.4.0 offline.
+		_, err = offlineFetcher.ResolvePlugin(baseCtx, "cached-pre", ArtifactKindProvider, ">=0.4.0")
+		require.Error(t, err)
+
+		// With pre-release opt-in, CachedRemoteCatalog offline fallback resolves 0.5.0-rc.1.
+		info, err := offlineFetcher.ResolvePlugin(preCtx, "cached-pre", ArtifactKindProvider, ">=0.4.0")
+		require.NoError(t, err)
+		assert.Equal(t, "0.5.0-rc.1", info.Reference.Version.String())
+	})
+}

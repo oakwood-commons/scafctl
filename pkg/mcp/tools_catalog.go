@@ -48,6 +48,9 @@ func (s *Server) registerCatalogTools() {
 			mcp.Description("Artifact kind: solution, provider, auth-handler"),
 			enumOpt("solution", "provider", "auth-handler"),
 		),
+		mcp.WithBoolean("pre_release",
+			mcp.Description("Include pre-release versions when resolving an unpinned reference (default: false)"),
+		),
 	)
 	s.addTool(catalogInspectTool, s.handleCatalogInspect)
 }
@@ -124,7 +127,7 @@ func (s *Server) handleCatalogList(_ context.Context, request mcp.CallToolReques
 }
 
 // handleCatalogInspect returns detailed metadata about a specific catalog artifact.
-func (s *Server) handleCatalogInspect(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleCatalogInspect(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	reference, err := request.RequireString("reference")
 	if err != nil {
 		return newStructuredError(ErrCodeInvalidInput, err.Error(),
@@ -168,7 +171,15 @@ func (s *Server) handleCatalogInspect(_ context.Context, request mcp.CallToolReq
 		), nil
 	}
 
-	info, err := localCatalog.Resolve(s.ctx, ref)
+	resolveCtx := s.ctx
+	if resolveCtx == nil {
+		resolveCtx = ctx
+	}
+	if request.GetBool("pre_release", false) {
+		resolveCtx = catalog.WithIncludePreRelease(resolveCtx)
+	}
+
+	info, err := localCatalog.Resolve(resolveCtx, ref)
 	if err != nil {
 		return newStructuredError(ErrCodeNotFound, fmt.Sprintf("artifact not found: %v", err),
 			WithField("reference"),
@@ -194,7 +205,7 @@ func (s *Server) handleCatalogInspect(_ context.Context, request mcp.CallToolReq
 
 	// Surface multi-platform info for plugin artifacts
 	if artifactKind == catalog.ArtifactKindProvider || artifactKind == catalog.ArtifactKindAuthHandler {
-		platforms, err := localCatalog.ListPlatforms(s.ctx, ref)
+		platforms, err := localCatalog.ListPlatforms(resolveCtx, info.Reference)
 		if err == nil {
 			result["isMultiPlatform"] = len(platforms) > 0
 			if len(platforms) > 0 {

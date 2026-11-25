@@ -83,7 +83,7 @@ func (c *RemoteCatalog) servesSource(s SourceSelector) bool {
 // latestCandidates.
 func versionCandidates(ctx context.Context, query ArtifactQuery, versions []*semver.Version) []*semver.Version {
 	var matcher VersionOrConstraint
-	matcher.Set(query.Version)
+	matcher.SetWithPreRelease(query.Version, IncludePreReleaseFromContext(ctx))
 
 	matched := make([]*semver.Version, 0, len(versions))
 	for _, v := range versions {

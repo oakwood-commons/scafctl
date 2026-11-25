@@ -103,6 +103,47 @@ This is useful for:
 - **Air-gapped environments**: Fetch once on a connected machine, copy the cache
 - **Reproducibility**: Pin versions with a lock file, then install from locks
 
+### Installing and Inspecting Pre-Release Plugins
+
+By default, unpinned references prefer stable releases when any stable version exists (falling back to pre-releases only when none exist), and semver range constraints (such as `>=0.4.0`) match only stable releases. Pass `--pre-release` to `scafctl plugins install` or `scafctl catalog inspect` to include pre-release versions (such as `0.5.0-dev` or `1.0.0-rc.1`), or pass an explicit `name@version` to target one pre-release directly:
+
+{{< tabs "plugin-auto-fetch-tutorial-cmd-prerelease" >}}
+{{% tab "Bash" %}}
+
+```bash
+# Opt into pre-release versions for unpinned or range installs
+scafctl plugins install exec --pre-release
+scafctl plugins install exec --version ">=0.4.0" --pre-release
+
+# Install an exact pre-release version directly (no --pre-release flag needed)
+scafctl plugins install exec@0.5.0-dev
+
+# Inspect a provider or auth-handler artifact, including pre-releases
+scafctl catalog inspect exec --kind provider --pre-release
+scafctl catalog inspect exec@0.5.0-dev --kind provider
+```
+
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+
+```powershell
+# Opt into pre-release versions for unpinned or range installs
+scafctl plugins install exec --pre-release
+scafctl plugins install exec --version ">=0.4.0" --pre-release
+
+# Install an exact pre-release version directly (no --pre-release flag needed)
+scafctl plugins install exec@0.5.0-dev
+
+# Inspect a provider or auth-handler artifact, including pre-releases
+scafctl catalog inspect exec --kind provider --pre-release
+scafctl catalog inspect exec@0.5.0-dev --kind provider
+```
+
+{{% /tab %}}
+{{< /tabs >}}
+
+When installing from a solution that has an adjacent `solution.lock`, locked entries remain pinned to their exact locked version and digest even when `--pre-release` is passed.
+
 ## Listing Cached Plugins
 
 View what's in your local plugin cache:

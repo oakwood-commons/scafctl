@@ -13,9 +13,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
@@ -357,4 +360,143 @@ spec: {}
 	}, nil)
 	require.Error(t, err)
 	assert.NotContains(t, stderr.String(), "trying next catalog", "locked solution install must fail closed without falling through")
+}
+
+func TestCommandInstall_PreReleaseFlagAndEmbedder(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandInstall(cliParams, ioStreams, "mycli")
+
+	f := cmd.Flags().Lookup("pre-release")
+	require.NotNil(t, f)
+	assert.Equal(t, "false", f.DefValue)
+	assert.Contains(t, cmd.Long, "mycli plugins install")
+	assert.Contains(t, cmd.Long, "--pre-release")
+}
+
+func TestRunInstall_PreReleaseAndLockPinning(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataDir)
+
+	localCat, err := catalog.NewLocalCatalog(logr.Discard())
+	require.NoError(t, err)
+
+	plat := plugin.CurrentPlatform()
+	bin040 := []byte("provider-bin-0.4.0")
+	bin050Dev := []byte("provider-bin-0.5.0-dev")
+
+	info040, err := localCat.StoreMultiPlatform(context.Background(), catalog.Reference{
+		Kind:    catalog.ArtifactKindProvider,
+		Name:    "custom-prov",
+		Version: semver.MustParse("0.4.0"),
+	}, []catalog.PlatformBinary{{Platform: plat, Data: bin040}}, nil, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, info040.Digest)
+
+	_, err = localCat.StoreMultiPlatform(context.Background(), catalog.Reference{
+		Kind:    catalog.ArtifactKindProvider,
+		Name:    "custom-prov",
+		Version: semver.MustParse("0.5.0-dev"),
+	}, []catalog.PlatformBinary{{Platform: plat, Data: bin050Dev}}, nil, false)
+	require.NoError(t, err)
+
+	appCfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true},
+		Catalogs: []config.CatalogConfig{
+			{Name: "local", Type: config.CatalogTypeFilesystem},
+		},
+	}
+
+	run := func(opts *InstallOptions, args []string) string {
+		t.Helper()
+		var outBuf, errBuf bytes.Buffer
+		ioStreams := terminal.NewIOStreams(nil, &outBuf, &errBuf, false)
+		cliParams := settings.NewCliParams()
+		w := writer.New(ioStreams, cliParams)
+		lgr := logr.Discard()
+		ctx := config.WithConfig(logger.WithLogger(writer.WithWriter(context.Background(), w), &lgr), appCfg)
+
+		opts.CliParams = cliParams
+		opts.IOStreams = ioStreams
+		opts.Platform = plat
+		require.NoError(t, runInstall(ctx, opts, args))
+		return outBuf.String()
+	}
+
+	// 1. Standalone unpinned and range without --pre-release install 0.4.0.
+	outUnpinnedStable := run(&InstallOptions{
+		CacheDir: t.TempDir(),
+		Kind:     "provider",
+	}, []string{"custom-prov"})
+	assert.Contains(t, outUnpinnedStable, "custom-prov@0.4.0")
+
+	outStable := run(&InstallOptions{
+		CacheDir: t.TempDir(),
+		Kind:     "provider",
+		Version:  ">=0.4.0",
+	}, []string{"custom-prov"})
+	assert.Contains(t, outStable, "custom-prov@0.4.0")
+
+	// 2. Standalone unpinned and range with --pre-release install 0.5.0-dev.
+	outUnpinnedPre := run(&InstallOptions{
+		CacheDir:   t.TempDir(),
+		Kind:       "provider",
+		PreRelease: true,
+	}, []string{"custom-prov"})
+	assert.Contains(t, outUnpinnedPre, "custom-prov@0.5.0-dev")
+
+	outPre := run(&InstallOptions{
+		CacheDir:   t.TempDir(),
+		Kind:       "provider",
+		Version:    ">=0.4.0",
+		PreRelease: true,
+	}, []string{"custom-prov"})
+	assert.Contains(t, outPre, "custom-prov@0.5.0-dev")
+
+	// 3. Solution with solution.lock stays pinned to locked 0.4.0 even when --pre-release is set.
+	cd040, err := localCat.ResolveContentDigest(context.Background(), catalog.Reference{
+		Kind:    catalog.ArtifactKindProvider,
+		Name:    "custom-prov",
+		Version: semver.MustParse("0.4.0"),
+	}, plat, catalog.MediaTypeProviderBinary)
+	require.NoError(t, err)
+
+	solDir := t.TempDir()
+	solFile := filepath.Join(solDir, "solution.yaml")
+	solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: locked-pre-test
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: custom-prov
+      kind: provider
+      version: ">=0.4.0"
+spec: {}
+`
+	require.NoError(t, os.WriteFile(solFile, []byte(solYAML), 0o600))
+	require.NoError(t, bundler.WriteLockFile(filepath.Join(solDir, bundler.DefaultLockFileName), &bundler.LockFile{
+		Version: bundler.LockFileVersion,
+		Plugins: []bundler.LockPlugin{
+			{
+				Name:         "custom-prov",
+				Kind:         "provider",
+				Version:      "0.4.0",
+				Constraint:   ">=0.4.0",
+				ResolvedFrom: "local",
+				Digests:      map[string]string{plat: cd040.ContentDigest},
+			},
+		},
+	}))
+
+	outLocked := run(&InstallOptions{
+		File:       solFile,
+		CacheDir:   t.TempDir(),
+		PreRelease: true,
+	}, nil)
+	assert.Contains(t, outLocked, "custom-prov@0.4.0", "locked solution must stay pinned to 0.4.0 despite --pre-release")
 }

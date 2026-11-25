@@ -6,9 +6,11 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	catversion "github.com/oakwood-commons/scafctl/pkg/catalog/version"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -22,8 +24,10 @@ import (
 // InspectOptions holds options for the inspect command.
 type InspectOptions struct {
 	Reference         string
+	Kind              string // Artifact kind (--kind: solution, provider, auth-handler)
 	Catalog           string // Remote catalog (URL or config name, --catalog)
 	VersionConstraint string // Semver version constraint (--version)
+	PreRelease        bool   // Include pre-release versions (--pre-release)
 	Referrers         bool   // Show referrers (--referrers)
 	ArtifactType      string // Filter referrers by artifact type (--artifact-type)
 	Insecure          bool   // Allow HTTP (--insecure)
@@ -77,6 +81,12 @@ func CommandInspect(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 			  # Inspect specific version
 			  %[1]s catalog inspect my-solution@1.0.0
 
+			  # Inspect a provider plugin in the local catalog
+			  %[1]s catalog inspect exec --kind provider
+
+			  # Include pre-release versions when resolving latest or a version range
+			  %[1]s catalog inspect exec --kind provider --pre-release
+
 			  # Inspect from a named remote catalog
 			  %[1]s catalog inspect my-solution@1.0.0 --catalog my-registry
 
@@ -96,6 +106,10 @@ func CommandInspect(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options.Reference = args[0]
 
+			if _, err := parseInspectKind(cmd.Context(), options.Kind); err != nil {
+				return err
+			}
+
 			// Validate --version constraint vs @version early (before branching)
 			if err := validateVersionConstraint(options.Reference, options.VersionConstraint); err != nil {
 				w := writer.FromContext(cmd.Context())
@@ -105,10 +119,18 @@ func CommandInspect(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			// --version is not supported with --referrers
+			// --version and --pre-release are not supported with --referrers
 			if options.Referrers && options.VersionConstraint != "" {
 				w := writer.FromContext(cmd.Context())
 				err := fmt.Errorf("--version cannot be used with --referrers")
+				if w != nil {
+					w.Errorf("%v", err)
+				}
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+			if options.Referrers && options.PreRelease {
+				w := writer.FromContext(cmd.Context())
+				err := fmt.Errorf("--pre-release cannot be used with --referrers")
 				if w != nil {
 					w.Errorf("%v", err)
 				}
@@ -124,8 +146,10 @@ func CommandInspect(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 	}
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &options.KvxOutputFlags)
+	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind (solution, provider, auth-handler)")
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().StringVar(&options.VersionConstraint, "version", "", "Semver version constraint (e.g., ^1.0.0, ~2.1, >=1.0 <3.0)")
+	cmd.Flags().BoolVar(&options.PreRelease, "pre-release", false, "Include pre-release versions (e.g. 1.0.0-beta.1)")
 	cmd.Flags().BoolVar(&options.Referrers, "referrers", false, "List artifacts attached via OCI referrers (SBOMs, signatures, etc.)")
 	cmd.Flags().StringVar(&options.ArtifactType, "artifact-type", "", "Filter referrers by artifact type (e.g., application/spdx+json)")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
@@ -133,70 +157,152 @@ func CommandInspect(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 	return cmd
 }
 
+// allInspectKinds lists the artifact kinds probed in canonical order when
+// --kind is omitted.
+var allInspectKinds = []catalog.ArtifactKind{
+	catalog.ArtifactKindSolution,
+	catalog.ArtifactKindProvider,
+	catalog.ArtifactKindAuthHandler,
+}
+
+func parseInspectKind(ctx context.Context, kindFlag string) (catalog.ArtifactKind, error) {
+	if kindFlag == "" {
+		return "", nil
+	}
+	k, ok := catalog.ParseArtifactKind(kindFlag)
+	if !ok {
+		err := fmt.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", kindFlag)
+		if w := writer.FromContext(ctx); w != nil {
+			w.Errorf("%v", err)
+		}
+		return "", exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+	return k, nil
+}
+
 func runInspect(ctx context.Context, opts *InspectOptions, outputOpts *kvx.OutputOptions) error {
-	lgr := logger.FromContext(ctx)
-	w := writer.FromContext(ctx)
+	parsedKind, err := parseInspectKind(ctx, opts.Kind)
+	if err != nil {
+		return err
+	}
+
+	if opts.PreRelease {
+		ctx = catalog.WithIncludePreRelease(ctx)
+	}
 
 	// Full OCI reference: inspect directly from a remote registry.
 	if looksLikeRemoteReference(opts.Reference) {
-		return runInspectRemote(ctx, opts, outputOpts)
+		return runInspectRemote(ctx, opts, parsedKind, outputOpts)
 	}
 
-	// --catalog flag: inspect from a named remote catalog.
-	if opts.Catalog != "" {
-		return runInspectFromCatalog(ctx, opts, outputOpts)
+	// --catalog flag: inspect from a named remote catalog ("local" routes to local catalog).
+	if opts.Catalog != "" && !strings.EqualFold(opts.Catalog, catalog.LocalCatalogName) {
+		return runInspectFromCatalog(ctx, opts, parsedKind, outputOpts)
 	}
 
-	// Parse reference - try as solution first
-	ref, err := catalog.ParseReference(catalog.ArtifactKindSolution, opts.Reference)
+	return runInspectLocal(ctx, opts, parsedKind, outputOpts)
+}
+
+func runInspectLocal(ctx context.Context, opts *InspectOptions, parsedKind catalog.ArtifactKind, outputOpts *kvx.OutputOptions) error {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	ref, err := catalog.ParseReference(parsedKind, opts.Reference)
 	if err != nil {
 		w.Errorf("invalid reference %q: %v", opts.Reference, err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Create local catalog
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err != nil {
 		w.Errorf("failed to open catalog: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	// When --version constraint is set, resolve the best matching version from local catalog
+	kinds := allInspectKinds
+	if parsedKind != "" {
+		kinds = []catalog.ArtifactKind{parsedKind}
+	}
+
+	// When --version constraint is set, resolve the best matching version per kind.
 	if opts.VersionConstraint != "" {
-		artifacts, listErr := localCatalog.List(ctx, ref.Kind, ref.Name)
-		if listErr != nil {
-			w.Errorf("failed to list versions: %v", listErr)
-			return exitcode.WithCode(listErr, exitcode.CatalogError)
+		var matches []catalog.ArtifactInfo
+		var matchedKinds []string
+		for _, k := range kinds {
+			artifacts, listErr := localCatalog.List(ctx, k, ref.Name)
+			if listErr != nil {
+				w.Errorf("failed to list versions: %v", listErr)
+				return exitcode.WithCode(listErr, exitcode.CatalogError)
+			}
+			filtered, filterErr := catversion.FilterArtifacts(artifacts, opts.VersionConstraint, opts.PreRelease)
+			if filterErr != nil {
+				w.Errorf("%v", filterErr)
+				return exitcode.WithCode(filterErr, exitcode.InvalidInput)
+			}
+			if len(filtered) > 0 {
+				matches = append(matches, filtered[0])
+				matchedKinds = append(matchedKinds, string(k))
+			}
 		}
-		filtered, filterErr := filterArtifactsByConstraint(artifacts, opts.VersionConstraint)
-		if filterErr != nil {
-			w.Errorf("%v", filterErr)
-			return exitcode.WithCode(filterErr, exitcode.InvalidInput)
-		}
-		if len(filtered) == 0 {
+		if len(matches) == 0 {
 			w.Errorf("no versions of %q match constraint %q", ref.Name, opts.VersionConstraint)
 			return exitcode.WithCode(fmt.Errorf("no matching version"), exitcode.FileNotFound)
 		}
-		w.Verbosef("Version constraint %q resolved to %s", opts.VersionConstraint, filtered[0].Reference.Version.Original())
-		ref = filtered[0].Reference
-	}
-
-	// Resolve to find artifact
-	info, err := localCatalog.Resolve(ctx, ref)
-	if err != nil {
-		if catalog.IsNotFound(err) {
-			w.Errorf("artifact %q not found in catalog", opts.Reference)
-			return exitcode.WithCode(err, exitcode.FileNotFound)
+		if len(matches) > 1 {
+			ambErr := fmt.Errorf("artifact %q matches multiple kinds (%s); specify --kind", opts.Reference, strings.Join(matchedKinds, ", "))
+			w.Errorf("%v", ambErr)
+			return exitcode.WithCode(ambErr, exitcode.InvalidInput)
 		}
-		w.Errorf("failed to resolve artifact: %v", err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
+		w.Verbosef("Version constraint %q resolved to %s", opts.VersionConstraint, matches[0].Reference.Version.Original())
+		info, resolveErr := localCatalog.Resolve(ctx, matches[0].Reference)
+		if resolveErr != nil {
+			if catalog.IsNotFound(resolveErr) {
+				w.Errorf("artifact %q not found in catalog", opts.Reference)
+				return exitcode.WithCode(resolveErr, exitcode.FileNotFound)
+			}
+			w.Errorf("failed to resolve artifact: %v", resolveErr)
+			return exitcode.WithCode(resolveErr, exitcode.CatalogError)
+		}
+		return writeInspectDetail(info, outputOpts)
 	}
 
-	return writeInspectDetail(info, outputOpts)
+	var matches []catalog.ArtifactInfo
+	var matchedKinds []string
+	var lastNotFound error
+	for _, k := range kinds {
+		candidate := ref
+		candidate.Kind = k
+		info, resolveErr := localCatalog.Resolve(ctx, candidate)
+		if resolveErr != nil {
+			if catalog.IsNotFound(resolveErr) {
+				lastNotFound = resolveErr
+				continue
+			}
+			w.Errorf("failed to resolve artifact: %v", resolveErr)
+			return exitcode.WithCode(resolveErr, exitcode.CatalogError)
+		}
+		matches = append(matches, info)
+		matchedKinds = append(matchedKinds, string(k))
+	}
+
+	if len(matches) == 0 {
+		if lastNotFound == nil {
+			lastNotFound = &catalog.ArtifactNotFoundError{Reference: ref, Catalog: catalog.LocalCatalogName}
+		}
+		w.Errorf("artifact %q not found in catalog", opts.Reference)
+		return exitcode.WithCode(lastNotFound, exitcode.FileNotFound)
+	}
+	if len(matches) > 1 {
+		ambErr := fmt.Errorf("artifact %q matches multiple kinds (%s); specify --kind", opts.Reference, strings.Join(matchedKinds, ", "))
+		w.Errorf("%v", ambErr)
+		return exitcode.WithCode(ambErr, exitcode.InvalidInput)
+	}
+
+	return writeInspectDetail(matches[0], outputOpts)
 }
 
 // runInspectRemote inspects an artifact from a full OCI reference.
-func runInspectRemote(ctx context.Context, opts *InspectOptions, outputOpts *kvx.OutputOptions) error {
+func runInspectRemote(ctx context.Context, opts *InspectOptions, parsedKind catalog.ArtifactKind, outputOpts *kvx.OutputOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -213,16 +319,31 @@ func runInspectRemote(ctx context.Context, opts *InspectOptions, outputOpts *kvx
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
+	if opts.VersionConstraint != "" && remoteRef.Tag != "" {
+		conflictErr := fmt.Errorf("%w in reference %q; use one or the other", ErrVersionConstraintConflict, opts.Reference)
+		w.Errorf("%v", conflictErr)
+		return exitcode.WithCode(conflictErr, exitcode.InvalidInput)
+	}
+
+	if parsedKind != "" && remoteRef.Kind != "" && remoteRef.Kind != parsedKind {
+		conflictErr := fmt.Errorf("--kind %q conflicts with artifact kind %q in remote reference %q", parsedKind, remoteRef.Kind, opts.Reference)
+		w.Errorf("%v", conflictErr)
+		return exitcode.WithCode(conflictErr, exitcode.InvalidInput)
+	}
+
 	ref, err := remoteRef.ToReference()
 	if err != nil {
 		w.Errorf("invalid reference: %v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
+	if parsedKind != "" && ref.Kind == "" {
+		ref.Kind = parsedKind
+	}
 
 	registry := remoteRef.Registry
 	repository := remoteRef.Repository
 
-	verboseRefInfo(w, remoteRef.Name, string(remoteRef.Kind), remoteRef.Tag)
+	verboseRefInfo(w, remoteRef.Name, string(ref.Kind), remoteRef.Tag)
 
 	credStore, err := catalog.NewCredentialStore(*lgr)
 	if err != nil {
@@ -250,38 +371,41 @@ func runInspectRemote(ctx context.Context, opts *InspectOptions, outputOpts *kvx
 	}
 
 	// When --version constraint is set, resolve the best matching version
+	allowKindlessFallback := remoteRef.Kind == "" && parsedKind == ""
 	if opts.VersionConstraint != "" {
-		resolved, constraintErr := resolveVersionConstraint(ctx, remoteCatalog, ref, opts.VersionConstraint)
+		resolved, constraintErr := resolveInspectRemoteConstraint(ctx, w, remoteCatalog, registry, opts.Reference, ref, opts.VersionConstraint, opts.PreRelease)
 		if constraintErr != nil {
-			w.Errorf("%v", constraintErr)
-			return exitcode.WithCode(constraintErr, exitcode.InvalidInput)
+			return constraintErr
 		}
-		w.Verbosef("Version constraint %q resolved to %s", opts.VersionConstraint, resolved.Version.Original())
 		ref = resolved
+		allowKindlessFallback = false
 	}
 
-	info, err := remoteCatalog.Resolve(ctx, ref)
+	info, err := resolveInspectRemote(
+		ctx,
+		w,
+		remoteCatalog,
+		registry,
+		fmt.Sprintf("artifact %q not found in remote catalog", opts.Reference),
+		opts.Reference,
+		ref,
+		allowKindlessFallback,
+	)
 	if err != nil {
-		if catalog.IsNotFound(err) {
-			w.Errorf("artifact %q not found in remote catalog", opts.Reference)
-			return exitcode.WithCode(err, exitcode.FileNotFound)
-		}
-		w.Errorf("failed to resolve artifact: %v", err)
-		hintOnAuthError(ctx, w, registry, err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
+		return err
 	}
 
 	return writeInspectDetail(info, outputOpts)
 }
 
 // runInspectFromCatalog inspects an artifact from a named remote catalog.
-func runInspectFromCatalog(ctx context.Context, opts *InspectOptions, outputOpts *kvx.OutputOptions) error {
+func runInspectFromCatalog(ctx context.Context, opts *InspectOptions, parsedKind catalog.ArtifactKind, outputOpts *kvx.OutputOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
 	w.Verbosef("Inspecting from catalog %q", opts.Catalog)
 
-	ref, err := catalog.ParseReference(catalog.ArtifactKindSolution, opts.Reference)
+	ref, err := catalog.ParseReference(parsedKind, opts.Reference)
 	if err != nil {
 		w.Errorf("invalid reference %q: %v", opts.Reference, err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -333,27 +457,152 @@ func runInspectFromCatalog(ctx context.Context, opts *InspectOptions, outputOpts
 
 	// When --version constraint is set, resolve the best matching version
 	if opts.VersionConstraint != "" {
-		resolved, constraintErr := resolveVersionConstraint(ctx, remoteCatalog, ref, opts.VersionConstraint)
+		resolved, constraintErr := resolveInspectRemoteConstraint(ctx, w, remoteCatalog, registry, opts.Reference, ref, opts.VersionConstraint, opts.PreRelease)
 		if constraintErr != nil {
-			w.Errorf("%v", constraintErr)
-			return exitcode.WithCode(constraintErr, exitcode.InvalidInput)
+			return constraintErr
 		}
-		w.Verbosef("Version constraint %q resolved to %s", opts.VersionConstraint, resolved.Version.Original())
 		ref = resolved
 	}
 
-	info, err := remoteCatalog.Resolve(ctx, ref)
+	info, err := resolveInspectRemote(
+		ctx,
+		w,
+		remoteCatalog,
+		registry,
+		fmt.Sprintf("artifact %q not found in remote catalog %q", opts.Reference, opts.Catalog),
+		opts.Reference,
+		ref,
+		false,
+	)
 	if err != nil {
-		if catalog.IsNotFound(err) {
-			w.Errorf("artifact %q not found in remote catalog %q", opts.Reference, opts.Catalog)
-			return exitcode.WithCode(err, exitcode.FileNotFound)
-		}
-		w.Errorf("failed to resolve artifact: %v", err)
-		hintOnAuthError(ctx, w, registry, err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
+		return err
 	}
 
 	return writeInspectDetail(info, outputOpts)
+}
+
+func resolveInspectRemote(
+	ctx context.Context,
+	w *writer.Writer,
+	remoteCatalog *catalog.RemoteCatalog,
+	registry, notFoundMsg, rawRef string,
+	ref catalog.Reference,
+	allowKindlessFallback bool,
+) (catalog.ArtifactInfo, error) {
+	if ref.Kind != "" {
+		info, err := remoteCatalog.Resolve(ctx, ref)
+		if err != nil {
+			if catalog.IsNotFound(err) {
+				w.Errorf("%s", notFoundMsg)
+				return catalog.ArtifactInfo{}, exitcode.WithCode(err, exitcode.FileNotFound)
+			}
+			w.Errorf("failed to resolve artifact: %v", err)
+			hintOnAuthError(ctx, w, registry, err)
+			return catalog.ArtifactInfo{}, exitcode.WithCode(err, exitcode.CatalogError)
+		}
+		return info, nil
+	}
+
+	var matches []catalog.ArtifactInfo
+	var matchedKinds []string
+	var lastNotFound error
+	for _, k := range allInspectKinds {
+		candidate := ref
+		candidate.Kind = k
+		info, err := remoteCatalog.Resolve(ctx, candidate)
+		if err != nil {
+			if catalog.IsNotFound(err) {
+				lastNotFound = err
+				continue
+			}
+			w.Errorf("failed to resolve artifact: %v", err)
+			hintOnAuthError(ctx, w, registry, err)
+			return catalog.ArtifactInfo{}, exitcode.WithCode(err, exitcode.CatalogError)
+		}
+		matches = append(matches, info)
+		matchedKinds = append(matchedKinds, string(k))
+	}
+
+	if len(matches) > 1 {
+		ambErr := fmt.Errorf("artifact %q matches multiple kinds (%s); specify --kind", rawRef, strings.Join(matchedKinds, ", "))
+		w.Errorf("%v", ambErr)
+		return catalog.ArtifactInfo{}, exitcode.WithCode(ambErr, exitcode.InvalidInput)
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+
+	if allowKindlessFallback {
+		info, err := remoteCatalog.Resolve(ctx, ref)
+		if err == nil {
+			return info, nil
+		}
+		if !catalog.IsNotFound(err) {
+			w.Errorf("failed to resolve artifact: %v", err)
+			hintOnAuthError(ctx, w, registry, err)
+			return catalog.ArtifactInfo{}, exitcode.WithCode(err, exitcode.CatalogError)
+		}
+		lastNotFound = err
+	}
+
+	if lastNotFound == nil {
+		lastNotFound = &catalog.ArtifactNotFoundError{Reference: ref, Catalog: registry}
+	}
+	w.Errorf("%s", notFoundMsg)
+	return catalog.ArtifactInfo{}, exitcode.WithCode(lastNotFound, exitcode.FileNotFound)
+}
+
+func resolveInspectRemoteConstraint(
+	ctx context.Context,
+	w *writer.Writer,
+	remoteCatalog *catalog.RemoteCatalog,
+	registry, rawRef string,
+	ref catalog.Reference,
+	constraint string,
+	includePreRelease bool,
+) (catalog.Reference, error) {
+	kinds := allInspectKinds
+	if ref.Kind != "" {
+		kinds = []catalog.ArtifactKind{ref.Kind}
+	}
+
+	var matches []catalog.ArtifactInfo
+	var matchedKinds []string
+	for _, k := range kinds {
+		artifacts, err := remoteCatalog.List(ctx, k, ref.Name)
+		if err != nil {
+			if catalog.IsNotFound(err) {
+				continue
+			}
+			w.Errorf("failed to list versions: %v", err)
+			hintOnAuthError(ctx, w, registry, err)
+			return ref, exitcode.WithCode(err, exitcode.CatalogError)
+		}
+
+		filtered, filterErr := catversion.FilterArtifacts(artifacts, constraint, includePreRelease)
+		if filterErr != nil {
+			w.Errorf("%v", filterErr)
+			return ref, exitcode.WithCode(filterErr, exitcode.InvalidInput)
+		}
+		if len(filtered) > 0 {
+			matches = append(matches, filtered[0])
+			matchedKinds = append(matchedKinds, string(k))
+		}
+	}
+
+	if len(matches) == 0 {
+		noMatchErr := fmt.Errorf("no versions of %q match constraint %q", ref.Name, constraint)
+		w.Errorf("%v", noMatchErr)
+		return ref, exitcode.WithCode(noMatchErr, exitcode.FileNotFound)
+	}
+	if len(matches) > 1 {
+		ambErr := fmt.Errorf("artifact %q matches multiple kinds (%s); specify --kind", rawRef, strings.Join(matchedKinds, ", "))
+		w.Errorf("%v", ambErr)
+		return ref, exitcode.WithCode(ambErr, exitcode.InvalidInput)
+	}
+
+	w.Verbosef("Version constraint %q resolved to %s", constraint, matches[0].Reference.Version.Original())
+	return matches[0].Reference, nil
 }
 
 // writeInspectDetail formats and writes artifact inspect output.
@@ -389,12 +638,30 @@ func runInspectReferrers(ctx context.Context, opts *InspectOptions, outputOpts *
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
+	parsedKind, err := parseInspectKind(ctx, opts.Kind)
+	if err != nil {
+		return err
+	}
+
+	if opts.PreRelease {
+		preErr := fmt.Errorf("--pre-release cannot be used with --referrers")
+		if w != nil {
+			w.Errorf("%v", preErr)
+		}
+		return exitcode.WithCode(preErr, exitcode.InvalidInput)
+	}
+
 	if opts.Catalog == "" {
 		w.Error("--catalog is required with --referrers (referrers are a remote registry feature)")
 		return exitcode.Errorf("catalog required")
 	}
+	if strings.EqualFold(opts.Catalog, catalog.LocalCatalogName) {
+		localErr := fmt.Errorf("--referrers cannot be used with the local catalog (referrers are a remote registry feature)")
+		w.Errorf("%v", localErr)
+		return exitcode.WithCode(localErr, exitcode.InvalidInput)
+	}
 
-	ref, err := catalog.ParseReference("", opts.Reference)
+	ref, err := catalog.ParseReference(parsedKind, opts.Reference)
 	if err != nil {
 		w.Errorf("invalid reference %q: %v", opts.Reference, err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -434,6 +701,23 @@ func runInspectReferrers(ctx context.Context, opts *InspectOptions, outputOpts *
 	if err != nil {
 		w.Errorf("failed to create remote catalog: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	if ref.Kind == "" || (!ref.HasVersion() && !ref.HasDigest()) {
+		info, resolveErr := resolveInspectRemote(
+			ctx,
+			w,
+			remoteCatalog,
+			registry,
+			fmt.Sprintf("artifact %q not found in remote catalog", opts.Reference),
+			opts.Reference,
+			ref,
+			ref.Kind == "",
+		)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		ref = info.Reference
 	}
 
 	referrers, err := remoteCatalog.Referrers(ctx, ref, opts.ArtifactType)
