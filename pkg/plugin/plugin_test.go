@@ -771,7 +771,6 @@ func TestProviderWrapper_Execute_PreservesOutputAndStreamedOnFailure(t *testing.
 	})
 
 	t.Run("mergeCapturedStreamChunks handles nil output nil Data structured fields and success without IOStreams", func(t *testing.T) {
-
 		// 1. Nil output with captured chunks synthesizes Output.Data.
 		fromNil := mergeCapturedStreamChunks(nil, "out\n", "err\n")
 		require.NotNil(t, fromNil)
