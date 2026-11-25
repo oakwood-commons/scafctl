@@ -399,3 +399,80 @@ func TestWalk_WorkflowWithFinally(t *testing.T) {
 	assert.Contains(t, actionNames, "a1")
 	assert.Contains(t, actionNames, "cleanup")
 }
+
+func TestWalk_ArgsAndContinueOnError(t *testing.T) {
+	t.Parallel()
+
+	cond := celexp.Expression("_.allowErr == true")
+	argRef := &spec.ValueRef{Literal: "argVal"}
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"r1": {
+					Name: "r1",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							CallRef:         spec.CallRef{Call: "fetch", Args: map[string]*spec.ValueRef{"url": argRef}},
+							ContinueOnError: &resolver.Condition{Expr: &cond},
+							ForEach: &spec.ForEachClause{
+								In:              argRef,
+								ContinueOnError: &spec.Condition{Expr: &cond},
+							},
+						}},
+					},
+					Transform: &resolver.TransformPhase{
+						With: []resolver.ProviderTransform{{
+							CallRef:         spec.CallRef{Call: "shape", Args: map[string]*spec.ValueRef{"in": argRef}},
+							ContinueOnError: &resolver.Condition{Expr: &cond},
+						}},
+					},
+					Validate: &resolver.ValidatePhase{
+						With: []resolver.ProviderValidation{{
+							CallRef: spec.CallRef{Call: "check", Args: map[string]*spec.ValueRef{"target": argRef}},
+							When:    &resolver.Condition{Expr: &cond},
+						}},
+					},
+				},
+			},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"deploy": {
+						Name:            "deploy",
+						CallRef:         spec.CallRef{Call: "runDeploy", Args: map[string]*spec.ValueRef{"env": argRef}},
+						ContinueOnError: &spec.Condition{Expr: &cond},
+						ForEach: &spec.ForEachClause{
+							In:              argRef,
+							ContinueOnError: &spec.Condition{Expr: &cond},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	var vrPaths, condPaths []string
+	err := Walk(sol, &Visitor{
+		ValueRef: func(path string, _ *spec.ValueRef) error {
+			vrPaths = append(vrPaths, path)
+			return nil
+		},
+		Condition: func(path, _ string, _ *celexp.Expression) error {
+			condPaths = append(condPaths, path)
+			return nil
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, vrPaths, "spec.resolvers.r1.resolve.with[0].args.url")
+	assert.Contains(t, vrPaths, "spec.resolvers.r1.resolve.with[0].forEach.in")
+	assert.Contains(t, vrPaths, "spec.resolvers.r1.transform.with[0].args.in")
+	assert.Contains(t, vrPaths, "spec.resolvers.r1.validate.with[0].args.target")
+	assert.Contains(t, vrPaths, "spec.workflow.actions.deploy.args.env")
+
+	assert.Contains(t, condPaths, "spec.resolvers.r1.resolve.with[0].continueOnError")
+	assert.Contains(t, condPaths, "spec.resolvers.r1.resolve.with[0].forEach.continueOnError")
+	assert.Contains(t, condPaths, "spec.resolvers.r1.transform.with[0].continueOnError")
+	assert.Contains(t, condPaths, "spec.resolvers.r1.validate.with[0].when")
+	assert.Contains(t, condPaths, "spec.workflow.actions.deploy.continueOnError")
+	assert.Contains(t, condPaths, "spec.workflow.actions.deploy.forEach.continueOnError")
+}

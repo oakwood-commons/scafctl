@@ -254,12 +254,16 @@ func walkArg(arg parse.Node, references *[]TemplateReference, visited map[string
 			walkArg(n.Node, references, visited, pos, scopeDepth)
 		}
 		if len(n.Field) > 0 {
-			// Check if the chain is rooted at a variable node ($var.Field or $.Field).
-			if vn, ok := n.Node.(*parse.VariableNode); ok {
-				if len(vn.Ident) == 1 && vn.Ident[0] == "$" {
+			base := unwrapSinglePipeArg(n.Node)
+			// Check if the chain is rooted at a variable node (($var).Field, ($).Field, ($._).Field).
+			if vn, ok := base.(*parse.VariableNode); ok {
+				if len(vn.Ident) >= 1 && vn.Ident[0] == "$" {
 					// $ always refers to the root data, even inside with/range,
-					// so $.resolver must be recorded as unscoped.
-					path := "." + strings.Join(n.Field, ".")
+					// so ($).resolver and ($._).resolver must be recorded as unscoped.
+					parts := make([]string, 0, len(vn.Ident)-1+len(n.Field))
+					parts = append(parts, vn.Ident[1:]...)
+					parts = append(parts, n.Field...)
+					path := "." + strings.Join(parts, ".")
 					if !isTemplateVariable(path) {
 						addOrUpgradeRef(references, visited, path, fmt.Sprintf("pos:%d", pos), false)
 					}
@@ -270,7 +274,10 @@ func walkArg(arg parse.Node, references *[]TemplateReference, visited map[string
 			}
 
 			// Extract the base path from the chain's base node
-			basePath := extractBasePath(n.Node)
+			basePath := extractBasePath(base)
+			if basePath == "." {
+				basePath = ""
+			}
 			path := basePath + "." + strings.Join(n.Field, ".")
 			if !isTemplateVariable(path) {
 				addOrUpgradeRef(references, visited, path, fmt.Sprintf("pos:%d", pos), scoped)

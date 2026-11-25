@@ -102,8 +102,10 @@ func CommandAction(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 		Short:   "Run specific actions from a solution by name",
 		Long: strings.ReplaceAll(`Execute specific actions from a solution's workflow by name.
 
-This command loads a solution, runs its resolvers, then executes only the
-selected actions and their transitive dependsOn dependencies. Finally actions
+This command loads a solution, runs only the resolvers required by the selected
+actions (plus finally actions and state configuration), then executes the
+selected actions and their transitive dependsOn dependencies. Pass --resolve-all
+to execute every resolver regardless of action requirements. Finally actions
 always run regardless of the filter.
 
 This is equivalent to 'scafctl run solution --action <name>' but with a more
@@ -288,6 +290,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	lgr.V(1).Info("running action",
 		"file", o.File,
 		"names", o.Names,
+		"resolveAll", o.ResolveAll,
 		"dryRun", o.DryRun)
 
 	// Prefer action files during auto-discovery.
@@ -432,9 +435,11 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 
 	// State lifecycle: load persisted state before resolver execution so that
 	// the state provider can serve previously saved values.
+	allResolvers := sol.Spec.ResolversToSlice()
 	var stateMgr *state.Manager
 	var stateData *state.Data
 	var stateSeed map[string]*resolver.ExecutionResult
+	var effectiveStateCfg *state.Config
 	stateCfg, stateCfgErr := o.resolveStateConfig(ctx, sol)
 	if stateCfgErr != nil {
 		return o.exitWithCode(ctx, stateCfgErr, exitcode.InvalidInput)
@@ -448,11 +453,12 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		if loadErr != nil {
 			return o.handleStateLoadError(ctx, loadErr)
 		}
-		if err := o.checkMissingLocks(ctx, loadResult.LoadResult, sol.Spec.ResolversToSlice(), o.DryRun); err != nil {
+		if err := o.checkMissingLocks(ctx, loadResult.LoadResult, allResolvers, o.DryRun); err != nil {
 			return err
 		}
 		stateSeed = loadResult.Seed
 		if !loadResult.Skipped {
+			effectiveStateCfg = stateCfg
 			ctx = loadResult.Ctx
 			actionCtx = state.WithState(actionCtx, loadResult.Data)
 			stateData = loadResult.Data
@@ -462,15 +468,30 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		reportStateLoaded(ctx, loadResult.LoadResult)
 	}
 
+	// Scope resolver execution to the selected actions when explicit action
+	// targets remain after source selection (sel.Args) and --resolve-all is not set.
+	resolvers := allResolvers
+	if len(names) > 0 && !o.ResolveAll {
+		var lookup resolver.DescriptorLookup
+		if reg != nil {
+			lookup = reg.DescriptorLookup()
+		}
+		skipValidation := validationPolicy == settings.ValidationIgnore || o.SkipTransform
+		resolvers = execute.ResolversForWorkflow(sol, workflow, effectiveStateCfg, lookup, execute.WithSkipValidationDeps(skipValidation))
+		lgr.V(1).Info("resolver execution scoped to selected actions",
+			"targets", names,
+			"selectedResolvers", len(resolvers),
+			"totalResolvers", len(allResolvers))
+	}
+
 	// Dry run — execute resolvers with ctx (solution-dir aware, no working-dir
 	// override) so resolver paths resolve relative to the solution file.
 	// Pass actionCtx so WhatIf generation sees CLI overrides (output-dir, etc.).
 	if o.DryRun {
-		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow, stateData, originalCwd, stateSeed)
+		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow, resolvers, stateData, originalCwd, stateSeed)
 	}
 
 	// Execute resolvers
-	resolvers := sol.Spec.ResolversToSlice()
 	start := time.Now()
 	resolverData, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if err != nil {
@@ -638,13 +659,13 @@ func (o *ActionOptions) failStructured(ctx context.Context, resolverOut map[stri
 
 // executeDryRun delegates to SolutionOptions.executeDryRun which runs
 // resolvers (side-effect-free) and produces a structured WhatIf report.
-func (o *ActionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg providerLookup, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
+func (o *ActionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg providerLookup, params map[string]any, workflow *action.Workflow, resolvers []*resolver.Resolver, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
 	s := &SolutionOptions{
 		sharedResolverOptions: o.sharedResolverOptions,
 		Verbose:               o.Verbose,
 		ShowExecution:         o.ShowExecution,
 	}
-	return s.executeDryRun(resolverCtx, actionCtx, sol, reg, params, workflow, stateData, cwd, stateSeed)
+	return s.executeDryRun(resolverCtx, actionCtx, sol, reg, params, workflow, resolvers, stateData, cwd, stateSeed)
 }
 
 // resolveOutputDir validates and creates the output directory.

@@ -53,12 +53,42 @@ func ResolverProviderName(r *resolver.Resolver) string {
 	return "unknown"
 }
 
+// FilterOption configures resolver dependency filtering.
+type FilterOption func(*filterConfig)
+
+type filterConfig struct {
+	skipValidationDeps bool
+}
+
+// WithSkipValidationDeps omits validation-only resolver dependencies from the
+// transitive closure when the validation phase will not execute (for example
+// under --skip-transform or --on-validation-error ignore).
+func WithSkipValidationDeps(skip bool) FilterOption {
+	return func(cfg *filterConfig) {
+		cfg.skipValidationDeps = skip
+	}
+}
+
 // FilterResolversWithDependencies returns the specified resolvers and all their dependencies.
 // When targetNames is empty, explicit resolvers are excluded unless they are
 // transitively required by a non-explicit resolver.
-// Uses resolver.ExtractDependencies to detect dependencies from CEL expressions,
-// Go templates, explicit rslvr: references, and provider-specific extraction.
-func FilterResolversWithDependencies(resolvers []*resolver.Resolver, targetNames []string, lookup resolver.DescriptorLookup) []*resolver.Resolver {
+// Uses resolver.ExtractDependencies and (unless WithSkipValidationDeps(true) is
+// passed) resolver.ExtractValidateDependencies to detect resolution and
+// cross-resolver deferred-validation dependencies while leaving
+// resolver.BuildPhases untouched.
+func FilterResolversWithDependencies(
+	resolvers []*resolver.Resolver,
+	targetNames []string,
+	lookup resolver.DescriptorLookup,
+	opts ...FilterOption,
+) []*resolver.Resolver {
+	var fcfg filterConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&fcfg)
+		}
+	}
+
 	if len(targetNames) == 0 {
 		// Exclude explicit resolvers from bare invocations, but preserve
 		// dependency closure: start from all non-explicit resolvers, then
@@ -90,9 +120,20 @@ func FilterResolversWithDependencies(resolvers []*resolver.Resolver, targetNames
 				return
 			}
 			needed[name] = true
-			deps := resolver.ExtractDependencies(r, lookup)
-			for _, dep := range deps {
+			for _, dep := range resolver.ExtractDependencies(r, lookup) {
 				collectDeps(dep)
+			}
+			if !fcfg.skipValidationDeps {
+				for _, dep := range resolver.ExtractValidateDependencies(r, lookup) {
+					collectDeps(dep)
+				}
+				if resolver.ValidateReferencesWholeNamespace(r) {
+					for _, other := range resolvers {
+						if !other.Explicit {
+							collectDeps(other.Name)
+						}
+					}
+				}
 			}
 		}
 		for _, r := range resolvers {
@@ -130,9 +171,18 @@ func FilterResolversWithDependencies(resolvers []*resolver.Resolver, targetNames
 			return
 		}
 
-		deps := resolver.ExtractDependencies(r, lookup)
-		for _, dep := range deps {
+		for _, dep := range resolver.ExtractDependencies(r, lookup) {
 			collectDeps(dep)
+		}
+		if !fcfg.skipValidationDeps {
+			for _, dep := range resolver.ExtractValidateDependencies(r, lookup) {
+				collectDeps(dep)
+			}
+			if resolver.ValidateReferencesWholeNamespace(r) {
+				for _, other := range resolvers {
+					collectDeps(other.Name)
+				}
+			}
 		}
 	}
 

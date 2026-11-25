@@ -1287,7 +1287,8 @@ spec:
       greet:
         provider: message
         inputs:
-          message: "SHOULD_NOT_RUN"
+          message:
+            expr: '"SHOULD_NOT_RUN " + string(_.broken)'
           type: info
 `
 
@@ -1362,6 +1363,61 @@ func TestIntegration_RunAction_FailureEnvelope_JSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(stdout), &decoded), "stdout must be valid JSON")
 	assert.Equal(t, "failed", decoded["status"])
 	assert.NotEmpty(t, decoded["diagnostics"])
+}
+
+func TestIntegration_RunAction_ScopedResolversAndResolveAll(t *testing.T) {
+	t.Parallel()
+
+	const scopedSol = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cli-scoped-resolvers
+  version: 1.0.0
+spec:
+  resolvers:
+    broken:
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "string(1 / 0)"
+  workflow:
+    actions:
+      clean:
+        provider: message
+        inputs:
+          message: "cleaned"
+      deploy:
+        provider: message
+        inputs:
+          message:
+            rslvr: broken
+`
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(scopedSol), 0o600))
+
+	// run action clean executes 0 resolvers and succeeds even though broken fails if run.
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "action", "clean", "-f", solutionPath, "--show-execution", "-o", "json",
+	)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode)
+	var cleanOut map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &cleanOut))
+	assert.Equal(t, "succeeded", cleanOut["status"])
+	execMeta, ok := cleanOut["__execution"].(map[string]any)
+	require.True(t, ok)
+	summary, ok := execMeta["summary"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(0), summary["resolverCount"])
+
+	// --resolve-all forces all resolvers to run, surfacing broken's failure.
+	_, _, resolveAllExit := runScafctl(t,
+		"run", "action", "clean", "--resolve-all", "-f", solutionPath, "-o", "json",
+	)
+	assert.Equal(t, 1, resolveAllExit)
 }
 
 // partialFailureSolution has one resolver that resolves successfully ("good")

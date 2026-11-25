@@ -2152,16 +2152,31 @@ spec:
 
 ## Minimal Resolver Execution
 
-Resolvers run only when required.
+> **Status**: Implemented in `pkg/solution/execute/action_resolvers.go` and `pkg/solution/execute/results.go`
+
+When specific actions are targeted via `scafctl run action <name...>` or `scafctl run solution --action <name>` (including `--dry-run`), scafctl executes only the resolvers required by the filtered workflow:
+
+- Direct and nested references in `inputs` (`rslvr`, `expr`, `tmpl`, and nested literal maps/lists)
+- Reusable call arguments (`args` on `spec.calls` invocations) and `spec.functions` template call sites
+- Iteration sources (`forEach.in`), conditions (`when`, `continueOnError`, `forEach.continueOnError`, `retry.retryIf`), `finally` actions, and active state configuration (`state.enabled`, `state.load`, and `state.save`)
+- Transitive resolver dependencies and cross-resolver `validate` dependencies
+
+Actions that reference zero resolvers execute zero resolvers. Bare `scafctl run solution` and bare `scafctl run action` (with no action filter) execute all resolvers in the solution.
 
 ~~~bash
+# Execute only the resolvers needed by 'deploy' (plus its dependsOn and finally actions)
+scafctl run action deploy
 scafctl run solution myapp --action deploy
+
+# Inspect only the resolvers referenced by 'deploy' without running actions
+scafctl run resolver --action deploy
 ~~~
 
-Force all resolvers with:
+Force all resolvers to execute regardless of action selection with `--resolve-all`:
 
 ~~~bash
-scafctl run solution myapp --resolve-all
+scafctl run action deploy --resolve-all
+scafctl run solution myapp --action deploy --resolve-all
 ~~~
 
 ---

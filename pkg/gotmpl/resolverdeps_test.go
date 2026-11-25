@@ -301,3 +301,78 @@ func TestUnscopedActionRefs_ParseError(t *testing.T) {
 	_, err := UnscopedActionRefs(`{{ .__actions.x `, "", "", nil)
 	assert.Error(t, err)
 }
+
+func TestReferencesWholeResolverNamespace(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   ResolverDepsInput
+		want bool
+	}{
+		{name: "empty", in: ResolverDepsInput{Template: ""}, want: false},
+		{name: "parse error", in: ResolverDepsInput{Template: "{{ ._ "}, want: false},
+		{name: "specific underscore field", in: ResolverDepsInput{Template: "{{ ._.host }}"}, want: false},
+		{name: "chained specific underscore field", in: ResolverDepsInput{Template: "{{ (._).host }}"}, want: false},
+		{name: "scoped dot inside range", in: ResolverDepsInput{Template: "{{ range .items }}{{ . }}{{ end }}"}, want: false},
+		{name: "whole underscore map in printf", in: ResolverDepsInput{Template: `{{ printf "%v" ._ }}`}, want: true},
+		{name: "whole dollar underscore inside range", in: ResolverDepsInput{Template: `{{ range .items }}{{ $._ }}{{ end }}`}, want: true},
+		{name: "unscoped root dot", in: ResolverDepsInput{Template: `{{ toJson . }}`}, want: true},
+		{name: "bare root dollar", in: ResolverDepsInput{Template: `{{ printf "%v" $ }}`}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, ReferencesWholeResolverNamespace(tt.in))
+		})
+	}
+
+	// Verify parenthesized chains extract the targeted resolver even under data scope or range blocks.
+	assert.Equal(t, []string{"host"}, ExtractResolverDeps(ResolverDepsInput{
+		Template:     "{{ (._).host }}",
+		HasDataInput: true,
+		DataKeys:     map[string]bool{"host": true},
+	}))
+	assert.Equal(t, []string{"items", "host"}, ExtractResolverDeps(ResolverDepsInput{
+		Template: "{{ range .items }}{{ ($._).host }}{{ end }}",
+	}))
+	assert.Equal(t, []string{"host"}, ExtractResolverDeps(ResolverDepsInput{
+		Template: "{{ (.).host }}",
+	}))
+
+	// Named template definitions use the invocation's dot/$ scope rather than root scope.
+	narrowedDef := ResolverDepsInput{
+		Template: `{{ define "value" }}{{ . }} {{ $ }} {{ $.sub }} {{ ._.sub }}{{ end }}{{ define "unused" }}{{ . }} {{ ._.broken }}{{ end }}{{ template "value" ._.host }}`,
+	}
+	assert.False(t, ReferencesWholeResolverNamespace(narrowedDef))
+	assert.Equal(t, []string{"host"}, ExtractResolverDeps(narrowedDef))
+
+	resolverMapDef := ResolverDepsInput{
+		Template:     `{{ define "pick" }}{{ .host }}{{ end }}{{ template "pick" ._ }}`,
+		HasDataInput: true,
+		DataKeys:     map[string]bool{"host": true},
+	}
+	assert.False(t, ReferencesWholeResolverNamespace(resolverMapDef))
+	assert.Equal(t, []string{"host"}, ExtractResolverDeps(resolverMapDef))
+
+	wholeViaDef := ResolverDepsInput{
+		Template: `{{ define "dump" }}{{ . }}{{ end }}{{ template "dump" ._ }}`,
+	}
+	assert.True(t, ReferencesWholeResolverNamespace(wholeViaDef))
+
+	recursiveDef := ResolverDepsInput{
+		Template: `{{ define "rec" }}{{ ._.host }}{{ template "rec" . }}{{ end }}{{ template "rec" . }}`,
+	}
+	assert.False(t, ReferencesWholeResolverNamespace(recursiveDef))
+	assert.Equal(t, []string{"host"}, ExtractResolverDeps(recursiveDef))
+
+	hardDeps, candidateDeps := ExtractResolverDepsWithCandidates(ResolverDepsInput{
+		Template:         "{{ .guaranteed }} {{ .host }} {{ .port }} {{ ._.host }}",
+		HasDataInput:     true,
+		DataKeys:         map[string]bool{"guaranteed": true},
+		DataKeysComplete: false,
+	})
+	assert.Equal(t, []string{"host"}, hardDeps)
+	assert.Equal(t, []string{"port"}, candidateDeps)
+}

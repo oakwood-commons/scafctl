@@ -3,7 +3,10 @@
 
 package gotmpl
 
-import "strings"
+import (
+	"strings"
+	"text/template/parse"
+)
 
 // DepScanContextKey is the reserved input-map key under which resolver dependency
 // extraction context is passed to a template-based provider's ExtractDependencies
@@ -19,10 +22,13 @@ const DepScanContextKey = "__scafctl_dep_scan_context"
 type DepScanContext struct {
 	// HasDataInput indicates the step supplies an explicit data input.
 	HasDataInput bool
-	// DataKeys is the set of top-level keys the data input provides. Only
-	// meaningful when DataKeysComplete is true.
+	// DataKeys is the set of top-level keys guaranteed to be present in the
+	// data input. Guaranteed keys are excluded from bare {{ .field }} resolver
+	// dependencies even when DataKeysComplete is false (for example when static
+	// shared data is merged with dynamic per-entry data).
 	DataKeys map[string]bool
-	// DataKeysComplete indicates DataKeys is an authoritative, complete key set.
+	// DataKeysComplete indicates DataKeys is an authoritative, complete key set
+	// with no additional dynamic keys unknown at scan time.
 	DataKeysComplete bool
 	// Aliases is the set of forEach item/index alias names bound locally.
 	Aliases map[string]bool
@@ -48,14 +54,16 @@ type ResolverDepsInput struct {
 	// resolver graph.
 	HasDataInput bool
 
-	// DataKeys is the set of top-level keys the `data` input provides. It is
-	// only meaningful when DataKeysComplete is true.
+	// DataKeys is the set of top-level keys guaranteed to be present in the
+	// `data` input. Guaranteed keys are excluded from bare {{ .field }}
+	// resolver dependencies and fallback candidates regardless of whether
+	// DataKeysComplete is true.
 	DataKeys map[string]bool
 
 	// DataKeysComplete indicates DataKeys is an authoritative, complete list of
-	// the keys the data input provides. It is false when the data input is
-	// dynamic (e.g. a rslvr reference or a non-map-literal expression) and the
-	// key set cannot be determined statically.
+	// the keys the data input provides. It is false when any merged data source
+	// is dynamic (e.g. a rslvr reference or a non-map-literal expression) and
+	// additional keys cannot be determined statically.
 	DataKeysComplete bool
 
 	// Aliases is the set of forEach item/index alias names bound locally for the
@@ -92,57 +100,22 @@ const (
 // The returned names are de-duplicated and preserve first-seen order. Template
 // parse errors yield a nil slice (extraction is best-effort).
 func ExtractResolverDeps(in ResolverDepsInput) []string {
-	refs, err := GetGoTemplateReferences(in.Template, in.LeftDelim, in.RightDelim)
-	if err != nil {
-		return nil
-	}
-
-	seen := make(map[string]bool)
-	var deps []string
-	add := func(name string) {
-		if name != "" && !seen[name] {
-			seen[name] = true
-			deps = append(deps, name)
-		}
-	}
-
-	for _, ref := range refs {
-		// Scoped references point at fields of a {{ with }}/{{ range }} narrowed
-		// context, not the root data, so they are never resolver dependencies.
-		if ref.Scoped {
-			continue
-		}
-
-		name, kind := classifyTemplatePath(ref.Path)
-		switch kind {
-		case pathSpecial:
-			continue
-		case pathExplicitResolver:
-			add(name)
-		case pathField:
-			if in.Aliases[name] {
-				continue
-			}
-			if !in.HasDataInput {
-				// No data input: the template root is resolver data.
-				add(name)
-				continue
-			}
-			if !in.DataKeysComplete {
-				// Data input present but its keys are not statically known:
-				// treat the whole template root as data context.
-				continue
-			}
-			if in.DataKeys[name] {
-				continue
-			}
-			// A field not provided by the known data keys still resolves against
-			// resolver data (buildTemplateData copies resolver data first).
-			add(name)
-		}
-	}
-
+	deps, _, _ := scanTemplateResolverDeps(in)
 	return deps
+}
+
+// ExtractResolverDepsWithCandidates partitions root-level template references
+// into unambiguous dependencies (explicit {{ ._.name }} references plus bare
+// {{ .field }} accessors not shadowed by guaranteed DataKeys or loop aliases
+// when HasDataInput is false or DataKeysComplete is true) and fallback
+// candidates (bare {{ .field }} accessors not in DataKeys or Aliases when
+// HasDataInput is true and DataKeysComplete is false, which resolve against the
+// base resolver context whenever the dynamic data map omits that key). Names
+// present in hardDeps are never repeated in candidateDeps regardless of
+// reference order.
+func ExtractResolverDepsWithCandidates(in ResolverDepsInput) (hardDeps, candidateDeps []string) {
+	hardDeps, candidateDeps, _ = scanTemplateResolverDeps(in)
+	return hardDeps, candidateDeps
 }
 
 // UnscopedResolverRef is a root-level, unscoped reference candidate in a Go
@@ -289,4 +262,306 @@ func UnscopedActionRefs(template, leftDelim, rightDelim string, declaredFuncs []
 		out = append(out, name)
 	}
 	return out, nil
+}
+
+// ReferencesWholeResolverNamespace reports whether in.Template accesses the
+// root resolver map as a whole (for example via {{ ._ }}, {{ printf "%v" ._ }},
+// {{ $._ }}, unscoped {{ . }}, or bare {{ $ }}) across reachable template
+// invocations such that individual resolver names cannot be enumerated
+// statically. Parse errors return false.
+func ReferencesWholeResolverNamespace(in ResolverDepsInput) bool {
+	_, _, whole := scanTemplateResolverDeps(in)
+	return whole
+}
+
+type tmplScopeKind int
+
+const (
+	tmplScopeRoot tmplScopeKind = iota
+	tmplScopeResolverMap
+	tmplScopeNarrowed
+)
+
+type tmplVisitKey struct {
+	name   string
+	dot    tmplScopeKind
+	dollar tmplScopeKind
+}
+
+const rootTemplateScanName = "resolver-deps-scan"
+
+func scanTemplateResolverDeps(in ResolverDepsInput) ([]string, []string, bool) {
+	if in.Template == "" {
+		return nil, nil, false
+	}
+	leftDelim := in.LeftDelim
+	if leftDelim == "" {
+		leftDelim = DefaultLeftDelim
+	}
+	rightDelim := in.RightDelim
+	if rightDelim == "" {
+		rightDelim = DefaultRightDelim
+	}
+
+	svc := NewService(nil)
+	trees, err := parseTemplatesTolerant(rootTemplateScanName, in.Template, leftDelim, rightDelim, svc.templateFuncNamesWith(nil))
+	if err != nil {
+		return nil, nil, false
+	}
+	mainTree := trees[rootTemplateScanName]
+	if mainTree == nil || mainTree.Root == nil {
+		return nil, nil, false
+	}
+
+	sc := &scopedTemplateScanner{
+		in:       in,
+		trees:    trees,
+		seen:     make(map[string]bool),
+		seenSoft: make(map[string]bool),
+		active:   make(map[tmplVisitKey]bool),
+	}
+	sc.walkNode(mainTree.Root, tmplScopeRoot, tmplScopeRoot)
+	var softDeps []string
+	for _, name := range sc.softDeps {
+		if !sc.seen[name] {
+			softDeps = append(softDeps, name)
+		}
+	}
+	return sc.deps, softDeps, sc.whole
+}
+
+type scopedTemplateScanner struct {
+	in       ResolverDepsInput
+	trees    map[string]*parse.Tree
+	seen     map[string]bool
+	seenSoft map[string]bool
+	deps     []string
+	softDeps []string
+	whole    bool
+	active   map[tmplVisitKey]bool
+}
+
+func (s *scopedTemplateScanner) addDep(name string) {
+	if name != "" && !s.seen[name] {
+		s.seen[name] = true
+		s.deps = append(s.deps, name)
+	}
+}
+
+func (s *scopedTemplateScanner) addSoftDep(name string) {
+	if name != "" && !s.seen[name] && !s.seenSoft[name] {
+		s.seenSoft[name] = true
+		s.softDeps = append(s.softDeps, name)
+	}
+}
+
+func (s *scopedTemplateScanner) walkNode(node parse.Node, dotScope, dollarScope tmplScopeKind) {
+	if node == nil {
+		return
+	}
+	switch n := node.(type) {
+	case *parse.ListNode:
+		if n == nil {
+			return
+		}
+		for _, child := range n.Nodes {
+			s.walkNode(child, dotScope, dollarScope)
+		}
+	case *parse.ActionNode:
+		s.walkPipe(n.Pipe, dotScope, dollarScope)
+	case *parse.IfNode:
+		s.walkPipe(n.Pipe, dotScope, dollarScope)
+		s.walkNode(n.List, dotScope, dollarScope)
+		s.walkNode(n.ElseList, dotScope, dollarScope)
+	case *parse.RangeNode:
+		s.walkPipe(n.Pipe, dotScope, dollarScope)
+		s.walkNode(n.List, tmplScopeNarrowed, dollarScope)
+		s.walkNode(n.ElseList, dotScope, dollarScope)
+	case *parse.WithNode:
+		s.walkPipe(n.Pipe, dotScope, dollarScope)
+		s.walkNode(n.List, tmplScopeNarrowed, dollarScope)
+		s.walkNode(n.ElseList, dotScope, dollarScope)
+	case *parse.TemplateNode:
+		s.walkTemplateInvocation(n, dotScope, dollarScope)
+	}
+}
+
+func (s *scopedTemplateScanner) walkTemplateInvocation(n *parse.TemplateNode, dotScope, dollarScope tmplScopeKind) {
+	subTree := s.trees[n.Name]
+	if subTree == nil || subTree.Root == nil {
+		// External/undefined template: inspect the invocation argument normally.
+		s.walkPipe(n.Pipe, dotScope, dollarScope)
+		return
+	}
+
+	subScope := tmplScopeNarrowed
+	if n.Pipe != nil {
+		if bound, ok := singlePipeArgScope(n.Pipe, dotScope, dollarScope); ok {
+			subScope = bound
+		} else {
+			s.walkPipe(n.Pipe, dotScope, dollarScope)
+		}
+	}
+
+	key := tmplVisitKey{name: n.Name, dot: subScope, dollar: subScope}
+	if s.active[key] {
+		return
+	}
+	s.active[key] = true
+	s.walkNode(subTree.Root, subScope, subScope)
+	delete(s.active, key)
+}
+
+func singlePipeArgScope(pipe *parse.PipeNode, dotScope, dollarScope tmplScopeKind) (tmplScopeKind, bool) {
+	if pipe == nil || len(pipe.Decl) > 0 || len(pipe.Cmds) != 1 || pipe.Cmds[0] == nil || len(pipe.Cmds[0].Args) != 1 {
+		return tmplScopeNarrowed, false
+	}
+	arg := unwrapSinglePipeArg(pipe.Cmds[0].Args[0])
+	switch n := arg.(type) {
+	case *parse.DotNode:
+		if dotScope == tmplScopeRoot || dotScope == tmplScopeResolverMap {
+			return dotScope, true
+		}
+	case *parse.FieldNode:
+		if len(n.Ident) == 1 && n.Ident[0] == "_" && dotScope == tmplScopeRoot {
+			return tmplScopeResolverMap, true
+		}
+	case *parse.VariableNode:
+		if len(n.Ident) == 1 && n.Ident[0] == "$" && (dollarScope == tmplScopeRoot || dollarScope == tmplScopeResolverMap) {
+			return dollarScope, true
+		}
+		if len(n.Ident) == 2 && n.Ident[0] == "$" && n.Ident[1] == "_" && dollarScope == tmplScopeRoot {
+			return tmplScopeResolverMap, true
+		}
+	case *parse.ChainNode:
+		base := unwrapSinglePipeArg(n.Node)
+		if len(n.Field) == 1 && n.Field[0] == "_" {
+			if _, isDot := base.(*parse.DotNode); isDot && dotScope == tmplScopeRoot {
+				return tmplScopeResolverMap, true
+			}
+			if vn, isVar := base.(*parse.VariableNode); isVar && len(vn.Ident) == 1 && vn.Ident[0] == "$" && dollarScope == tmplScopeRoot {
+				return tmplScopeResolverMap, true
+			}
+		}
+	}
+	return tmplScopeNarrowed, false
+}
+
+func (s *scopedTemplateScanner) walkPipe(pipe *parse.PipeNode, dotScope, dollarScope tmplScopeKind) {
+	if pipe == nil {
+		return
+	}
+	for _, cmd := range pipe.Cmds {
+		if cmd == nil {
+			continue
+		}
+		for _, arg := range cmd.Args {
+			s.walkArg(arg, dotScope, dollarScope)
+		}
+	}
+}
+
+func (s *scopedTemplateScanner) walkArg(arg parse.Node, dotScope, dollarScope tmplScopeKind) {
+	switch n := arg.(type) {
+	case *parse.DotNode:
+		if dotScope == tmplScopeRoot || dotScope == tmplScopeResolverMap {
+			s.whole = true
+		}
+	case *parse.FieldNode:
+		s.recordPath(buildFieldPath(n.Ident), dotScope)
+	case *parse.VariableNode:
+		if len(n.Ident) >= 1 && n.Ident[0] == "$" {
+			if len(n.Ident) == 1 {
+				if dollarScope == tmplScopeRoot || dollarScope == tmplScopeResolverMap {
+					s.whole = true
+				}
+				return
+			}
+			s.recordPath("."+strings.Join(n.Ident[1:], "."), dollarScope)
+		}
+	case *parse.ChainNode:
+		if len(n.Field) == 0 {
+			s.walkArg(n.Node, dotScope, dollarScope)
+			return
+		}
+		base := unwrapSinglePipeArg(n.Node)
+		switch b := base.(type) {
+		case *parse.VariableNode:
+			if len(b.Ident) >= 1 && b.Ident[0] == "$" {
+				parts := make([]string, 0, len(b.Ident)-1+len(n.Field))
+				parts = append(parts, b.Ident[1:]...)
+				parts = append(parts, n.Field...)
+				s.recordPath("."+strings.Join(parts, "."), dollarScope)
+			}
+			return
+		case *parse.FieldNode:
+			parts := make([]string, 0, len(b.Ident)+len(n.Field))
+			parts = append(parts, b.Ident...)
+			parts = append(parts, n.Field...)
+			s.recordPath("."+strings.Join(parts, "."), dotScope)
+			return
+		case *parse.DotNode:
+			s.recordPath("."+strings.Join(n.Field, "."), dotScope)
+			return
+		default:
+			s.walkArg(n.Node, dotScope, dollarScope)
+		}
+	case *parse.PipeNode:
+		s.walkPipe(n, dotScope, dollarScope)
+	}
+}
+
+func (s *scopedTemplateScanner) recordPath(path string, scope tmplScopeKind) {
+	switch scope {
+	case tmplScopeNarrowed:
+		return
+	case tmplScopeResolverMap:
+		if path == "." || path == "" {
+			s.whole = true
+			return
+		}
+		seg := firstSegment(strings.TrimPrefix(path, "."))
+		if strings.HasPrefix(seg, "__") {
+			return
+		}
+		s.addDep(seg)
+	case tmplScopeRoot:
+		if path == "._" || path == "." {
+			s.whole = true
+			return
+		}
+		name, kind := classifyTemplatePath(path)
+		switch kind {
+		case pathSpecial:
+			return
+		case pathExplicitResolver:
+			s.addDep(name)
+		case pathField:
+			if s.in.Aliases[name] {
+				return
+			}
+			if !s.in.HasDataInput {
+				s.addDep(name)
+				return
+			}
+			if s.in.DataKeys[name] {
+				return
+			}
+			if !s.in.DataKeysComplete {
+				s.addSoftDep(name)
+				return
+			}
+			s.addDep(name)
+		}
+	}
+}
+
+func unwrapSinglePipeArg(node parse.Node) parse.Node {
+	for {
+		p, ok := node.(*parse.PipeNode)
+		if !ok || p == nil || len(p.Decl) > 0 || len(p.Cmds) != 1 || p.Cmds[0] == nil || len(p.Cmds[0].Args) != 1 {
+			return node
+		}
+		node = p.Cmds[0].Args[0]
+	}
 }

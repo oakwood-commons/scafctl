@@ -10,12 +10,10 @@ import (
 	"io"
 	"os"
 	stdfilepath "path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
-	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	cmdflags "github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	cmdlint "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -570,14 +568,21 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	// Get all resolvers, then filter by names if specified
 	allResolvers := sol.Spec.ResolversToSlice()
 
+	var lookup resolver.DescriptorLookup
+	if reg != nil {
+		lookup = reg.DescriptorLookup()
+	}
+
 	// --action: extract resolver names consumed by the specified action(s)
 	if len(o.Actions) > 0 {
-		actionNames, actionErr := o.resolveActionResolverNames(sol)
+		actionNames, actionErr := o.resolveActionResolverNames(sol, lookup)
 		if actionErr != nil {
 			return o.exitWithCode(ctx, actionErr, exitcode.InvalidInput)
 		}
-		names = actionNames
-		lgr.V(1).Info("--action resolved to resolver names", "actions", o.Actions, "resolvers", actionNames)
+		if !o.ResolveAll {
+			names = actionNames
+			lgr.V(1).Info("--action resolved to resolver names", "actions", o.Actions, "resolvers", actionNames)
+		}
 	}
 
 	// Validate parameter keys against parameter provider 'key' inputs (early
@@ -586,11 +591,24 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
-	var lookup resolver.DescriptorLookup
-	if reg != nil {
-		lookup = reg.DescriptorLookup()
+	// Wire skip-transform and resolve validation policy before dependency
+	// filtering so validation-only dependencies are omitted when validation will
+	// not execute (unless --snapshot is set, which forces non-fatal validation).
+	if o.SkipTransform {
+		o.sharedResolverOptions.SkipTransform = true
 	}
-	resolvers := execute.FilterResolversWithDependencies(allResolvers, names, lookup)
+	policy, err := o.resolveValidationPolicy(ctx)
+	if err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
+	var resolvers []*resolver.Resolver
+	if o.ResolveAll {
+		resolvers = allResolvers
+	} else {
+		skipValidation := o.SkipTransform || (!o.Snapshot && policy == settings.ValidationIgnore)
+		resolvers = execute.FilterResolversWithDependencies(allResolvers, names, lookup, execute.WithSkipValidationDeps(skipValidation))
+	}
 
 	// Validate requested names exist
 	if len(names) > 0 {
@@ -659,19 +677,6 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 			warnSolutionMismatch(ctx, stateData, sol)
 		}
 		reportStateLoaded(ctx, loadResult.LoadResult)
-	}
-
-	// Wire skip-transform flag into shared options for executeResolvers
-	if o.SkipTransform {
-		o.sharedResolverOptions.SkipTransform = true
-	}
-
-	// Resolve the validation-failure policy (default "warn" for run resolver /
-	// "error" for validate resolver). This configures executeResolvers and
-	// drives the exit-code decision below.
-	policy, err := o.resolveValidationPolicy(ctx)
-	if err != nil {
-		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
 	// Track timing
@@ -1141,90 +1146,20 @@ func helpDiscoveryContext(ctx context.Context, c *cobra.Command, cliParams *sett
 	return settings.IntoContext(ctx, &effective)
 }
 
-// resolveActionResolverNames looks up the specified action(s) in the solution's
-// workflow and extracts the resolver names referenced by their inputs, forEach.in,
-// and when conditions. Multiple actions are unioned. Returns an error if the
-// solution has no workflow or an action does not exist.
-func (o *ResolverOptions) resolveActionResolverNames(sol *solution.Solution) ([]string, error) {
-	if !sol.Spec.HasWorkflow() {
-		return nil, fmt.Errorf("--action requires a solution with a workflow section, but %q has none", sol.Metadata.Name)
+// resolveActionResolverNames delegates to execute.NamedActionsResolverRefs to
+// extract the resolver names referenced by the requested action(s), enforcing
+// the CLI zero-reference error unless --resolve-all is set.
+func (o *ResolverOptions) resolveActionResolverNames(sol *solution.Solution, lookup resolver.DescriptorLookup) ([]string, error) {
+	names, err := execute.NamedActionsResolverRefs(sol, o.Actions, lookup)
+	if err != nil {
+		return nil, err
 	}
-
-	workflow := sol.Spec.Workflow
-	unioned := make(map[string]bool)
-
-	for _, actionName := range o.Actions {
-		act, found := workflow.Actions[actionName]
-		if !found {
-			// Also check finally actions
-			act, found = workflow.Finally[actionName]
-		}
-		if !found {
-			// Build available action names for the error message
-			available := make([]string, 0, len(workflow.Actions))
-			for name := range workflow.Actions {
-				available = append(available, name)
-			}
-			for name := range workflow.Finally {
-				available = append(available, name)
-			}
-			sort.Strings(available)
-			return nil, fmt.Errorf("action %q not found (available: %s)", actionName, strings.Join(available, ", "))
-		}
-
-		// Build a set of forEach alias names to exclude from extracted refs.
-		// These are iteration variables, not resolver names.
-		forEachAliases := make(map[string]bool)
-		if act.ForEach != nil {
-			if act.ForEach.Item != "" {
-				forEachAliases[act.ForEach.Item] = true
-			}
-			if act.ForEach.Index != "" {
-				forEachAliases[act.ForEach.Index] = true
-			}
-		}
-
-		// Extract resolver names from the action's inputs
-		for _, name := range resolver.ExtractRefsFromValueRefs(act.Inputs) {
-			if !forEachAliases[name] {
-				unioned[name] = true
-			}
-		}
-
-		// Extract from forEach.in if present
-		if act.ForEach != nil && act.ForEach.In != nil {
-			for _, name := range resolver.ExtractRefsFromValueRefs(map[string]*resolver.ValueRef{"in": act.ForEach.In}) {
-				unioned[name] = true
-			}
-		}
-
-		// Extract from the when condition if present
-		if act.When != nil && act.When.Expr != nil {
-			celExpr := celexp.Expression(*act.When.Expr)
-			vars, err := celExpr.GetUnderscoreVariables(context.TODO())
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse when condition for action %q: %w", actionName, err)
-			}
-			for _, v := range vars {
-				if !forEachAliases[v] {
-					unioned[v] = true
-				}
-			}
-		}
-	}
-
-	if len(unioned) == 0 {
+	if len(names) == 0 && !o.ResolveAll {
 		if len(o.Actions) == 1 {
 			return nil, fmt.Errorf("action %q does not reference any resolvers in its inputs or conditions", o.Actions[0])
 		}
 		return nil, fmt.Errorf("actions %v do not reference any resolvers in their inputs or conditions", o.Actions)
 	}
-
-	names := make([]string, 0, len(unioned))
-	for name := range unioned {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 	return names, nil
 }
 

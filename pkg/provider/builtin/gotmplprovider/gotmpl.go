@@ -16,6 +16,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -1404,13 +1405,174 @@ func buildIgnoredBlockReplacements(templateStr string, configs []ignoredBlockCon
 	return replacements
 }
 
+// ExtractDependencies extracts resolver references from go-template provider
+// inputs for both "render" and "render-tree" operations.
+func ExtractDependencies(inputs map[string]any) []string {
+	return extractDependencies(inputs)
+}
+
+// ExtractRawTemplateDependencies extracts resolver references only from raw Go
+// template strings evaluated by the go-template provider (pathTemplate, non-raw
+// render-tree entries[*].content, and render template), without re-scanning
+// explicit ValueRef wrappers ({rslvr}, {expr}, {tmpl}). Callers that separately
+// partition explicit wrappers into hard vs optional references use this helper
+// so optional CEL references are not promoted to hard dependencies.
+func ExtractRawTemplateDependencies(inputs map[string]any) []string {
+	deps, _ := ExtractRawTemplateDependenciesWithCandidates(inputs)
+	return deps
+}
+
+// ExtractRawTemplateDependenciesWithCandidates extracts both unambiguous raw
+// template dependencies and fallback candidate names (bare {{ .field }}
+// accessors when a dynamic data map does not have statically known keys, which
+// fall back to the base resolver context in buildTemplateData whenever the
+// dynamic data map omits that key). Names present in hardDeps are never
+// repeated in candidateDeps regardless of scan order.
+func ExtractRawTemplateDependenciesWithCandidates(inputs map[string]any) (hardDeps, candidateDeps []string) {
+	seenHard := make(map[string]bool)
+	seenSoft := make(map[string]bool)
+	hardDeps = []string{}
+	var rawSoft []string
+	addHard := func(name string) {
+		if name != "" && !seenHard[name] {
+			seenHard[name] = true
+			hardDeps = append(hardDeps, name)
+		}
+	}
+	addSoft := func(name string) {
+		if name != "" && !seenHard[name] && !seenSoft[name] {
+			seenSoft[name] = true
+			rawSoft = append(rawSoft, name)
+		}
+	}
+	fanOutAliases := extractFanOutDeps(inputs, func(string) {})
+	scanRawTemplates(inputs, fanOutAliases, func(scan gotmpl.ResolverDepsInput) {
+		hard, soft := gotmpl.ExtractResolverDepsWithCandidates(scan)
+		for _, name := range hard {
+			addHard(name)
+		}
+		for _, name := range soft {
+			addSoft(name)
+		}
+	})
+	candidateDeps = []string{}
+	for _, name := range rawSoft {
+		if !seenHard[name] {
+			candidateDeps = append(candidateDeps, name)
+		}
+	}
+	return hardDeps, candidateDeps
+}
+
+// ReferencesWholeNamespace reports whether any active template evaluated by the
+// go-template provider for inputs accesses the root resolver namespace as a
+// whole or receives dynamically supplied template content whose internal
+// resolver references cannot be inspected statically before resolution.
+func ReferencesWholeNamespace(inputs map[string]any) bool {
+	if hasDynamicActiveTemplateInputs(inputs) {
+		return true
+	}
+	whole := false
+	fanOutAliases := extractFanOutDeps(inputs, func(string) {})
+	scanRawTemplates(inputs, fanOutAliases, func(scan gotmpl.ResolverDepsInput) {
+		if !whole && gotmpl.ReferencesWholeResolverNamespace(scan) {
+			whole = true
+		}
+	})
+	return whole
+}
+
+func isDynamicSuppliedRef(v any) bool {
+	if _, isStr := v.(string); isStr {
+		return false
+	}
+	if m, isMap := v.(map[string]any); isMap && len(m) == 1 {
+		if _, isTmpl := m["tmpl"].(string); isTmpl {
+			// Explicit tmpl: ValueRef wrapper is statically inspectable by the caller.
+			return false
+		}
+	}
+	return true
+}
+
+func hasDynamicActiveTemplateInputs(inputs map[string]any) bool {
+	// Dynamically supplied template delimiters prevent static template parsing.
+	for _, delimKey := range []string{"leftDelim", "rightDelim"} {
+		if rawDelim, exists := inputs[delimKey]; exists && rawDelim != nil {
+			if _, ok := rawDelim.(string); !ok {
+				return true
+			}
+		}
+	}
+
+	// Active render template supplied dynamically (e.g. {rslvr: ...} or {expr: ...}).
+	if opStr, isStr := inputs["operation"].(string); !isStr || opStr != OperationRenderTree {
+		if rawTmpl, exists := inputs["template"]; exists && rawTmpl != nil {
+			if isDynamicSuppliedRef(rawTmpl) {
+				return true
+			}
+		}
+	}
+
+	// Active pathTemplate supplied dynamically.
+	if shouldScanPathTemplate(inputs) {
+		if rawPathTmpl, exists := inputs["pathTemplate"]; exists && rawPathTmpl != nil {
+			if isDynamicSuppliedRef(rawPathTmpl) {
+				return true
+			}
+		}
+	}
+
+	// Active render-tree entries supplied dynamically (whole slice, entry map,
+	// raw flag, or non-raw entry content).
+	if shouldScanRenderTreeEntries(inputs) {
+		rawEntries, exists := inputs["entries"]
+		if !exists || rawEntries == nil {
+			return false
+		}
+		entriesSlice, ok := toAnySlice(rawEntries)
+		if !ok {
+			return true
+		}
+		rawGlobs, _ := parseRawGlobs(inputs)
+		for _, entryRaw := range entriesSlice {
+			entry, isMap := entryRaw.(map[string]any)
+			if !isMap || (len(entry) == 1 && isValueRefShapedData(entry)) {
+				return true
+			}
+			entryPath, pathIsStr := entry["path"].(string)
+			entryGlobs := rawGlobs
+			if !pathIsStr {
+				entryGlobs = nil
+			}
+			raw, badRawType := isRawEntry(entryPath, entry, entryGlobs)
+			if badRawType {
+				return true
+			}
+			if raw {
+				continue
+			}
+			contentVal, hasContent := entry["content"]
+			if !hasContent || contentVal == nil {
+				continue
+			}
+			if isDynamicSuppliedRef(contentVal) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // extractDependencies extracts resolver references from the go-template provider inputs.
 // Handles both the "render" operation (template input) and the "render-tree" operation
 // (entries/data inputs). It respects custom delimiters specified in leftDelim/rightDelim
-// if present.
+// if present. Returns a non-nil slice so callers distinguish "zero dependencies"
+// from extraction failure (nil).
 func extractDependencies(inputs map[string]any) []string {
 	seen := make(map[string]bool)
-	var deps []string
+	deps := []string{}
 
 	addDep := func(name string) {
 		if name != "" && !seen[name] {
@@ -1419,13 +1581,30 @@ func extractDependencies(inputs map[string]any) []string {
 		}
 	}
 
+	// Extract explicit ValueRef wrappers (top-level and nested single-key
+	// {rslvr: ...}, {expr: ...}, {tmpl: ...} maps) across all inputs using only
+	// caller-supplied loop aliases. Explicit wrappers are evaluated by the spec
+	// layer before the provider receives its inputs, so sibling data-key
+	// exclusions do not apply to them.
+	var callerAliases map[string]bool
+	if injected, ok := inputs[gotmpl.DepScanContextKey].(gotmpl.DepScanContext); ok {
+		callerAliases = injected.Aliases
+	}
+	for key, raw := range inputs {
+		if key == gotmpl.DepScanContextKey || key == "forEach" {
+			continue
+		}
+		skipTopLevelRslvrExpr := key == "entries" || key == "data" || key == "template"
+		extractWrapperValueRefs(raw, callerAliases, addDep, 0, skipTopLevelRslvrExpr)
+	}
+
 	// Extract rslvr/expr references from ValueRef-shaped inputs (entries, data, template, etc.)
 	for _, key := range []string{"entries", "data", "template"} {
 		raw, ok := inputs[key]
 		if !ok {
 			continue
 		}
-		if m, ok := raw.(map[string]any); ok {
+		if m, ok := raw.(map[string]any); ok && isValueRefShapedData(m) {
 			if rslvr, ok := m["rslvr"].(string); ok {
 				// Extract base resolver name (strip dotted sub-path)
 				if idx := strings.Index(rslvr, "."); idx > 0 {
@@ -1445,8 +1624,36 @@ func extractDependencies(inputs map[string]any) []string {
 	// (forEach.item/index) are locally bound, never resolver dependencies.
 	fanOutAliases := extractFanOutDeps(inputs, addDep)
 
-	// Get delimiters (default to standard Go template delimiters), shared by the
-	// pathTemplate and inline-template scans below.
+	scanRawTemplates(inputs, fanOutAliases, func(scan gotmpl.ResolverDepsInput) {
+		for _, name := range gotmpl.ExtractResolverDeps(scan) {
+			addDep(name)
+		}
+	})
+	return deps
+}
+
+func shouldScanRenderTreeEntries(inputs map[string]any) bool {
+	opRaw, exists := inputs["operation"]
+	if !exists || opRaw == nil {
+		return false
+	}
+	opStr, isStr := opRaw.(string)
+	if !isStr {
+		// Dynamic ValueRef (e.g. {rslvr: ...}, {expr: ...}, {tmpl: ...}): scan conservatively.
+		return true
+	}
+	return opStr == OperationRenderTree
+}
+
+func shouldScanPathTemplate(inputs map[string]any) bool {
+	if !shouldScanRenderTreeEntries(inputs) {
+		return false
+	}
+	fe, present := inputs["forEach"]
+	return present && fe != nil
+}
+
+func scanRawTemplates(inputs map[string]any, fanOutAliases map[string]bool, onScan func(gotmpl.ResolverDepsInput)) {
 	leftDelim := "{{"
 	rightDelim := "}}"
 	if ld, ok := inputs["leftDelim"].(string); ok && ld != "" {
@@ -1456,53 +1663,189 @@ func extractDependencies(inputs map[string]any) []string {
 		rightDelim = rd
 	}
 
-	// pathTemplate references (render-tree fan-out): scan for resolver deps,
-	// excluding the fan-out aliases and reserved __* variables.
-	if pathTmpl, ok := inputs["pathTemplate"].(string); ok && pathTmpl != "" {
-		scan := resolveDepScanContext(inputs)
-		if scan.Aliases == nil {
-			scan.Aliases = make(map[string]bool, len(fanOutAliases))
-		}
-		for a := range fanOutAliases {
-			scan.Aliases[a] = true
-		}
-		scan.Template = pathTmpl
-		scan.LeftDelim = leftDelim
-		scan.RightDelim = rightDelim
-		for _, name := range gotmpl.ExtractResolverDeps(scan) {
-			addDep(name)
-		}
+	// pathTemplate references (render-tree fan-out): evaluated only when
+	// render-tree (or dynamic operation) has a non-nil forEach configuration.
+	if pathTmpl, ok := inputs["pathTemplate"].(string); ok && pathTmpl != "" && shouldScanPathTemplate(inputs) {
+		scanPathTemplateDeps(inputs, pathTmpl, fanOutAliases, leftDelim, rightDelim, onScan)
 	}
 
-	// For the "render" operation, also extract Go template references from
-	// the template content (if provided as a literal string).
+	ignoredCfg := parseIgnoredBlocksConfig(inputs)
+
+	// Scan render-tree entry content only when operation is render-tree (or a
+	// dynamic ValueRef); render (including the default operation) ignores entries.
+	if shouldScanRenderTreeEntries(inputs) {
+		scanRenderTreeEntries(inputs, fanOutAliases, leftDelim, rightDelim, ignoredCfg, onScan)
+	}
+
+	// For the "render" operation (or dynamic operation), scan inline template content.
+	if opStr, isStr := inputs["operation"].(string); isStr && opStr == OperationRenderTree {
+		return
+	}
 	templateContent, ok := inputs["template"].(string)
 	if !ok {
-		return deps
+		return
 	}
 
-	// Strip ignored/raw regions (built-in markers + declared ignoredBlocks)
-	// so that references inside literal pass-through blocks are not mistaken
-	// for resolver dependencies.
-	ignoredCfg := parseIgnoredBlocksConfig(inputs)
 	for _, repl := range buildIgnoredBlockReplacements(templateContent, ignoredCfg) {
 		templateContent = strings.ReplaceAll(templateContent, repl.Find, "")
 	}
 
-	// Determine the template scan context (data keys + forEach aliases). Prefer
-	// the context injected by the dependency-graph builder (which can see the
-	// forEach clause and statically analyse CEL data expressions); otherwise
-	// fall back to best-effort local computation from a literal data map.
 	scan := resolveDepScanContext(inputs)
 	scan.Template = templateContent
 	scan.LeftDelim = leftDelim
 	scan.RightDelim = rightDelim
+	onScan(scan)
+}
 
-	for _, name := range gotmpl.ExtractResolverDeps(scan) {
-		addDep(name)
+func scanPathTemplateDeps(
+	inputs map[string]any,
+	pathTmpl string,
+	fanOutAliases map[string]bool,
+	leftDelim, rightDelim string,
+	onScan func(gotmpl.ResolverDepsInput),
+) {
+	baseScan := resolveDepScanContextWithAliases(inputs, fanOutAliases)
+	entriesSlice, ok := toAnySlice(inputs["entries"])
+	if !ok {
+		baseScan.Template = pathTmpl
+		baseScan.LeftDelim = leftDelim
+		baseScan.RightDelim = rightDelim
+		onScan(baseScan)
+		return
+	}
+	for _, entryRaw := range entriesSlice {
+		entry, isMap := entryRaw.(map[string]any)
+		if !isMap || (len(entry) == 1 && isValueRefShapedData(entry)) {
+			scan := baseScan
+			scan.Template = pathTmpl
+			scan.LeftDelim = leftDelim
+			scan.RightDelim = rightDelim
+			onScan(scan)
+			continue
+		}
+		if contentVal, hasContent := entry["content"]; !hasContent || contentVal == nil {
+			continue
+		}
+		entryScan := mergeRenderTreeEntryDataScan(baseScan, entry["data"])
+		entryScan.Template = pathTmpl
+		entryScan.LeftDelim = leftDelim
+		entryScan.RightDelim = rightDelim
+		onScan(entryScan)
+	}
+}
+
+// resolveDepScanContextWithAliases returns resolveDepScanContext(inputs) with a
+// cloned Aliases map merged with extraAliases so caller maps are never mutated.
+func resolveDepScanContextWithAliases(inputs map[string]any, extraAliases map[string]bool) gotmpl.ResolverDepsInput {
+	scan := resolveDepScanContext(inputs)
+	if len(extraAliases) == 0 {
+		return scan
+	}
+	merged := make(map[string]bool)
+	for k, v := range scan.Aliases {
+		merged[k] = v
+	}
+	for a := range extraAliases {
+		merged[a] = true
+	}
+	scan.Aliases = merged
+	return scan
+}
+
+// scanRenderTreeEntries scans literal entries in render-tree inputs with
+// their effective data scope, respecting per-entry raw flags, rawGlobs,
+// ignoredBlocks, custom delimiters, fan-out/caller aliases, and per-entry data
+// overrides.
+func scanRenderTreeEntries(
+	inputs map[string]any,
+	fanOutAliases map[string]bool,
+	leftDelim, rightDelim string,
+	ignoredCfg []ignoredBlockConfig,
+	onScan func(gotmpl.ResolverDepsInput),
+) {
+	entriesSlice, ok := toAnySlice(inputs["entries"])
+	if !ok || len(entriesSlice) == 0 {
+		return
 	}
 
-	return deps
+	rawGlobs, _ := parseRawGlobs(inputs)
+	baseScan := resolveDepScanContextWithAliases(inputs, fanOutAliases)
+
+	for _, entryRaw := range entriesSlice {
+		entry, ok := entryRaw.(map[string]any)
+		if !ok || (len(entry) == 1 && isValueRefShapedData(entry)) {
+			continue
+		}
+
+		entryPath, pathIsStr := entry["path"].(string)
+		entryGlobs := rawGlobs
+		if !pathIsStr {
+			entryGlobs = nil
+		}
+		if raw, badType := isRawEntry(entryPath, entry, entryGlobs); raw && !badType {
+			continue
+		}
+
+		entryContent, ok := entry["content"].(string)
+		if !ok || entryContent == "" {
+			continue
+		}
+
+		for _, repl := range buildIgnoredBlockReplacements(entryContent, ignoredCfg) {
+			entryContent = strings.ReplaceAll(entryContent, repl.Find, "")
+		}
+
+		entryScan := mergeRenderTreeEntryDataScan(baseScan, entry["data"])
+		entryScan.Template = entryContent
+		entryScan.LeftDelim = leftDelim
+		entryScan.RightDelim = rightDelim
+		onScan(entryScan)
+	}
+}
+
+func mergeRenderTreeEntryDataScan(base gotmpl.ResolverDepsInput, rawEntryData any) gotmpl.ResolverDepsInput {
+	entryData, ok := rawEntryData.(map[string]any)
+	if !ok {
+		return base
+	}
+	baseComplete := !base.HasDataInput || base.DataKeysComplete
+	mergedKeys := make(map[string]bool)
+	for k, v := range base.DataKeys {
+		if v {
+			mergedKeys[k] = true
+		}
+	}
+	if len(entryData) == 1 && isValueRefShapedData(entryData) {
+		if expr, ok := entryData["expr"].(string); ok {
+			if keys, known := celexp.Expression(expr).MapLiteralKeys(context.Background()); known {
+				for _, k := range keys {
+					mergedKeys[k] = true
+				}
+				out := base
+				out.HasDataInput = true
+				out.DataKeys = mergedKeys
+				out.DataKeysComplete = baseComplete
+				return out
+			}
+		}
+		out := base
+		out.HasDataInput = true
+		if len(mergedKeys) > 0 {
+			out.DataKeys = mergedKeys
+		} else {
+			out.DataKeys = nil
+		}
+		out.DataKeysComplete = false
+		return out
+	}
+	for k := range entryData {
+		mergedKeys[k] = true
+	}
+	out := base
+	out.HasDataInput = true
+	out.DataKeys = mergedKeys
+	out.DataKeysComplete = baseComplete
+	return out
 }
 
 // extractFanOutDeps scans render-tree fan-out inputs (forEach.in) for resolver
@@ -1522,7 +1865,7 @@ func extractFanOutDeps(inputs map[string]any, addDep func(string)) map[string]bo
 		aliases[index] = true
 	}
 	inRaw, ok := fe["in"].(map[string]any)
-	if !ok {
+	if !ok || !isValueRefShapedData(inRaw) {
 		return aliases
 	}
 	if rslvr, ok := inRaw["rslvr"].(string); ok {
@@ -1560,10 +1903,23 @@ func resolveDepScanContext(inputs map[string]any) gotmpl.ResolverDepsInput {
 		return gotmpl.ResolverDepsInput{}
 	}
 	// A ValueRef-shaped data map (e.g. {expr: "..."}, {rslvr: "vars"},
-	// {tmpl: "..."}) does not expose its runtime keys statically, so treat the
-	// key set as dynamic/incomplete rather than mistaking the control key
-	// (expr/rslvr/tmpl) for a data key.
-	if isValueRefShapedData(dataMap) {
+	// {tmpl: "..."}) only exposes static keys when it is a CEL map literal;
+	// otherwise treat the key set as dynamic/incomplete rather than mistaking the
+	// control key (expr/rslvr/tmpl) for a data key.
+	if len(dataMap) == 1 && isValueRefShapedData(dataMap) {
+		if expr, ok := dataMap["expr"].(string); ok {
+			if keys, known := celexp.Expression(expr).MapLiteralKeys(context.Background()); known {
+				dataKeys := make(map[string]bool, len(keys))
+				for _, k := range keys {
+					dataKeys[k] = true
+				}
+				return gotmpl.ResolverDepsInput{
+					HasDataInput:     true,
+					DataKeys:         dataKeys,
+					DataKeysComplete: true,
+				}
+			}
+		}
 		return gotmpl.ResolverDepsInput{HasDataInput: true, DataKeysComplete: false}
 	}
 	dataKeys := make(map[string]bool, len(dataMap))
@@ -1577,11 +1933,51 @@ func resolveDepScanContext(inputs map[string]any) gotmpl.ResolverDepsInput {
 	}
 }
 
-// isValueRefShapedData reports whether a raw data map is a ValueRef wrapper
-// (expr/rslvr/tmpl) rather than a literal map of template context keys. Such
-// wrappers resolve to their value at runtime, so their control key must not be
-// treated as a data-context key.
+const maxWrapperScanDepth = 32
+
+func extractWrapperValueRefs(val any, callerAliases map[string]bool, addDep func(string), depth int, skipTopRslvrExpr bool) {
+	if depth > maxWrapperScanDepth || val == nil {
+		return
+	}
+	switch v := val.(type) {
+	case map[string]any:
+		if len(v) == 1 && isValueRefShapedData(v) {
+			if !skipTopRslvrExpr {
+				if rslvr, ok := v["rslvr"].(string); ok {
+					addDep(rslvr)
+				}
+				if expr, ok := v["expr"].(string); ok {
+					extractCELDeps(expr, addDep)
+				}
+			}
+			if tmpl, ok := v["tmpl"].(string); ok {
+				for _, name := range gotmpl.ExtractResolverDeps(gotmpl.ResolverDepsInput{
+					Template: tmpl,
+					Aliases:  callerAliases,
+				}) {
+					addDep(name)
+				}
+			}
+			return
+		}
+		for _, child := range v {
+			extractWrapperValueRefs(child, callerAliases, addDep, depth+1, false)
+		}
+	case []any:
+		for _, item := range v {
+			extractWrapperValueRefs(item, callerAliases, addDep, depth+1, false)
+		}
+	}
+}
+
+// isValueRefShapedData reports whether a raw map is a single-key ValueRef
+// wrapper (expr/rslvr/tmpl/scrt/tkn, matching spec.IsValueRefMap) rather than a
+// literal map of template context keys. Such wrappers resolve to their value at
+// runtime, so their control key must not be treated as a data-context key.
 func isValueRefShapedData(dataMap map[string]any) bool {
+	if len(dataMap) != 1 {
+		return false
+	}
 	if _, ok := dataMap["expr"]; ok {
 		return true
 	}
@@ -1600,22 +1996,16 @@ func isValueRefShapedData(dataMap map[string]any) bool {
 	return false
 }
 
-// extractCELDeps extracts resolver references from a CEL expression string.
-// It looks for _.resolverName patterns and calls addDep for each found.
+// extractCELDeps extracts inferred resolver references (both hard and optional
+// underscore accesses) from a CEL expression string using AST analysis so
+// string literals containing "_." are ignored and bracketed accesses
+// (_["my-name"]) are recognized.
 func extractCELDeps(expr string, addDep func(string)) {
-	// Simple pattern: find _.identifier patterns
-	// Full CEL parsing is done by the CEL provider; this is a lightweight check.
-	for i := 0; i < len(expr)-2; i++ {
-		if expr[i] == '_' && expr[i+1] == '.' {
-			// Extract identifier after _.
-			start := i + 2
-			end := start
-			for end < len(expr) && (expr[end] == '_' || (expr[end] >= 'a' && expr[end] <= 'z') || (expr[end] >= 'A' && expr[end] <= 'Z') || (expr[end] >= '0' && expr[end] <= '9')) {
-				end++
-			}
-			if end > start {
-				addDep(expr[start:end])
-			}
-		}
+	vars, err := celexp.Expression(expr).GetUnderscoreVariables(context.Background())
+	if err != nil {
+		return
+	}
+	for _, v := range vars {
+		addDep(v)
 	}
 }

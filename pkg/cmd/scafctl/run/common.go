@@ -607,7 +607,19 @@ func (o *sharedResolverOptions) executeResolvers(
 	resolverData := make(map[string]any)
 	if len(resolvers) == 0 {
 		lgr.V(0).Info("no resolvers to execute")
-		return resolverData, resolver.NewContext(), nil
+		rctx := resolver.NewContext()
+		for name, res := range execCfg.seed {
+			if res == nil {
+				continue
+			}
+			rctx.SetResult(name, res)
+			if res.Status == resolver.ExecutionStatusSuccess {
+				resolverData[name] = res.Value
+			} else if res.Value != nil {
+				resolverData[name] = res.Value
+			}
+		}
+		return resolverData, rctx, nil
 	}
 
 	// Set up progress reporter if enabled

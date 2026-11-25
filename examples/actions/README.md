@@ -58,6 +58,12 @@ scafctl run solution -f examples/actions/foreach-deploy.yaml -r targets='["serve
 
 # Run resolvers only (for debugging)
 scafctl run resolver -f examples/actions/hello-world.yaml
+
+# Run a single action (executes only the resolvers that action requires)
+scafctl run action build -f examples/actions/sequential-chain.yaml
+
+# Force every resolver to execute even when targeting a single action
+scafctl run action build --resolve-all -f examples/actions/sequential-chain.yaml
 ```
 
 ## Concepts Demonstrated

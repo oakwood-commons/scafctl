@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3640,5 +3641,233 @@ spec:
 		)
 		require.NoError(t, opts.Run(ctx))
 		assert.Contains(t, stdout.String(), "from-mycli-deploy")
+	})
+}
+
+func TestResolverOptions_Run_ActionFlag_ResolveAllAndExtendedLocations(t *testing.T) {
+	t.Parallel()
+
+	t.Run("--action on 0-ref action succeeds when --resolve-all is set", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolve-all-zero-ref
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+    debugOnly:
+      explicit: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: explicit-val
+  workflow:
+    actions:
+      clean:
+        provider: shell
+        inputs:
+          command: "echo clean"
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(solYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.ExitOnError = false
+
+		opts := &ResolverOptions{
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams:       &terminal.IOStreams{Out: &stdout, ErrOut: &stderr},
+				CliParams:       cliParams,
+				File:            solPath,
+				ResolveAll:      true,
+				KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+				ResolverTimeout: 10 * time.Second,
+				PhaseTimeout:    30 * time.Second,
+				registry:        testRegistry(newMockProvider("shell")),
+			},
+			Actions: []string{"clean"},
+		}
+
+		ctx := logger.WithLogger(context.Background(), logger.Get(0))
+		require.NoError(t, opts.Run(ctx))
+
+		var result map[string]any
+		require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
+		assert.Equal(t, "hello", result["greeting"])
+		assert.Equal(t, "explicit-val", result["debugOnly"])
+	})
+
+	t.Run("--action extracts from continueOnError, retry.retryIf, spec.calls args, and spec.functions call sites", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: extended-action-refs
+  version: 1.0.0
+spec:
+  functions:
+    banner:
+      params:
+        - name: msg
+          type: string
+      cel: "'[' + _.args.msg + ']'"
+  calls:
+    invokeShell:
+      args:
+        cmd:
+          type: string
+      provider: shell
+      inputs:
+        command:
+          expr: "_.args.cmd"
+  resolvers:
+    callTarget:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "deploy-cmd"
+    fnInput:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "ready"
+    errGate:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: true
+    retryGate:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: false
+    unused:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "skip"
+  workflow:
+    actions:
+      runCall:
+        call: invokeShell
+        args:
+          cmd:
+            tmpl: "{{ banner .fnInput }} {{ ._.callTarget }}"
+        continueOnError:
+          expr: "_.errGate == true"
+        retry:
+          maxAttempts: 2
+          retryIf: "_.retryGate == true"
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(solYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.ExitOnError = false
+
+		opts := &ResolverOptions{
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams:       &terminal.IOStreams{Out: &stdout, ErrOut: &stderr},
+				CliParams:       cliParams,
+				File:            solPath,
+				KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+				ResolverTimeout: 10 * time.Second,
+				PhaseTimeout:    30 * time.Second,
+				registry:        testRegistry(newMockProvider("shell")),
+			},
+			Actions: []string{"runCall"},
+		}
+
+		ctx := logger.WithLogger(context.Background(), logger.Get(0))
+		require.NoError(t, opts.Run(ctx))
+
+		var result map[string]any
+		require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
+		assert.Contains(t, result, "callTarget")
+		assert.Contains(t, result, "fnInput")
+		assert.Contains(t, result, "errGate")
+		assert.Contains(t, result, "retryGate")
+		assert.NotContains(t, result, "unused")
+	})
+
+	t.Run("skip-transform and on-validation-error ignore omit validation-only dependencies", func(t *testing.T) {
+		t.Parallel()
+		solPath := filepath.Join(t.TempDir(), "solution.yaml")
+		solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: skip-val-deps
+  version: 1.0.0
+spec:
+  resolvers:
+    brokenValOnly:
+      resolve:
+        with:
+          - provider: broken-from
+    target:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "clean"
+      validate:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: "__self != string(_.brokenValOnly)"
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(solYAML), 0o600))
+
+		for _, tc := range []struct {
+			name          string
+			skipTransform bool
+			onValErr      string
+		}{
+			{name: "skip-transform", skipTransform: true},
+			{name: "on-validation-error ignore", onValErr: "ignore"},
+		} {
+			var brokenCalls atomic.Int32
+			var stdout, stderr bytes.Buffer
+			cliParams := settings.NewCliParams()
+			cliParams.ExitOnError = false
+			opts := &ResolverOptions{
+				sharedResolverOptions: sharedResolverOptions{
+					IOStreams:         &terminal.IOStreams{Out: &stdout, ErrOut: &stderr},
+					CliParams:         cliParams,
+					File:              solPath,
+					OnValidationError: tc.onValErr,
+					KvxOutputFlags:    flags.KvxOutputFlags{Output: "json"},
+					ResolverTimeout:   10 * time.Second,
+					PhaseTimeout:      30 * time.Second,
+					registry:          actionScopedTestRegistry(newCountingFailResolverProvider(&brokenCalls)),
+				},
+				Names:         []string{"target"},
+				SkipTransform: tc.skipTransform,
+			}
+			ctx := logger.WithLogger(context.Background(), logger.Get(0))
+			require.NoError(t, opts.Run(ctx), "%s: %s", tc.name, stderr.String())
+			assert.Zero(t, brokenCalls.Load())
+			var out map[string]any
+			require.NoError(t, json.Unmarshal(stdout.Bytes(), &out))
+			assert.Equal(t, map[string]any{"target": "clean"}, out)
+		}
 	})
 }
