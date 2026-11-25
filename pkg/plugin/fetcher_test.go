@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
+	catversion "github.com/oakwood-commons/scafctl/pkg/catalog/version"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
@@ -217,16 +218,29 @@ func (s mockPluginSource) Find(ctx context.Context, query catalog.ArtifactQuery)
 		return catalog.ArtifactInfo{}, err
 	}
 	notFound := &catalog.ArtifactNotFoundError{Reference: catalog.Reference{Kind: query.Kind, Name: query.Name}, Catalog: s.m.name}
+	includePre := catalog.IncludePreReleaseFromContext(ctx)
 	constraint := query.Version
 	if strings.EqualFold(constraint, "latest") {
 		constraint = ""
 	}
 	if constraint == "" {
+		candidates := infos
+		if !includePre {
+			stable := make([]catalog.ArtifactInfo, 0, len(infos))
+			for _, a := range infos {
+				if !catalog.IsPreRelease(a.Reference.Version) {
+					stable = append(stable, a)
+				}
+			}
+			if len(stable) > 0 {
+				candidates = stable
+			}
+		}
 		var best *catalog.ArtifactInfo
-		for i := range infos {
-			v := infos[i].Reference.Version
+		for i := range candidates {
+			v := candidates[i].Reference.Version
 			if best == nil || (v != nil && (best.Reference.Version == nil || v.GreaterThan(best.Reference.Version))) {
-				best = &infos[i]
+				best = &candidates[i]
 			}
 		}
 		if best == nil {
@@ -234,7 +248,7 @@ func (s mockPluginSource) Find(ctx context.Context, query catalog.ArtifactQuery)
 		}
 		return *best, nil
 	}
-	matches, err := catalog.FilterByVersionConstraint(infos, constraint)
+	matches, err := catversion.FilterArtifacts(infos, constraint, includePre)
 	if err != nil {
 		return catalog.ArtifactInfo{}, fmt.Errorf("%w: %w", catalog.ErrInvalidQuery, err)
 	}
@@ -2505,27 +2519,31 @@ func TestCachedVersionSatisfies(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		constraint string
-		cached     string
-		want       bool
-		wantErr    bool
+		name              string
+		constraint        string
+		cached            string
+		includePreRelease bool
+		want              bool
+		wantErr           bool
 	}{
-		{"empty constraint", "", "1.0.0", true, false},
-		{"latest", "latest", "0.5.0", true, false},
-		{"LATEST case insensitive", "LATEST", "0.5.0", true, false},
-		{"exact match", "1.0.0", "1.0.0", true, false},
-		{"exact mismatch", "2.0.0", "1.0.0", false, false},
-		{"range satisfied", "^1.0.0", "1.2.3", true, false},
-		{"range not satisfied", "^2.0.0", "1.2.3", false, false},
-		{"invalid constraint", ">>>bad<<<", "1.0.0", false, true},
-		{"invalid cached version", "^1.0.0", "not-semver", false, true},
+		{"empty constraint", "", "1.0.0", false, true, false},
+		{"latest", "latest", "0.5.0", false, true, false},
+		{"LATEST case insensitive", "LATEST", "0.5.0", false, true, false},
+		{"exact match", "1.0.0", "1.0.0", false, true, false},
+		{"exact mismatch", "2.0.0", "1.0.0", false, false, false},
+		{"range satisfied", "^1.0.0", "1.2.3", false, true, false},
+		{"range not satisfied", "^2.0.0", "1.2.3", false, false, false},
+		{"prerelease excluded from range without flag", ">=0.4.0", "0.5.0-dev", false, false, false},
+		{"prerelease included in range with flag", ">=0.4.0", "0.5.0-dev", true, true, false},
+		{"exact prerelease satisfied without flag", "0.5.0-dev", "0.5.0-dev", false, true, false},
+		{"invalid constraint", ">>>bad<<<", "1.0.0", false, false, true},
+		{"invalid cached version", "^1.0.0", "not-semver", false, false, true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := cachedVersionSatisfies(tc.constraint, tc.cached)
+			got, err := cachedVersionSatisfies(tc.constraint, tc.cached, tc.includePreRelease)
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -2534,6 +2552,346 @@ func TestCachedVersionSatisfies(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestFetcher_PreReleaseCacheAndSingleflight(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cached pre-release does not short-circuit open constraint without pre-release opt-in, but serves offline fallback", func(t *testing.T) {
+		t.Parallel()
+
+		cat := newMockCatalog()
+		cat.addArtifact(testRef("exec-ext", "0.4.0"), []byte("bin-0.4.0"))
+		cat.addArtifact(testRef("exec-ext", "0.5.0-dev"), []byte("bin-0.5.0-dev"))
+
+		// Seed registry-indexed cache entry (exercises f.catalogIndex.All() loop) AND
+		// flat-layout cache entry (exercises WithFlatLayoutOnly() pass).
+		remoteCat, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+			Name:       "remote",
+			Registry:   "127.0.0.1:1",
+			Repository: "scafctl",
+			Insecure:   true,
+			Logger:     logr.Discard(),
+		})
+		require.NoError(t, err)
+		regHash := catalogindex.FromCatalogs([]catalog.Catalog{remoteCat}).All()[0].RegistryHash()
+
+		indexedCache := NewCache(t.TempDir())
+		_, err = indexedCache.Put("exec-ext", "0.5.0-dev", "linux/amd64", []byte("bin-0.5.0-dev"), WithRegistryHash(regHash))
+		require.NoError(t, err)
+
+		// Offline fallback on indexed remote catalog: remote 127.0.0.1:1 is unreachable,
+		// so open constraint without pre-release falls back to cached 0.5.0-dev.
+		localStore, err := catalog.NewLocalCatalogAt(t.TempDir(), logr.Discard())
+		require.NoError(t, err)
+		cachedRemote, err := catalog.NewCachedRemoteCatalog(localStore, remoteCat)
+		require.NoError(t, err)
+		pfOffline, err := catalog.NewPluginFetcher(logr.Discard(), nil, cachedRemote)
+		require.NoError(t, err)
+
+		fIndexedOffline := NewFetcher(FetcherConfig{
+			CatalogFetcher: pfOffline,
+			Cache:          indexedCache,
+			Platform:       "linux/amd64",
+			Logger:         logr.Discard(),
+		})
+		resIndexedOffline, err := fIndexedOffline.FetchPlugin(context.Background(), solution.PluginDependency{
+			Name: "exec-ext",
+			Kind: solution.PluginKindProvider,
+		}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "0.5.0-dev", resIndexedOffline.Version)
+		assert.True(t, resIndexedOffline.FromCache)
+
+		// Flat-layout cache with 0.5.0-dev: open constraint without WithIncludePreRelease
+		// must NOT short-circuit to cached 0.5.0-dev when live catalog has stable 0.4.0.
+		flatCache := NewCache(t.TempDir())
+		_, err = flatCache.Put("exec-ext", "0.5.0-dev", "linux/amd64", []byte("bin-0.5.0-dev"))
+		require.NoError(t, err)
+
+		fLive := NewFetcher(FetcherConfig{
+			CatalogFetcher: cat,
+			Cache:          flatCache,
+			Platform:       "linux/amd64",
+			Logger:         logr.Discard(),
+		})
+		resStable, err := fLive.FetchPlugin(context.Background(), solution.PluginDependency{
+			Name: "exec-ext",
+			Kind: solution.PluginKindProvider,
+		}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "0.4.0", resStable.Version)
+		assert.False(t, resStable.FromCache)
+
+		// Flat-layout offline fallback: when catalog fails, open constraint falls back to 0.5.0-dev.
+		onlyPreFlatCache := NewCache(t.TempDir())
+		_, err = onlyPreFlatCache.Put("exec-ext", "0.5.0-dev", "linux/amd64", []byte("bin-0.5.0-dev"))
+		require.NoError(t, err)
+
+		offlineCat := newMockCatalog()
+		offlineCat.listFunc = func(_ context.Context, _ catalog.ArtifactKind, _ string) ([]catalog.ArtifactInfo, error) {
+			return nil, errors.New("dial tcp: network unreachable")
+		}
+		fFlatOffline := NewFetcher(FetcherConfig{
+			CatalogFetcher: offlineCat,
+			Cache:          onlyPreFlatCache,
+			Platform:       "linux/amd64",
+			Logger:         logr.Discard(),
+		})
+		resFlatOffline, err := fFlatOffline.FetchPlugin(context.Background(), solution.PluginDependency{
+			Name: "exec-ext",
+			Kind: solution.PluginKindProvider,
+		}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "0.5.0-dev", resFlatOffline.Version)
+		assert.True(t, resFlatOffline.FromCache)
+
+		// Range constraint >=0.4.0 with NoCache: without preCtx -> 0.4.0; with preCtx -> 0.5.0-dev.
+		preCtx := catalog.WithIncludePreRelease(context.Background())
+		fNoCache := NewFetcher(FetcherConfig{
+			CatalogFetcher: cat,
+			Cache:          NewCache(t.TempDir()),
+			Platform:       "linux/amd64",
+			NoCache:        true,
+			Logger:         logr.Discard(),
+		})
+		resRangeStable, err := fNoCache.FetchPlugin(context.Background(), solution.PluginDependency{
+			Name:    "exec-ext",
+			Kind:    solution.PluginKindProvider,
+			Version: ">=0.4.0",
+		}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "0.4.0", resRangeStable.Version)
+
+		resRangePre, err := fNoCache.FetchPlugin(preCtx, solution.PluginDependency{
+			Name:    "exec-ext",
+			Kind:    solution.PluginKindProvider,
+			Version: ">=0.4.0",
+		}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "0.5.0-dev", resRangePre.Version)
+	})
+
+	t.Run("coexisting cached stable and pre-release select newest eligible version without network", func(t *testing.T) {
+		t.Parallel()
+		preCtx := catalog.WithIncludePreRelease(context.Background())
+
+		remoteCat, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+			Name:       "remote",
+			Registry:   "127.0.0.1:1",
+			Repository: "scafctl",
+			Insecure:   true,
+			Logger:     logr.Discard(),
+		})
+		require.NoError(t, err)
+		regHash := catalogindex.FromCatalogs([]catalog.Catalog{remoteCat}).All()[0].RegistryHash()
+
+		localStore, err := catalog.NewLocalCatalogAt(t.TempDir(), logr.Discard())
+		require.NoError(t, err)
+		cachedRemote, err := catalog.NewCachedRemoteCatalog(localStore, remoteCat)
+		require.NoError(t, err)
+		pfOffline, err := catalog.NewPluginFetcher(logr.Discard(), nil, cachedRemote)
+		require.NoError(t, err)
+
+		// 1. Registry-indexed cache containing BOTH 0.4.0 and 0.5.0-dev (remote 127.0.0.1:1 is unreachable,
+		// proving hits come straight from tryCachedAcrossCatalogs with FromCache == true).
+		bothIndexed := NewCache(t.TempDir())
+		_, err = bothIndexed.Put("exec-ext", "0.4.0", "linux/amd64", []byte("bin-0.4.0"), WithRegistryHash(regHash))
+		require.NoError(t, err)
+		_, err = bothIndexed.Put("exec-ext", "0.5.0-dev", "linux/amd64", []byte("bin-0.5.0-dev"), WithRegistryHash(regHash))
+		require.NoError(t, err)
+
+		fIndexed := NewFetcher(FetcherConfig{
+			CatalogFetcher: pfOffline,
+			Cache:          bothIndexed,
+			Platform:       "linux/amd64",
+			Logger:         logr.Discard(),
+		})
+		resIdxStable, err := fIndexed.FetchPlugin(context.Background(), solution.PluginDependency{
+			Name: "exec-ext",
+			Kind: solution.PluginKindProvider,
+		}, nil)
+		require.NoError(t, err)
+		if resIdxStable.Release != nil {
+			defer resIdxStable.Release()
+		}
+		assert.Equal(t, "0.4.0", resIdxStable.Version)
+		assert.True(t, resIdxStable.FromCache)
+		assert.Equal(t, "remote", resIdxStable.Catalog)
+
+		resIdxPre, err := fIndexed.FetchPlugin(preCtx, solution.PluginDependency{
+			Name: "exec-ext",
+			Kind: solution.PluginKindProvider,
+		}, nil)
+		require.NoError(t, err)
+		if resIdxPre.Release != nil {
+			defer resIdxPre.Release()
+		}
+		assert.Equal(t, "0.5.0-dev", resIdxPre.Version)
+		assert.True(t, resIdxPre.FromCache)
+
+		resIdxRangeStable, err := fIndexed.FetchPlugin(context.Background(), solution.PluginDependency{
+			Name:    "exec-ext",
+			Kind:    solution.PluginKindProvider,
+			Version: ">=0.4.0",
+		}, nil)
+		require.NoError(t, err)
+		if resIdxRangeStable.Release != nil {
+			defer resIdxRangeStable.Release()
+		}
+		assert.Equal(t, "0.4.0", resIdxRangeStable.Version)
+		assert.True(t, resIdxRangeStable.FromCache)
+
+		// 2. Flat-layout cache containing BOTH 0.4.0 and 0.5.0-dev with a failing catalog:
+		// default unpinned fetch must hit 0.4.0 directly on the first cache pass without touching the catalog.
+		bothFlat := NewCache(t.TempDir())
+		_, err = bothFlat.Put("exec-ext", "0.4.0", "linux/amd64", []byte("bin-0.4.0"))
+		require.NoError(t, err)
+		_, err = bothFlat.Put("exec-ext", "0.5.0-dev", "linux/amd64", []byte("bin-0.5.0-dev"))
+		require.NoError(t, err)
+
+		var flatCatalogCalls int
+		countingCat := newMockCatalog()
+		countingCat.listFunc = func(_ context.Context, _ catalog.ArtifactKind, _ string) ([]catalog.ArtifactInfo, error) {
+			flatCatalogCalls++
+			return nil, errors.New("unexpected network call")
+		}
+		fFlat := NewFetcher(FetcherConfig{
+			CatalogFetcher: countingCat,
+			Cache:          bothFlat,
+			Platform:       "linux/amd64",
+			Logger:         logr.Discard(),
+		})
+		resFlatStable, err := fFlat.FetchPlugin(context.Background(), solution.PluginDependency{
+			Name: "exec-ext",
+			Kind: solution.PluginKindProvider,
+		}, nil)
+		require.NoError(t, err)
+		if resFlatStable.Release != nil {
+			defer resFlatStable.Release()
+		}
+		assert.Equal(t, "0.4.0", resFlatStable.Version)
+		assert.True(t, resFlatStable.FromCache)
+		assert.Zero(t, flatCatalogCalls, "usable cached stable binary must short-circuit catalog resolution")
+
+		resFlatPre, err := fFlat.FetchPlugin(preCtx, solution.PluginDependency{
+			Name: "exec-ext",
+			Kind: solution.PluginKindProvider,
+		}, nil)
+		require.NoError(t, err)
+		if resFlatPre.Release != nil {
+			defer resFlatPre.Release()
+		}
+		assert.Equal(t, "0.5.0-dev", resFlatPre.Version)
+		assert.True(t, resFlatPre.FromCache)
+		assert.Zero(t, flatCatalogCalls)
+
+		// 3. Managed cache (API server mode) containing BOTH 0.4.0 and 0.5.0-dev.
+		managedCache, err := NewManagedCache(t.TempDir(), 10*1024*1024)
+		require.NoError(t, err)
+		_, err = managedCache.Put("exec-ext", "0.4.0", "linux/amd64", []byte("bin-0.4.0"), WithRegistryHash(regHash))
+		require.NoError(t, err)
+		_, err = managedCache.Put("exec-ext", "0.5.0-dev", "linux/amd64", []byte("bin-0.5.0-dev"), WithRegistryHash(regHash))
+		require.NoError(t, err)
+
+		fManaged := NewFetcher(FetcherConfig{
+			CatalogFetcher: pfOffline,
+			Cache:          managedCache,
+			Platform:       "linux/amd64",
+			Logger:         logr.Discard(),
+		})
+		resManagedStable, err := fManaged.FetchPlugin(context.Background(), solution.PluginDependency{
+			Name: "exec-ext",
+			Kind: solution.PluginKindProvider,
+		}, nil)
+		require.NoError(t, err)
+		require.NotNil(t, resManagedStable.Release)
+		defer resManagedStable.Release()
+		assert.Equal(t, "0.4.0", resManagedStable.Version)
+		assert.True(t, resManagedStable.FromCache)
+	})
+
+	t.Run("singleflight separates pre-release and stable resolution keys", func(t *testing.T) {
+		t.Parallel()
+
+		gate := make(chan struct{})
+		arrived := make(chan struct{}, 2)
+		slowFetcher := &gatedCatalogFetcher{
+			gate:    gate,
+			arrived: arrived,
+		}
+
+		f := NewFetcher(FetcherConfig{
+			CatalogFetcher: slowFetcher,
+			Cache:          NewCache(t.TempDir()),
+			Platform:       "linux/amd64",
+			NoCache:        true,
+			Logger:         logr.Discard(),
+		})
+
+		var wg sync.WaitGroup
+		var stableVer, preVer string
+		var stableErr, preErr error
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			info, err := f.resolveCatalogPlugin(context.Background(), catalog.ArtifactKindProvider, "exec-ext", ">=0.4.0", "")
+			stableErr = err
+			if info.Reference.Version != nil {
+				stableVer = info.Reference.Version.String()
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			info, err := f.resolveCatalogPlugin(catalog.WithIncludePreRelease(context.Background()), catalog.ArtifactKindProvider, "exec-ext", ">=0.4.0", "")
+			preErr = err
+			if info.Reference.Version != nil {
+				preVer = info.Reference.Version.String()
+			}
+		}()
+
+		// Both calls must reach ResolvePlugin independently rather than sharing one singleflight key.
+		<-arrived
+		<-arrived
+		close(gate)
+		wg.Wait()
+
+		require.NoError(t, stableErr)
+		require.NoError(t, preErr)
+		assert.Equal(t, "0.4.0", stableVer)
+		assert.Equal(t, "0.5.0-dev", preVer)
+	})
+}
+
+type gatedCatalogFetcher struct {
+	gate    <-chan struct{}
+	arrived chan<- struct{}
+}
+
+func (g *gatedCatalogFetcher) ResolvePlugin(ctx context.Context, name string, kind catalog.ArtifactKind, _ string, _ ...catalog.Option) (catalog.ArtifactInfo, error) {
+	g.arrived <- struct{}{}
+	<-g.gate
+	ver := "0.4.0"
+	if catalog.IncludePreReleaseFromContext(ctx) {
+		ver = "0.5.0-dev"
+	}
+	return catalog.ArtifactInfo{
+		Reference: catalog.Reference{
+			Kind:    kind,
+			Name:    name,
+			Version: semver.MustParse(ver),
+		},
+		Catalog: "test",
+	}, nil
+}
+
+func (g *gatedCatalogFetcher) FetchPlugin(_ context.Context, _ string, _ catalog.ArtifactKind, _, _ string, _ ...catalog.Option) ([]byte, catalog.ArtifactInfo, error) {
+	return nil, catalog.ArtifactInfo{}, catalog.ErrArtifactNotFound
+}
+
+func (g *gatedCatalogFetcher) ResolveContentDigest(_ context.Context, _ string, _ catalog.ArtifactKind, _, _, _ string, _ ...catalog.Option) (catalog.ContentDigestInfo, error) {
+	return catalog.ContentDigestInfo{}, catalog.ErrArtifactNotFound
 }
 
 // ── RegisterFetchedAuthHandlerPlugins subprocess-lifecycle tests ──────────────

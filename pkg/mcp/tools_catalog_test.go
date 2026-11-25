@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
+	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,5 +87,84 @@ func TestHandleCatalogList(t *testing.T) {
 		result, err := srv.handleCatalogList(context.Background(), request)
 		require.NoError(t, err)
 		assert.NotNil(t, result)
+	})
+}
+
+func TestHandleCatalogInspect_PreRelease(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataDir)
+
+	localCat, err := catalog.NewLocalCatalog(logr.Discard())
+	require.NoError(t, err)
+
+	for _, ver := range []string{"0.4.0", "0.5.0-dev"} {
+		_, storeErr := localCat.StoreMultiPlatform(context.Background(), catalog.Reference{
+			Kind:    catalog.ArtifactKindProvider,
+			Name:    "exec",
+			Version: semver.MustParse(ver),
+		}, []catalog.PlatformBinary{
+			{Platform: "linux/amd64", Data: []byte("exec-" + ver)},
+		}, nil, false)
+		require.NoError(t, storeErr)
+	}
+
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	callInspect := func(args map[string]any) *mcp.CallToolResult {
+		t.Helper()
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "catalog_inspect"
+		req.Params.Arguments = args
+		res, callErr := srv.handleCatalogInspect(context.Background(), req)
+		require.NoError(t, callErr)
+		require.NotNil(t, res)
+		return res
+	}
+
+	t.Run("unpinned excludes pre-release by default", func(t *testing.T) {
+		res := callInspect(map[string]any{
+			"reference": "exec",
+			"kind":      "provider",
+		})
+		require.False(t, res.IsError)
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(res.Content[0].(mcp.TextContent).Text), &parsed))
+		assert.Equal(t, "provider", parsed["kind"])
+		assert.Equal(t, "exec", parsed["name"])
+		assert.Equal(t, "0.4.0", parsed["version"])
+		assert.Equal(t, true, parsed["isMultiPlatform"])
+	})
+
+	t.Run("unpinned includes pre-release when pre_release is true", func(t *testing.T) {
+		res := callInspect(map[string]any{
+			"reference":   "exec",
+			"kind":        "provider",
+			"pre_release": true,
+		})
+		require.False(t, res.IsError)
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(res.Content[0].(mcp.TextContent).Text), &parsed))
+		assert.Equal(t, "0.5.0-dev", parsed["version"])
+		assert.Equal(t, true, parsed["isMultiPlatform"])
+	})
+
+	t.Run("exact pre-release version resolves without pre_release flag", func(t *testing.T) {
+		res := callInspect(map[string]any{
+			"reference": "exec@0.5.0-dev",
+			"kind":      "provider",
+		})
+		require.False(t, res.IsError)
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(res.Content[0].(mcp.TextContent).Text), &parsed))
+		assert.Equal(t, "0.5.0-dev", parsed["version"])
+	})
+
+	t.Run("validation and not-found errors", func(t *testing.T) {
+		assert.True(t, callInspect(map[string]any{"kind": "provider"}).IsError)
+		assert.True(t, callInspect(map[string]any{"reference": "exec"}).IsError)
+		assert.True(t, callInspect(map[string]any{"reference": "exec", "kind": "bad"}).IsError)
+		assert.True(t, callInspect(map[string]any{"reference": "@@@", "kind": "provider"}).IsError)
+		assert.True(t, callInspect(map[string]any{"reference": "missing", "kind": "provider"}).IsError)
 	})
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -28,15 +29,16 @@ import (
 
 // InstallOptions holds options for the install command.
 type InstallOptions struct {
-	CliParams *settings.Run
-	IOStreams *terminal.IOStreams
-	File      string
-	Platform  string
-	CacheDir  string
-	NoCache   bool
-	Kind      string
-	Version   string
-	DryRun    bool
+	CliParams  *settings.Run
+	IOStreams  *terminal.IOStreams
+	File       string
+	Platform   string
+	CacheDir   string
+	NoCache    bool
+	Kind       string
+	Version    string
+	PreRelease bool
+	DryRun     bool
 }
 
 // CommandInstall creates the install subcommand.
@@ -68,6 +70,9 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 
 			  # Install a specific version
 			  scafctl plugins install github --version ">=0.3.0"
+
+			  # Install a pre-release version matching a constraint
+			  scafctl plugins install github --version ">=0.3.0" --pre-release
 
 			  # Install an auth handler plugin
 			  scafctl plugins install github --kind auth-handler
@@ -101,6 +106,7 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 	cmd.Flags().BoolVar(&opts.NoCache, "no-cache", false, "Bypass the plugin cache and fetch directly from the catalog")
 	cmd.Flags().StringVar(&opts.Kind, "kind", "provider", "Plugin kind: provider or auth-handler")
 	cmd.Flags().StringVar(&opts.Version, "version", "", "Version constraint for standalone plugins (e.g., \">=0.3.0\", \"latest\")")
+	cmd.Flags().BoolVar(&opts.PreRelease, "pre-release", false, "Include pre-release versions when resolving unpinned or range constraints")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Show what would be installed without fetching")
 
 	return cmd
@@ -110,6 +116,10 @@ func runInstall(ctx context.Context, opts *InstallOptions, args []string) error 
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
+	}
+
+	if opts.PreRelease {
+		ctx = catalog.WithIncludePreRelease(ctx)
 	}
 
 	// Determine plugins: from positional args (standalone) or solution file.

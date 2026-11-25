@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
+	catversion "github.com/oakwood-commons/scafctl/pkg/catalog/version"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -450,7 +452,7 @@ func (s *Fetcher) resolvePlugin(ctx context.Context, kind catalog.ArtifactKind, 
 // optionally scoped to one named catalog, without applying catalog policy.
 // Concurrent identical requests are deduplicated.
 func (s *Fetcher) resolveCatalogPlugin(ctx context.Context, kind catalog.ArtifactKind, name, version, catalogName string) (catalog.ArtifactInfo, error) {
-	key := name + "/" + string(kind) + "/" + version + "/" + catalogName
+	key := fmt.Sprintf("%s/%s/%s/%s/pre=%t", name, kind, version, catalogName, catalog.IncludePreReleaseFromContext(ctx))
 	return dedupeRequest(ctx, &s.sfResolver, key, settings.DefaultPluginResolveTimeout, func(ctx context.Context) (catalog.ArtifactInfo, error) {
 		var opts []catalog.Option
 		if catalogName != "" {
@@ -540,9 +542,11 @@ func (s *Fetcher) resolveContentDigest(ctx context.Context, kind catalog.Artifac
 // binary may be stale. Those deps resolve their digest from disk (no network)
 // and fetchAndVerify's digest-checked cache lookup still reuses a matching
 // binary.
-func (f *Fetcher) tryCachedAcrossCatalogs(dep pluginArtifact) (FetchResult, bool) {
+func (f *Fetcher) tryCachedAcrossCatalogs(ctx context.Context, dep pluginArtifact, offlineFallback bool) (FetchResult, bool) {
 	cacheName := PluginCacheKey(dep.ArtifactName(), dep.PluginKind())
 	catalogName := dep.CatalogName()
+	constraint := dep.VersionConstraint()
+	includePre := catalog.IncludePreReleaseFromContext(ctx)
 	for _, id := range f.catalogIndex.All() {
 		if id.IsLocal() {
 			continue
@@ -550,24 +554,17 @@ func (f *Fetcher) tryCachedAcrossCatalogs(dep pluginArtifact) (FetchResult, bool
 		if catalogName != "" && !strings.EqualFold(catalogName, id.Alias) {
 			continue
 		}
-		pinPath, cachedVer, release, ok := f.cache.GetLatestCachedPin(cacheName, f.platform, WithRegistryHash(id.RegistryHash()))
-		if !ok {
-			continue
-		}
-		satisfies, _ := cachedVersionSatisfies(dep.VersionConstraint(), cachedVer)
-		if !satisfies {
-			release()
-			continue
-		}
 		if err := f.catalogIndex.CheckAllowed(id.Alias); err != nil {
-			release()
 			continue
 		}
 		// Per-catalog plugin allowlist: a cached binary from an allowed catalog
 		// must still be one that catalog is permitted to serve. The chain's
 		// decorator never sees cache hits, so this is the enforcement point.
 		if err := f.catalogIndex.CheckPluginAllowed(id.Alias, dep.ArtifactName()); err != nil {
-			release()
+			continue
+		}
+		pinPath, cachedVer, release, ok := f.bestEligibleCachedPin(cacheName, constraint, includePre, offlineFallback, WithRegistryHash(id.RegistryHash()))
+		if !ok {
 			continue
 		}
 		f.logger.V(1).Info("using cached plugin (no lock file)",
@@ -593,24 +590,17 @@ func (f *Fetcher) tryCachedAcrossCatalogs(dep pluginArtifact) (FetchResult, bool
 	if catalogName != "" || f.disallowLocalBuilds {
 		return FetchResult{}, false
 	}
-	pinPath, cachedVer, release, ok := f.cache.GetLatestCachedPin(cacheName, f.platform, WithFlatLayoutOnly())
-	if !ok {
-		return FetchResult{}, false
-	}
-	satisfies, _ := cachedVersionSatisfies(dep.VersionConstraint(), cachedVer)
-	if !satisfies {
-		release()
-		return FetchResult{}, false
-	}
 	if err := f.catalogIndex.CheckAllowed(""); err != nil {
-		release()
 		return FetchResult{}, false
 	}
 	// Per-catalog plugin allowlist. With an unknown origin this rejects when any
 	// per-catalog policy is configured, since the plugin cannot be attributed to
 	// a permitted catalog.
 	if err := f.catalogIndex.CheckPluginAllowed("", dep.ArtifactName()); err != nil {
-		release()
+		return FetchResult{}, false
+	}
+	pinPath, cachedVer, release, ok := f.bestEligibleCachedPin(cacheName, constraint, includePre, offlineFallback, WithFlatLayoutOnly())
+	if !ok {
 		return FetchResult{}, false
 	}
 	f.logger.V(1).Info("using cached plugin (no lock file, legacy path)",
@@ -625,6 +615,104 @@ func (f *Fetcher) tryCachedAcrossCatalogs(dep pluginArtifact) (FetchResult, bool
 		FromCache: true,
 		Release:   release,
 	}, true
+}
+
+type cachedCandidate struct {
+	version      string
+	registryHash string
+	parsed       *semver.Version
+	preRelease   bool
+}
+
+// bestEligibleCachedPin selects and pins the newest cached plugin binary that
+// satisfies constraint under the caller's pre-release and offline-fallback
+// policy. On open constraints ("", "latest") without pre-release opt-in, stable
+// versions outrank pre-releases so a cached pre-release does not hide a usable
+// cached stable binary; pre-release-only caches are skipped during live lookups
+// and remain eligible when offlineFallback is true.
+func (f *Fetcher) bestEligibleCachedPin(cacheName, constraint string, includePre, offlineFallback bool, opts ...CacheOption) (string, string, func(), bool) {
+	if f.cache == nil {
+		return "", "", nil, false
+	}
+	o := applyCacheOpts(opts)
+	openConstraint := isOpenVersionConstraint(constraint)
+
+	var candidates []cachedCandidate
+	if f.cache.managed != nil {
+		mn := managedName(cacheName, o.registryHash)
+		for _, ver := range f.cache.managed.Versions(mn, f.platform) {
+			parsed, err := semver.NewVersion(ver)
+			candidates = append(candidates, cachedCandidate{
+				version:      ver,
+				registryHash: o.registryHash,
+				parsed:       parsed,
+				preRelease:   err == nil && catalog.IsPreRelease(parsed),
+			})
+		}
+	} else {
+		for _, vd := range f.cache.enumerateVersionDirs(cacheName, o.registryHash, o.flatOnly) {
+			if _, ok := f.cache.statCachedBinary(cacheName, vd.version, f.platform, vd.registryHash); !ok {
+				continue
+			}
+			parsed, err := semver.NewVersion(vd.version)
+			candidates = append(candidates, cachedCandidate{
+				version:      vd.version,
+				registryHash: vd.registryHash,
+				parsed:       parsed,
+				preRelease:   err == nil && catalog.IsPreRelease(parsed),
+			})
+		}
+	}
+
+	eligible := make([]cachedCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		if openConstraint {
+			if !includePre && !offlineFallback && c.preRelease {
+				continue
+			}
+			eligible = append(eligible, c)
+			continue
+		}
+		if ok, err := cachedVersionSatisfies(constraint, c.version, includePre); err == nil && ok {
+			eligible = append(eligible, c)
+		}
+	}
+	if len(eligible) == 0 {
+		return "", "", nil, false
+	}
+
+	preferStable := openConstraint && !includePre
+	sort.Slice(eligible, func(i, j int) bool {
+		ci, cj := eligible[i], eligible[j]
+		switch {
+		case ci.parsed != nil && cj.parsed != nil:
+			if preferStable && ci.preRelease != cj.preRelease {
+				return !ci.preRelease
+			}
+			if !ci.parsed.Equal(cj.parsed) {
+				return ci.parsed.GreaterThan(cj.parsed)
+			}
+		case ci.parsed != nil:
+			return true
+		case cj.parsed != nil:
+			return false
+		}
+		if ci.version != cj.version {
+			return ci.version > cj.version
+		}
+		return ci.registryHash < cj.registryHash
+	})
+
+	for _, c := range eligible {
+		var pinOpts []CacheOption
+		if c.registryHash != "" {
+			pinOpts = append(pinOpts, WithRegistryHash(c.registryHash))
+		}
+		if path, release, ok := f.cache.Pin(cacheName, c.version, f.platform, pinOpts...); ok {
+			return path, c.version, release, true
+		}
+	}
+	return "", "", nil, false
 }
 
 // FetchResult contains the result of fetching a single plugin.
@@ -968,7 +1056,7 @@ func (f *Fetcher) resolveFromCatalog(ctx context.Context, dep pluginArtifact, ki
 	// (including the offline fallback below) so every binary is signature-checked.
 	useCache := f.cacheReadsAllowed()
 	if useCache && !f.localBuildShadows(ctx, dep, kind) {
-		if result, ok := f.tryCachedAcrossCatalogs(dep); ok {
+		if result, ok := f.tryCachedAcrossCatalogs(ctx, dep, false); ok {
 			return result, nil, nil
 		}
 	}
@@ -986,7 +1074,7 @@ func (f *Fetcher) resolveFromCatalog(ctx context.Context, dep pluginArtifact, ki
 	cdInfo, err := f.resolveCatalogDigest(ctx, dep, kind)
 	if err != nil {
 		if useCache {
-			if result, ok := f.tryCachedAcrossCatalogs(dep); ok {
+			if result, ok := f.tryCachedAcrossCatalogs(ctx, dep, true); ok {
 				f.logger.V(0).Info("catalog resolution failed, using cached version",
 					"name", dep.ArtifactName(),
 					"version", result.Version,
@@ -1013,8 +1101,8 @@ func (f *Fetcher) resolveFromCatalog(ctx context.Context, dep pluginArtifact, ki
 
 	// Defensive post-condition: the resolved version must satisfy the
 	// declared constraint.
-	if version != "" && constraint != "" && !strings.EqualFold(constraint, "latest") {
-		satisfies, chkErr := bundler.CheckVersionConstraint(constraint, version)
+	if version != "" && !isOpenVersionConstraint(constraint) {
+		satisfies, chkErr := catversion.CheckConstraint(constraint, version, catalog.IncludePreReleaseFromContext(ctx))
 		if chkErr != nil {
 			return FetchResult{}, nil, fmt.Errorf("checking version constraint: %w", chkErr)
 		}
@@ -1640,14 +1728,19 @@ func lockDigestForPlatform(locked *bundler.LockPlugin, platform string) (string,
 	return d, ok
 }
 
+func isOpenVersionConstraint(constraint string) bool {
+	trimmed := strings.TrimSpace(constraint)
+	return trimmed == "" || strings.EqualFold(trimmed, "latest")
+}
+
 // cachedVersionSatisfies checks whether a cached version satisfies a version
 // constraint. Returns true when no constraint is specified or the constraint is
 // "latest". Returns false with a nil error when the constraint is simply not
 // satisfied. Returns false with a non-nil error when the constraint or cached
 // version string cannot be parsed.
-func cachedVersionSatisfies(constraint, cachedVer string) (bool, error) {
-	if constraint == "" || strings.EqualFold(constraint, "latest") {
+func cachedVersionSatisfies(constraint, cachedVer string, includePreRelease bool) (bool, error) {
+	if isOpenVersionConstraint(constraint) {
 		return true, nil
 	}
-	return bundler.CheckVersionConstraint(constraint, cachedVer)
+	return catversion.CheckConstraint(constraint, cachedVer, includePreRelease)
 }

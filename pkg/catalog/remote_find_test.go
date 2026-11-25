@@ -69,6 +69,22 @@ func TestRemoteCatalog_Find(t *testing.T) {
 			wantVersion: "1.5.0",
 		},
 		{
+			name:        "range constraint excludes pre-release without opt-in",
+			query:       ArtifactQuery{Name: name, Kind: ArtifactKindProvider, Version: ">=1.0.0"},
+			wantVersion: "1.5.0",
+		},
+		{
+			name:        "range constraint includes pre-release with opt-in",
+			query:       ArtifactQuery{Name: name, Kind: ArtifactKindProvider, Version: ">=1.0.0"},
+			preRelease:  true,
+			wantVersion: "2.0.0-beta.1",
+		},
+		{
+			name:        "exact pre-release version resolves without opt-in",
+			query:       ArtifactQuery{Name: name, Kind: ArtifactKindProvider, Version: "2.0.0-beta.1"},
+			wantVersion: "2.0.0-beta.1",
+		},
+		{
 			name:    "constraint with no match",
 			query:   ArtifactQuery{Name: name, Kind: ArtifactKindProvider, Version: ">=3.0.0"},
 			wantErr: ErrArtifactNotFound,
@@ -219,10 +235,13 @@ func TestVersionCandidates(t *testing.T) {
 		want       []string
 	}{
 		{name: "open sorts stable desc", in: all, want: []string{"1.5.0", "1.2.0", "1.0.0"}},
+		{name: "latest alias sorts stable desc", query: ArtifactQuery{Version: "latest"}, in: all, want: []string{"1.5.0", "1.2.0", "1.0.0"}},
+		{name: "unnormalized LATEST matches nothing", query: ArtifactQuery{Version: "  LATEST  "}, in: all, want: []string{}},
 		{name: "open with pre-release opt-in", in: all, preRelease: true, want: []string{"2.0.0-rc.1", "1.5.0", "1.2.0", "1.0.0"}},
 		{name: "open falls back to pre-releases", in: versions("1.0.0-a", "1.0.0-b"), want: []string{"1.0.0-b", "1.0.0-a"}},
 		{name: "exact", query: ArtifactQuery{Version: "1.2.0"}, in: all, want: []string{"1.2.0"}},
 		{name: "constraint", query: ArtifactQuery{Version: ">=1.2.0"}, in: all, want: []string{"1.5.0", "1.2.0"}},
+		{name: "constraint with pre-release context", query: ArtifactQuery{Version: ">=1.2.0"}, preRelease: true, in: all, want: []string{"2.0.0-rc.1", "1.5.0", "1.2.0"}},
 		{name: "no match", query: ArtifactQuery{Version: "3.x"}, in: all, want: []string{}},
 		{name: "invalid selector matches nothing", query: ArtifactQuery{Version: "not-a-version!"}, in: all, want: []string{}},
 		{name: "empty input", in: nil, want: []string{}},

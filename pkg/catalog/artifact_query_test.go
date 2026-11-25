@@ -180,6 +180,32 @@ func TestArtifactQuery_Matches(t *testing.T) {
 			info:  builtInfo,
 			want:  false,
 		},
+		{
+			name:  "range constraint excludes pre-release without pre-release comparator",
+			query: ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Version: ">=0.4.0"},
+			info: ArtifactInfo{
+				Reference: Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse("0.5.0-dev")},
+				Annotations: map[string]string{
+					AnnotationArtifactName: "demo",
+					AnnotationArtifactType: "solution",
+					AnnotationVersion:      "0.5.0-dev",
+				},
+			},
+			want: false,
+		},
+		{
+			name:  "rewritten range constraint matches pre-release",
+			query: ArtifactQuery{Name: "demo", Kind: ArtifactKindSolution, Version: withPreReleaseConstraint(">=0.4.0")},
+			info: ArtifactInfo{
+				Reference: Reference{Kind: ArtifactKindSolution, Name: "demo", Version: semver.MustParse("0.5.0-dev")},
+				Annotations: map[string]string{
+					AnnotationArtifactName: "demo",
+					AnnotationArtifactType: "solution",
+					AnnotationVersion:      "0.5.0-dev",
+				},
+			},
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -390,4 +416,52 @@ func TestVersionOrConstraint(t *testing.T) {
 		assert.False(t, vc.Satisfies("1.0.0"))
 		assert.False(t, vc.Satisfies(""))
 	})
+
+	t.Run("SetWithPreRelease controls range pre-release matching", func(t *testing.T) {
+		var vc VersionOrConstraint
+		vc.SetWithPreRelease(">=0.4.0", false)
+		assert.Equal(t, IsConstraint, vc.Type())
+		assert.True(t, vc.Satisfies("0.4.0"))
+		assert.False(t, vc.Satisfies("0.5.0-dev"))
+
+		vc.SetWithPreRelease(">=0.4.0", true)
+		assert.Equal(t, IsConstraint, vc.Type())
+		assert.True(t, vc.Satisfies("0.4.0"))
+		assert.True(t, vc.Satisfies("0.5.0-dev"))
+
+		vc.SetWithPreRelease("0.5.0-dev", false)
+		assert.Equal(t, IsVersion, vc.Type())
+		assert.True(t, vc.Satisfies("0.5.0-dev"))
+		assert.Nil(t, vc.constraint, "switching from constraint to exact version clears stale constraint")
+
+		for _, raw := range []string{"LATEST", " latest ", "   "} {
+			vc.SetWithPreRelease(raw, false)
+			assert.Equal(t, InvalidVersionOrConstraint, vc.Type(), "unnormalized selector %q must not bypass wantsLatest", raw)
+			require.ErrorIs(t, (ArtifactQuery{Name: "demo", Kind: ArtifactKindProvider, Version: raw}).Validate(), ErrInvalidQuery)
+		}
+	})
+}
+
+func TestLocalCatalog_Find_LatestSelectorDoesNotLeakPreRelease(t *testing.T) {
+	t.Parallel()
+	local := newTestLocalCatalog(t)
+	ctx := t.Context()
+
+	for _, ver := range []string{"0.4.0", "0.5.0-dev"} {
+		_, err := local.StoreMultiPlatform(ctx, testRef("exec", ver), []PlatformBinary{
+			{Platform: "linux/amd64", Data: []byte("bin-" + ver)},
+		}, nil, false)
+		require.NoError(t, err)
+	}
+
+	for _, openVer := range []string{"", "latest"} {
+		info, err := local.Find(ctx, ArtifactQuery{Name: "exec", Kind: ArtifactKindProvider, Version: openVer})
+		require.NoError(t, err)
+		assert.Equal(t, "0.4.0", info.Reference.Version.String())
+	}
+
+	for _, invalidVer := range []string{"LATEST", " latest ", "   "} {
+		_, err := local.Find(ctx, ArtifactQuery{Name: "exec", Kind: ArtifactKindProvider, Version: invalidVer})
+		require.ErrorIs(t, err, ErrInvalidQuery)
+	}
 }

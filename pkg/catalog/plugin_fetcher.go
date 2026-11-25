@@ -7,8 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 )
 
@@ -222,6 +224,48 @@ func (f *PluginFetcher) targetCatalog(name string) (PluginSource, error) {
 	return src, nil
 }
 
+// normalizeVersionSelector trims whitespace and canonicalizes the
+// case-insensitive "latest" alias to lowercase so wantsLatest recognizes it.
+func normalizeVersionSelector(v string) string {
+	trimmed := strings.TrimSpace(v)
+	if strings.EqualFold(trimmed, latestVersionAlias) {
+		return latestVersionAlias
+	}
+	return trimmed
+}
+
+// withPreReleaseConstraint rewrites a semver range constraint so every OR
+// clause carries a ">=0.0.0-0" comparator, enabling Masterminds/semver
+// pre-release evaluation across candidate-tag corruption checks, local
+// annotation matching, and CachedRemoteCatalog offline fallback when parsed via
+// VersionOrConstraint.Set. Open selectors, exact versions, and invalid
+// selectors are returned unchanged. The rewrite is idempotent.
+func withPreReleaseConstraint(v string) string {
+	if v == "" || v == latestVersionAlias {
+		return v
+	}
+	if _, err := semver.NewVersion(v); err == nil {
+		return v
+	}
+	if _, err := semver.NewConstraint(v); err != nil {
+		return v
+	}
+	clauses := strings.Split(v, "||")
+	for i, clause := range clauses {
+		trimmed := strings.TrimSpace(clause)
+		if strings.Contains(trimmed, ">=0.0.0-0") {
+			clauses[i] = trimmed
+			continue
+		}
+		clauses[i] = trimmed + ", >=0.0.0-0"
+	}
+	rewritten := strings.Join(clauses, " || ")
+	if _, err := semver.NewConstraint(rewritten); err != nil {
+		return v
+	}
+	return rewritten
+}
+
 // Find resolves query to a single plugin artifact, respecting the WithCatalog
 // option to scope to a single configured catalog.
 func (f *PluginFetcher) Find(ctx context.Context, query ArtifactQuery, opts ...Option) (ArtifactInfo, error) {
@@ -230,9 +274,14 @@ func (f *PluginFetcher) Find(ctx context.Context, query ArtifactQuery, opts ...O
 	if err != nil {
 		return ArtifactInfo{}, err
 	}
+	query.Version = normalizeVersionSelector(query.Version)
+	origQuery := query
+	if IncludePreReleaseFromContext(ctx) {
+		query.Version = withPreReleaseConstraint(query.Version)
+	}
 	info, err := target.Find(ctx, query)
 	if err != nil {
-		return ArtifactInfo{}, fmt.Errorf("finding plugin %s: %w", query.String(), err)
+		return ArtifactInfo{}, fmt.Errorf("finding plugin %s: %w", origQuery.String(), err)
 	}
 	return info, nil
 }
@@ -247,7 +296,15 @@ func (f *PluginFetcher) ResolvePlugin(ctx context.Context, name string, kind Art
 		return ArtifactInfo{}, err
 	}
 
-	info, err := target.Find(ctx, ArtifactQuery{Name: name, Kind: kind, Version: versionConstraint})
+	ver := normalizeVersionSelector(versionConstraint)
+	if IncludePreReleaseFromContext(ctx) {
+		ver = withPreReleaseConstraint(ver)
+	}
+	info, err := target.Find(ctx, ArtifactQuery{
+		Name:    name,
+		Kind:    kind,
+		Version: ver,
+	})
 	if err != nil {
 		return ArtifactInfo{}, fmt.Errorf("resolving plugin %s (%s): %w", name, kind, err)
 	}
@@ -410,6 +467,9 @@ func (l *localPlugin) Find(ctx context.Context, query ArtifactQuery) (ArtifactIn
 		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: Reference{Kind: query.Kind, Name: query.Name}, Catalog: l.Name()}
 	}
 	query.Source = SourceSelector{Kind: SourceBuilt}
+	if IncludePreReleaseFromContext(ctx) {
+		query.Version = withPreReleaseConstraint(query.Version)
+	}
 	return l.source.Find(ctx, query)
 }
 

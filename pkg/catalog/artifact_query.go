@@ -177,8 +177,20 @@ func (v *VersionOrConstraint) Type() VersionOrConstraintType {
 	return v.semVarType
 }
 
+// Set parses value as an open selector ("" or "latest"), an exact semantic
+// version, or a semver constraint with pre-release matching disabled.
 func (v *VersionOrConstraint) Set(value string) {
-	if value == "" || value == "latest" {
+	v.SetWithPreRelease(value, false)
+}
+
+// SetWithPreRelease parses value as an open selector ("" or "latest"), an
+// exact semantic version, or a semver constraint, setting IncludePrerelease on
+// parsed range constraints. Open-selector matching accepts only canonical ""
+// or "latest" so VersionOrConstraint stays aligned with wantsLatest.
+func (v *VersionOrConstraint) SetWithPreRelease(value string, includePreRelease bool) {
+	v.version = nil
+	v.constraint = nil
+	if value == "" || value == latestVersionAlias {
 		v.semVarType = LatestVersionConstraint
 		return
 	}
@@ -193,6 +205,7 @@ func (v *VersionOrConstraint) Set(value string) {
 		return
 	}
 	if constraint, err := semver.NewConstraint(value); err == nil && constraint != nil {
+		constraint.IncludePrerelease = includePreRelease
 		v.constraint = constraint
 		v.semVarType = IsConstraint
 		return
@@ -285,7 +298,7 @@ func (q ArtifactQuery) Validate() error {
 	if q.Digest != "" && !IsValidDigest(q.Digest) {
 		return &InvalidQueryError{Query: q, Message: fmt.Sprintf("digest %q is not a valid OCI digest", q.Digest)}
 	}
-	if q.Version == "" || q.Version == "latest" {
+	if q.Version == "" || q.Version == latestVersionAlias {
 		return nil
 	}
 
