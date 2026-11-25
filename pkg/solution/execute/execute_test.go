@@ -1,18 +1,25 @@
 package execute
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -213,6 +220,20 @@ func TestResolversForPreview_NoResolvers(t *testing.T) {
 	assert.Empty(t, result)
 }
 
+func TestResolversWithContextForPreview_NilRegistryWithResolvers(t *testing.T) {
+	ctx := context.Background()
+	sol := &solution.Solution{}
+	sol.Metadata.Name = "test"
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"r1": {Name: "r1"},
+	}
+
+	result, err := ResolversWithContextForPreview(ctx, sol, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "no provider registry configured")
+}
+
 func TestApplySolutionCELCostLimit(t *testing.T) {
 	t.Run("no options returns same context", func(t *testing.T) {
 		ctx := context.Background()
@@ -273,5 +294,276 @@ func TestApplySolutionCELCostLimit(t *testing.T) {
 			// When global limit is disabled (0), solution overrides are ignored
 			assert.False(t, ok)
 		}
+	})
+
+	t.Run("solution limit capped at parent context limit", func(t *testing.T) {
+		globalLimit := celexp.GetDefaultCostLimit()
+		if globalLimit == 0 {
+			t.Skip("global limit is disabled; solution overrides are ignored")
+		}
+
+		parentCtx := celexp.ContextWithCostLimit(context.Background(), 250)
+		sol := &solution.Solution{}
+		childLimit := uint64(1000)
+		sol.Spec.Options = &solution.SpecOptions{
+			CEL: &solution.CELOptions{CostLimit: &childLimit},
+		}
+
+		got := ApplySolutionCELCostLimit(parentCtx, sol)
+		effective, ok := celexp.CostLimitFromContext(got)
+		assert.True(t, ok)
+		assert.Equal(t, uint64(250), effective, "child solution must not raise parent CEL cost limit")
+	})
+
+	t.Run("tighter child limit wins below parent context limit", func(t *testing.T) {
+		globalLimit := celexp.GetDefaultCostLimit()
+		if globalLimit == 0 {
+			t.Skip("global limit is disabled; solution overrides are ignored")
+		}
+
+		parentCtx := celexp.ContextWithCostLimit(context.Background(), 500)
+		sol := &solution.Solution{}
+		childLimit := uint64(120)
+		sol.Spec.Options = &solution.SpecOptions{
+			CEL: &solution.CELOptions{CostLimit: &childLimit},
+		}
+
+		got := ApplySolutionCELCostLimit(parentCtx, sol)
+		effective, ok := celexp.CostLimitFromContext(got)
+		assert.True(t, ok)
+		assert.Equal(t, uint64(120), effective)
+	})
+}
+
+type stubExecProvider struct {
+	name string
+	fn   func(ctx context.Context, input any) (*provider.Output, error)
+}
+
+func (s *stubExecProvider) Descriptor() *provider.Descriptor {
+	return &provider.Descriptor{
+		Name:         s.name,
+		APIVersion:   "v1",
+		Version:      semver.MustParse("1.0.0"),
+		Description:  "stub provider for execute package unit tests",
+		Capabilities: []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+		OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+			provider.CapabilityFrom: schemahelper.AnyProp("val"),
+			provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"success": schemahelper.BoolProp("success"),
+			}),
+		},
+	}
+}
+
+func (s *stubExecProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	return s.fn(ctx, input)
+}
+
+func TestExecutionErrors_UnwrapAndError(t *testing.T) {
+	root := errors.New("underlying failure")
+
+	resErr := &ResolverExecutionError{
+		PartialResult: &ResolverExecutionResult{Data: map[string]any{"ok": 1}},
+		Err:           root,
+	}
+	assert.Contains(t, resErr.Error(), "resolver execution failed: underlying failure")
+	assert.ErrorIs(t, resErr, root)
+	assert.Equal(t, 1, resErr.PartialResult.Data["ok"])
+
+	actErr := &ActionExecutionError{
+		PartialResult: &action.ExecutionResult{FinalStatus: action.ExecutionFailed, FailedActions: []string{"deploy"}},
+		Err:           root,
+	}
+	assert.Contains(t, actErr.Error(), "action execution failed: underlying failure")
+	assert.ErrorIs(t, actErr, root)
+	assert.Equal(t, []string{"deploy"}, actErr.PartialResult.FailedActions)
+}
+
+func TestResolvers_PreFilteredSliceAndPartialFailure(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&stubExecProvider{
+		name: "good",
+		fn: func(_ context.Context, _ any) (*provider.Output, error) {
+			return &provider.Output{Data: "resolved-good"}, nil
+		},
+	}))
+	require.NoError(t, reg.Register(&stubExecProvider{
+		name: "bad",
+		fn: func(_ context.Context, _ any) (*provider.Output, error) {
+			return nil, errors.New("resolver exploded")
+		},
+	}))
+
+	rGood := &resolver.Resolver{
+		Name:    "good",
+		Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "good"}}},
+	}
+	rBad := &resolver.Resolver{
+		Name:      "bad",
+		DependsOn: []string{"good"},
+		Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "bad"}}},
+	}
+	sol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "res-test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"good": rGood,
+				"bad":  rBad,
+			},
+		},
+	}
+
+	t.Run("pre-filtered slice executes only selected resolvers", func(t *testing.T) {
+		res, err := Resolvers(context.Background(), sol, nil, reg, ResolverExecutionConfig{
+			Timeout:      5 * time.Second,
+			PhaseTimeout: 5 * time.Second,
+			Resolvers:    []*resolver.Resolver{rGood},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"good": "resolved-good"}, res.Data)
+		assert.GreaterOrEqual(t, res.Elapsed, time.Duration(0))
+	})
+
+	t.Run("fatal failure returns ResolverExecutionError with partial data", func(t *testing.T) {
+		res, err := Resolvers(context.Background(), sol, nil, reg, ResolverExecutionConfig{
+			Timeout:      5 * time.Second,
+			PhaseTimeout: 5 * time.Second,
+		})
+		require.Error(t, err)
+		assert.Nil(t, res)
+		var execErr *ResolverExecutionError
+		require.ErrorAs(t, err, &execErr)
+		require.NotNil(t, execErr.PartialResult)
+		assert.Equal(t, "resolved-good", execErr.PartialResult.Data["good"])
+	})
+}
+
+func TestActions_PipelineOptionsAndErrorPaths(t *testing.T) {
+	t.Run("filters explicit actions, wires streams/progress/executionData, and creates outputDir", func(t *testing.T) {
+		var executed []string
+		var outBuf bytes.Buffer
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(&stubExecProvider{
+			name: "step",
+			fn: func(ctx context.Context, input any) (*provider.Output, error) {
+				m, _ := input.(map[string]any)
+				if name, ok := m["name"].(string); ok {
+					executed = append(executed, name)
+				}
+				if streams, ok := provider.IOStreamsFromContext(ctx); ok && streams != nil && streams.Out != nil {
+					_, _ = streams.Out.Write([]byte("ok;"))
+				}
+				return &provider.Output{Data: map[string]any{"success": true}}, nil
+			},
+		}))
+
+		execExpr := celexp.Expression("string(__execution.summary.resolverCount)")
+		sol := &solution.Solution{
+			Metadata: solution.Metadata{Name: "act-pipeline"},
+			Spec: solution.Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"default-step": {
+							Provider: "step",
+							Inputs: map[string]*spec.ValueRef{
+								"name":  {Literal: "default-step"},
+								"count": {Expr: &execExpr},
+							},
+						},
+						"explicit-step": {
+							Provider: "step",
+							Explicit: true,
+							Inputs:   map[string]*spec.ValueRef{"name": {Literal: "explicit-step"}},
+						},
+					},
+				},
+			},
+		}
+
+		outDir := filepath.Join(t.TempDir(), "nested-out")
+		cfg := ActionExecutionConfig{
+			DefaultTimeout:   5 * time.Second,
+			GracePeriod:      time.Second,
+			MaxConcurrency:   2,
+			OutputDir:        outDir,
+			ExecutionData:    map[string]any{"summary": map[string]any{"resolverCount": 1}},
+			ProgressCallback: action.NoOpProgressCallback{},
+			IOStreams:        &provider.IOStreams{Out: &outBuf},
+		}
+
+		res, err := Actions(context.Background(), sol, map[string]any{}, reg, cfg)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, action.ExecutionSucceeded, res.Result.FinalStatus)
+		assert.Equal(t, []string{"default-step"}, executed)
+		assert.Equal(t, "ok;", outBuf.String())
+		info, statErr := os.Stat(outDir)
+		require.NoError(t, statErr)
+		assert.True(t, info.IsDir())
+	})
+
+	t.Run("failed action returns ActionExecutionError with PartialResult", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(&stubExecProvider{
+			name: "fail-step",
+			fn: func(_ context.Context, _ any) (*provider.Output, error) {
+				return nil, errors.New("step boom")
+			},
+		}))
+
+		sol := &solution.Solution{
+			Metadata: solution.Metadata{Name: "act-fail"},
+			Spec: solution.Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"broken": {Provider: "fail-step"},
+					},
+				},
+			},
+		}
+
+		res, err := Actions(context.Background(), sol, nil, reg, ActionExecutionConfig{
+			DefaultTimeout: 5 * time.Second,
+			GracePeriod:    time.Second,
+		})
+		require.Error(t, err)
+		assert.Nil(t, res)
+		var execErr *ActionExecutionError
+		require.ErrorAs(t, err, &execErr)
+		require.NotNil(t, execErr.PartialResult)
+		assert.Equal(t, action.ExecutionFailed, execErr.PartialResult.FinalStatus)
+		assert.Contains(t, execErr.PartialResult.FailedActions, "broken")
+	})
+
+	t.Run("cancelled context returns ActionExecutionError", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(&stubExecProvider{
+			name: "noop",
+			fn: func(_ context.Context, _ any) (*provider.Output, error) {
+				return &provider.Output{Data: map[string]any{"success": true}}, nil
+			},
+		}))
+
+		sol := &solution.Solution{
+			Metadata: solution.Metadata{Name: "act-cancel"},
+			Spec: solution.Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"step": {Provider: "noop"},
+					},
+				},
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := Actions(ctx, sol, nil, reg, ActionExecutionConfig{
+			DefaultTimeout: 5 * time.Second,
+			GracePeriod:    time.Second,
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
 	})
 }

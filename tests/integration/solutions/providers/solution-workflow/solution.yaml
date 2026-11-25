@@ -1,0 +1,100 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-solution-provider-workflow
+  version: 1.0.0
+  description: |
+    Functional tests for composed workflows via the solution provider.
+    Verifies explicit action exclusion, dependsOn closure, finally execution,
+    prefixed progress reporting, and action-envelope output for resolver-only children.
+
+spec:
+  resolvers:
+    targetEnv:
+      type: string
+      description: Target environment passed to child solution
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "staging"
+
+  workflow:
+    actions:
+      runChildWorkflow:
+        description: Execute child workflow via solution provider
+        provider: solution
+        inputs:
+          source: "./child.yaml"
+          inputs:
+            env:
+              rslvr: targetEnv
+
+      runResolverOnlyChild:
+        description: Execute resolver-only child in action mode
+        provider: solution
+        inputs:
+          source: "./resolver-only-child.yaml"
+
+      checkPrepExists:
+        description: Verify explicit dependency action ran
+        dependsOn: [runChildWorkflow]
+        provider: file
+        inputs:
+          operation: exists
+          path: ./prep.txt
+
+      checkBuildContent:
+        description: Verify non-explicit build action ran with parent input
+        dependsOn: [runChildWorkflow]
+        provider: file
+        inputs:
+          operation: read
+          path: ./build.txt
+
+      checkOptionalSkipped:
+        description: Verify standalone explicit action did not run
+        dependsOn: [runChildWorkflow]
+        provider: file
+        inputs:
+          operation: exists
+          path: ./optional.txt
+
+      checkFinallyExists:
+        description: Verify child finally action ran
+        dependsOn: [runChildWorkflow]
+        provider: file
+        inputs:
+          operation: exists
+          path: ./finally.txt
+
+  testing:
+    cases:
+      composed-workflow-explicit-and-finally:
+        description: Verify composed child workflow excludes standalone explicit actions, keeps dependsOn closure, runs finally, and prefixes progress
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [provider, solution-provider, action, smoke]
+        files: ["child.yaml", "resolver-only-child.yaml"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["runChildWorkflow"].results.success == true
+          - expression: __output.actions["runChildWorkflow"].results.workflow.finalStatus == "succeeded"
+          - expression: __output.actions["checkPrepExists"].results.exists == true
+            message: "Explicit child action depended on by non-explicit action must run"
+          - expression: __output.actions["checkBuildContent"].results.content == "build:staging"
+            message: "Non-explicit child action must run and receive parent input"
+          - expression: __output.actions["checkOptionalSkipped"].results.exists == false
+            message: "Standalone explicit child action must not run when composed"
+          - expression: __output.actions["checkFinallyExists"].results.exists == true
+            message: "Child finally action must run"
+          - expression: __output.actions["runResolverOnlyChild"].results.success == true
+            message: "Resolver-only child in action mode must return action envelope with success boolean"
+          - expression: __output.actions["runResolverOnlyChild"].results.resolvers.token == "from-resolver-only-child"
+          - expression: __stderr.contains("[solution:")
+            message: "Child action progress must be prefixed with [solution:<name>]"
+          - expression: __stderr.contains("] prep:")
+          - expression: __stderr.contains("] build:")
+          - expression: "!__stderr.contains(\"] optionalDeploy\")"

@@ -188,7 +188,7 @@ func validateSection(
 ) {
 	for name, action := range actions {
 		// Set action name from map key
-		if action != nil {
+		if action != nil && action.Name != name {
 			action.Name = name
 		}
 
