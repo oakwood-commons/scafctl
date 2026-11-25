@@ -16,7 +16,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -74,7 +73,10 @@ func runLintFix(ctx context.Context, opts *Options) error {
 			w.Verbosef("Using %s", resolvedPath)
 		}
 	case source.KindLocalFile:
-		resolvedPath = sel.Source.Ref
+		resolvedPath, err = provider.AbsFromContext(ctx, sel.Source.Ref)
+		if err != nil {
+			resolvedPath = sel.Source.Ref
+		}
 	case source.KindStdin:
 		return failFix(opts, exitcode.ValidationFailed, errors.New("lint --fix requires a file path; stdin ('-') is not supported"))
 	case source.KindUnknown, source.KindURL, source.KindRemoteRef, source.KindCatalogQualified, source.KindBareName:
@@ -196,8 +198,13 @@ func trimNotFixable(detail string) string {
 // same output as a plain 'lint'. Findings are rendered to stdout; a non-zero
 // error count yields the ValidationFailed exit code.
 func renderResidualFindings(ctx context.Context, opts *Options, content []byte, registry *provider.Registry) error {
-	sol := &solution.Solution{}
-	if err := sol.UnmarshalFromBytes(content); err != nil {
+	absPath := opts.File
+	if resolved, err := provider.AbsFromContext(ctx, opts.File); err == nil {
+		absPath = resolved
+	}
+
+	sol, err := pkglint.LoadComposedFromBytes(content, absPath)
+	if err != nil {
 		writeError(opts, fmt.Sprintf("failed to re-lint fixed content: %v", err))
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}

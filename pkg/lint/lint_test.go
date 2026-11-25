@@ -21,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
@@ -987,6 +988,162 @@ func TestLintUnknownResolverRefs(t *testing.T) {
 				assert.Empty(t, filterFindingsByRule(result, "unknown-resolver-reference"))
 			})
 		}
+	})
+
+	t.Run("suppressed messages.error reference does not hide unsuppressed step input reference", func(t *testing.T) {
+		rawYAML := "apiVersion: scafctl.io/v1\n" + // 1
+			"kind: Solution\n" + // 2
+			"metadata:\n" + // 3
+			"  name: dup-ref-suppress\n" + // 4
+			"  version: 1.0.0\n" + // 5
+			"spec:\n" + // 6
+			"  resolvers:\n" + // 7
+			"    consumer:\n" + // 8
+			"      description: Consumer with suppressed error message ref and unsuppressed input ref\n" + // 9
+			"      messages:\n" + // 10
+			"        error:\n" + // 11
+			"          expr: '_.missing' # scafctl-lint-ignore: unknown-resolver-reference\n" + // 12
+			"      resolve:\n" + // 13
+			"        with:\n" + // 14
+			"          - provider: cel\n" + // 15
+			"            inputs:\n" + // 16
+			"              expression:\n" + // 17
+			"                expr: '_.missing'\n" // 18
+
+		sol := &solution.Solution{}
+		sol.SetPath("solution.yaml")
+		require.NoError(t, sol.UnmarshalFromBytes([]byte(rawYAML)))
+
+		result := Solution(sol, "solution.yaml", newReg())
+		findings := filterFindingsByRule(result, "unknown-resolver-reference")
+		require.Len(t, findings, 1, "suppressed messages.error occurrence must not hide unsuppressed input occurrence")
+		assert.Equal(t, "spec.resolvers.consumer.resolve.with[0].inputs.expression", findings[0].Location)
+		assert.Equal(t, 17, findings[0].Line)
+		assert.Empty(t, filterFindingsByRule(result, "unused-suppression"))
+	})
+
+	t.Run("suppressed optional reference and condition expression alias preserve unsuppressed site and dedupe remaining", func(t *testing.T) {
+		rawYAML := "apiVersion: scafctl.io/v1\n" + // 1
+			"kind: Solution\n" + // 2
+			"metadata:\n" + // 3
+			"  name: dup-opt-suppress\n" + // 4
+			"  version: 1.0.0\n" + // 5
+			"spec:\n" + // 6
+			"  resolvers:\n" + // 7
+			"    first:\n" + // 8
+			"      description: Suppressed condition expression alias\n" + // 9
+			"      when:\n" + // 10
+			"        expression: '_.?missing.orValue(true)' # scafctl-lint-ignore: undefined-optional-reference\n" + // 11
+			"      resolve:\n" + // 12
+			"        with:\n" + // 13
+			"          - provider: cel\n" + // 14
+			"            inputs:\n" + // 15
+			"              expression:\n" + // 16
+			"                expr: '_.?missing.orValue(\"a\")'\n" + // 17
+			"    second:\n" + // 18
+			"      description: Third unsuppressed reference deduplicated after suppression\n" + // 19
+			"      resolve:\n" + // 20
+			"        with:\n" + // 21
+			"          - provider: cel\n" + // 22
+			"            inputs:\n" + // 23
+			"              expression:\n" + // 24
+			"                expr: '_.?missing.orValue(\"b\")'\n" // 25
+
+		sol := &solution.Solution{}
+		sol.SetPath("solution.yaml")
+		require.NoError(t, sol.UnmarshalFromBytes([]byte(rawYAML)))
+
+		result := Solution(sol, "solution.yaml", newReg())
+		findings := filterFindingsByRule(result, "undefined-optional-reference")
+		require.Len(t, findings, 1, "suppressed first site must reveal second site while deduplicating third")
+		assert.Equal(t, "spec.resolvers.first.resolve.with[0].inputs.expression", findings[0].Location)
+		assert.Equal(t, 16, findings[0].Line)
+		assert.Empty(t, filterFindingsByRule(result, "unused-suppression"))
+	})
+
+	t.Run("composed multi-file suppression preserves unsuppressed cross-file resolver ref", func(t *testing.T) {
+		primaryYAML := "apiVersion: scafctl.io/v1\n" +
+			"kind: Solution\n" +
+			"metadata:\n" +
+			"  name: composed-dup-ref\n" +
+			"  version: 1.0.0\n" +
+			"compose:\n" +
+			"  - part-a.yaml\n" +
+			"  - part-b.yaml\n" +
+			"spec:\n" +
+			"  resolvers:\n" +
+			"    base:\n" +
+			"      description: Base\n" +
+			"      resolve:\n" +
+			"        with:\n" +
+			"          - provider: static\n" +
+			"            inputs:\n" +
+			"              value: ok\n"
+		partA := "spec:\n" + // 1
+			"  resolvers:\n" + // 2
+			"    alpha:\n" + // 3
+			"      description: Suppressed missing ref in fragment A\n" + // 4
+			"      resolve:\n" + // 5
+			"        with:\n" + // 6
+			"          - provider: cel\n" + // 7
+			"            inputs:\n" + // 8
+			"              expression:\n" + // 9
+			"                expr: '_.missing' # scafctl-lint-ignore: unknown-resolver-reference\n" // 10
+		partB := "spec:\n" + // 1
+			"  resolvers:\n" + // 2
+			"    beta:\n" + // 3
+			"      description: Unsuppressed missing ref in fragment B\n" + // 4
+			"      resolve:\n" + // 5
+			"        with:\n" + // 6
+			"          - provider: cel\n" + // 7
+			"            inputs:\n" + // 8
+			"              expression:\n" + // 9
+			"                expr: '_.missing'\n" // 10
+
+		sol, solPath := buildComposedSolutionForLintTest(t, primaryYAML, map[string]string{
+			"part-a.yaml": partA,
+			"part-b.yaml": partB,
+		})
+		result := Solution(sol, solPath, newReg())
+		findings := filterFindingsByRule(result, "unknown-resolver-reference")
+		require.Len(t, findings, 1)
+		assert.Equal(t, filepath.Join(filepath.Dir(solPath), "part-b.yaml"), findings[0].SourceFile)
+		assert.Equal(t, 9, findings[0].Line)
+		assert.Empty(t, filterFindingsByRule(result, "unused-suppression"))
+	})
+
+	t.Run("function named expr does not suppress sibling invalid-function finding", func(t *testing.T) {
+		rawYAML := "apiVersion: scafctl.io/v1\n" + // 1
+			"kind: Solution\n" + // 2
+			"metadata:\n" + // 3
+			"  name: fn-expr-collision\n" + // 4
+			"  version: 1.0.0\n" + // 5
+			"spec:\n" + // 6
+			"  functions:\n" + // 7
+			"    # scafctl-lint-ignore: invalid-function\n" + // 8
+			"    expr:\n" + // 9
+			"      args:\n" + // 10
+			"        - name: x\n" + // 11
+			"          type: string\n" + // 12
+			"      cel: 'x'\n" + // 13
+			"    broken:\n" + // 14
+			"      cel: ''\n" + // 15 (empty cel body triggers invalid-function on spec.functions)
+			"  resolvers:\n" + // 16
+			"    base:\n" + // 17
+			"      description: Base\n" + // 18
+			"      resolve:\n" + // 19
+			"        with:\n" + // 20
+			"          - provider: static\n" + // 21
+			"            inputs:\n" + // 22
+			"              value: ok\n" // 23
+
+		sol := &solution.Solution{}
+		sol.SetPath("solution.yaml")
+		require.NoError(t, sol.LoadFromBytesLenient([]byte(rawYAML)))
+
+		result := Solution(sol, "solution.yaml", newReg())
+		assert.NotEmpty(t, filterFindingsByRule(result, "invalid-function"), "ignore on spec.functions.expr must not suppress spec.functions finding")
+		assert.Len(t, filterFindingsByRule(result, "unused-suppression"), 1)
 	})
 }
 
@@ -3921,4 +4078,389 @@ func TestLintAction_InvalidFingerprintScope(t *testing.T) {
 			}
 		})
 	}
+}
+
+func buildComposedSolutionForLintTest(t *testing.T, primaryYAML string, parts map[string]string) (*solution.Solution, string) {
+	t.Helper()
+	dir := t.TempDir()
+	solPath := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solPath, []byte(primaryYAML), 0o600))
+
+	for rel, content := range parts {
+		partPath := filepath.Join(dir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(partPath), 0o700))
+		require.NoError(t, os.WriteFile(partPath, []byte(content), 0o600))
+	}
+
+	sol := &solution.Solution{}
+	sol.SetPath(solPath)
+	require.NoError(t, sol.LoadFromBytesLenient([]byte(primaryYAML)))
+
+	composed, err := bundler.Compose(sol, dir)
+	require.NoError(t, err)
+	composed.SetPath(solPath)
+	return composed, solPath
+}
+
+func TestLintSolution_ComposedFragmentSchemaValidation(t *testing.T) {
+	t.Parallel()
+
+	primary := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: frag-repro
+  version: 1.0.0
+compose:
+  - tests/svc.yaml
+spec:
+  resolvers:
+    hello:
+      description: Greeting resolver
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: world
+`
+
+	t.Run("single service invalid pattern resolves exact array element line", func(t *testing.T) {
+		t.Parallel()
+		svcYAML := "spec:\n" + // 1
+			"  testing:\n" + // 2
+			"    config:\n" + // 3
+			"      services:\n" + // 4
+			"        - name: mocksvc\n" + // 5
+			"          type: bogus\n" // 6
+
+		sol, solPath := buildComposedSolutionForLintTest(t, primary, map[string]string{
+			"tests/svc.yaml": svcYAML,
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		res := Solution(sol, solPath, reg)
+		violations := filterFindingsByRule(res, "schema-violation")
+		require.Len(t, violations, 1)
+		assert.Equal(t, 1, res.ErrorCount)
+		assert.Equal(t, "spec.testing.config.services.type", violations[0].Location)
+		assert.Equal(t, filepath.Join(filepath.Dir(solPath), "tests/svc.yaml"), violations[0].SourceFile)
+		assert.Equal(t, 6, violations[0].Line)
+		assert.Equal(t, 11, violations[0].Column)
+	})
+
+	t.Run("multiple array elements fall back to longest prefix", func(t *testing.T) {
+		t.Parallel()
+		svcYAML := "spec:\n" + // 1
+			"  testing:\n" + // 2
+			"    config:\n" + // 3
+			"      services:\n" + // 4
+			"        - name: ok-svc\n" + // 5
+			"          type: http\n" + // 6
+			"        - name: bad-svc\n" + // 7
+			"          type: bogus\n" // 8
+
+		sol, solPath := buildComposedSolutionForLintTest(t, primary, map[string]string{
+			"tests/svc.yaml": svcYAML,
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		res := Solution(sol, solPath, reg)
+		violations := filterFindingsByRule(res, "schema-violation")
+		require.Len(t, violations, 1)
+		assert.Equal(t, filepath.Join(filepath.Dir(solPath), "tests/svc.yaml"), violations[0].SourceFile)
+		assert.Equal(t, 4, violations[0].Line, "ambiguous unindexed array match must fall back to longest prefix")
+	})
+
+	t.Run("comment-only composed fragment is valid", func(t *testing.T) {
+		t.Parallel()
+		sol, solPath := buildComposedSolutionForLintTest(t, primary, map[string]string{
+			"tests/svc.yaml": "# placeholder compose file\n",
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		res := Solution(sol, solPath, reg)
+		assert.Empty(t, filterFindingsByRule(res, "schema-violation"))
+		assert.Equal(t, 0, res.ErrorCount)
+	})
+
+	t.Run("disallowed root section in fragment reports exact key position", func(t *testing.T) {
+		t.Parallel()
+		badPart := "metadata:\n  name: wrong-place\nspec:\n  resolvers: {}\n"
+		sol, solPath := buildComposedSolutionForLintTest(t, primary, map[string]string{
+			"tests/svc.yaml": badPart,
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		res := Solution(sol, solPath, reg)
+		violations := filterFindingsByRule(res, "schema-violation")
+		require.Len(t, violations, 1)
+		assert.Equal(t, "(root)", violations[0].Location)
+		assert.Equal(t, filepath.Join(filepath.Dir(solPath), "tests/svc.yaml"), violations[0].SourceFile)
+		assert.Equal(t, 1, violations[0].Line)
+	})
+
+	t.Run("suppression directives are scoped per file SourceMap", func(t *testing.T) {
+		t.Parallel()
+		suppressedPart := "spec:\n" + // 1
+			"  testing:\n" + // 2
+			"    config:\n" + // 3
+			"      # scafctl-lint-ignore: schema-violation\n" + // 4
+			"      services:\n" + // 5
+			"        - name: mocksvc\n" + // 6
+			"          type: bogus\n" // 7
+
+		// Primary has its own schema violation; fragment suppresses only its own.
+		primaryWithBug := primary + "unknownRootField: nope\n"
+		sol, solPath := buildComposedSolutionForLintTest(t, primaryWithBug, map[string]string{
+			"tests/svc.yaml": suppressedPart,
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		res := Solution(sol, solPath, reg)
+		violations := filterFindingsByRule(res, "schema-violation")
+		require.Len(t, violations, 1, "fragment violation should be suppressed while primary violation remains")
+		assert.Equal(t, solPath, violations[0].SourceFile)
+		assert.Empty(t, filterFindingsByRule(res, "unused-suppression"))
+	})
+
+	t.Run("disable-file in fragment does not suppress primary findings", func(t *testing.T) {
+		t.Parallel()
+		disablePart := "# scafctl-lint-disable-file\nspec:\n  testing:\n    config:\n      services:\n        - name: s\n          type: bogus\n"
+		primaryWithBug := primary + "unknownRootField: nope\n"
+		sol, solPath := buildComposedSolutionForLintTest(t, primaryWithBug, map[string]string{
+			"tests/svc.yaml": disablePart,
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		res := Solution(sol, solPath, reg)
+		violations := filterFindingsByRule(res, "schema-violation")
+		require.Len(t, violations, 1, "fragment disable-file must not leak to primary solution")
+		assert.Equal(t, solPath, violations[0].SourceFile)
+	})
+
+	t.Run("non-schema finding and unused suppression in composed fragment resolve fragment positions", func(t *testing.T) {
+		t.Parallel()
+		partWithHyphenAndUnusedIgnore := "# scafctl-lint-ignore: missing-provider\n" + // 1
+			"spec:\n" + // 2
+			"  resolvers:\n" + // 3
+			"    child-resolver:\n" + // 4
+			"      description: Composed hyphenated resolver\n" + // 5
+			"      resolve:\n" + // 6
+			"        with:\n" + // 7
+			"          - provider: static\n" + // 8
+			"            inputs:\n" + // 9
+			"              value: child\n" // 10
+
+		sol, solPath := buildComposedSolutionForLintTest(t, primary, map[string]string{
+			"tests/svc.yaml": partWithHyphenAndUnusedIgnore,
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		res := Solution(sol, solPath, reg)
+		expectedPartPath := filepath.Join(filepath.Dir(solPath), "tests/svc.yaml")
+
+		hyphenFindings := filterFindingsByRule(res, "hyphenated-name")
+		require.Len(t, hyphenFindings, 1)
+		assert.Equal(t, expectedPartPath, hyphenFindings[0].SourceFile)
+		assert.Equal(t, 4, hyphenFindings[0].Line)
+
+		unusedSuppressions := filterFindingsByRule(res, "unused-suppression")
+		require.Len(t, unusedSuppressions, 1)
+		assert.Equal(t, expectedPartPath, unusedSuppressions[0].SourceFile)
+		assert.Equal(t, 1, unusedSuppressions[0].Line)
+	})
+
+	t.Run("dynamic map-key wildcard and item-level block ignore work in fragments", func(t *testing.T) {
+		t.Parallel()
+		// Action violation in workflow.yaml resolves through dynamicMapContainers
+		// ("spec.workflow.actions.<name>"), while a service violation in tests/svc.yaml
+		// with # scafctl-lint-ignore on the list item is suppressed via resolvedPath.
+		primaryTwoParts := "apiVersion: scafctl.io/v1\n" +
+			"kind: Solution\n" +
+			"metadata:\n" +
+			"  name: frag-repro\n" +
+			"  version: 1.0.0\n" +
+			"compose:\n" +
+			"  - workflow.yaml\n" +
+			"  - tests/svc.yaml\n" +
+			"spec:\n" +
+			"  resolvers:\n" +
+			"    hello:\n" +
+			"      description: Greeting resolver\n" +
+			"      resolve:\n" +
+			"        with:\n" +
+			"          - provider: static\n" +
+			"            inputs:\n" +
+			"              value: world\n"
+		workflowYAML := "spec:\n" + // 1
+			"  workflow:\n" + // 2
+			"    actions:\n" + // 3
+			"      deploy:\n" + // 4
+			"        description: Deploy action\n" + // 5
+			"        provider: static\n" + // 6
+			"        alias: 1bad-alias\n" // 7 (violates Action.Alias pattern)
+		svcYAML := "spec:\n" + // 1
+			"  testing:\n" + // 2
+			"    config:\n" + // 3
+			"      services:\n" + // 4
+			"        # scafctl-lint-ignore: schema-violation\n" + // 5
+			"        - name: mocksvc\n" + // 6
+			"          type: bogus\n" // 7
+
+		sol, solPath := buildComposedSolutionForLintTest(t, primaryTwoParts, map[string]string{
+			"workflow.yaml":  workflowYAML,
+			"tests/svc.yaml": svcYAML,
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		res := Solution(sol, solPath, reg)
+		violations := filterFindingsByRule(res, "schema-violation")
+		require.Len(t, violations, 1, "list-item ignore should suppress service violation leaving only action alias violation")
+		assert.Equal(t, "spec.workflow.actions.alias", violations[0].Location)
+		assert.Equal(t, filepath.Join(filepath.Dir(solPath), "workflow.yaml"), violations[0].SourceFile)
+		assert.Equal(t, 7, violations[0].Line)
+		assert.Empty(t, filterFindingsByRule(res, "unused-suppression"))
+	})
+
+	t.Run("multiple unknown sibling keys split into independent findings so single-line ignore preserves siblings", func(t *testing.T) {
+		t.Parallel()
+		multiUnknown := "apiVersion: scafctl.io/v1 # scafctl-lint-ignore: schema-violation\n" + // 1 (suppressed)
+			"kind: Solution\n" + // 2 (unsuppressed)
+			"metadata:\n" + // 3 (unsuppressed)
+			"  name: dup\n" + // 4
+			"spec:\n" + // 5
+			"  resolvers: {}\n" // 6
+		primaryWithTwoUnknown := primary +
+			"badA: 1 # scafctl-lint-ignore: schema-violation\n" + // suppressed on primary
+			"badB: 2\n" // unsuppressed on primary
+
+		sol, solPath := buildComposedSolutionForLintTest(t, primaryWithTwoUnknown, map[string]string{
+			"tests/svc.yaml": multiUnknown,
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		for range 5 {
+			res := Solution(sol, solPath, reg)
+			violations := filterFindingsByRule(res, "schema-violation")
+			require.Len(t, violations, 3, "suppressed badA and apiVersion must not hide unsuppressed badB, kind, or metadata")
+
+			assert.Equal(t, solPath, violations[0].SourceFile)
+			assert.Contains(t, violations[0].Message, `"badB"`)
+
+			expectedPart := filepath.Join(filepath.Dir(solPath), "tests/svc.yaml")
+			assert.Equal(t, expectedPart, violations[1].SourceFile)
+			assert.Equal(t, 2, violations[1].Line)
+			assert.Contains(t, violations[1].Message, `"kind"`)
+
+			assert.Equal(t, expectedPart, violations[2].SourceFile)
+			assert.Equal(t, 3, violations[2].Line)
+			assert.Contains(t, violations[2].Message, `"metadata"`)
+			assert.Empty(t, filterFindingsByRule(res, "unused-suppression"))
+		}
+	})
+
+	t.Run("action named alias does not misattribute or suppress sibling invalid alias", func(t *testing.T) {
+		t.Parallel()
+		workflowCollisionYAML := "spec:\n" + // 1
+			"  workflow:\n" + // 2
+			"    actions:\n" + // 3
+			"      # scafctl-lint-ignore: schema-violation\n" + // 4 (annotates valid 'alias' action, NOT 'deploy')
+			"      alias:\n" + // 5
+			"        description: Valid action named alias\n" + // 6
+			"        provider: static\n" + // 7
+			"      deploy:\n" + // 8
+			"        description: Deploy action with invalid alias\n" + // 9
+			"        provider: static\n" + // 10
+			"        alias: 1bad-alias\n" // 11
+
+		sol, solPath := buildComposedSolutionForLintTest(t, primary, map[string]string{
+			"tests/svc.yaml": workflowCollisionYAML,
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		res := Solution(sol, solPath, reg)
+		violations := filterFindingsByRule(res, "schema-violation")
+		require.Len(t, violations, 1, "directive on valid 'alias' action must not suppress 'deploy.alias'")
+		assert.Equal(t, 11, violations[0].Line)
+		assert.Len(t, filterFindingsByRule(res, "unused-suppression"), 1)
+	})
+
+	t.Run("ambiguous alias across multiple actions falls back to actions map line", func(t *testing.T) {
+		t.Parallel()
+		workflowAmbiguousYAML := "spec:\n" + // 1
+			"  workflow:\n" + // 2
+			"    actions:\n" + // 3
+			"      first:\n" + // 4
+			"        provider: static\n" + // 5
+			"        alias: validAlias\n" + // 6
+			"      deploy:\n" + // 7
+			"        provider: static\n" + // 8
+			"        alias: 1bad-alias\n" // 9
+
+		sol, solPath := buildComposedSolutionForLintTest(t, primary, map[string]string{
+			"tests/svc.yaml": workflowAmbiguousYAML,
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		res := Solution(sol, solPath, reg)
+		violations := filterFindingsByRule(res, "schema-violation")
+		require.Len(t, violations, 1)
+		assert.Equal(t, 3, violations[0].Line, "ambiguous dynamic map child must fall back to containing actions map")
+	})
+
+	t.Run("relative filePath under different cwd still matches primary suppressions via sol.GetPath", func(t *testing.T) {
+		t.Parallel()
+		primarySuppressed := "apiVersion: scafctl.io/v1\n" +
+			"kind: Solution\n" +
+			"metadata:\n" +
+			"  name: cwd-test\n" +
+			"  version: 1.0.0\n" +
+			"compose:\n" +
+			"  - tests/svc.yaml\n" +
+			"spec:\n" +
+			"  resolvers:\n" +
+			"    # scafctl-lint-ignore: hyphenated-name\n" +
+			"    my-hello:\n" +
+			"      description: Greeting\n" +
+			"      resolve:\n" +
+			"        with:\n" +
+			"          - provider: static\n" +
+			"            inputs:\n" +
+			"              value: world\n"
+		sol, _ := buildComposedSolutionForLintTest(t, primarySuppressed, map[string]string{
+			"tests/svc.yaml": "# empty partial\n",
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}}))
+
+		// Pass bare relative "solution.yaml" while CWD is this package dir, not sol's temp dir.
+		res := Solution(sol, "solution.yaml", reg)
+		assert.Empty(t, filterFindingsByRule(res, "hyphenated-name"))
+		assert.Empty(t, filterFindingsByRule(res, "unused-suppression"))
+	})
+
+	t.Run("empty-solution root finding is not misattributed to test-only composed fragment", func(t *testing.T) {
+		t.Parallel()
+		emptyPrimary := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: empty-composed\n  version: 1.0.0\ncompose:\n  - tests/svc.yaml\n"
+		testsOnlyPart := "spec:\n  testing:\n    config:\n      skipBuiltins: true\n"
+
+		sol, solPath := buildComposedSolutionForLintTest(t, emptyPrimary, map[string]string{
+			"tests/svc.yaml": testsOnlyPart,
+		})
+		res := Solution(sol, solPath, provider.NewRegistry())
+		emptyFindings := filterFindingsByRule(res, "empty-solution")
+		require.Len(t, emptyFindings, 1)
+		assert.Equal(t, 1, res.ErrorCount)
+		assert.NotEqual(t, filepath.Join(filepath.Dir(solPath), "tests/svc.yaml"), emptyFindings[0].SourceFile)
+	})
 }

@@ -106,6 +106,23 @@ type Solution struct {
 	// rawContent stores the original bytes used to parse this solution.
 	// It preserves the original formatting for round-trip fidelity.
 	rawContent []byte `json:"-" yaml:"-"`
+
+	// composedParts stores source metadata for partial YAML files merged into
+	// this solution via bundler.Compose, kept separate from rawContent and
+	// sourceMap so primary-file byte-offset invariants remain intact.
+	composedParts []ComposedPart `json:"-" yaml:"-"`
+}
+
+// ComposedPart records the file path, raw bytes, and source map of a partial
+// YAML file merged into a Solution by bundler.Compose. Keeping composed
+// fragments separate from the primary Solution's RawContent and SourceMap
+// preserves byte-exact primary-file offsets for refindex and refactoring while
+// enabling per-fragment schema validation, position lookup, and inline lint
+// suppression directives.
+type ComposedPart struct {
+	Path       string
+	RawContent []byte
+	SourceMap  *sourcepos.SourceMap
 }
 
 // Metadata contains the descriptive information about a solution.
@@ -509,6 +526,54 @@ func (s *Solution) SetSourceMap(sm *sourcepos.SourceMap) {
 		return
 	}
 	s.sourceMap = sm
+}
+
+// ComposedParts returns a defensive copy of the composed fragment records
+// attached to this solution by bundler.Compose, or nil when the solution has
+// no composed parts.
+func (s *Solution) ComposedParts() []ComposedPart {
+	if s == nil || len(s.composedParts) == 0 {
+		return nil
+	}
+	out := make([]ComposedPart, len(s.composedParts))
+	for i, p := range s.composedParts {
+		var raw []byte
+		if p.RawContent != nil {
+			raw = append([]byte(nil), p.RawContent...)
+		}
+		out[i] = ComposedPart{
+			Path:       p.Path,
+			RawContent: raw,
+			SourceMap:  p.SourceMap,
+		}
+	}
+	return out
+}
+
+// SetComposedParts attaches composed fragment records to this solution, copying
+// the slice and each part's RawContent bytes. Passing nil or an empty slice
+// clears any stored composed parts.
+func (s *Solution) SetComposedParts(parts []ComposedPart) {
+	if s == nil {
+		return
+	}
+	if len(parts) == 0 {
+		s.composedParts = nil
+		return
+	}
+	copied := make([]ComposedPart, len(parts))
+	for i, p := range parts {
+		var raw []byte
+		if p.RawContent != nil {
+			raw = append([]byte(nil), p.RawContent...)
+		}
+		copied[i] = ComposedPart{
+			Path:       p.Path,
+			RawContent: raw,
+			SourceMap:  p.SourceMap,
+		}
+	}
+	s.composedParts = copied
 }
 
 // ApplyDefaults populates default values for optional top-level fields.

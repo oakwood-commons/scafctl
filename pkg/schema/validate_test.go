@@ -520,6 +520,12 @@ func TestParseValidatingChain(t *testing.T) {
 			wantP:   "spec",
 			wantMsg: "some error",
 		},
+		{
+			name:    "collapses cumulative inline properties chain",
+			input:   `validating https://scafctl.dev/schemas/v1/compose-part.json: validating /properties/spec: validating /properties/spec/properties/workflow: validating /properties/spec/properties/workflow/properties/actions: validating /properties/spec/properties/workflow/properties/actions/additionalProperties: validating /$defs/ActionAction: validating /$defs/ActionAction/properties/alias: does not match pattern`,
+			wantP:   "spec.workflow.actions.alias",
+			wantMsg: "does not match pattern",
+		},
 	}
 
 	for _, tc := range tests {
@@ -569,4 +575,172 @@ func TestValidateSolutionAgainstSchema_UnknownKey(t *testing.T) {
 	assert.Contains(t, v.Message, `unknown key "s"`, "should use 'unknown key' not 'unexpected additional properties'")
 	assert.NotContains(t, v.Message, "validating", "should not contain 'validating' prefix")
 	assert.NotContains(t, v.Message, "$defs", "should not contain $defs references")
+}
+
+func TestValidateComposePartAgainstSchema(t *testing.T) {
+	t.Run("nil comment-only partial is valid", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+		violations, err := ValidateComposePartAgainstSchema(nil)
+		require.NoError(t, err)
+		assert.Nil(t, violations)
+	})
+
+	t.Run("empty object partial is valid", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+		violations, err := ValidateComposePartAgainstSchema(map[string]any{})
+		require.NoError(t, err)
+		assert.Empty(t, violations)
+	})
+
+	t.Run("valid partial with all allowed sections passes without inline names", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+		data := map[string]any{
+			"spec": map[string]any{
+				"resolvers": map[string]any{
+					"env": map[string]any{
+						"resolve": map[string]any{
+							"with": []any{
+								map[string]any{
+									"provider": "static",
+									"inputs":   map[string]any{"value": "dev"},
+								},
+							},
+						},
+					},
+				},
+				"workflow": map[string]any{
+					"actions": map[string]any{
+						"deploy": map[string]any{
+							"provider": "exec",
+							"inputs":   map[string]any{"command": "echo deploy"},
+						},
+					},
+					"finally": map[string]any{
+						"cleanup": map[string]any{
+							"provider": "exec",
+							"inputs":   map[string]any{"command": "echo cleanup"},
+						},
+					},
+				},
+				"testing": map[string]any{
+					"config": map[string]any{
+						"skipBuiltins": true,
+						"services": []any{
+							map[string]any{
+								"name": "mocksvc",
+								"type": "http",
+							},
+						},
+					},
+					"cases": map[string]any{
+						"smoke": map[string]any{
+							"description": "smoke test",
+							"command":     []any{"render", "solution"},
+							"assertions": []any{
+								map[string]any{"contains": "dev"},
+							},
+						},
+					},
+				},
+			},
+			"bundle": map[string]any{
+				"include": []any{"templates/**"},
+			},
+		}
+
+		violations, err := ValidateComposePartAgainstSchema(data)
+		require.NoError(t, err)
+		assert.Empty(t, violations)
+	})
+
+	t.Run("invalid service type pattern in testing config is flagged", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+		data := map[string]any{
+			"spec": map[string]any{
+				"testing": map[string]any{
+					"config": map[string]any{
+						"services": []any{
+							map[string]any{
+								"name": "mocksvc",
+								"type": "bogus",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		violations, err := ValidateComposePartAgainstSchema(data)
+		require.NoError(t, err)
+		require.NotEmpty(t, violations)
+		assert.Equal(t, "spec.testing.config.services.type", violations[0].Path)
+	})
+
+	disallowedCases := []struct {
+		name     string
+		data     map[string]any
+		wantPath string
+		wantKey  string
+	}{
+		{
+			name:     "root metadata disallowed",
+			data:     map[string]any{"metadata": map[string]any{"name": "bad"}},
+			wantPath: "",
+			wantKey:  `"metadata"`,
+		},
+		{
+			name:     "spec.calls disallowed",
+			data:     map[string]any{"spec": map[string]any{"calls": map[string]any{}}},
+			wantPath: "spec",
+			wantKey:  `"calls"`,
+		},
+		{
+			name:     "spec.functions disallowed",
+			data:     map[string]any{"spec": map[string]any{"functions": map[string]any{}}},
+			wantPath: "spec",
+			wantKey:  `"functions"`,
+		},
+		{
+			name:     "spec.options disallowed",
+			data:     map[string]any{"spec": map[string]any{"options": map[string]any{}}},
+			wantPath: "spec",
+			wantKey:  `"options"`,
+		},
+		{
+			name: "spec.workflow.resultSchemaMode disallowed",
+			data: map[string]any{
+				"spec": map[string]any{
+					"workflow": map[string]any{"resultSchemaMode": "warn"},
+				},
+			},
+			wantPath: "spec.workflow",
+			wantKey:  `"resultSchemaMode"`,
+		},
+		{
+			name:     "bundle.plugins disallowed",
+			data:     map[string]any{"bundle": map[string]any{"plugins": []any{}}},
+			wantPath: "bundle",
+			wantKey:  `"plugins"`,
+		},
+	}
+
+	for _, tc := range disallowedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetSolutionSchemaOnce()
+			violations, err := ValidateComposePartAgainstSchema(tc.data)
+			require.NoError(t, err)
+			require.NotEmpty(t, violations)
+			assert.Equal(t, tc.wantPath, violations[0].Path)
+			assert.Contains(t, violations[0].Message, tc.wantKey)
+		})
+	}
+
+	t.Run("non-object scalar and array roots are rejected", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+		for _, badRoot := range []any{"scalar-string", []any{"item"}} {
+			violations, err := ValidateComposePartAgainstSchema(badRoot)
+			require.NoError(t, err)
+			assert.NotEmpty(t, violations)
+		}
+	})
 }

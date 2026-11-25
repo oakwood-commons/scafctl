@@ -6722,6 +6722,48 @@ spec:
 	assert.Equal(t, 0, exitCode, "lint should succeed (exit 0) for a valid composed solution")
 }
 
+func TestIntegration_Lint_ComposedFragmentSchemaViolation(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "tests"), 0o700))
+
+	solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: frag-repro
+  version: 1.0.0
+compose:
+  - tests/svc.yaml
+spec:
+  resolvers:
+    hello:
+      description: A greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: world
+`
+	svcYAML := `spec:
+  testing:
+    config:
+      services:
+        - name: mocksvc
+          type: bogus
+`
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	svcFile := filepath.Join(tmpDir, "tests", "svc.yaml")
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionYAML), 0o600))
+	require.NoError(t, os.WriteFile(svcFile, []byte(svcYAML), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", solutionFile, "-o", "json")
+	assert.NotEqual(t, 0, exitCode, "lint must fail when a composed fragment has a schema violation")
+	assert.Contains(t, stdout, `"ruleName": "schema-violation"`)
+	assert.Contains(t, stdout, `"errorCount": 1`)
+	assert.Contains(t, stdout, "svc.yaml")
+	assert.Contains(t, stdout, `"line": 6`)
+}
+
 func TestIntegration_Lint_AutoDiscovery(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()

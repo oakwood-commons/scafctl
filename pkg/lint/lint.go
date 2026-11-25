@@ -59,6 +59,17 @@ type Finding struct {
 	Line       int           `json:"line,omitempty" yaml:"line,omitempty" doc:"Source line number" maximum:"1000000" example:"42"`
 	Column     int           `json:"column,omitempty" yaml:"column,omitempty" doc:"Source column number" maximum:"10000" example:"5"`
 	SourceFile string        `json:"sourceFile,omitempty" yaml:"sourceFile,omitempty" doc:"Source file path" maxLength:"512" example:"solution.yaml"`
+
+	// resolvedPath stores the concrete SourceMap path matched when a schema
+	// violation's unindexed array or map path resolved uniquely (e.g.
+	// "spec.testing.config.services[0].type"), allowing block-scoped suppression
+	// directives on individual list items or map entries to match.
+	resolvedPath string `json:"-" yaml:"-"`
+
+	// dedupeKey groups multi-occurrence findings (such as repeated references to
+	// the same undefined resolver) that are preserved independently through
+	// applySuppressions and collapsed to the first surviving occurrence afterward.
+	dedupeKey string `json:"-" yaml:"-"`
 }
 
 // Result contains all lint findings for a solution.
@@ -71,6 +82,10 @@ type Result struct {
 
 	// sourceMap is used internally to enrich findings with source positions.
 	sourceMap *sourcepos.SourceMap `json:"-" yaml:"-"`
+
+	// composedParts holds composed fragment metadata for position enrichment
+	// and per-fragment schema/suppression handling without mutating sourceMap.
+	composedParts []solution.ComposedPart `json:"-" yaml:"-"`
 }
 
 type providerLookup interface {
@@ -94,55 +109,55 @@ func Solution(sol *solution.Solution, filePath string, registry providerLookup) 
 		Findings: make([]*Finding, 0),
 	}
 
-	// Capture source map for enriching findings with line/column positions.
+	// Capture source map and composed fragments for enriching findings with
+	// line/column/file positions while keeping primary SourceMap untouched.
 	result.sourceMap = sol.SourceMap()
+	result.composedParts = sol.ComposedParts()
 
-	// Schema validation: validate the raw YAML against the generated JSON Schema.
-	// This catches unknown fields, type mismatches, pattern violations, etc.
-	// Prefer the already-loaded raw content (works for URL/catalog sources too);
-	// fall back to reading the file from disk only when raw content is absent.
+	// Schema validation: validate the primary solution's raw YAML against the
+	// generated Solution JSON Schema, and validate each composed partial against
+	// the compose-part sub-schema.
 	lintSchema(sol.RawContent(), filePath, result)
+	lintComposeParts(result.composedParts, result)
 
 	if !sol.Spec.HasResolvers() && !sol.Spec.HasWorkflow() {
 		result.addFinding(SeverityError, "structure", "spec", "Solution has no resolvers or workflow", "", "empty-solution")
-		return result
+	} else {
+		referencedResolvers := collectReferencedResolvers(sol)
+
+		// Scan external template files on disk for resolver references.
+		// This prevents false-positive unused-resolver warnings for resolvers
+		// consumed only in .tpl files (not referenced in the solution YAML).
+		solutionDir := filepath.Dir(filePath)
+		templateFileRefs := collectTemplateFileResolverRefs(sol, solutionDir)
+		for ref := range templateFileRefs {
+			referencedResolvers[ref] = true
+		}
+		lintValidateExternalProviders(sol, result, registry)
+		lintResolvers(sol, result, registry, referencedResolvers)
+		lintTemplateFileDependencies(sol, solutionDir, result, registry)
+		lintResolverDependencies(sol, result)
+		lintResolverCycles(sol, result, registry)
+		lintUnknownResolverRefs(sol, result)
+		lintUndefinedOptionalRefs(sol, result)
+		lintDeferredValidation(sol, result, registry)
+		lintTemplateAccessors(sol, result)
+		lintWorkflow(sol, result, registry)
+		lintCalls(sol, result, registry)
+		lintFunctions(sol, result)
+		lintState(sol, result, registry)
+		lintImmutableResolvers(sol, result)
+		lintParameterNumericMatches(sol, result)
+		lintTests(sol, filePath, result)
+		lintProviderInputs(sol, result, registry)
+		lintCredentials(sol, result)
+		lintDeprecatedFields(sol, result)
+		lintBundlePlugins(sol, result)
 	}
 
-	referencedResolvers := collectReferencedResolvers(sol)
-
-	// Scan external template files on disk for resolver references.
-	// This prevents false-positive unused-resolver warnings for resolvers
-	// consumed only in .tpl files (not referenced in the solution YAML).
-	solutionDir := filepath.Dir(filePath)
-	templateFileRefs := collectTemplateFileResolverRefs(sol, solutionDir)
-	for ref := range templateFileRefs {
-		referencedResolvers[ref] = true
-	}
-	lintValidateExternalProviders(sol, result, registry)
-	lintResolvers(sol, result, registry, referencedResolvers)
-	lintTemplateFileDependencies(sol, solutionDir, result, registry)
-	lintResolverDependencies(sol, result)
-	lintResolverCycles(sol, result, registry)
-	lintUnknownResolverRefs(sol, result)
-	lintUndefinedOptionalRefs(sol, result)
-	lintDeferredValidation(sol, result, registry)
-	lintTemplateAccessors(sol, result)
-	lintWorkflow(sol, result, registry)
-	lintCalls(sol, result, registry)
-	lintFunctions(sol, result)
-	lintState(sol, result, registry)
-	lintImmutableResolvers(sol, result)
-	lintParameterNumericMatches(sol, result)
-	lintTests(sol, filePath, result)
-	lintProviderInputs(sol, result, registry)
-	lintCredentials(sol, result)
-	lintDeprecatedFields(sol, result)
-	lintBundlePlugins(sol, result)
-
-	// Apply suppression directives parsed from inline YAML comments.
-	suppressions := ParseDirectives(sol.RawContent(), filePath).WithSourceMap(result.sourceMap)
-	result.Findings = suppressions.Filter(result.Findings)
-	result.Findings = append(result.Findings, suppressions.UnusedFindings()...)
+	// Apply suppression directives parsed from inline YAML comments in the
+	// primary file and each composed fragment, scoped per file SourceMap.
+	applySuppressions(sol, filePath, result)
 
 	for _, f := range result.Findings {
 		switch f.Severity {
@@ -158,7 +173,7 @@ func Solution(sol *solution.Solution, filePath string, registry providerLookup) 
 	return result
 }
 
-func (r *Result) addFinding(severity SeverityLevel, category, location, message, suggestion, rule string) {
+func (r *Result) addFinding(severity SeverityLevel, category, location, message, suggestion, rule string) *Finding {
 	f := &Finding{
 		Severity:   severity,
 		Category:   category,
@@ -171,20 +186,117 @@ func (r *Result) addFinding(severity SeverityLevel, category, location, message,
 	// Enrich with source position if a source map is available.
 	// Lint paths omit the "spec." prefix (e.g. "resolvers.foo"), while the
 	// source map records full YAML paths (e.g. "spec.resolvers.foo").
-	// Try the raw location first, then the "spec." prefixed variant.
-	if r.sourceMap != nil {
-		if pos, ok := r.sourceMap.Get(location); ok {
-			f.Line = pos.Line
-			f.Column = pos.Column
-			f.SourceFile = pos.File
-		} else if pos, ok := r.sourceMap.Get("spec." + location); ok {
-			f.Line = pos.Line
-			f.Column = pos.Column
-			f.SourceFile = pos.File
+	// Check the primary source map first, then composed fragments for entity
+	// locations (never whole-solution root keys like "spec" or "bundle", which
+	// belong to the primary document even when omitted inline).
+	if pos, ok := lookupExactPosition(r.sourceMap, location); ok {
+		f.Line = pos.Line
+		f.Column = pos.Column
+		f.SourceFile = pos.File
+	} else if !isRootSectionLocation(location) {
+		for _, part := range r.composedParts {
+			if pos, ok := lookupExactPosition(part.SourceMap, location); ok {
+				f.Line = pos.Line
+				f.Column = pos.Column
+				f.SourceFile = pos.File
+				if f.SourceFile == "" {
+					f.SourceFile = part.Path
+				}
+				break
+			}
 		}
 	}
 
 	r.Findings = append(r.Findings, f)
+	return f
+}
+
+func isRootSectionLocation(location string) bool {
+	return location == "" || location == "(root)" || location == "spec" || location == "bundle"
+}
+
+func lookupExactPosition(sm *sourcepos.SourceMap, location string) (sourcepos.Position, bool) {
+	if sm == nil || location == "" {
+		return sourcepos.Position{}, false
+	}
+	if pos, ok := sm.Get(location); ok {
+		return pos, true
+	}
+	if pos, ok := sm.Get("spec." + location); ok {
+		return pos, true
+	}
+	return sourcepos.Position{}, false
+}
+
+func dedupePostSuppression(findings []*Finding) []*Finding {
+	seen := make(map[string]bool)
+	out := make([]*Finding, 0, len(findings))
+	for _, f := range findings {
+		if f.dedupeKey != "" {
+			if seen[f.dedupeKey] {
+				continue
+			}
+			seen[f.dedupeKey] = true
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+func applySuppressions(sol *solution.Solution, filePath string, result *Result) {
+	// Prefer sol.GetPath() when set: FileLoader resolves it against --cwd / MCP
+	// cwd, matching the File stamp recorded inside sol.SourceMap().
+	primaryFile := filePath
+	if sol.GetPath() != "" {
+		primaryFile = sol.GetPath()
+	}
+	primarySS := ParseDirectives(sol.RawContent(), primaryFile).WithSourceMap(result.sourceMap)
+	if primaryFile != "" {
+		primarySS.WithFileSourceMap(primaryFile, result.sourceMap)
+	}
+	if filePath != "" && filePath != primaryFile {
+		primarySS.WithFileSourceMap(filePath, result.sourceMap)
+	}
+
+	parts := result.composedParts
+	if len(parts) == 0 {
+		result.Findings = dedupePostSuppression(primarySS.Filter(result.Findings))
+		result.Findings = append(result.Findings, primarySS.UnusedFindings()...)
+		return
+	}
+
+	partSets := make([]*SuppressionSet, len(parts))
+	for i, part := range parts {
+		sm := part.SourceMap
+		if sm == nil && len(part.RawContent) > 0 {
+			sm, _ = sourcepos.BuildSourceMap(part.RawContent, part.Path)
+		}
+		partSets[i] = ParseDirectives(part.RawContent, part.Path).WithFileSourceMap(part.Path, sm)
+	}
+
+	kept := make([]*Finding, 0, len(result.Findings))
+	for _, f := range result.Findings {
+		owner := primarySS
+		if f.SourceFile != "" {
+			for i, part := range parts {
+				if part.Path != "" && sameSourceFile(f.SourceFile, part.Path) {
+					owner = partSets[i]
+					break
+				}
+			}
+		}
+		if owner.isSuppressed(f) {
+			continue
+		}
+		kept = append(kept, f)
+	}
+
+	kept = dedupePostSuppression(kept)
+	kept = append(kept, primarySS.UnusedFindings()...)
+	for _, ps := range partSets {
+		kept = append(kept, ps.UnusedFindings()...)
+	}
+	result.Findings = kept
 }
 
 // parameterProviderName is the name of the built-in parameter provider, whose
@@ -1705,9 +1817,10 @@ func lintUndefinedOptionalRefs(sol *solution.Solution, result *Result) {
 		defined[name] = true
 	}
 
-	// Dedupe by resolver name so a name referenced optionally in several places
-	// yields a single finding, located at the first occurrence encountered.
-	seen := make(map[string]bool)
+	// Emit one finding per (name, location) occurrence so line- or block-scoped
+	// suppressions apply per reference site; applySuppressions collapses multiple
+	// surviving occurrences of the same undefined resolver via dedupeKey.
+	seen := make(map[resolverRefOccurrence]bool)
 	report := func(path string, optional map[string]bool) {
 		names := make([]string, 0, len(optional))
 		for n := range optional {
@@ -1715,7 +1828,8 @@ func lintUndefinedOptionalRefs(sol *solution.Solution, result *Result) {
 		}
 		sort.Strings(names)
 		for _, n := range names {
-			if defined[n] || seen[n] {
+			occ := resolverRefOccurrence{name: n, location: path}
+			if defined[n] || seen[occ] {
 				continue
 			}
 			// Injected context keys (e.g. __plan) are reachable through the `_`
@@ -1724,28 +1838,123 @@ func lintUndefinedOptionalRefs(sol *solution.Solution, result *Result) {
 			if strings.HasPrefix(n, "__") {
 				continue
 			}
-			seen[n] = true
-			result.addFinding(SeverityInfo, "dependency", path,
+			seen[occ] = true
+			f := result.addFinding(SeverityInfo, "dependency", path,
 				fmt.Sprintf("optional reference to resolver '%s' which is not defined; it will always resolve to absent", n),
 				fmt.Sprintf("Define a resolver named '%s' or remove the optional reference if the absence is intentional", n),
 				"undefined-optional-reference")
+			f.dedupeKey = "undefined-optional-reference:" + n
+		}
+	}
+
+	walkAllResolverRefs(sol,
+		func(path string, vr *spec.ValueRef) {
+			optional := make(map[string]bool)
+			resolver.ExtractOptionalRefsFromValueRef(vr, optional)
+			report(path, optional)
+		},
+		func(path string, expr *celexp.Expression) {
+			optional := make(map[string]bool)
+			resolver.ExtractOptionalRefsFromValueRef(&spec.ValueRef{Expr: expr}, optional)
+			report(path, optional)
+		},
+	)
+}
+
+// walkAllResolverRefs traverses every ValueRef and Condition in sol -- including
+// step-level and bundle fields that walk.Walk does not descend into directly
+// (ProviderSource forEach, step/action/forEach continueOnError, CallRef args,
+// ProviderValidation when, Resolver messages.error, and bundle.plugins defaults)
+// -- invoking visitValueRef and visitExpr.
+func walkAllResolverRefs(
+	sol *solution.Solution,
+	visitValueRef func(path string, vr *spec.ValueRef),
+	visitExpr func(path string, expr *celexp.Expression),
+) {
+	if sol == nil {
+		return
+	}
+	visitSpecCond := func(path string, cond *spec.Condition) {
+		if cond != nil && cond.Expr != nil {
+			visitExpr(path, cond.Expr)
+		}
+	}
+	visitResolverCond := func(path string, cond *resolver.Condition) {
+		if cond != nil && cond.Expr != nil {
+			visitExpr(path, cond.Expr)
+		}
+	}
+	visitArgs := func(basePath string, args map[string]*spec.ValueRef) {
+		if len(args) == 0 {
+			return
+		}
+		keys := make([]string, 0, len(args))
+		for k := range args {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if vr := args[k]; vr != nil {
+				visitValueRef(basePath+"."+k, vr)
+			}
 		}
 	}
 
 	_ = walk.Walk(sol, &walk.Visitor{
 		ValueRef: func(path string, vr *spec.ValueRef) error {
-			optional := make(map[string]bool)
-			resolver.ExtractOptionalRefsFromValueRef(vr, optional)
-			report(path, optional)
+			visitValueRef(path, vr)
 			return nil
 		},
 		Condition: func(path, _ string, expr *celexp.Expression) error {
-			optional := make(map[string]bool)
-			resolver.ExtractOptionalRefsFromValueRef(&spec.ValueRef{Expr: expr}, optional)
-			report(path, optional)
+			visitExpr(path, expr)
+			return nil
+		},
+		Resolver: func(path, _ string, r *resolver.Resolver) error {
+			if r.Messages != nil && r.Messages.Error != nil {
+				visitValueRef(path+".messages.error", r.Messages.Error)
+			}
+			return nil
+		},
+		ProviderSource: func(path string, ps *resolver.ProviderSource) error {
+			visitResolverCond(path+".continueOnError", ps.ContinueOnError)
+			if ps.ForEach != nil {
+				if ps.ForEach.In != nil {
+					visitValueRef(path+".forEach.in", ps.ForEach.In)
+				}
+				visitSpecCond(path+".forEach.continueOnError", ps.ForEach.ContinueOnError)
+			}
+			visitArgs(path+".args", ps.Args)
+			return nil
+		},
+		ProviderTransform: func(path string, pt *resolver.ProviderTransform) error {
+			visitResolverCond(path+".continueOnError", pt.ContinueOnError)
+			visitArgs(path+".args", pt.Args)
+			return nil
+		},
+		ProviderValidation: func(path string, pv *resolver.ProviderValidation) error {
+			visitResolverCond(path+".when", pv.When)
+			visitArgs(path+".args", pv.Args)
+			return nil
+		},
+		Action: func(path, _, _ string, act *action.Action) error {
+			visitSpecCond(path+".continueOnError", act.ContinueOnError)
+			visitArgs(path+".args", act.Args)
+			return nil
+		},
+		ForEach: func(path string, fe *spec.ForEachClause) error {
+			visitSpecCond(path+".continueOnError", fe.ContinueOnError)
 			return nil
 		},
 	})
+
+	for i := range sol.Bundle.Plugins {
+		visitArgs(fmt.Sprintf("bundle.plugins[%d].defaults", i), sol.Bundle.Plugins[i].Defaults)
+	}
+}
+
+type resolverRefOccurrence struct {
+	name     string
+	location string
 }
 
 // collectHardResolverRefs collects resolver references made with UNAMBIGUOUS
@@ -1755,10 +1964,12 @@ func lintUndefinedOptionalRefs(sol *solution.Solution, result *Result) {
 // resolver may be absent, the latter may resolve against a step's data keys or a
 // forEach alias.
 //
-// The result is keyed by resolver name with the first location seen, so callers
-// can report a finding against a real path in the solution.
-func collectHardResolverRefs(sol *solution.Solution) map[string]string {
-	locations := make(map[string]string)
+// Every distinct (name, location) occurrence is returned in deterministic order
+// so inline/block suppressions apply per reference site before post-suppression
+// deduplication collapses surviving findings to one per undefined resolver.
+func collectHardResolverRefs(sol *solution.Solution) []resolverRefOccurrence {
+	var occurrences []resolverRefOccurrence
+	seen := make(map[resolverRefOccurrence]bool)
 
 	record := func(path string, refs map[string]bool) {
 		names := make([]string, 0, len(refs))
@@ -1767,28 +1978,33 @@ func collectHardResolverRefs(sol *solution.Solution) map[string]string {
 		}
 		sort.Strings(names)
 		for _, n := range names {
-			if _, seen := locations[n]; !seen {
-				locations[n] = path
+			occ := resolverRefOccurrence{name: n, location: path}
+			if seen[occ] {
+				continue
 			}
+			seen[occ] = true
+			occurrences = append(occurrences, occ)
 		}
 	}
 
-	_ = walk.Walk(sol, &walk.Visitor{
-		ValueRef: func(path string, vr *spec.ValueRef) error {
+	walkAllResolverRefs(sol,
+		func(path string, vr *spec.ValueRef) {
 			refs := make(map[string]bool)
 			resolver.ExtractHardCelRefsFromValueRef(vr, refs)
 			record(path, refs)
-			return nil
 		},
-		Condition: func(path, _ string, expr *celexp.Expression) error {
+		func(path string, expr *celexp.Expression) {
 			refs := make(map[string]bool)
 			resolver.ExtractHardCelRefsFromValueRef(&spec.ValueRef{Expr: expr}, refs)
 			record(path, refs)
-			return nil
 		},
+	)
+
+	sort.SliceStable(occurrences, func(i, j int) bool {
+		return occurrences[i].name < occurrences[j].name
 	})
 
-	return locations
+	return occurrences
 }
 
 // lintUnknownResolverRefs emits an ERROR for each unambiguous resolver reference
@@ -1809,13 +2025,8 @@ func lintUnknownResolverRefs(sol *solution.Solution, result *Result) {
 		return
 	}
 
-	names := make([]string, 0, len(refs))
-	for name := range refs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
+	for _, occ := range refs {
+		name := occ.name
 		if _, defined := sol.Spec.Resolvers[name]; defined {
 			continue
 		}
@@ -1835,10 +2046,11 @@ func lintUnknownResolverRefs(sol *solution.Solution, result *Result) {
 				continue
 			}
 		}
-		result.addFinding(SeverityError, "dependency", refs[name],
+		f := result.addFinding(SeverityError, "dependency", occ.location,
 			fmt.Sprintf("reference to undefined resolver %q", name),
 			fmt.Sprintf("Define a resolver named %q, fix the typo, or use optional access (_.?%s) if the value may be absent", name, name),
 			"unknown-resolver-reference")
+		f.dedupeKey = "unknown-resolver-reference:" + name
 	}
 }
 
@@ -1851,16 +2063,14 @@ func collectReferencedResolvers(sol *solution.Solution) map[string]bool {
 	// (_.?name, _[?"name"]) CEL access, Go-template references, and nested
 	// literals, and applies go-template data-scope exclusions -- keeping the
 	// unused-resolver rule consistent with actual dependency resolution.
-	_ = walk.Walk(sol, &walk.Visitor{
-		ValueRef: func(_ string, vr *spec.ValueRef) error {
+	walkAllResolverRefs(sol,
+		func(_ string, vr *spec.ValueRef) {
 			resolver.ExtractRefsFromValueRef(vr, refs)
-			return nil
 		},
-		Condition: func(_, _ string, expr *celexp.Expression) error {
+		func(_ string, expr *celexp.Expression) {
 			resolver.ExtractRefsFromValueRef(&spec.ValueRef{Expr: expr}, refs)
-			return nil
 		},
-	})
+	)
 
 	// A resolver named in another resolver's dependsOn array is used, even when
 	// it is not referenced by any expression or template. The walker does not
@@ -2575,15 +2785,409 @@ func lintSchema(rawContent []byte, filePath string, result *Result) {
 		return
 	}
 
+	appendSchemaViolations(violations, result.sourceMap, "", result)
+}
+
+// lintComposeParts validates each composed partial YAML file against the
+// compose-part sub-schema and records findings with the fragment's own file
+// path, line, and column.
+func lintComposeParts(parts []solution.ComposedPart, result *Result) {
+	for _, part := range parts {
+		lintComposePart(part, result)
+	}
+}
+
+func lintComposePart(part solution.ComposedPart, result *Result) {
+	data := part.RawContent
+	if len(data) == 0 {
+		return
+	}
+
+	var raw any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return
+	}
+
+	violations, err := schema.ValidateComposePartAgainstSchema(raw)
+	if err != nil {
+		result.Findings = append(result.Findings, &Finding{
+			Severity:   SeverityWarning,
+			Category:   "schema",
+			Location:   "",
+			Message:    fmt.Sprintf("schema validation unavailable: %v", err),
+			RuleName:   "schema-error",
+			SourceFile: part.Path,
+		})
+		return
+	}
+
+	if len(violations) == 0 {
+		return
+	}
+
+	sm := part.SourceMap
+	if sm == nil {
+		sm, _ = sourcepos.BuildSourceMap(data, part.Path)
+	}
+
+	appendSchemaViolations(violations, sm, part.Path, result)
+}
+
+// appendSchemaViolations converts schema violations into Finding entries
+// enriched with positions from sm. When a single violation names multiple
+// unknown sibling keys, it is split into one independently positioned finding
+// per key so line- or block-scoped suppression directives on one key never mask
+// unsuppressed sibling keys.
+func appendSchemaViolations(violations []schema.Violation, sm *sourcepos.SourceMap, defaultSourceFile string, result *Result) {
 	for _, v := range violations {
 		location := v.Path
 		if location == "" {
 			location = "(root)"
 		}
-		result.addFinding(SeverityError, "schema", location, v.Message,
-			"Check field name spelling and value types against the solution schema",
-			"schema-violation")
+
+		unknownKeys := extractUnknownKeys(v.Message)
+		if len(unknownKeys) > 1 {
+			split := make([]*Finding, 0, len(unknownKeys))
+			for _, k := range unknownKeys {
+				msg := fmt.Sprintf("unknown key %q", k)
+				split = append(split, buildSchemaViolationFinding(location, v.Path, msg, sm, defaultSourceFile))
+			}
+			sort.SliceStable(split, func(i, j int) bool {
+				if (split[i].Line > 0) != (split[j].Line > 0) {
+					return split[i].Line > 0
+				}
+				if split[i].Line != split[j].Line {
+					return split[i].Line < split[j].Line
+				}
+				if split[i].Column != split[j].Column {
+					return split[i].Column < split[j].Column
+				}
+				return split[i].Message < split[j].Message
+			})
+			result.Findings = append(result.Findings, split...)
+			continue
+		}
+
+		result.Findings = append(result.Findings, buildSchemaViolationFinding(location, v.Path, v.Message, sm, defaultSourceFile))
 	}
+}
+
+func buildSchemaViolationFinding(location, rawPath, message string, sm *sourcepos.SourceMap, defaultSourceFile string) *Finding {
+	f := &Finding{
+		Severity:   SeverityError,
+		Category:   "schema",
+		Location:   location,
+		Message:    message,
+		Suggestion: "Check field name spelling and value types against the solution schema",
+		RuleName:   "schema-violation",
+		SourceFile: defaultSourceFile,
+	}
+	if pos, matchedPath, ok := resolveSchemaViolationPosition(sm, rawPath, message); ok {
+		f.Line = pos.Line
+		f.Column = pos.Column
+		if pos.File != "" {
+			f.SourceFile = pos.File
+		}
+		f.resolvedPath = matchedPath
+	}
+	return f
+}
+
+// resolveSchemaViolationPosition resolves a schema violation's dot-path against
+// sm. Schema validators emit unindexed array paths (e.g.
+// "spec.testing.config.services.type") and omit dynamic map keys on
+// additionalProperties containers (e.g. "spec.resolvers.resolve"), and report
+// unknown keys against the parent object with Message `unknown key "x"`.
+//
+// Resolution order:
+//  1. Unknown-key child paths parsed from Message, picking the earliest
+//     (Line, Column) match deterministically across multi-key violations.
+//  2. Exact match on path (or "spec." + path), provided path does not cross an
+//     omitted dynamic map-key boundary.
+//  3. Unique wildcard match over unindexed array segments and known dynamic map
+//     containers when len(matches) == 1.
+//  4. Longest prefix in sm (exact or unique wildcard match).
+func resolveSchemaViolationPosition(sm *sourcepos.SourceMap, path, message string) (sourcepos.Position, string, bool) {
+	if sm == nil {
+		return sourcepos.Position{}, "", false
+	}
+
+	if unknownKeys := extractUnknownKeys(message); len(unknownKeys) > 0 {
+		var bestPos sourcepos.Position
+		var bestPath string
+		found := false
+		for _, k := range unknownKeys {
+			keyPath := k
+			if path != "" {
+				keyPath = path + "." + k
+			}
+			pos, matched, ok := resolveExactOrUniqueWildcard(sm, keyPath)
+			if !ok {
+				continue
+			}
+			if !found || positionBefore(pos, bestPos) {
+				bestPos = pos
+				bestPath = matched
+				found = true
+			}
+		}
+		if found {
+			return bestPos, bestPath, true
+		}
+	}
+
+	return resolveFragmentPosition(sm, path)
+}
+
+func positionBefore(a, b sourcepos.Position) bool {
+	if a.Line != b.Line {
+		return a.Line < b.Line
+	}
+	return a.Column < b.Column
+}
+
+func resolveFragmentPosition(sm *sourcepos.SourceMap, path string) (sourcepos.Position, string, bool) {
+	if sm == nil || path == "" || path == "(root)" {
+		return sourcepos.Position{}, "", false
+	}
+	if pos, matched, ok := resolveExactOrUniqueWildcard(sm, path); ok {
+		return pos, matched, true
+	}
+	for prefix := trimLastPathSegment(path); prefix != ""; prefix = trimLastPathSegment(prefix) {
+		if pos, matched, ok := resolveExactOrUniqueWildcard(sm, prefix); ok {
+			return pos, matched, true
+		}
+	}
+	return sourcepos.Position{}, "", false
+}
+
+func resolveExactOrUniqueWildcard(sm *sourcepos.SourceMap, path string) (sourcepos.Position, string, bool) {
+	if sm == nil || path == "" {
+		return sourcepos.Position{}, "", false
+	}
+	if !crossesDynamicMapContainer(path) {
+		if pos, ok := sm.Get(path); ok {
+			return pos, path, true
+		}
+	}
+	specPrefixed := "spec." + path
+	if !strings.HasPrefix(path, "spec.") && !strings.HasPrefix(path, "bundle.") && path != "spec" && path != "bundle" {
+		if !crossesDynamicMapContainer(specPrefixed) {
+			if pos, ok := sm.Get(specPrefixed); ok {
+				return pos, specPrefixed, true
+			}
+		}
+	}
+	if pos, matched, ok := uniqueWildcardMatch(sm, path); ok {
+		return pos, matched, true
+	}
+	if !strings.HasPrefix(path, "spec.") && !strings.HasPrefix(path, "bundle.") && path != "spec" && path != "bundle" {
+		if pos, matched, ok := uniqueWildcardMatch(sm, specPrefixed); ok {
+			return pos, matched, true
+		}
+	}
+	return sourcepos.Position{}, "", false
+}
+
+// dynamicMapContainers lists YAML mapping paths whose child keys are user-named
+// entries validated via JSON Schema additionalProperties, which jsonschema-go
+// omits from error chains (e.g. emitting "spec.resolvers.resolve" instead of
+// "spec.resolvers.myResolver.resolve").
+var dynamicMapContainers = map[string]bool{
+	"spec.resolvers":          true,
+	"spec.workflow.actions":   true,
+	"spec.workflow.finally":   true,
+	"spec.testing.cases":      true,
+	"spec.calls":              true,
+	"spec.functions":          true,
+	"spec.calls.args":         true,
+	"bundle.plugins.defaults": true,
+}
+
+func isDynamicMapContainer(prefix string) bool {
+	if dynamicMapContainers[prefix] {
+		return true
+	}
+	if strings.HasSuffix(prefix, ".inputs") {
+		return strings.HasPrefix(prefix, "spec.resolvers.") ||
+			strings.HasPrefix(prefix, "spec.workflow.") ||
+			strings.HasPrefix(prefix, "spec.calls.") ||
+			strings.HasPrefix(prefix, "state.")
+	}
+	if strings.HasSuffix(prefix, ".args") {
+		return strings.HasPrefix(prefix, "spec.resolvers.") ||
+			strings.HasPrefix(prefix, "spec.workflow.")
+	}
+	return false
+}
+
+// crossesDynamicMapContainer reports whether path continues past at least one
+// dynamic map container whose user key jsonschema-go omits, meaning a direct
+// SourceMap lookup would collide with a sibling entry named after the child
+// field (e.g. an action named "alias" vs. another action's invalid "alias").
+func crossesDynamicMapContainer(path string) bool {
+	segs := strings.Split(path, ".")
+	for i := 1; i < len(segs); i++ {
+		if isDynamicMapContainer(strings.Join(segs[:i], ".")) {
+			return true
+		}
+	}
+	return false
+}
+
+// uniqueWildcardMatch matches target against paths in sm by treating unindexed
+// non-terminal array segments as wildcards over "[N]" indices and requiring a
+// concrete dynamic map-key segment immediately after known map containers. It
+// returns a position only when len(matches) == 1.
+func uniqueWildcardMatch(sm *sourcepos.SourceMap, target string) (sourcepos.Position, string, bool) {
+	if sm == nil || target == "" {
+		return sourcepos.Position{}, "", false
+	}
+	tSegs := strings.Split(target, ".")
+	var matched string
+	count := 0
+	for _, candidate := range sm.Paths() {
+		if wildcardSegmentsMatch(candidate, tSegs) {
+			matched = candidate
+			count++
+			if count > 1 {
+				return sourcepos.Position{}, "", false
+			}
+		}
+	}
+	if count == 1 {
+		pos, ok := sm.Get(matched)
+		return pos, matched, ok
+	}
+	return sourcepos.Position{}, "", false
+}
+
+func wildcardSegmentsMatch(candidate string, targetSegs []string) bool {
+	cSegs := strings.Split(candidate, ".")
+	return matchSegments(cSegs, 0, targetSegs, 0, "", false)
+}
+
+func matchSegments(cSegs []string, ci int, tSegs []string, ti int, matchedTargetPrefix string, usedWildcard bool) bool {
+	if ti == len(tSegs) {
+		return ci == len(cSegs) && usedWildcard
+	}
+	if ci >= len(cSegs) {
+		return false
+	}
+
+	cSeg := cSegs[ci]
+	tSeg := tSegs[ti]
+	nextPrefix := tSeg
+	if matchedTargetPrefix != "" {
+		nextPrefix = matchedTargetPrefix + "." + tSeg
+	}
+
+	segMatches := false
+	segWildcard := usedWildcard
+	switch {
+	case cSeg == tSeg:
+		segMatches = true
+	case ti < len(tSegs)-1 && !strings.Contains(tSeg, "["):
+		if base, ok := stripTrailingIndexBrackets(cSeg); ok && base == tSeg {
+			segMatches = true
+			segWildcard = true
+		}
+	}
+	if !segMatches {
+		return false
+	}
+
+	// When nextPrefix is a dynamic map container and target continues past it,
+	// jsonschema-go omitted the user's map key, so candidate must supply one
+	// concrete map-key segment before matching ti+1.
+	if ti < len(tSegs)-1 && isDynamicMapContainer(nextPrefix) {
+		if ci+1 < len(cSegs) {
+			keySeg := cSegs[ci+1]
+			if keySeg != "" && !strings.Contains(keySeg, "[") {
+				return matchSegments(cSegs, ci+2, tSegs, ti+1, nextPrefix, true)
+			}
+		}
+		return false
+	}
+
+	return matchSegments(cSegs, ci+1, tSegs, ti+1, nextPrefix, segWildcard)
+}
+
+func stripTrailingIndexBrackets(seg string) (string, bool) {
+	hadBrackets := false
+	for strings.HasSuffix(seg, "]") {
+		open := strings.LastIndex(seg, "[")
+		if open <= 0 {
+			return "", false
+		}
+		digits := seg[open+1 : len(seg)-1]
+		if digits == "" {
+			return "", false
+		}
+		for i := 0; i < len(digits); i++ {
+			if digits[i] < '0' || digits[i] > '9' {
+				return "", false
+			}
+		}
+		seg = seg[:open]
+		hadBrackets = true
+	}
+	return seg, hadBrackets
+}
+
+func trimLastPathSegment(path string) string {
+	lastDot := strings.LastIndex(path, ".")
+	lastBracket := strings.LastIndex(path, "[")
+	if strings.HasSuffix(path, "]") && lastBracket > lastDot {
+		return path[:lastBracket]
+	}
+	if lastDot > 0 {
+		return path[:lastDot]
+	}
+	return ""
+}
+
+// extractUnknownKeys extracts all quoted property names from a cleaned schema
+// violation message containing `unknown key ...`, supporting both
+// space-separated (`unknown key "a" "b"`) and comma-separated
+// (`unknown key "a", "b"`) formats.
+func extractUnknownKeys(msg string) []string {
+	const prefix = `unknown key "`
+	idx := strings.Index(msg, prefix)
+	if idx < 0 {
+		return nil
+	}
+	rest := msg[idx+len("unknown key "):]
+	var keys []string
+	for {
+		rest = strings.TrimLeft(rest, " ,")
+		if !strings.HasPrefix(rest, `"`) {
+			break
+		}
+		rest = rest[1:]
+		var b strings.Builder
+		closed := false
+		for i := 0; i < len(rest); i++ {
+			if rest[i] == '\\' && i+1 < len(rest) {
+				i++
+				b.WriteByte(rest[i])
+				continue
+			}
+			if rest[i] == '"' {
+				rest = rest[i+1:]
+				closed = true
+				break
+			}
+			b.WriteByte(rest[i])
+		}
+		if !closed {
+			break
+		}
+		if b.Len() > 0 {
+			keys = append(keys, b.String())
+		}
+	}
+	return keys
 }
 
 // lintProviderInputs validates that resolver and action inputs match the

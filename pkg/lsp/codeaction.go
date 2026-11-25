@@ -58,8 +58,13 @@ func (s *Server) codeAction(_ *glsp.Context, params *protocol.CodeActionParams) 
 	// Quick fixes for lint diagnostics (deprecated onError, redundant dependsOn,
 	// unused resolver), gated by the quickfix kind filter.
 	if onlyAllows(params.Context.Only, protocol.CodeActionKindQuickFix) {
-		result := lint.Solution(entry.Sol, uriToPath(params.TextDocument.URI), s.registry)
+		docPath := uriToPath(params.TextDocument.URI)
+		solPath := entry.Sol.GetPath()
+		result := lint.Solution(entry.Sol, docPath, s.registry)
 		for _, f := range result.Findings {
+			if isForeignSourceFile(f.SourceFile, docPath, solPath) {
+				continue
+			}
 			edits, fixable := lint.QuickFixFor(entry.Sol, f, s.registry)
 			if !fixable || len(edits) == 0 {
 				continue

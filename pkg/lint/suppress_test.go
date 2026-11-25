@@ -773,3 +773,81 @@ func TestFilter_BlockScopedSuppression_InlineOnTransform(t *testing.T) {
 	kept := ss.Filter([]*Finding{finding})
 	assert.Empty(t, kept, "inline directive on transform key should suppress findings within the block")
 }
+
+func TestSuppressionSet_PerFileSourceMapScoping(t *testing.T) {
+	t.Parallel()
+
+	t.Run("block lookup uses only registered file SourceMap", func(t *testing.T) {
+		t.Parallel()
+		primarySM := sourcepos.NewSourceMap()
+		primarySM.Set("spec.resolvers.a.transform", sourcepos.Position{Line: 4, Column: 7, File: "solution.yaml"})
+
+		partYAML := []byte("spec:\n" + // 1
+			"  testing:\n" + // 2
+			"    # scafctl-lint-ignore: schema-violation\n" + // 3
+			"    config:\n" + // 4
+			"      services:\n" + // 5
+			"        - name: svc\n" + // 6
+			"          type: bogus\n") // 7
+		partSM := sourcepos.NewSourceMap()
+		partSM.Set("spec.testing.config", sourcepos.Position{Line: 4, Column: 5, File: "tests/svc.yaml"})
+
+		ss := ParseDirectives(partYAML, "tests/svc.yaml").
+			WithSourceMap(primarySM).
+			WithFileSourceMap("solution.yaml", primarySM).
+			WithFileSourceMap("tests/svc.yaml", partSM)
+
+		partFinding := &Finding{
+			RuleName:   "schema-violation",
+			Location:   "spec.testing.config.services.type",
+			Line:       7,
+			SourceFile: "tests/svc.yaml",
+		}
+		wrongBlockFinding := &Finding{
+			RuleName:   "schema-violation",
+			Location:   "resolvers.a.transform.with[0]",
+			Line:       7,
+			SourceFile: "tests/svc.yaml",
+		}
+
+		kept := ss.Filter([]*Finding{partFinding, wrongBlockFinding})
+		require.Len(t, kept, 1)
+		assert.Equal(t, "resolvers.a.transform.with[0]", kept[0].Location)
+	})
+
+	t.Run("nil file SourceMap registration never falls back to default sourceMap", func(t *testing.T) {
+		t.Parallel()
+		primarySM := sourcepos.NewSourceMap()
+		primarySM.Set("spec.testing.config", sourcepos.Position{Line: 4, Column: 5, File: "solution.yaml"})
+
+		partYAML := []byte("spec:\n  testing:\n    # scafctl-lint-ignore: schema-violation\n    config:\n      services: []\n")
+		ss := ParseDirectives(partYAML, "tests/svc.yaml").
+			WithSourceMap(primarySM).
+			WithFileSourceMap("tests/svc.yaml", nil)
+
+		finding := &Finding{
+			RuleName:   "schema-violation",
+			Location:   "spec.testing.config.services.type",
+			Line:       10,
+			SourceFile: "tests/svc.yaml",
+		}
+		assert.Len(t, ss.Filter([]*Finding{finding}), 1)
+	})
+
+	t.Run("block ignore on top-level spec key suppresses spec-scoped findings", func(t *testing.T) {
+		t.Parallel()
+		yamlBytes := []byte("# scafctl-lint-ignore: schema-violation\nspec:\n  testing:\n    config:\n      services:\n        - name: svc\n          type: bogus\n")
+		sm := sourcepos.NewSourceMap()
+		sm.Set("spec", sourcepos.Position{Line: 2, Column: 1, File: "tests/svc.yaml"})
+
+		ss := ParseDirectives(yamlBytes, "tests/svc.yaml").WithFileSourceMap("tests/svc.yaml", sm)
+		finding := &Finding{
+			RuleName:   "schema-violation",
+			Location:   "spec.testing.config.services.type",
+			Line:       7,
+			SourceFile: "tests/svc.yaml",
+		}
+		assert.Empty(t, ss.Filter([]*Finding{finding}))
+		assert.Empty(t, ss.UnusedFindings())
+	})
+}

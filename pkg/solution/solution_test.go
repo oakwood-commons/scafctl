@@ -12,6 +12,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
@@ -1111,4 +1112,73 @@ func TestSolution_ReferencedProviderNames_ReflectionCoverage(t *testing.T) {
 		t.Errorf("provider field on type %q (paths: %v) is not handled by Solution.ReferencedProviderNames; "+
 			"wire it into the method or add %q to the ignored set with a rationale", owner, paths, owner)
 	}
+}
+
+func TestSolution_ComposedParts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil receiver is safe", func(t *testing.T) {
+		t.Parallel()
+		var s *Solution
+		assert.Nil(t, s.ComposedParts())
+		s.SetComposedParts([]ComposedPart{{Path: "a.yaml", RawContent: []byte("spec: {}")}})
+		assert.Nil(t, s.ComposedParts())
+	})
+
+	t.Run("defensive copies on set and get", func(t *testing.T) {
+		t.Parallel()
+		raw := []byte("spec:\n  resolvers: {}\n")
+		sm, err := sourcepos.BuildSourceMap(raw, "parts/r.yaml")
+		require.NoError(t, err)
+
+		in := []ComposedPart{{Path: "parts/r.yaml", RawContent: raw, SourceMap: sm}}
+		s := &Solution{}
+		s.SetComposedParts(in)
+
+		// Mutating caller input does not mutate stored bytes.
+		raw[0] = 'X'
+		in[0].Path = "mutated.yaml"
+
+		got1 := s.ComposedParts()
+		require.Len(t, got1, 1)
+		assert.Equal(t, "parts/r.yaml", got1[0].Path)
+		assert.Equal(t, "spec:\n  resolvers: {}\n", string(got1[0].RawContent))
+		assert.Same(t, sm, got1[0].SourceMap)
+
+		// Mutating returned slice/bytes does not mutate stored state.
+		got1[0].RawContent[0] = 'Z'
+		got1[0].Path = "changed.yaml"
+
+		got2 := s.ComposedParts()
+		require.Len(t, got2, 1)
+		assert.Equal(t, "parts/r.yaml", got2[0].Path)
+		assert.Equal(t, "spec:\n  resolvers: {}\n", string(got2[0].RawContent))
+
+		// Clearing with empty slice resets to nil.
+		s.SetComposedParts([]ComposedPart{})
+		assert.Nil(t, s.ComposedParts())
+	})
+
+	t.Run("excluded from YAML and JSON serialization", func(t *testing.T) {
+		t.Parallel()
+		s := &Solution{
+			APIVersion: DefaultAPIVersion,
+			Kind:       SolutionKind,
+			Metadata:   Metadata{Name: "test-sol"},
+		}
+		s.SetComposedParts([]ComposedPart{{
+			Path:       "secret-part.yaml",
+			RawContent: []byte("spec: {}"),
+		}})
+
+		yb, err := s.ToYAML()
+		require.NoError(t, err)
+		assert.NotContains(t, string(yb), "secret-part.yaml")
+		assert.NotContains(t, string(yb), "composedParts")
+
+		jb, err := s.ToJSON()
+		require.NoError(t, err)
+		assert.NotContains(t, string(jb), "secret-part.yaml")
+		assert.NotContains(t, string(jb), "composedParts")
+	})
 }

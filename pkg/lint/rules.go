@@ -281,9 +281,9 @@ var KnownRules = map[string]RuleMeta{
 		Rule:        "schema-violation",
 		Severity:    string(SeverityError),
 		Category:    "schema",
-		Description: "The solution YAML violates the JSON Schema definition. This includes unknown fields, type mismatches, pattern violations, and constraint violations.",
-		Why:         "Schema violations indicate the YAML structure doesn't match what scafctl expects. This will cause parsing errors or unexpected behavior.",
-		Fix:         "Use get_solution_schema to see the expected schema. Common issues: unknown field names (typos), wrong types (string vs int), invalid metadata.name pattern (must be lowercase with hyphens, 3-60 chars).",
+		Description: "The solution YAML or a composed partial file violates its JSON Schema definition. This includes unknown fields, type mismatches, pattern violations, constraint violations, and disallowed sections in compose fragments.",
+		Why:         "Schema violations indicate the YAML structure doesn't match what scafctl expects. This will cause parsing errors, silently ignored fields, or unexpected behavior.",
+		Fix:         "Use get_solution_schema to see the expected schema. Common issues: unknown field names (typos), wrong types (string vs int), invalid metadata.name pattern (must be lowercase with hyphens, 3-60 chars), or placing root-only sections in a compose partial (partials may contribute only spec.resolvers, spec.workflow.actions, spec.workflow.finally, spec.testing, and bundle.include).",
 	},
 	"unknown-provider-input": {
 		Rule:        "unknown-provider-input",

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -67,4 +69,49 @@ spec:
 		require.NotNil(t, d.Code)
 		assert.GreaterOrEqual(t, d.Range.End.Character, d.Range.Start.Character)
 	}
+}
+
+func TestDiagnostics_SkipsForeignSourceFileFindings(t *testing.T) {
+	reg, err := builtin.DefaultRegistry(context.Background())
+	require.NoError(t, err)
+
+	primary := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: composed-lsp
+  version: 1.0.0
+spec:
+  resolvers:
+    appName:
+      description: App name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: _.missingResolver
+`)
+	partContent := []byte("spec:\n  testing:\n    config:\n      services:\n        - name: svc\n          type: bogus\n")
+	partSM, err := sourcepos.BuildSourceMap(partContent, "/workspace/tests/svc.yaml")
+	require.NoError(t, err)
+
+	sol := &solution.Solution{}
+	sol.SetPath("/workspace/solution.yaml")
+	require.NoError(t, sol.UnmarshalFromBytes(primary))
+	sol.SetComposedParts([]solution.ComposedPart{{
+		Path:       "/workspace/tests/svc.yaml",
+		RawContent: partContent,
+		SourceMap:  partSM,
+	}})
+
+	diags := diagnosticsFromSolution(sol, primary, "/workspace/solution.yaml", "scafctl", reg)
+	require.NotEmpty(t, diags)
+	for _, d := range diags {
+		require.NotNil(t, d.Code)
+		assert.NotEqual(t, "schema-violation", d.Code.Value,
+			"foreign composed-fragment finding must not be published on primary document")
+	}
+
+	assert.False(t, sameDiagPath("", "."))
+	assert.False(t, sameDiagPath(".", ""))
 }

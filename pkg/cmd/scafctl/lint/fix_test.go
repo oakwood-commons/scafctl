@@ -341,3 +341,357 @@ func TestRunLintFix_CollisionSkippedNoWrite(t *testing.T) {
 	// The internal ErrNotFixable sentinel must be stripped from the reason.
 	assert.NotContains(t, stderr, "finding is not auto-fixable")
 }
+
+func TestRunLintFix_ComposedResidualFindings(t *testing.T) {
+	t.Run("composes partials so valid composed-only resolvers pass residual lint", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		partPath := filepath.Join(tmpDir, "resolvers.yaml")
+
+		primary := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fix-composed-clean
+  version: 1.0.0
+compose:
+  - resolvers.yaml
+`
+		part := `spec:
+  resolvers:
+    greeting:
+      description: Greeting value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(primary), 0o600))
+		require.NoError(t, os.WriteFile(partPath, []byte(part), 0o600))
+
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		ctx := testContext(ioStreams)
+		opts := fixOptions(solPath, ioStreams)
+		opts.Fix = true
+
+		require.NoError(t, runLintFix(ctx, opts))
+	})
+
+	t.Run("surfaces schema-violation in composed fragment during residual lint", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "tests"), 0o700))
+		partPath := filepath.Join(tmpDir, "tests", "svc.yaml")
+
+		primary := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fix-composed-invalid
+  version: 1.0.0
+compose:
+  - tests/svc.yaml
+spec:
+  resolvers:
+    my-greeting:
+      description: Greeting value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+		badPart := `spec:
+  testing:
+    config:
+      services:
+        - name: mocksvc
+          type: bogus
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(primary), 0o600))
+		require.NoError(t, os.WriteFile(partPath, []byte(badPart), 0o600))
+
+		ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+		ctx := testContext(ioStreams)
+		opts := fixOptions(solPath, ioStreams)
+		opts.Fix = true
+		opts.KvxOutputFlags.Output = "json"
+
+		err := runLintFix(ctx, opts)
+		require.Error(t, err)
+		assert.Equal(t, exitcode.ValidationFailed, exitcode.GetCode(err))
+
+		// Primary fix was still written.
+		gotPrimary, rerr := os.ReadFile(solPath) //nolint:gosec // test-controlled path
+		require.NoError(t, rerr)
+		assert.Contains(t, string(gotPrimary), "myGreeting:")
+
+		// Residual JSON output includes the composed fragment schema-violation.
+		assert.Contains(t, outBuf.String(), "schema-violation")
+		assert.Contains(t, outBuf.String(), "svc.yaml")
+	})
+
+	t.Run("skips rename when composed fragment references primary hyphenated resolver", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		partPath := filepath.Join(tmpDir, "resolvers.yaml")
+
+		primary := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fix-composed-ref
+  version: 1.0.0
+compose:
+  - resolvers.yaml
+spec:
+  resolvers:
+    my-greeting:
+      description: Greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+		part := `spec:
+  resolvers:
+    consumer:
+      description: Consumes primary resolver
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_["my-greeting"]'
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(primary), 0o600))
+		require.NoError(t, os.WriteFile(partPath, []byte(part), 0o600))
+
+		ioStreams, _, errBuf := terminal.NewTestIOStreams()
+		ctx := testContext(ioStreams)
+		opts := fixOptions(solPath, ioStreams)
+		opts.Fix = true
+
+		require.NoError(t, runLintFix(ctx, opts))
+
+		gotPrimary, rerr := os.ReadFile(solPath) //nolint:gosec // test-controlled path
+		require.NoError(t, rerr)
+		assert.Equal(t, primary, string(gotPrimary), "must not rewrite primary when composed fragment holds an off-file reference")
+		assert.Contains(t, errBuf.String(), "skipped")
+	})
+
+	t.Run("skips rename when composed fragment already defines target camelCase resolver", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		partPath := filepath.Join(tmpDir, "resolvers.yaml")
+
+		primary := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fix-composed-collision
+  version: 1.0.0
+compose:
+  - resolvers.yaml
+spec:
+  resolvers:
+    my-greeting:
+      description: Greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+		part := `spec:
+  resolvers:
+    myGreeting:
+      description: Already defined in composed fragment
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: existing
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(primary), 0o600))
+		require.NoError(t, os.WriteFile(partPath, []byte(part), 0o600))
+
+		ioStreams, _, errBuf := terminal.NewTestIOStreams()
+		ctx := testContext(ioStreams)
+		opts := fixOptions(solPath, ioStreams)
+		opts.Fix = true
+
+		require.NoError(t, runLintFix(ctx, opts))
+
+		gotPrimary, rerr := os.ReadFile(solPath) //nolint:gosec // test-controlled path
+		require.NoError(t, rerr)
+		assert.Equal(t, primary, string(gotPrimary), "must not rewrite primary into a duplicate-resolver collision")
+		assert.Contains(t, errBuf.String(), "skipped")
+	})
+
+	t.Run("resolves relative -f against --cwd context", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte(hyphenatedFixSolution), 0o600))
+
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		ctx := provider.WithWorkingDirectory(testContext(ioStreams), tmpDir)
+		opts := fixOptions("solution.yaml", ioStreams)
+		opts.Fix = true
+
+		require.NoError(t, runLintFix(ctx, opts))
+
+		got, rerr := os.ReadFile(solPath) //nolint:gosec // test-controlled path
+		require.NoError(t, rerr)
+		assert.Contains(t, string(got), "myServiceName:")
+	})
+
+	t.Run("skips rename when composed fragment references primary resolver via source forEach.in", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		partPath := filepath.Join(tmpDir, "resolvers.yaml")
+
+		primary := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fix-composed-foreach
+  version: 1.0.0
+compose:
+  - resolvers.yaml
+spec:
+  resolvers:
+    my-items:
+      description: Item list
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - a
+                - b
+`
+		part := `spec:
+  resolvers:
+    mapped:
+      description: Iterates over primary resolver in resolve source forEach
+      resolve:
+        with:
+          - provider: cel
+            forEach:
+              item: entry
+              in:
+                rslvr: my-items
+            inputs:
+              expression: 'entry'
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(primary), 0o600))
+		require.NoError(t, os.WriteFile(partPath, []byte(part), 0o600))
+
+		ioStreams, _, errBuf := terminal.NewTestIOStreams()
+		ctx := testContext(ioStreams)
+		opts := fixOptions(solPath, ioStreams)
+		opts.Fix = true
+
+		require.NoError(t, runLintFix(ctx, opts))
+
+		gotPrimary, rerr := os.ReadFile(solPath) //nolint:gosec // test-controlled path
+		require.NoError(t, rerr)
+		assert.Equal(t, primary, string(gotPrimary), "must not rewrite primary when composed resolve source forEach.in references it")
+		assert.Contains(t, errBuf.String(), "skipped")
+	})
+
+	t.Run("skips rename when primary file holds unrewritten source forEach.in reference", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+
+		primary := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fix-primary-foreach
+  version: 1.0.0
+spec:
+  resolvers:
+    my-items:
+      description: Item list
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - a
+                - b
+    mapped:
+      description: Iterates over sibling resolver in resolve source forEach
+      resolve:
+        with:
+          - provider: cel
+            forEach:
+              item: entry
+              in:
+                rslvr: my-items
+            inputs:
+              expression: 'entry'
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(primary), 0o600))
+
+		ioStreams, _, errBuf := terminal.NewTestIOStreams()
+		ctx := testContext(ioStreams)
+		opts := fixOptions(solPath, ioStreams)
+		opts.Fix = true
+
+		require.NoError(t, runLintFix(ctx, opts))
+
+		gotPrimary, rerr := os.ReadFile(solPath) //nolint:gosec // test-controlled path
+		require.NoError(t, rerr)
+		assert.Equal(t, primary, string(gotPrimary), "must not rewrite primary when unindexed source forEach.in reference remains")
+		assert.Contains(t, errBuf.String(), "unrewritten reference remains in solution")
+	})
+
+	t.Run("skips rename when composed test case mocks primary hyphenated resolver", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solPath := filepath.Join(tmpDir, "solution.yaml")
+		partPath := filepath.Join(tmpDir, "tests.yaml")
+
+		primary := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fix-composed-mock
+  version: 1.0.0
+compose:
+  - tests.yaml
+spec:
+  resolvers:
+    my-greeting:
+      description: Greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+		part := `spec:
+  testing:
+    cases:
+      smoke:
+        description: Smoke test mocking primary resolver
+        command:
+          - render
+          - solution
+        mocks:
+          my-greeting: mocked-hello
+        assertions:
+          - contains: mocked-hello
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(primary), 0o600))
+		require.NoError(t, os.WriteFile(partPath, []byte(part), 0o600))
+
+		ioStreams, _, errBuf := terminal.NewTestIOStreams()
+		ctx := testContext(ioStreams)
+		opts := fixOptions(solPath, ioStreams)
+		opts.Fix = true
+
+		require.NoError(t, runLintFix(ctx, opts))
+
+		gotPrimary, rerr := os.ReadFile(solPath) //nolint:gosec // test-controlled path
+		require.NoError(t, rerr)
+		assert.Equal(t, primary, string(gotPrimary), "must not rewrite primary when composed test case mocks the old resolver name")
+		assert.Contains(t, errBuf.String(), "skipped")
+	})
+}
