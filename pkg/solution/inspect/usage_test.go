@@ -5,11 +5,13 @@ package inspect
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -391,4 +393,378 @@ func TestBuildUsage_MetadataFields(t *testing.T) {
 	assert.Equal(t, "refresh", usage.Params[0].Example)
 
 	assert.Equal(t, "Long-form prose about how this works.", usage.Details)
+}
+
+func TestAllActionsExplicit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		workflow *action.Workflow
+		want     bool
+	}{
+		{
+			name:     "nil workflow",
+			workflow: nil,
+			want:     false,
+		},
+		{
+			name:     "empty actions",
+			workflow: &action.Workflow{},
+			want:     false,
+		},
+		{
+			name: "finally-only workflow",
+			workflow: &action.Workflow{
+				Finally: map[string]*action.Action{
+					"cleanup": {Explicit: true},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "only nil action entries",
+			workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"ghost": nil,
+				},
+			},
+			want: false,
+		},
+		{
+			name: "mixed explicit and default",
+			workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"build":   {Explicit: false},
+					"release": {Explicit: true},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "when-gated non-explicit action",
+			workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"show":    {When: whenCondition(`_.action == "show"`)},
+					"cleanup": {Explicit: true},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "all non-nil actions explicit",
+			workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"build": {Explicit: true},
+					"lint":  {Explicit: true},
+					"nil":   nil,
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, AllActionsExplicit(tc.workflow))
+		})
+	}
+}
+
+func TestBuildUsage_AllActionsExplicitAndAlias(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	sol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "ci-tasks"},
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"build": {
+						Alias:       "b",
+						Description: "Compile binary",
+						Explicit:    true,
+					},
+					"lint": {
+						Description: "Run linters",
+						Explicit:    true,
+					},
+				},
+			},
+		},
+	}
+
+	// BuildRunCommand keeps "run solution" for non-usage callers (inspect solution, get_run_command).
+	runCmd, err := BuildRunCommand(sol, "actions.yaml", "scafctl")
+	require.NoError(t, err)
+	assert.Equal(t, "scafctl run solution", runCmd.Subcommand)
+
+	usage, err := BuildUsage(ctx, sol, "actions.yaml", "scafctl")
+	require.NoError(t, err)
+	assert.Equal(t, "scafctl run action <name>", usage.Run)
+	require.Len(t, usage.Actions, 2)
+	assert.Equal(t, "build", usage.Actions[0].Name)
+	assert.Equal(t, "b", usage.Actions[0].Alias)
+	assert.False(t, usage.Actions[0].Default)
+	assert.Equal(t, "scafctl run action build -f ./actions.yaml", usage.Actions[0].Command)
+	assert.Equal(t, "lint", usage.Actions[1].Name)
+	assert.Empty(t, usage.Actions[1].Alias)
+	assert.Equal(t, "scafctl run action lint -f ./actions.yaml", usage.Actions[1].Command)
+
+	// Embedder binary name and stdin (-f -) source preservation.
+	stdinUsage, err := BuildUsage(ctx, sol, "-", "mycli")
+	require.NoError(t, err)
+	assert.Equal(t, "mycli run action <name>", stdinUsage.Run)
+	assert.Equal(t, "mycli run action build -f -", stdinUsage.Actions[0].Command)
+
+	// URL, catalog, and remote OCI references convert to "-f <ref>" for explicit actions.
+	for _, tc := range []struct {
+		resolvedPath string
+		rawPath      string
+		wantCmd      string
+	}{
+		{
+			resolvedPath: "https://example.com/actions.yaml",
+			rawPath:      "https://example.com/actions.yaml",
+			wantCmd:      "scafctl run action build -f https://example.com/actions.yaml",
+		},
+		{
+			resolvedPath: "catalog:my-app@1.0.0",
+			rawPath:      "my-app@1.0.0",
+			wantCmd:      "scafctl run action build -f my-app@1.0.0",
+		},
+		{
+			resolvedPath: "remote:ghcr.io/org/app@1.0.0",
+			rawPath:      "ghcr.io/org/app@1.0.0",
+			wantCmd:      "scafctl run action build -f ghcr.io/org/app@1.0.0",
+		},
+	} {
+		refSol := *sol
+		refSol.SetPath(tc.resolvedPath)
+		refUsage, refErr := BuildUsage(ctx, &refSol, tc.rawPath, "scafctl")
+		require.NoError(t, refErr)
+		assert.Equal(t, tc.wantCmd, refUsage.Actions[0].Command)
+	}
+
+	// Catalog, version constraint, and pre-release selectors are preserved on both
+	// default ("run solution ...") and explicit ("run action <name> -f ...") commands.
+	scopedSol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "scoped-app"},
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"check":   {Description: "Default check"},
+					"release": {Description: "Explicit release", Explicit: true},
+				},
+			},
+		},
+	}
+	scopedSol.SetPath("catalog:official:scoped-app")
+	scopedEntries := BuildActionList(
+		ctx,
+		scopedSol,
+		"scoped-app",
+		"scafctl",
+		WithCatalog("official"),
+		WithVersionConstraint("^1.0.0"),
+		WithPreRelease(true),
+	)
+	require.Len(t, scopedEntries, 2)
+	assert.Equal(t, "scafctl run solution scoped-app --catalog official --version '^1.0.0' --pre-release", scopedEntries[0].Command)
+	assert.Equal(t, "scafctl run action release -f scoped-app --catalog official --version '^1.0.0' --pre-release", scopedEntries[1].Command)
+
+	// Paths containing spaces, trailing whitespace, and URL query metacharacters
+	// are shell-quoted consistently across default, when-gated, and explicit actions.
+	mixedSol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "mixed-tasks"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"mode": paramResolver("mode", "dev"),
+			},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"check":   {Description: "Default check"},
+					"deploy":  {Description: "Gated deploy", When: whenCondition(`_.mode == "prod"`)},
+					"release": {Description: "Explicit release", Explicit: true},
+				},
+			},
+		},
+	}
+	for _, tc := range []struct {
+		name        string
+		resolved    string
+		rawPath     string
+		wantCheck   string
+		wantDeploy  string
+		wantRelease string
+	}{
+		{
+			name:        "relative path with spaces",
+			resolved:    "/workspace/task files/actions.yaml",
+			rawPath:     "task files/actions.yaml",
+			wantCheck:   "scafctl run solution -f './task files/actions.yaml'",
+			wantDeploy:  "scafctl run solution -f './task files/actions.yaml' -r mode=prod",
+			wantRelease: "scafctl run action release -f './task files/actions.yaml'",
+		},
+		{
+			name:        "filename with trailing whitespace",
+			resolved:    "/tmp/actions.yaml ",
+			rawPath:     "/tmp/actions.yaml ",
+			wantCheck:   "scafctl run solution -f '/tmp/actions.yaml '",
+			wantDeploy:  "scafctl run solution -f '/tmp/actions.yaml ' -r mode=prod",
+			wantRelease: "scafctl run action release -f '/tmp/actions.yaml '",
+		},
+		{
+			name:        "URL with query metacharacters",
+			resolved:    "https://example.com/actions.yaml?a=1&b=2",
+			rawPath:     "https://example.com/actions.yaml?a=1&b=2",
+			wantCheck:   "scafctl run solution 'https://example.com/actions.yaml?a=1&b=2'",
+			wantDeploy:  "scafctl run solution 'https://example.com/actions.yaml?a=1&b=2' -r mode=prod",
+			wantRelease: "scafctl run action release -f 'https://example.com/actions.yaml?a=1&b=2'",
+		},
+	} {
+		s := *mixedSol
+		s.SetPath(tc.resolved)
+		entries := BuildActionList(ctx, &s, tc.rawPath, "scafctl")
+		require.Len(t, entries, 3, tc.name)
+		assert.Equal(t, tc.wantCheck, entries[0].Command, tc.name)
+		assert.Equal(t, tc.wantDeploy, entries[1].Command, tc.name)
+		assert.Equal(t, tc.wantRelease, entries[2].Command, tc.name)
+	}
+}
+
+func TestBuildActionList(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("empty and non-workflow solutions return non-nil empty slice", func(t *testing.T) {
+		t.Parallel()
+		for _, sol := range []*solution.Solution{
+			nil,
+			{Metadata: solution.Metadata{Name: "empty"}},
+			{
+				Metadata: solution.Metadata{Name: "resolver-only"},
+				Spec: solution.Spec{
+					Resolvers: map[string]*resolver.Resolver{"x": paramResolver("x", "val")},
+				},
+			},
+			{
+				Metadata: solution.Metadata{Name: "finally-only"},
+				Spec: solution.Spec{
+					Workflow: &action.Workflow{
+						Finally: map[string]*action.Action{"cleanup": {Description: "Clean"}},
+					},
+				},
+			},
+		} {
+			entries := BuildActionList(ctx, sol, "solution.yaml", "scafctl")
+			require.NotNil(t, entries)
+			assert.Empty(t, entries)
+			raw, err := json.Marshal(entries)
+			require.NoError(t, err)
+			assert.Equal(t, "[]", string(raw))
+		}
+	})
+
+	t.Run("entries carry all keys without omitempty in JSON and YAML", func(t *testing.T) {
+		t.Parallel()
+		sol := &solution.Solution{
+			Metadata: solution.Metadata{Name: "tasks"},
+			Spec: solution.Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"build": {
+							Alias:       "b",
+							Description: "Build project",
+						},
+						"release": {
+							Explicit: true,
+						},
+					},
+				},
+			},
+		}
+
+		entries := BuildActionList(ctx, sol, "actions.yaml", "mycli")
+		require.Len(t, entries, 2)
+
+		assert.Equal(t, ActionListEntry{
+			Name:        "build",
+			Alias:       "b",
+			Default:     true,
+			Description: "Build project",
+			Command:     "mycli run solution -f ./actions.yaml",
+		}, entries[0])
+		assert.Equal(t, ActionListEntry{
+			Name:        "release",
+			Alias:       "",
+			Default:     false,
+			Description: "",
+			Command:     "mycli run action release -f ./actions.yaml",
+		}, entries[1])
+
+		rawJSON, err := json.Marshal(entries)
+		require.NoError(t, err)
+		var decodedJSON []map[string]any
+		require.NoError(t, json.Unmarshal(rawJSON, &decodedJSON))
+		for _, item := range decodedJSON {
+			assert.Contains(t, item, "name")
+			assert.Contains(t, item, "alias")
+			assert.Contains(t, item, "default")
+			assert.Contains(t, item, "description")
+			assert.Contains(t, item, "command")
+		}
+
+		rawYAML, err := yaml.Marshal(entries)
+		require.NoError(t, err)
+		var decodedYAML []map[string]any
+		require.NoError(t, yaml.Unmarshal(rawYAML, &decodedYAML))
+		for _, item := range decodedYAML {
+			assert.Contains(t, item, "name")
+			assert.Contains(t, item, "alias")
+			assert.Contains(t, item, "default")
+			assert.Contains(t, item, "description")
+			assert.Contains(t, item, "command")
+		}
+	})
+}
+
+func TestFormatAvailableActions(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, FormatAvailableActions(nil))
+
+	lines := FormatAvailableActions([]ActionUsage{
+		{Name: "build", Alias: "b", Description: "Compile\n\tthe \x1b[31mbinary\x1b[0m"},
+		{Name: "check", Default: true, Description: "Run checks"},
+		{Name: "clean"},
+	})
+	assert.Equal(t, []string{
+		"  build (b)        Compile the binary",
+		"  check (default)  Run checks",
+		"  clean",
+	}, lines)
+}
+
+func BenchmarkBuildActionList(b *testing.B) {
+	sol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "tasks"},
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"build":   {Alias: "b", Description: "Build binary", Explicit: true},
+					"lint":    {Alias: "l", Description: "Run linters", Explicit: true},
+					"test":    {Alias: "t", Description: "Run tests", Explicit: true},
+					"release": {Description: "Publish release", Explicit: true},
+				},
+			},
+		},
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_ = BuildActionList(ctx, sol, "actions.yaml", "scafctl")
+	}
 }

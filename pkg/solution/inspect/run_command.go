@@ -41,6 +41,39 @@ type RunCommandInfo struct {
 
 	// HasResolvers indicates whether the solution has resolvers.
 	HasResolvers bool `json:"hasResolvers" yaml:"hasResolvers" doc:"Whether the solution has resolvers"`
+
+	// actionSource holds the pre-formatted source + selector flags for
+	// 'run action <name>' commands (e.g. " -f ./sol.yaml" or
+	// " -f app --catalog official --version '^1.0.0'").
+	actionSource string
+}
+
+// RunCommandOption configures source selector flags in BuildRunCommand,
+// BuildUsage, and BuildActionList.
+type RunCommandOption func(*runCommandConfig)
+
+type runCommandConfig struct {
+	catalog    string
+	version    string
+	preRelease bool
+}
+
+// WithCatalog appends '--catalog <name>' to generated commands when the
+// solution source is scoped to a specific catalog.
+func WithCatalog(name string) RunCommandOption {
+	return func(c *runCommandConfig) { c.catalog = name }
+}
+
+// WithVersionConstraint appends '--version <constraint>' to generated commands
+// when the solution source is scoped by a semver constraint.
+func WithVersionConstraint(constraint string) RunCommandOption {
+	return func(c *runCommandConfig) { c.version = constraint }
+}
+
+// WithPreRelease appends '--pre-release' to generated commands for catalog and
+// remote registry sources when pre-release resolution was enabled.
+func WithPreRelease(enabled bool) RunCommandOption {
+	return func(c *runCommandConfig) { c.preRelease = enabled }
 }
 
 // ParamInfo describes a parameter-type resolver that requires a user-provided value.
@@ -73,9 +106,16 @@ type ParamInfo struct {
 // The binaryName parameter is used in the generated command (e.g., "scafctl" or a
 // custom name when scafctl is embedded as a library).
 // Returns nil and an error message if the solution has nothing to run.
-func BuildRunCommand(sol *solution.Solution, path, binaryName string) (*RunCommandInfo, error) {
+func BuildRunCommand(sol *solution.Solution, path, binaryName string, opts ...RunCommandOption) (*RunCommandInfo, error) {
 	if binaryName == "" {
 		binaryName = settings.CliBinaryName
+	}
+
+	var cfg runCommandConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
 	}
 
 	hasResolvers := sol.Spec.HasResolvers()
@@ -128,11 +168,14 @@ func BuildRunCommand(sol *solution.Solution, path, binaryName string) (*RunComma
 	// It is derived from how the solution was actually loaded, so catalog/URL
 	// references become positional args and auto-discovery falls back to the
 	// resolved path -- never a bogus "-f ./" or "-f ./my-catalog-ref".
-	sourceArg := solutionSourceArg(sol, path)
+	sourceVal, useFileFlag := resolveSolutionSource(sol, path)
+	sourceArg := formatSourceArg(sourceVal, useFileFlag)
+	selectorFlags := formatSelectorFlags(sol, sourceVal, useFileFlag, cfg)
 	baseCommand := command
 	if sourceArg != "" {
-		baseCommand = command + " " + sourceArg
+		baseCommand = command + " " + sourceArg + selectorFlags
 	}
+	actionSource := buildActionSourceFlags(sourceVal, selectorFlags)
 	fullCommand := baseCommand
 	for _, p := range parameters {
 		exampleVal := "<value>"
@@ -156,20 +199,65 @@ func BuildRunCommand(sol *solution.Solution, path, binaryName string) (*RunComma
 		Parameters:   parameters,
 		HasWorkflow:  hasWorkflow,
 		HasResolvers: hasResolvers,
+		actionSource: actionSource,
 	}, nil
 }
 
-// solutionSourceArg returns the command-line argument that points `run
-// solution`/`run resolver` at this solution, derived from how the solution was
-// actually loaded (via sol.GetPath()). rawPath is the original user input
-// (an -f path, a catalog/URL/registry ref, or "" for auto-discovery) and is
-// preferred when it is a usable reference.
-//
-// Returns:
-//   - "-f <path>"   for local files (and auto-discovery, using the resolved path)
-//   - "<ref>"       (positional) for catalog names, remote OCI refs, and URLs
-//   - ""            when no source can be determined
-func solutionSourceArg(sol *solution.Solution, rawPath string) string {
+func isCatalogOrRemoteSource(sol *solution.Solution, sourceVal string, useFileFlag bool) bool {
+	if sourceVal == "" || useFileFlag {
+		return false
+	}
+	if sol != nil {
+		resolved := sol.GetPath()
+		if strings.HasPrefix(resolved, "catalog:") || strings.HasPrefix(resolved, "remote:") {
+			return true
+		}
+	}
+	return strings.HasPrefix(sourceVal, "oci://") || !strings.Contains(sourceVal, "://")
+}
+
+func formatSelectorFlags(sol *solution.Solution, sourceVal string, useFileFlag bool, cfg runCommandConfig) string {
+	if !isCatalogOrRemoteSource(sol, sourceVal, useFileFlag) {
+		return ""
+	}
+	var b strings.Builder
+	if cfg.catalog != "" {
+		b.WriteString(" --catalog ")
+		b.WriteString(shellQuote(cfg.catalog))
+	}
+	if cfg.version != "" {
+		b.WriteString(" --version ")
+		b.WriteString(shellQuote(cfg.version))
+	}
+	if cfg.preRelease {
+		b.WriteString(" --pre-release")
+	}
+	return b.String()
+}
+
+func formatSourceArg(sourceVal string, useFileFlag bool) string {
+	if sourceVal == "" {
+		return ""
+	}
+	if useFileFlag {
+		return "-f " + shellQuote(sourceVal)
+	}
+	return shellQuote(sourceVal)
+}
+
+func buildActionSourceFlags(sourceVal, selectorFlags string) string {
+	if sourceVal == "" {
+		return ""
+	}
+	return " -f " + shellQuote(sourceVal) + selectorFlags
+}
+
+// resolveSolutionSource determines the raw source argument value and whether
+// 'run solution'/'run resolver' takes it via '-f' (local files, stdin, and
+// auto-discovery) or positionally (catalog names, remote OCI refs, and URLs).
+// Whitespace in file paths is preserved verbatim so shellQuote can quote the
+// exact filename without altering it.
+func resolveSolutionSource(sol *solution.Solution, rawPath string) (string, bool) {
 	resolved := ""
 	if sol != nil {
 		resolved = sol.GetPath()
@@ -179,36 +267,46 @@ func solutionSourceArg(sol *solution.Solution, rawPath string) string {
 	if ref, ok := strings.CutPrefix(resolved, "catalog:"); ok {
 		// catalogPath may be "catalog:<name[@ver]>" or "catalog:<cat>:<name[@ver]>".
 		if c, err := source.Classify(rawPath); err == nil && c.Kind.IsReference() {
-			return rawPath
+			return rawPath, false
 		}
 		if i := strings.LastIndex(ref, ":"); i >= 0 {
 			ref = ref[i+1:]
 		}
-		return ref
+		if ref == "" {
+			return "", false
+		}
+		return ref, false
 	}
 	// Remote OCI reference: positional.
 	if ref, ok := strings.CutPrefix(resolved, "remote:"); ok {
 		if rawPath != "" {
-			return rawPath
+			return rawPath, false
 		}
-		return ref
+		if ref == "" {
+			return "", false
+		}
+		return ref, false
 	}
 	// URL: positional (no ./ prefixing).
 	if strings.Contains(resolved, "://") {
-		return resolved
+		return resolved, false
 	}
 	if strings.Contains(rawPath, "://") {
-		return rawPath
+		return rawPath, false
 	}
 
 	// Local file. Prefer the user's own -f path when they gave one (preserves
-	// their relative form); otherwise fall back to the resolved discovery path.
+	// their relative form and any intentional whitespace); otherwise fall back
+	// to the resolved discovery path.
 	filePath := rawPath
 	if filePath == "" {
 		filePath = resolved
 	}
 	if filePath == "" {
-		return ""
+		return "", false
+	}
+	if filePath == "-" {
+		return "-", true
 	}
 	// Ensure relative paths have a "./" prefix so chat UIs do not auto-linkify
 	// bare filenames into content-reference URLs.
@@ -216,7 +314,7 @@ func solutionSourceArg(sol *solution.Solution, rawPath string) string {
 		!strings.HasPrefix(filePath, "../") && !strings.Contains(filePath, "://") {
 		filePath = "./" + filePath
 	}
-	return "-f " + filePath
+	return filePath, true
 }
 
 // parameterDefault extracts the literal "default" input from a parameter

@@ -687,6 +687,93 @@ With the alias `config`, you can write `config.results.region` instead of `__act
 - Cannot start with `__` (reserved prefix)
 - Cannot conflict with action names or reserved names (`true`, `false`, `null`, etc.)
 - Must be unique across all actions in the workflow
+- Aliases can also be passed as target names to `scafctl run action <alias>` and appear alongside action names in `scafctl run action --list` and `scafctl inspect solution --usage`.
+
+### Opt-In Actions (`explicit: true`) and Listing Actions (`--list`)
+
+Task-runner files (`actions.yaml`) typically define independent tasks such as `build`, `lint`, `test`, and `release` that should only execute when explicitly named on the CLI. Set `explicit: true` on an action to exclude it from bare `scafctl run action` and `scafctl run solution` invocations:
+
+~~~yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: repo-tasks
+  version: 1.0.0
+
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
+spec:
+  workflow:
+    actions:
+      build:
+        alias: b
+        description: Compile the binary
+        explicit: true
+        provider: exec
+        inputs:
+          command: "go build ./..."
+
+      lint:
+        alias: l
+        description: Run linters
+        explicit: true
+        provider: exec
+        inputs:
+          command: "golangci-lint run"
+
+      test:
+        alias: t
+        description: Run unit tests
+        explicit: true
+        provider: exec
+        inputs:
+          command: "go test ./..."
+~~~
+
+Use `scafctl run action --list` (or `-l`) to inspect available actions without running resolvers, fetching plugins, or executing commands:
+
+{{< tabs "actions-tutorial-list-1" >}}
+{{% tab "Bash" %}}
+
+~~~bash
+# List available actions in the discovered actions.yaml or solution.yaml
+scafctl run action --list
+
+# Output as JSON for scripts or CI
+scafctl run action -l -o json
+
+# Filter to default (non-explicit, un-gated) actions with CEL
+scafctl run action -l -w '_.default'
+
+# Browse actions in the interactive TUI
+scafctl run action -l -i
+~~~
+
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+
+~~~powershell
+# List available actions in the discovered actions.yaml or solution.yaml
+scafctl run action --list
+
+# Output as JSON for scripts or CI
+scafctl run action -l -o json
+
+# Filter to default (non-explicit, un-gated) actions with CEL
+scafctl run action -l -w '_.default'
+
+# Browse actions in the interactive TUI
+scafctl run action -l -i
+~~~
+
+{{% /tab %}}
+{{< /tabs >}}
+
+When **every** regular action in a workflow is marked `explicit: true`, running bare `scafctl run action` with no target names prints the available actions to stderr and exits with code `3` (`InvalidInput`) rather than silently doing nothing.
 
 ---
 
@@ -1251,6 +1338,9 @@ scafctl run resolver config -f conditional-demo.yaml -r environment=staging
 # Run specific action(s); executes only the resolvers those actions need
 scafctl run action setup -f conditional-demo.yaml
 
+# List available actions without executing resolvers or actions
+scafctl run action --list -f conditional-demo.yaml
+
 # Force all resolvers to execute even when scoping to specific actions
 scafctl run action setup --resolve-all -f conditional-demo.yaml
 ```
@@ -1285,6 +1375,9 @@ scafctl run resolver config -f conditional-demo.yaml -r environment=staging
 
 # Run specific action(s); executes only the resolvers those actions need
 scafctl run action setup -f conditional-demo.yaml
+
+# List available actions without executing resolvers or actions
+scafctl run action --list -f conditional-demo.yaml
 
 # Force all resolvers to execute even when scoping to specific actions
 scafctl run action setup --resolve-all -f conditional-demo.yaml

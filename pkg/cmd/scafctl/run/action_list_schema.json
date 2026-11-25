@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Solution Actions",
+  "description": "Runnable workflow actions in a solution",
+  "type": "array",
+
+  "x-kvx-icon": "⚡",
+  "x-kvx-collectionTitle": "Actions",
+
+  "x-kvx-list": {
+    "titleField": "name",
+    "subtitleField": "description",
+    "subtitleMaxLines": 1
+  },
+
+  "x-kvx-detail": {
+    "titleField": "name",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "Properties",
+        "fields": ["alias", "default"],
+        "layout": "table"
+      },
+      {
+        "title": "Description",
+        "fields": ["description"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Command",
+        "fields": ["command"],
+        "layout": "paragraph"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["name", "alias", "default", "description", "command"],
+    "properties": {
+      "name": {
+        "type": "string",
+        "title": "Name",
+        "description": "Action identifier passed to 'run action <name>'"
+      },
+      "alias": {
+        "type": "string",
+        "title": "Alias",
+        "description": "Short alias accepted in place of the action name"
+      },
+      "default": {
+        "type": "boolean",
+        "title": "Default",
+        "description": "Whether the action runs on a bare invocation (not explicit and not gated by when)"
+      },
+      "description": {
+        "type": "string",
+        "title": "Description",
+        "description": "Human-readable summary of what the action does"
+      },
+      "command": {
+        "type": "string",
+        "title": "Command",
+        "description": "CLI command to execute this action"
+      }
+    }
+  }
+}

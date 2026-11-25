@@ -451,3 +451,63 @@ func TestCommandInspect(t *testing.T) {
 	cmd2 := CommandInspect(cliParams, ioStreams, "mycli")
 	assert.Contains(t, cmd2.Example, "mycli inspect solution")
 }
+
+func TestCommandInspectSolution_UsageAllExplicitAndAlias(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	allExplicit := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: task-runner
+  version: 1.0.0
+spec:
+  workflow:
+    actions:
+      build:
+        alias: b
+        description: Compile the binary
+        explicit: true
+        provider: shell
+        inputs:
+          command: "echo build"
+      lint:
+        description: Run linters
+        explicit: true
+        provider: shell
+        inputs:
+          command: "echo lint"
+`
+	solFile := writeSolution(t, dir, allExplicit)
+
+	out, ioStreams := makeIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandInspectSolution(cliParams, ioStreams, "mycli")
+	cmd.SetArgs([]string{"-f", solFile, "--usage"})
+	cmd.SetOut(out)
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	cmd.SetContext(ctx)
+
+	require.NoError(t, cmd.Execute())
+
+	got := out.String()
+	assert.Contains(t, got, "Run: mycli run action <name>")
+	assert.Contains(t, got, "  build (b)\n")
+	assert.Contains(t, got, "  lint\n")
+	assert.Contains(t, got, "mycli run action build -f ")
+
+	jsonOut, jsonStreams := makeIOStreams()
+	cmdJSON := CommandInspectSolution(cliParams, jsonStreams, "mycli")
+	cmdJSON.SetArgs([]string{"-f", solFile, "--usage", "-o", "json"})
+	cmdJSON.SetOut(jsonOut)
+	cmdJSON.SetContext(writer.WithWriter(context.Background(), writer.New(jsonStreams, cliParams)))
+	require.NoError(t, cmdJSON.Execute())
+
+	var usage inspect.UsageInfo
+	require.NoError(t, json.Unmarshal(jsonOut.Bytes(), &usage))
+	assert.Equal(t, "mycli run action <name>", usage.Run)
+	require.Len(t, usage.Actions, 2)
+	assert.Equal(t, "b", usage.Actions[0].Alias)
+}
