@@ -354,6 +354,10 @@ Execute shell commands using an embedded cross-platform POSIX shell interpreter.
 | `env` | object | ❌ | — | Environment variables to set (key-value pairs). Merged with the parent process environment. `NO_COLOR=1` and `TERM=dumb` are injected automatically to prevent child processes from emitting ANSI escape codes in captured output (override by setting them explicitly) |
 | `timeout` | int | ❌ | — | Timeout in seconds (0 or omit for no timeout, max 3600) |
 | `shell` | string | ❌ | `auto` | Shell interpreter to use: `auto` (embedded POSIX shell — works on all platforms), `sh` (alias for auto), `bash` (external bash), `pwsh` (external PowerShell Core), `cmd` (external cmd.exe — Windows only) |
+| `raw` | bool | ❌ | `false` | Return trimmed `stdout` string instead of the full result map (`from`/`transform` capabilities only; `action` always returns the full map). `exitCode` and `stderr` are preserved in output metadata for `failOnError` diagnostics |
+| `passthrough` | bool | ❌ | `false` | Stream `stdout`/`stderr` directly to the user's terminal in real time (`stderr` is also captured internally for `failOnError` error messages) |
+| `echo` | bool | ❌ | `false` | Print the resolved command to `stderr` before executing (useful for debugging dynamic commands built with `expr:`) |
+| `failOnError` | bool | ❌ | `true` (`action`), `false` (`from`/`transform`) | Return an error to the engine when the command exits with a non-zero exit code. Set `failOnError: true` on non-final `exec` sources in `resolve.with` fallback chains (checked by the `exec-source-without-fail-on-error` lint rule) |
 
 ### Output
 

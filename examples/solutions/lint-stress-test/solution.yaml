@@ -205,6 +205,20 @@ spec:
               operation: render
               template: "Deploying {{ .projcts }}"
 
+    # exec-source-without-fail-on-error (exec source before fallback without failOnError: true)
+    exec_fallback:
+      type: string
+      description: Exec source in fallback chain without failOnError
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: some-cli create token
+              raw: true
+          - provider: static
+            inputs:
+              value: "fallback-token"
+
     # used resolver so not everything is unused
     main_output:
       type: string
@@ -220,6 +234,7 @@ spec:
         - no_desc
         - bad_orvalue
         - typo_template
+        - exec_fallback
       resolve:
         with:
           - provider: static

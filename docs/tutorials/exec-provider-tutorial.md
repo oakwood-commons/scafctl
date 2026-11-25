@@ -94,7 +94,7 @@ Every exec action produces these output fields:
 | `stdout` | string | Standard output from the command |
 | `stderr` | string | Standard error output |
 | `exitCode` | int | The command's exit code (0 = success) |
-| `success` | bool | `true` if exitCode is 0 (action capability only) |
+| `success` | bool | `true` if exitCode is 0 (action capability only; set `failOnError: false` to inspect non-zero exits) |
 | `command` | string | The full command that was executed |
 | `shell` | string | Which shell interpreter was used |
 
@@ -318,7 +318,7 @@ actions:
       timeout: 5
 ```
 
-When a command is killed by timeout, it returns a non-zero exit code and the `success` field is `false`.
+When a command is killed by timeout, it exits with a non-zero exit code -- failing the action immediately by default (`failOnError: true`), or setting `success: false` when `failOnError: false` is configured.
 
 ---
 
@@ -458,11 +458,12 @@ actions:
 
 ## Error Handling
 
-The exec provider captures exit codes but does **not** return a Go error for non-zero exits. This means:
+The `failOnError` input controls whether a non-zero exit code returns an error to the engine, and its default depends on the capability:
 
-- The action always "succeeds" from the workflow engine's perspective
-- Use the `exitCode` and `success` output fields to detect failures
-- Use CEL expressions in `retryIf` or `skipIf` to react to failures
+- **Actions (`action` capability)**: `failOnError` defaults to `true` (fail-fast). A non-zero exit code fails the action immediately unless you set `failOnError: false`.
+- **Resolvers (`from` and `transform` capabilities)**: `failOnError` defaults to `false` so single-step resolvers can inspect `exitCode` and `stderr`.
+
+To inspect non-zero exit codes in downstream workflow actions without aborting the workflow, set `failOnError: false` and check `exitCode` or `success` via `__actions` in downstream expressions or `when` conditions (note: action `retry` / `retryIf` requires an error return, so keep the default `failOnError: true` when using `retry` and inspect `__error` in `retryIf`, pairing with `continueOnError: true` if exhausted retries should not abort the workflow):
 
 ```yaml
 actions:
@@ -470,6 +471,7 @@ actions:
     provider: exec
     inputs:
       command: "false"
+      failOnError: false
 
   check-result:
     provider: exec
@@ -482,9 +484,30 @@ actions:
             : "'echo Command failed with exit code ' + string(__actions['might-fail'].results.exitCode)"
 ```
 
+### Resolver Fallback Chains
+
+Because `failOnError` defaults to `false` in `from` mode, a failing `exec` source in a multi-step `resolve.with` chain "succeeds" with empty output and prevents subsequent fallback sources from running. Always set `failOnError: true` on non-final `exec` sources in a fallback chain (`scafctl lint` warns with `exec-source-without-fail-on-error` if omitted):
+
+```yaml
+spec:
+  resolvers:
+    token:
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: some-cli create token
+              raw: true
+              failOnError: true
+          - provider: env
+            inputs:
+              operation: get
+              name: FEDERATED_TOKEN
+```
+
 ### Command Not Found
 
-If a command doesn't exist, the embedded shell returns exit code 127 (standard POSIX behavior):
+If a command doesn't exist, the embedded shell returns exit code 127 (standard POSIX behavior). In an action, set `failOnError: false` if you want to inspect the exit code instead of failing immediately:
 
 ```yaml
 actions:
@@ -492,6 +515,7 @@ actions:
     provider: exec
     inputs:
       command: "nonexistent-command"
+      failOnError: false
       # exitCode will be 127
       # success will be false
 ```
@@ -518,6 +542,7 @@ actions:
       command: "go test ./... -count=1"
       workingDir: /path/to/project
       timeout: 300
+      failOnError: false
 
   report:
     provider: exec
