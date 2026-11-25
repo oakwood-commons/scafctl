@@ -161,3 +161,89 @@ func BenchmarkSolutionProvider_From_Bundled(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkSolutionProvider_Action_Targeted(b *testing.B) {
+	reg := provider.NewRegistry()
+	_ = reg.Register(&mockProvider{
+		name:   "static",
+		output: &provider.Output{Data: map[string]any{"success": true}},
+	})
+
+	usedRef := "usedCfg"
+	child := &solution.Solution{
+		Metadata: solution.Metadata{Name: "bench-targeted-child"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"usedCfg": {
+					Name: "usedCfg",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "static"}},
+					},
+				},
+				"unusedCfg": {
+					Name: "unusedCfg",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "static"}},
+					},
+				},
+			},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"prep": {
+						Name:     "prep",
+						Provider: "static",
+						Explicit: true,
+					},
+					"opt": {
+						Name:      "opt",
+						Provider:  "static",
+						Explicit:  true,
+						DependsOn: []string{"prep"},
+						Inputs: map[string]*spec.ValueRef{
+							"cfg": {Resolver: &usedRef},
+						},
+					},
+					"unselected": {
+						Name:     "unselected",
+						Provider: "static",
+					},
+				},
+				Finally: map[string]*action.Action{
+					"cleanup": {Name: "cleanup", Provider: "static"},
+				},
+			},
+		},
+	}
+
+	solProv := New(
+		WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"bench-targeted@1.0.0": child}}),
+		WithRegistry(reg),
+	)
+	_ = reg.Register(solProv)
+
+	parentWorkflow := &action.Workflow{
+		Actions: map[string]*action.Action{
+			"run-targeted": {
+				Name:     "run-targeted",
+				Provider: ProviderName,
+				Inputs: map[string]*spec.ValueRef{
+					"source":  {Literal: "bench-targeted@1.0.0"},
+					"actions": {Literal: []any{"opt"}},
+				},
+			},
+		},
+	}
+
+	ctx := testContext()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		exec := action.NewExecutor(
+			action.WithRegistry(reg),
+			action.WithProgressCallback(action.NoOpProgressCallback{}),
+		)
+		if _, err := exec.Execute(ctx, parentWorkflow); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

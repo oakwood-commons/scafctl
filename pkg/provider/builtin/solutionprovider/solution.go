@@ -41,6 +41,9 @@ const (
 	// Version is the semantic version of this provider.
 	Version = "1.0.0"
 
+	// MaxActionTargets is the maximum number of target action names accepted in the actions input.
+	MaxActionTargets = 100
+
 	// defaultMaxDepth is the default maximum nesting depth for recursive composition.
 	defaultMaxDepth = 10
 )
@@ -222,6 +225,9 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 	var in *Input
 	switch v := input.(type) {
 	case *Input:
+		if v == nil {
+			return nil, fmt.Errorf("%s: input cannot be nil", ProviderName)
+		}
 		in = v
 	case map[string]any:
 		decoded, err := decodeInput(v)
@@ -235,6 +241,15 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 		}
 	default:
 		return nil, fmt.Errorf("%s: expected *Input or map[string]any, got %T", ProviderName, input)
+	}
+
+	if len(in.Actions) > MaxActionTargets {
+		return nil, fmt.Errorf("%s: 'actions' exceeds maximum of %d items (got %d)", ProviderName, MaxActionTargets, len(in.Actions))
+	}
+
+	mode, _ := provider.ExecutionModeFromContext(ctx)
+	if in.Actions != nil && mode != provider.CapabilityAction {
+		return nil, fmt.Errorf("%s: 'actions' input is only supported in %q capability (got %q)", ProviderName, provider.CapabilityAction, mode)
 	}
 
 	// Resolve runtime dependencies (struct fields → context fallback).
@@ -309,10 +324,24 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 		return buildLoadFailureOutput(ctx, displayResolvedSource, scrubbedPluginErr), nil
 	}
 
-	// Dry-run: validate source (by loading) without extracting bundles or executing.
-	mode, _ := provider.ExecutionModeFromContext(ctx)
+	timeoutDur, _, timeoutErr := in.timeoutDuration()
+	if timeoutErr != nil {
+		return nil, timeoutErr
+	}
+
+	// Validate requested child action targets ahead of dry-run and bundle extraction.
+	isAction := mode == provider.CapabilityAction
+	var filteredWorkflow *action.Workflow
+	if isAction && len(in.Actions) > 0 {
+		var filterErr error
+		filteredWorkflow, filterErr = filterChildActionTargets(sol, in.Actions)
+		if filterErr != nil {
+			scrubbedErr := scrubSourceError(filterErr, tracker, secretSource, rawSourceVals...)
+			return buildActionTargetFilterFailure(tracker, displaySource, in, scrubbedErr)
+		}
+	}
+
 	if provider.DryRunFromContext(ctx) {
-		isAction := mode == provider.CapabilityAction
 		envelope := BuildDryRunEnvelope(isAction)
 		return &provider.Output{Data: envelope.ToMap()}, nil
 	}
@@ -338,7 +367,7 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 	// Build isolated context for sub-solution execution.
 	subCtx := buildIsolatedContext(ctx, displayName, in.Inputs, childSolutionDir)
 
-	return p.executeSubSolution(subCtx, mode, displayName, displaySource, parentWorkDir, sol, in, reg)
+	return p.executeSubSolution(subCtx, mode, displayName, displaySource, parentWorkDir, sol, in, reg, filteredWorkflow, timeoutDur)
 }
 
 func loadSubSolution(ctx context.Context, loader Loader, path string) (*solution.Solution, []byte, error) {
@@ -480,32 +509,11 @@ func mergeChildPluginDefaults(sol *solution.Solution) {
 
 	// Pre-initialize nil Inputs maps on resolver steps whose provider declares
 	// defaults so bundler.MergePluginDefaults populates steps that omitted `inputs:`.
-	for _, r := range sol.Spec.Resolvers {
-		if r == nil {
-			continue
+	visitResolverStepInputs(sol, func(prov string, inputs *map[string]*spec.ValueRef) {
+		if *inputs == nil && len(defaultsMap[prov]) > 0 {
+			*inputs = make(map[string]*spec.ValueRef)
 		}
-		if r.Resolve != nil {
-			for i := range r.Resolve.With {
-				if r.Resolve.With[i].Inputs == nil && len(defaultsMap[r.Resolve.With[i].Provider]) > 0 {
-					r.Resolve.With[i].Inputs = make(map[string]*spec.ValueRef)
-				}
-			}
-		}
-		if r.Transform != nil {
-			for i := range r.Transform.With {
-				if r.Transform.With[i].Inputs == nil && len(defaultsMap[r.Transform.With[i].Provider]) > 0 {
-					r.Transform.With[i].Inputs = make(map[string]*spec.ValueRef)
-				}
-			}
-		}
-		if r.Validate != nil {
-			for i := range r.Validate.With {
-				if r.Validate.With[i].Inputs == nil && len(defaultsMap[r.Validate.With[i].Provider]) > 0 {
-					r.Validate.With[i].Inputs = make(map[string]*spec.ValueRef)
-				}
-			}
-		}
-	}
+	})
 
 	hasNilAction := false
 	if sol.Spec.Workflow != nil {
@@ -519,26 +527,9 @@ func mergeChildPluginDefaults(sol *solution.Solution) {
 	if !hasNilAction {
 		bundler.MergePluginDefaults(sol)
 	} else {
-		for _, r := range sol.Spec.Resolvers {
-			if r == nil {
-				continue
-			}
-			if r.Resolve != nil {
-				for i := range r.Resolve.With {
-					applyStepDefaults(&r.Resolve.With[i].Inputs, defaultsMap[r.Resolve.With[i].Provider])
-				}
-			}
-			if r.Transform != nil {
-				for i := range r.Transform.With {
-					applyStepDefaults(&r.Transform.With[i].Inputs, defaultsMap[r.Transform.With[i].Provider])
-				}
-			}
-			if r.Validate != nil {
-				for i := range r.Validate.With {
-					applyStepDefaults(&r.Validate.With[i].Inputs, defaultsMap[r.Validate.With[i].Provider])
-				}
-			}
-		}
+		visitResolverStepInputs(sol, func(prov string, inputs *map[string]*spec.ValueRef) {
+			applyStepDefaults(inputs, defaultsMap[prov])
+		})
 		for _, a := range sol.Spec.Workflow.Actions {
 			if a != nil {
 				applyStepDefaults(&a.Inputs, defaultsMap[a.Provider])
@@ -550,6 +541,29 @@ func mergeChildPluginDefaults(sol *solution.Solution) {
 		for _, a := range sol.Spec.Workflow.Finally {
 			if a != nil {
 				applyStepDefaults(&a.Inputs, defaultsMap[a.Provider])
+			}
+		}
+	}
+}
+
+func visitResolverStepInputs(sol *solution.Solution, fn func(provider string, inputs *map[string]*spec.ValueRef)) {
+	for _, r := range sol.Spec.Resolvers {
+		if r == nil {
+			continue
+		}
+		if r.Resolve != nil {
+			for i := range r.Resolve.With {
+				fn(r.Resolve.With[i].Provider, &r.Resolve.With[i].Inputs)
+			}
+		}
+		if r.Transform != nil {
+			for i := range r.Transform.With {
+				fn(r.Transform.With[i].Provider, &r.Transform.With[i].Inputs)
+			}
+		}
+		if r.Validate != nil {
+			for i := range r.Validate.With {
+				fn(r.Validate.With[i].Provider, &r.Validate.With[i].Inputs)
 			}
 		}
 	}
@@ -580,6 +594,8 @@ func (p *SolutionProvider) executeSubSolution(
 	sol *solution.Solution,
 	in *Input,
 	reg *provider.Registry,
+	filteredWorkflow *action.Workflow,
+	timeoutDur time.Duration,
 ) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
 	tracker := redact.FromContext(ctx)
@@ -587,21 +603,30 @@ func (p *SolutionProvider) executeSubSolution(
 	parentCtx := ctx
 
 	// Apply timeout if specified across both resolver and workflow phases.
-	if d, ok, err := in.timeoutDuration(); err != nil {
-		return nil, err
-	} else if ok {
+	if timeoutDur > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, d)
+		ctx, cancel = context.WithTimeout(ctx, timeoutDur)
 		defer cancel()
 	}
 
 	executedResolvers := sol.Spec.ResolversToSlice()
-	if len(in.Resolvers) > 0 {
+	resolverCfg := buildChildResolverConfig(ctx, executedResolvers)
+	switch {
+	case in.Resolvers != nil:
 		var err error
 		executedResolvers, err = filterResolvers(executedResolvers, in.Resolvers)
 		if err != nil {
 			return nil, err
 		}
+		resolverCfg.Resolvers = executedResolvers
+	case isAction && len(in.Actions) > 0:
+		var lookup resolver.DescriptorLookup
+		if reg != nil {
+			lookup = reg.DescriptorLookup()
+		}
+		skipOpt := execute.WithSkipValidationDeps(resolverCfg.SkipValidation || resolverCfg.SkipTransform)
+		executedResolvers = execute.ResolversForWorkflow(sol, filteredWorkflow, nil, lookup, skipOpt)
+		resolverCfg.Resolvers = executedResolvers
 	}
 
 	resolverData := make(map[string]any)
@@ -612,10 +637,9 @@ func (p *SolutionProvider) executeSubSolution(
 	)
 
 	if len(executedResolvers) > 0 {
-		lgr.V(1).Info("executing sub-solution resolvers", "count", len(executedResolvers), "selected", len(in.Resolvers))
+		lgr.V(1).Info("executing sub-solution resolvers", "count", len(executedResolvers), "selected", len(in.Resolvers), "targetActions", len(in.Actions))
 	}
 
-	resolverCfg := buildChildResolverConfig(ctx, executedResolvers)
 	resResult, resErr := execute.Resolvers(ctx, sol, in.Inputs, reg, resolverCfg)
 	if resErr != nil {
 		if parentCtx.Err() != nil {
@@ -685,6 +709,7 @@ func (p *SolutionProvider) executeSubSolution(
 		childActionCtx = provider.WithWorkingDirectory(childActionCtx, parentWorkDir)
 	}
 	actionCfg := buildChildActionConfig(childActionCtx, displayName, parentWorkDir, resolverCtx, executedResolvers, resolverElapsed)
+	actionCfg.TargetActions = in.Actions
 	actResult, actErr := execute.Actions(childActionCtx, sol, resolverData, reg, actionCfg)
 
 	var workflowResult *WorkflowResult
@@ -811,6 +836,67 @@ func buildChildActionConfig(
 	}
 
 	return cfg
+}
+
+func filterChildActionTargets(sol *solution.Solution, targets []string) (*action.Workflow, error) {
+	if sol == nil || !sol.Spec.HasWorkflow() {
+		var name string
+		if sol != nil {
+			name = sol.Metadata.Name
+		}
+		return nil, fmt.Errorf("solution %q has no workflow defined", name)
+	}
+	return action.FilterWorkflowActions(sol.Spec.Workflow, targets)
+}
+
+func buildActionTargetFilterFailure(tracker *redact.Tracker, displaySource string, in *Input, filterErr error) (*provider.Output, error) {
+	redactedErr := tracker.RedactError(filterErr)
+	if in.shouldPropagateErrors() {
+		return nil, fmt.Errorf("solution %q: workflow failed: %w", displaySource, redactedErr)
+	}
+	envelope := BuildActionEnvelope(nil, nil, []ResolverError{{Resolver: "_workflow", Message: tracker.RedactString(redactedErr.Error())}})
+	return &provider.Output{
+		Data:     envelope.ToMap(),
+		Warnings: []string{fmt.Sprintf("sub-solution %q failed", displaySource)},
+	}, nil
+}
+
+func describeWhatIf(ctx context.Context, input any) (string, error) {
+	var src string
+	var actions []string
+	switch v := input.(type) {
+	case *Input:
+		if v != nil {
+			src, actions = v.Source, v.Actions
+		}
+	case map[string]any:
+		src, _ = v["source"].(string)
+		switch arr := v["actions"].(type) {
+		case []string:
+			actions = arr
+		case []any:
+			for _, item := range arr {
+				if s, ok := item.(string); ok {
+					actions = append(actions, s)
+				}
+			}
+		case string:
+			if arr == redact.RedactedPlaceholder {
+				actions = []string{arr}
+			}
+		}
+	}
+	base := "Would execute sub-solution"
+	if src != "" {
+		base = fmt.Sprintf("Would execute solution %q", redactSourceDisplay(ctx, src))
+	}
+	if len(actions) == 0 {
+		return base, nil
+	}
+	if t := redact.FromContext(ctx); t != nil {
+		actions = t.RedactSlice(actions)
+	}
+	return fmt.Sprintf("%s (actions: %s)", base, strings.Join(actions, ", ")), nil
 }
 
 // buildLoadFailureOutput constructs a degraded envelope for load/parse failures
@@ -944,6 +1030,7 @@ type Input struct {
 	Source          string         `json:"source" yaml:"source" doc:"Sub-solution location (file path, catalog reference, or URL)" example:"deploy-to-k8s@2.0.0"`
 	Inputs          map[string]any `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Parameters passed to the sub-solution's parameter provider"`
 	Resolvers       []string       `json:"resolvers,omitempty" yaml:"resolvers,omitempty" doc:"Resolver names to execute from the child solution; when empty all resolvers run" maxItems:"100"`
+	Actions         []string       `json:"actions,omitempty" yaml:"actions,omitempty" doc:"Action names or aliases to execute from the child workflow with their transitive dependsOn dependencies and finally actions (action capability only); when empty all non-explicit actions run" maxItems:"100"`
 	PropagateErrors *bool          `json:"propagateErrors,omitempty" yaml:"propagateErrors,omitempty" doc:"Whether sub-solution failures (including load/parse) cause a Go error (default: true)"`
 	MaxDepth        *int           `json:"maxDepth,omitempty" yaml:"maxDepth,omitempty" doc:"Maximum nesting depth for recursive composition (default: 10)" minimum:"1" maximum:"100"`
 	Timeout         *string        `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Maximum duration for sub-solution execution (e.g. 30s, 5m)" example:"30s" pattern:"^[0-9]+(ns|us|µs|ms|s|m|h)+$" patternDescription:"Go duration string"`
@@ -1039,22 +1126,19 @@ func decodeInput(m map[string]any) (any, error) {
 	}
 
 	if v, ok := m["resolvers"]; ok {
-		switch arr := v.(type) {
-		case []any:
-			names := make([]string, 0, len(arr))
-			for i, item := range arr {
-				s, ok := item.(string)
-				if !ok {
-					return nil, fmt.Errorf("%s: 'resolvers[%d]' must be a string, got %T", ProviderName, i, item)
-				}
-				names = append(names, s)
-			}
-			in.Resolvers = names
-		case []string:
-			in.Resolvers = arr
-		default:
-			return nil, fmt.Errorf("%s: 'resolvers' must be an array of strings", ProviderName)
+		names, err := decodeStringSlice(v, "resolvers", 0)
+		if err != nil {
+			return nil, err
 		}
+		in.Resolvers = names
+	}
+
+	if v, ok := m["actions"]; ok {
+		names, err := decodeStringSlice(v, "actions", MaxActionTargets)
+		if err != nil {
+			return nil, err
+		}
+		in.Actions = names
 	}
 
 	if v, ok := m["timeout"]; ok {
@@ -1066,6 +1150,30 @@ func decodeInput(m map[string]any) (any, error) {
 	}
 
 	return in, nil
+}
+
+func decodeStringSlice(v any, field string, maxItems int) ([]string, error) {
+	var names []string
+	switch arr := v.(type) {
+	case []any:
+		names = make([]string, len(arr))
+		for i, item := range arr {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s: '%s[%d]' must be a string, got %T", ProviderName, field, i, item)
+			}
+			names[i] = s
+		}
+	case []string:
+		names = make([]string, len(arr))
+		copy(names, arr)
+	default:
+		return nil, fmt.Errorf("%s: '%s' must be an array of strings", ProviderName, field)
+	}
+	if maxItems > 0 && len(names) > maxItems {
+		return nil, fmt.Errorf("%s: '%s' exceeds maximum of %d items (got %d)", ProviderName, field, maxItems, len(names))
+	}
+	return names, nil
 }
 
 // --- Dependency Extraction ---
@@ -1219,19 +1327,7 @@ func buildDescriptor() *provider.Descriptor {
 		Version:     version,
 		Description: "Executes a sub-solution and returns its results as a structured envelope",
 		Category:    "composition",
-		WhatIf: func(ctx context.Context, input any) (string, error) {
-			var src string
-			switch v := input.(type) {
-			case *Input:
-				src = v.Source
-			case map[string]any:
-				src, _ = v["source"].(string)
-			}
-			if src != "" {
-				return fmt.Sprintf("Would execute solution %q", redactSourceDisplay(ctx, src)), nil
-			}
-			return "Would execute sub-solution", nil
-		},
+		WhatIf:      describeWhatIf,
 		Capabilities: []provider.Capability{
 			provider.CapabilityFrom,
 			provider.CapabilityAction,
@@ -1247,6 +1343,11 @@ func buildDescriptor() *provider.Descriptor {
 			},
 			"resolvers": schemahelper.ArrayProp("Resolver names to execute from the child solution; when empty all resolvers run",
 				schemahelper.WithItems(schemahelper.StringProp("Resolver name")),
+			),
+			"actions": schemahelper.ArrayProp(
+				"Action names or aliases to execute from the child workflow with their transitive dependsOn dependencies and finally actions (action capability only); when empty all non-explicit actions run",
+				schemahelper.WithItems(schemahelper.StringProp("Action name or alias")),
+				schemahelper.WithMaxItems(MaxActionTargets),
 			),
 			"propagateErrors": schemahelper.BoolProp("Whether sub-solution failures cause a Go error (default: true)"),
 			"maxDepth": schemahelper.IntProp("Maximum nesting depth for recursive composition",
@@ -1307,6 +1408,18 @@ inputs:
     - database-url
     - cache-ttl
   timeout: "30s"`,
+			},
+			{
+				Name:        "Selective action execution (action capability)",
+				Description: "Execute specific target actions (plus their transitive dependencies and finally actions) from a child workflow",
+				YAML: `name: deploy-prod
+provider: solution
+inputs:
+  source: "deploy-to-k8s@2.0.0"
+  actions:
+    - deploy
+  inputs:
+    environment: "production"`,
 			},
 		},
 	}

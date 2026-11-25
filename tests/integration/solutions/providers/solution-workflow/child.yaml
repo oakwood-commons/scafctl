@@ -15,6 +15,22 @@ spec:
               key: env
               default: "dev"
 
+    unusedCheck:
+      type: string
+      description: Resolver not referenced by targeted deployWithPrep action
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: unusedMode
+              default: "ok"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: '__self != "fail"'
+              message: "unusedCheck must not run when targeting actions that do not reference it"
+
   workflow:
     actions:
       prep:
@@ -45,6 +61,18 @@ spec:
           operation: write
           path: ./optional.txt
           content: "should-not-run"
+
+      deployWithPrep:
+        description: Explicit deploy entry point with alias and dependsOn closure
+        explicit: true
+        alias: deploy
+        dependsOn: [prep]
+        provider: file
+        inputs:
+          operation: write
+          path: ./targeted-deploy.txt
+          content:
+            expr: '"deploy:" + _.env'
 
     finally:
       cleanup:

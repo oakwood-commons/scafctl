@@ -137,6 +137,17 @@ func TestDescriptor(t *testing.T) {
 	assert.NotNil(t, desc.OutputSchemas[provider.CapabilityAction])
 	assert.NotNil(t, desc.Decode)
 	assert.NotNil(t, desc.ExtractDependencies)
+	assert.GreaterOrEqual(t, len(desc.Examples), 4)
+
+	actionsSchema := desc.Schema.Properties["actions"]
+	require.NotNil(t, actionsSchema)
+	assert.Equal(t, "array", actionsSchema.Type)
+	require.NotNil(t, actionsSchema.MaxItems)
+	assert.Equal(t, MaxActionTargets, *actionsSchema.MaxItems)
+	require.NotNil(t, actionsSchema.Items)
+	assert.Equal(t, "string", actionsSchema.Items.Type)
+	assert.Nil(t, actionsSchema.Items.MinLength, "item schema must not enforce minLength ahead of Execute")
+	assert.Empty(t, actionsSchema.Items.Pattern, "item schema must not enforce pattern ahead of Execute")
 
 	// Validate descriptor passes validation
 	err := provider.ValidateDescriptor(desc)
@@ -2268,13 +2279,27 @@ func TestDecodeInput_Resolvers(t *testing.T) {
 	})
 
 	t.Run("resolvers as []string", func(t *testing.T) {
+		caller := []string{"greeting"}
 		result, err := decodeInput(map[string]any{
 			"source":    "child.yaml",
-			"resolvers": []string{"greeting"},
+			"resolvers": caller,
 		})
 		require.NoError(t, err)
 		in := result.(*Input)
 		assert.Equal(t, []string{"greeting"}, in.Resolvers)
+		caller[0] = "mutated"
+		assert.Equal(t, []string{"greeting"}, in.Resolvers)
+	})
+
+	t.Run("resolvers as empty []string preserves non-nil slice", func(t *testing.T) {
+		result, err := decodeInput(map[string]any{
+			"source":    "child.yaml",
+			"resolvers": []string{},
+		})
+		require.NoError(t, err)
+		in := result.(*Input)
+		require.NotNil(t, in.Resolvers)
+		assert.Empty(t, in.Resolvers)
 	})
 
 	t.Run("resolvers with non-string element", func(t *testing.T) {
@@ -3326,5 +3351,1043 @@ func TestExecute_ChildWorkflowActionReads_LocalAndBundled_WithAndWithoutOutputDi
 		_, err = p.Execute(provider.WithOutputDirectory(baseCtx, outDir), &Input{Source: "escape-pkg@1.0.0"})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "outside solution directory")
+	})
+}
+
+// --- Action Targets (actions input) Tests ---
+
+func TestDecodeInput_Actions(t *testing.T) {
+	maxItemsAny := make([]any, MaxActionTargets)
+	maxItemsStr := make([]string, MaxActionTargets)
+	for i := range MaxActionTargets {
+		s := fmt.Sprintf("act-%d", i)
+		maxItemsAny[i] = s
+		maxItemsStr[i] = s
+	}
+	overMaxAny := append(append([]any(nil), maxItemsAny...), "extra")
+	overMaxStr := append(append([]string(nil), maxItemsStr...), "extra")
+
+	tests := []struct {
+		name        string
+		input       map[string]any
+		wantActions []string
+		wantNonNil  bool
+		wantErr     string
+	}{
+		{
+			name:        "actions omitted leaves nil slice",
+			input:       map[string]any{"source": "child.yaml"},
+			wantActions: nil,
+			wantNonNil:  false,
+		},
+		{
+			name:        "actions as []any of strings",
+			input:       map[string]any{"source": "child.yaml", "actions": []any{"plan", "deploy"}},
+			wantActions: []string{"plan", "deploy"},
+			wantNonNil:  true,
+		},
+		{
+			name:        "actions as []string",
+			input:       map[string]any{"source": "child.yaml", "actions": []string{"deploy"}},
+			wantActions: []string{"deploy"},
+			wantNonNil:  true,
+		},
+		{
+			name:        "actions as empty []any preserves non-nil slice",
+			input:       map[string]any{"source": "child.yaml", "actions": []any{}},
+			wantActions: []string{},
+			wantNonNil:  true,
+		},
+		{
+			name:        "actions as empty []string preserves non-nil slice",
+			input:       map[string]any{"source": "child.yaml", "actions": []string{}},
+			wantActions: []string{},
+			wantNonNil:  true,
+		},
+		{
+			name:        "actions as typed nil []string still marks actions key present",
+			input:       map[string]any{"source": "child.yaml", "actions": ([]string)(nil)},
+			wantActions: []string{},
+			wantNonNil:  true,
+		},
+		{
+			name:        "actions at MaxActionTargets succeeds",
+			input:       map[string]any{"source": "child.yaml", "actions": maxItemsAny},
+			wantActions: maxItemsStr,
+			wantNonNil:  true,
+		},
+		{
+			name:    "actions []any exceeding MaxActionTargets fails",
+			input:   map[string]any{"source": "child.yaml", "actions": overMaxAny},
+			wantErr: fmt.Sprintf("'actions' exceeds maximum of %d items", MaxActionTargets),
+		},
+		{
+			name:    "actions []string exceeding MaxActionTargets fails",
+			input:   map[string]any{"source": "child.yaml", "actions": overMaxStr},
+			wantErr: fmt.Sprintf("'actions' exceeds maximum of %d items", MaxActionTargets),
+		},
+		{
+			name:    "actions with non-string element fails",
+			input:   map[string]any{"source": "child.yaml", "actions": []any{"plan", 99}},
+			wantErr: "actions[1]",
+		},
+		{
+			name:    "actions with non-array type fails",
+			input:   map[string]any{"source": "child.yaml", "actions": "deploy"},
+			wantErr: "array of strings",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotAny, err := decodeInput(tt.input)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			got := gotAny.(*Input)
+			if tt.wantNonNil {
+				require.NotNil(t, got.Actions)
+			} else {
+				assert.Nil(t, got.Actions)
+			}
+			assert.Equal(t, tt.wantActions, got.Actions)
+		})
+	}
+
+	t.Run("defensively copies []string input", func(t *testing.T) {
+		callerSlice := []string{"deploy"}
+		gotAny, err := decodeInput(map[string]any{
+			"source":  "child.yaml",
+			"actions": callerSlice,
+		})
+		require.NoError(t, err)
+		callerSlice[0] = "mutated"
+		assert.Equal(t, []string{"deploy"}, gotAny.(*Input).Actions)
+	})
+}
+
+func TestBuildDescriptor_WhatIf_Actions(t *testing.T) {
+	desc := New().Descriptor()
+	require.NotNil(t, desc.WhatIf)
+
+	tracker := redact.NewTracker()
+	tracker.Track("secret-token-val")
+	trackedCtx := redact.WithTracker(context.Background(), tracker)
+
+	tests := []struct {
+		name  string
+		ctx   context.Context
+		input any
+		want  string
+	}{
+		{
+			name:  "struct input with single action",
+			ctx:   context.Background(),
+			input: &Input{Source: "deploy-app@2.0.0", Actions: []string{"deploy"}},
+			want:  `Would execute solution "deploy-app@2.0.0" (actions: deploy)`,
+		},
+		{
+			name:  "struct input with multiple actions",
+			ctx:   context.Background(),
+			input: &Input{Source: "deploy-app@2.0.0", Actions: []string{"plan", "deploy"}},
+			want:  `Would execute solution "deploy-app@2.0.0" (actions: plan, deploy)`,
+		},
+		{
+			name:  "struct input with empty actions omits suffix",
+			ctx:   context.Background(),
+			input: &Input{Source: "deploy-app@2.0.0", Actions: []string{}},
+			want:  `Would execute solution "deploy-app@2.0.0"`,
+		},
+		{
+			name:  "nil struct pointer falls back cleanly",
+			ctx:   context.Background(),
+			input: (*Input)(nil),
+			want:  "Would execute sub-solution",
+		},
+		{
+			name:  "map input with []any actions",
+			ctx:   context.Background(),
+			input: map[string]any{"source": "./child.yaml", "actions": []any{"build", "test"}},
+			want:  `Would execute solution "./child.yaml" (actions: build, test)`,
+		},
+		{
+			name:  "map input with []string actions",
+			ctx:   context.Background(),
+			input: map[string]any{"source": "./child.yaml", "actions": []string{"lint"}},
+			want:  `Would execute solution "./child.yaml" (actions: lint)`,
+		},
+		{
+			name:  "missing source with actions",
+			ctx:   context.Background(),
+			input: &Input{Actions: []string{"deploy"}},
+			want:  "Would execute sub-solution (actions: deploy)",
+		},
+		{
+			name:  "redacts tracked secret in actions",
+			ctx:   trackedCtx,
+			input: &Input{Source: "child.yaml", Actions: []string{"deploy-secret-token-val"}},
+			want:  `Would execute solution "child.yaml" (actions: deploy-` + redact.RedactedPlaceholder + `)`,
+		},
+		{
+			name:  "whole-property masked actions string from RedactGraphInputs",
+			ctx:   context.Background(),
+			input: map[string]any{"source": "child.yaml", "actions": redact.RedactedPlaceholder},
+			want:  fmt.Sprintf(`Would execute solution "child.yaml" (actions: %s)`, redact.RedactedPlaceholder),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := desc.WhatIf(tt.ctx, tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestExecute_ActionTargets_SelectionAndClosure(t *testing.T) {
+	lit := func(v string) *spec.ValueRef { return &spec.ValueRef{Literal: v} }
+
+	tests := []struct {
+		name         string
+		actions      []string
+		wantExecuted []string
+	}{
+		{
+			name:         "subset target runs transitive dependsOn closure and finally",
+			actions:      []string{"test"},
+			wantExecuted: []string{"setup", "build", "test", "cleanup"},
+		},
+		{
+			name:         "explicit action target runs with its dependsOn closure and finally",
+			actions:      []string{"destroy"},
+			wantExecuted: []string{"setup", "destroy", "cleanup"},
+		},
+		{
+			name:         "alias target resolves to canonical action plus closure and finally",
+			actions:      []string{"d"},
+			wantExecuted: []string{"setup", "build", "deploy", "cleanup"},
+		},
+		{
+			name:         "empty actions slice runs all non-explicit actions and finally",
+			actions:      []string{},
+			wantExecuted: []string{"setup", "build", "test", "lint", "cleanup"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var executed []string
+
+			reg := provider.NewRegistry()
+			require.NoError(t, reg.Register(&callbackProvider{
+				name: "recorder",
+				fn: func(_ context.Context, input any) (*provider.Output, error) {
+					m, _ := input.(map[string]any)
+					step, _ := m["step"].(string)
+					mu.Lock()
+					executed = append(executed, step)
+					mu.Unlock()
+					return &provider.Output{Data: map[string]any{"success": true}}, nil
+				},
+			}))
+
+			child := &solution.Solution{
+				Metadata: solution.Metadata{Name: "multi-entry-child"},
+				Spec: solution.Spec{
+					Workflow: &action.Workflow{
+						Actions: map[string]*action.Action{
+							"setup": {
+								Provider: "recorder",
+								Explicit: true,
+								Inputs:   map[string]*spec.ValueRef{"step": lit("setup")},
+							},
+							"build": {
+								Provider:  "recorder",
+								DependsOn: []string{"setup"},
+								Inputs:    map[string]*spec.ValueRef{"step": lit("build")},
+							},
+							"test": {
+								Provider:  "recorder",
+								DependsOn: []string{"build"},
+								Inputs:    map[string]*spec.ValueRef{"step": lit("test")},
+							},
+							"lint": {
+								Provider: "recorder",
+								Inputs:   map[string]*spec.ValueRef{"step": lit("lint")},
+							},
+							"deploy": {
+								Provider:  "recorder",
+								Explicit:  true,
+								Alias:     "d",
+								DependsOn: []string{"build"},
+								Inputs:    map[string]*spec.ValueRef{"step": lit("deploy")},
+							},
+							"destroy": {
+								Provider:  "recorder",
+								Explicit:  true,
+								DependsOn: []string{"setup"},
+								Inputs:    map[string]*spec.ValueRef{"step": lit("destroy")},
+							},
+						},
+						Finally: map[string]*action.Action{
+							"cleanup": {
+								Provider: "recorder",
+								Inputs:   map[string]*spec.ValueRef{"step": lit("cleanup")},
+							},
+						},
+					},
+				},
+			}
+
+			p := New(
+				WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"child": child}}),
+				WithRegistry(reg),
+			)
+
+			ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+			out, err := p.Execute(ctx, &Input{
+				Source:  "child",
+				Actions: tt.actions,
+			})
+			require.NoError(t, err)
+			data := out.Data.(map[string]any)
+			assert.Equal(t, "success", data["status"])
+			assert.Equal(t, true, data["success"])
+			assert.ElementsMatch(t, tt.wantExecuted, executed)
+			// Verify cleanup ran last.
+			require.NotEmpty(t, executed)
+			assert.Equal(t, "cleanup", executed[len(executed)-1])
+		})
+	}
+}
+
+func TestExecute_ActionTargets_ChildResolverScoping(t *testing.T) {
+	planRef := "planEnv"
+	finallyRef := "auditTag"
+	destroyRef := "destroyCred"
+
+	buildChild := func(planRefsResolver bool) *solution.Solution {
+		planInputs := map[string]*spec.ValueRef{"step": {Literal: "plan"}}
+		if planRefsResolver {
+			planInputs["env"] = &spec.ValueRef{Resolver: &planRef}
+		}
+		finallyInputs := map[string]*spec.ValueRef{"step": {Literal: "cleanup"}}
+		if planRefsResolver {
+			finallyInputs["tag"] = &spec.ValueRef{Resolver: &finallyRef}
+		}
+		return &solution.Solution{
+			Metadata: solution.Metadata{Name: "scoped-resolvers-child"},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"baseEnv": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "env-prov"}},
+						},
+					},
+					"planEnv": {
+						DependsOn: []string{"baseEnv"},
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "env-prov",
+								Inputs:   map[string]*spec.ValueRef{"dep": {Resolver: &[]string{"baseEnv"}[0]}},
+							}},
+						},
+					},
+					"auditTag": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "tag-prov"}},
+						},
+					},
+					"extraStatic": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "extra-prov"}},
+						},
+					},
+					"destroyCred": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "failing-cred-prov"}},
+						},
+					},
+				},
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"plan": {
+							Provider: "act-noop",
+							Inputs:   planInputs,
+						},
+						"destroy": {
+							Provider: "act-noop",
+							Explicit: true,
+							Inputs: map[string]*spec.ValueRef{
+								"cred": {Resolver: &destroyRef},
+							},
+						},
+					},
+					Finally: map[string]*action.Action{
+						"cleanup": {
+							Provider: "act-noop",
+							Inputs:   finallyInputs,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name             string
+		planRefsResolver bool
+		actions          []string
+		resolvers        []string
+		wantResolvers    []string
+	}{
+		{
+			name:             "scopes resolvers to targeted action transitive deps and finally, skipping failing unselected resolver",
+			planRefsResolver: true,
+			actions:          []string{"plan"},
+			wantResolvers:    []string{"baseEnv", "planEnv", "auditTag"},
+		},
+		{
+			name:             "executes zero resolvers when targeted action and finally reference none",
+			planRefsResolver: false,
+			actions:          []string{"plan"},
+			wantResolvers:    []string{},
+		},
+		{
+			name:             "explicit resolvers input overrides automatic action resolver scoping",
+			planRefsResolver: false,
+			actions:          []string{"plan"},
+			resolvers:        []string{"extraStatic"},
+			wantResolvers:    []string{"extraStatic"},
+		},
+		{
+			name:             "explicit empty resolvers slice overrides automatic scoping and runs all child resolvers",
+			planRefsResolver: false,
+			actions:          []string{"plan"},
+			resolvers:        []string{},
+			wantResolvers:    []string{"baseEnv", "planEnv", "auditTag", "extraStatic", "destroyCred"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var failingResolverCalled atomic.Bool
+			reg := provider.NewRegistry()
+			require.NoError(t, reg.Register(&mockProvider{name: "env-prov", output: &provider.Output{Data: "staging"}}))
+			require.NoError(t, reg.Register(&mockProvider{name: "tag-prov", output: &provider.Output{Data: "audit-1"}}))
+			require.NoError(t, reg.Register(&mockProvider{name: "extra-prov", output: &provider.Output{Data: "extra-val"}}))
+			require.NoError(t, reg.Register(&mockProvider{name: "act-noop", output: &provider.Output{Data: map[string]any{"success": true}}}))
+			require.NoError(t, reg.Register(&callbackProvider{
+				name: "failing-cred-prov",
+				fn: func(_ context.Context, _ any) (*provider.Output, error) {
+					failingResolverCalled.Store(true)
+					if tt.resolvers != nil && len(tt.resolvers) == 0 {
+						return &provider.Output{Data: "all-resolvers-ran"}, nil
+					}
+					return nil, errors.New("missing destroy credentials")
+				},
+			}))
+
+			p := New(
+				WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"child": buildChild(tt.planRefsResolver)}}),
+				WithRegistry(reg),
+			)
+
+			ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+			out, err := p.Execute(ctx, &Input{
+				Source:    "child",
+				Actions:   tt.actions,
+				Resolvers: tt.resolvers,
+			})
+			require.NoError(t, err)
+			if tt.resolvers != nil && len(tt.resolvers) == 0 {
+				assert.True(t, failingResolverCalled.Load(), "explicit empty resolvers slice must execute all child resolvers")
+			} else {
+				assert.False(t, failingResolverCalled.Load(), "unselected action's failing resolver must not execute")
+			}
+
+			data := out.Data.(map[string]any)
+			assert.Equal(t, "success", data["status"])
+			assert.Equal(t, true, data["success"])
+
+			gotResolversMap := data["resolvers"].(map[string]any)
+			gotNames := make([]string, 0, len(gotResolversMap))
+			for k := range gotResolversMap {
+				gotNames = append(gotNames, k)
+			}
+			assert.ElementsMatch(t, tt.wantResolvers, gotNames)
+		})
+	}
+
+	t.Run("decoded empty resolvers []any with actions runs all child resolvers", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(&mockProvider{name: "env-prov", output: &provider.Output{Data: "staging"}}))
+		require.NoError(t, reg.Register(&mockProvider{name: "tag-prov", output: &provider.Output{Data: "audit-1"}}))
+		require.NoError(t, reg.Register(&mockProvider{name: "extra-prov", output: &provider.Output{Data: "extra-val"}}))
+		require.NoError(t, reg.Register(&mockProvider{name: "failing-cred-prov", output: &provider.Output{Data: "cred-ok"}}))
+		require.NoError(t, reg.Register(&mockProvider{name: "act-noop", output: &provider.Output{Data: map[string]any{"success": true}}}))
+
+		p := New(
+			WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"child": buildChild(false)}}),
+			WithRegistry(reg),
+		)
+		ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+		out, err := p.Execute(ctx, map[string]any{
+			"source":    "child",
+			"actions":   []any{"plan"},
+			"resolvers": []any{},
+		})
+		require.NoError(t, err)
+		gotResolversMap := out.Data.(map[string]any)["resolvers"].(map[string]any)
+		assert.Len(t, gotResolversMap, 5)
+	})
+}
+
+func TestExecute_ActionTargets_ErrorsAndCapabilityGuard(t *testing.T) {
+	t.Run("capability guard rejects actions outside action capability before loading child", func(t *testing.T) {
+		overMax := make([]string, MaxActionTargets+1)
+		for i := range overMax {
+			overMax[i] = fmt.Sprintf("a-%d", i)
+		}
+
+		cases := []struct {
+			name        string
+			setMode     bool
+			mode        provider.Capability
+			input       *Input
+			wantErrPart string
+		}{
+			{
+				name:        "nil Input pointer",
+				setMode:     true,
+				mode:        provider.CapabilityAction,
+				input:       nil,
+				wantErrPart: "input cannot be nil",
+			},
+			{
+				name:        "Execute enforces MaxActionTargets on direct *Input",
+				setMode:     true,
+				mode:        provider.CapabilityAction,
+				input:       &Input{Source: "child", Actions: overMax},
+				wantErrPart: fmt.Sprintf("'actions' exceeds maximum of %d items", MaxActionTargets),
+			},
+			{
+				name:        "CapabilityFrom with non-empty actions and propagateErrors true",
+				setMode:     true,
+				mode:        provider.CapabilityFrom,
+				input:       &Input{Source: "child", Actions: []string{"deploy"}, PropagateErrors: boolPtr(true)},
+				wantErrPart: `'actions' input is only supported in "action" capability`,
+			},
+			{
+				name:        "CapabilityFrom with non-empty actions and propagateErrors false still returns hard error",
+				setMode:     true,
+				mode:        provider.CapabilityFrom,
+				input:       &Input{Source: "child", Actions: []string{"deploy"}, PropagateErrors: boolPtr(false)},
+				wantErrPart: `'actions' input is only supported in "action" capability`,
+			},
+			{
+				name:        "CapabilityFrom with empty non-nil actions slice and propagateErrors false still returns hard error",
+				setMode:     true,
+				mode:        provider.CapabilityFrom,
+				input:       &Input{Source: "child", Actions: []string{}, PropagateErrors: boolPtr(false)},
+				wantErrPart: `'actions' input is only supported in "action" capability`,
+			},
+			{
+				name:        "unset execution mode with actions returns hard error",
+				setMode:     false,
+				input:       &Input{Source: "child", Actions: []string{"deploy"}, PropagateErrors: boolPtr(false)},
+				wantErrPart: `'actions' input is only supported in "action" capability`,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				var loaderCalled atomic.Bool
+				loader := &mockBundleLoader{
+					err: errors.New("loader should not be called"),
+				}
+				p := New(WithLoader(loader), WithRegistry(provider.NewRegistry()))
+
+				ctx := testContext()
+				if tc.setMode {
+					ctx = provider.WithExecutionMode(ctx, tc.mode)
+				}
+				_, err := p.Execute(ctx, tc.input)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErrPart)
+				assert.Empty(t, loader.gotPaths, "loader must not be invoked when capability/input guard rejects request")
+				assert.False(t, loaderCalled.Load())
+			})
+		}
+	})
+
+	t.Run("unknown target and workflow-less child validate before child resolvers and honor propagateErrors and dry-run", func(t *testing.T) {
+		var childResolverCalled atomic.Bool
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "must-not-run",
+			fn: func(_ context.Context, _ any) (*provider.Output, error) {
+				childResolverCalled.Store(true)
+				return nil, errors.New("child resolver should not have run")
+			},
+		}))
+		require.NoError(t, reg.Register(&mockProvider{
+			name:   "noop",
+			output: &provider.Output{Data: map[string]any{"success": true}},
+		}))
+
+		withWorkflow := &solution.Solution{
+			Metadata: solution.Metadata{Name: "wf-child"},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "must-not-run"}}}},
+				},
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"build":  {Provider: "noop"},
+						"deploy": {Provider: "noop", Explicit: true},
+					},
+				},
+			},
+		}
+		noWorkflow := &solution.Solution{
+			Metadata: solution.Metadata{Name: "resolver-only-child"},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "must-not-run"}}}},
+				},
+			},
+		}
+
+		p := New(
+			WithLoader(&mockLoader{solutions: map[string]*solution.Solution{
+				"wf-child": withWorkflow,
+				"no-wf":    noWorkflow,
+			}}),
+			WithRegistry(reg),
+		)
+
+		cases := []struct {
+			name            string
+			dryRun          bool
+			source          string
+			actions         []string
+			propagate       bool
+			wantDryRunOK    bool
+			wantErrContains string
+		}{
+			{
+				name:            "unknown action propagateErrors true",
+				source:          "wf-child",
+				actions:         []string{"nonexistent"},
+				propagate:       true,
+				wantErrContains: `action "nonexistent" not found in workflow`,
+			},
+			{
+				name:            "unknown action propagateErrors false",
+				source:          "wf-child",
+				actions:         []string{"nonexistent"},
+				propagate:       false,
+				wantErrContains: `action "nonexistent" not found in workflow`,
+			},
+			{
+				name:            "workflow-less child propagateErrors true",
+				source:          "no-wf",
+				actions:         []string{"deploy"},
+				propagate:       true,
+				wantErrContains: `solution "resolver-only-child" has no workflow defined`,
+			},
+			{
+				name:            "workflow-less child propagateErrors false",
+				source:          "no-wf",
+				actions:         []string{"deploy"},
+				propagate:       false,
+				wantErrContains: `solution "resolver-only-child" has no workflow defined`,
+			},
+			{
+				name:         "dry-run valid explicit target succeeds",
+				dryRun:       true,
+				source:       "wf-child",
+				actions:      []string{"deploy"},
+				propagate:    true,
+				wantDryRunOK: true,
+			},
+			{
+				name:            "dry-run unknown action propagateErrors true",
+				dryRun:          true,
+				source:          "wf-child",
+				actions:         []string{"nonexistent"},
+				propagate:       true,
+				wantErrContains: `action "nonexistent" not found in workflow`,
+			},
+			{
+				name:            "dry-run unknown action propagateErrors false",
+				dryRun:          true,
+				source:          "wf-child",
+				actions:         []string{"nonexistent"},
+				propagate:       false,
+				wantErrContains: `action "nonexistent" not found in workflow`,
+			},
+			{
+				name:            "dry-run workflow-less child propagateErrors true",
+				dryRun:          true,
+				source:          "no-wf",
+				actions:         []string{"deploy"},
+				propagate:       true,
+				wantErrContains: `solution "resolver-only-child" has no workflow defined`,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				childResolverCalled.Store(false)
+				ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+				if tc.dryRun {
+					ctx = provider.WithDryRun(ctx, true)
+				}
+
+				out, err := p.Execute(ctx, &Input{
+					Source:          tc.source,
+					Actions:         tc.actions,
+					PropagateErrors: boolPtr(tc.propagate),
+				})
+				assert.False(t, childResolverCalled.Load(), "child resolvers must not execute when target validation fails or in dry-run")
+
+				if tc.wantDryRunOK {
+					require.NoError(t, err)
+					data := out.Data.(map[string]any)
+					assert.Equal(t, true, data["dryRun"])
+					assert.Equal(t, "success", data["status"])
+					assert.Equal(t, true, data["success"])
+					return
+				}
+
+				if tc.propagate {
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), tc.wantErrContains)
+					return
+				}
+
+				require.NoError(t, err)
+				require.NotNil(t, out)
+				require.NotEmpty(t, out.Warnings)
+				data := out.Data.(map[string]any)
+				assert.Equal(t, "failed", data["status"])
+				assert.Equal(t, false, data["success"])
+				errs := data["errors"].([]map[string]any)
+				require.Len(t, errs, 1)
+				assert.Equal(t, "_workflow", errs[0]["resolver"])
+				assert.Contains(t, errs[0]["message"], tc.wantErrContains)
+			})
+		}
+	})
+
+	t.Run("mixed literal and sensitive actions via action.Executor does not poison tracker with non-secret literal", func(t *testing.T) {
+		const (
+			literalTarget   = "deploy"
+			sensitiveTarget = "secret-target-step"
+		)
+
+		reg := provider.NewRegistry()
+		solProv := New(WithRegistry(reg))
+		require.NoError(t, reg.Register(solProv))
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "echo-step",
+			fn: func(_ context.Context, input any) (*provider.Output, error) {
+				m, _ := input.(map[string]any)
+				return &provider.Output{Data: map[string]any{"success": true, "echo": m["msg"]}}, nil
+			},
+		}))
+
+		child := &solution.Solution{
+			Metadata: solution.Metadata{Name: "mixed-actions-child"},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"statusMsg": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "echo-step",
+								Inputs:   map[string]*spec.ValueRef{"msg": {Literal: "deploy completed for " + sensitiveTarget}},
+							}},
+						},
+					},
+				},
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						literalTarget: {
+							Provider: "echo-step",
+							Explicit: true,
+							Inputs:   map[string]*spec.ValueRef{"msg": {Literal: "deploy"}},
+						},
+						sensitiveTarget: {
+							Provider: "echo-step",
+							Explicit: true,
+							Inputs:   map[string]*spec.ValueRef{"msg": {Literal: sensitiveTarget}},
+						},
+					},
+				},
+			},
+		}
+		solProv.Configure(WithLoader(&mockLoader{
+			solutions: map[string]*solution.Solution{"mixed@1.0.0": child},
+		}))
+
+		tracker := redact.NewTracker()
+		tracker.Track(sensitiveTarget)
+		ctx := redact.WithTracker(testContext(), tracker)
+
+		rec := &progressLog{}
+		parentExec := action.NewExecutor(
+			action.WithRegistry(reg),
+			action.WithResolverData(map[string]any{"sensitiveTarget": sensitiveTarget}),
+			action.WithSensitiveResolvers(map[string]bool{"sensitiveTarget": true}),
+			action.WithProgressCallback(rec),
+		)
+
+		res, err := parentExec.Execute(ctx, &action.Workflow{
+			Actions: map[string]*action.Action{
+				"run-mixed": {
+					Provider: ProviderName,
+					Inputs: map[string]*spec.ValueRef{
+						"source": {Literal: "mixed@1.0.0"},
+						"actions": {Literal: []any{
+							literalTarget,
+							map[string]any{"rslvr": "sensitiveTarget"},
+						}},
+						"resolvers": {Literal: []any{"statusMsg"}},
+					},
+				},
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, action.ExecutionSucceeded, res.FinalStatus)
+
+		// Tracker must NOT redact "deploy" while still redacting sensitiveTarget.
+		assert.Equal(t, "deploy completed for "+redact.RedactedPlaceholder, tracker.RedactString("deploy completed for "+sensitiveTarget))
+		assert.Contains(t, rec.events, "start:[solution:mixed@1.0.0] deploy")
+	})
+
+	t.Run("live target validation scrubs short secret source on workflow-less child and skips bundle extraction", func(t *testing.T) {
+		const shortSource = "s9"
+		noWfChild := &solution.Solution{
+			Metadata: solution.Metadata{Name: shortSource},
+			Spec:     solution.Spec{},
+		}
+
+		p := New(
+			WithLoader(&mockBundleLoader{
+				solutions: map[string]*solution.Solution{shortSource: noWfChild},
+				// Deliberately invalid tar bytes: if Execute extracted the bundle before
+				// target validation, this would fail with an extraction error instead.
+				bundles: map[string][]byte{shortSource: []byte("corrupt-tar-must-not-extract")},
+			}),
+			WithRegistry(provider.NewRegistry()),
+		)
+
+		ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+		ctx = provider.WithSecretProperties(ctx, map[string]bool{"source": true})
+
+		_, err := p.Execute(ctx, &Input{
+			Source:          shortSource,
+			Actions:         []string{"deploy"},
+			PropagateErrors: boolPtr(true),
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "has no workflow defined")
+		assert.NotContains(t, err.Error(), shortSource)
+		assert.Contains(t, err.Error(), redact.RedactedPlaceholder)
+
+		out, err := p.Execute(ctx, &Input{
+			Source:          shortSource,
+			Actions:         []string{"deploy"},
+			PropagateErrors: boolPtr(false),
+		})
+		require.NoError(t, err)
+		data := out.Data.(map[string]any)
+		assert.Equal(t, "failed", data["status"])
+		errs := data["errors"].([]map[string]any)
+		require.Len(t, errs, 1)
+		assert.Equal(t, "_workflow", errs[0]["resolver"])
+		assert.Contains(t, errs[0]["message"], "has no workflow defined")
+		assert.NotContains(t, errs[0]["message"], shortSource)
+		assert.Contains(t, errs[0]["message"], redact.RedactedPlaceholder)
+		require.NotEmpty(t, out.Warnings)
+		assert.NotContains(t, out.Warnings[0], shortSource)
+	})
+}
+
+func TestExecute_ActionTargets_ConcurrentSharedSolutionAndCustomBinary(t *testing.T) {
+	t.Run("concurrent different action targets on shared Solution are race-free", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		solProv := New(WithRegistry(reg))
+		require.NoError(t, reg.Register(solProv))
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "noop-step",
+			fn: func(_ context.Context, _ any) (*provider.Output, error) {
+				return &provider.Output{Data: map[string]any{"success": true}}, nil
+			},
+		}))
+
+		rRef := "cfg"
+		sharedChild := &solution.Solution{
+			Metadata: solution.Metadata{Name: "shared-targeted-child"},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"cfg": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "noop-step"}},
+						},
+					},
+					"other": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "noop-step"}},
+						},
+					},
+				},
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"prep":   {Provider: "noop-step", Explicit: true},
+						"build":  {Provider: "noop-step", DependsOn: []string{"prep"}, Inputs: map[string]*spec.ValueRef{"c": {Resolver: &rRef}}},
+						"deploy": {Provider: "noop-step", Explicit: true, Alias: "d", DependsOn: []string{"build"}},
+					},
+					Finally: map[string]*action.Action{
+						"cleanup": {Provider: "noop-step"},
+					},
+				},
+			},
+		}
+		solProv.Configure(WithLoader(&mockLoader{
+			solutions: map[string]*solution.Solution{"shared@1.0.0": sharedChild},
+		}))
+
+		targetSets := [][]any{
+			{"prep"},
+			{"build"},
+			{"d"},
+			{},
+		}
+		parentActions := make(map[string]*action.Action, 8)
+		for i := range 8 {
+			inputs := map[string]*spec.ValueRef{
+				"source": {Literal: "shared@1.0.0"},
+			}
+			if targets := targetSets[i%len(targetSets)]; len(targets) > 0 {
+				inputs["actions"] = &spec.ValueRef{Literal: targets}
+			}
+			parentActions[fmt.Sprintf("caller-%d", i)] = &action.Action{
+				Provider: ProviderName,
+				Inputs:   inputs,
+			}
+		}
+
+		parentExec := action.NewExecutor(
+			action.WithRegistry(reg),
+			action.WithProgressCallback(action.NoOpProgressCallback{}),
+		)
+		res, err := parentExec.Execute(testContext(), &action.Workflow{Actions: parentActions})
+		require.NoError(t, err)
+		assert.Equal(t, action.ExecutionSucceeded, res.FinalStatus)
+	})
+
+	t.Run("custom embedder binary name mycli with bundled targeted action execution", func(t *testing.T) {
+		bundleData := buildTestBundleTar(t, map[string]string{
+			"templates/deploy.tmpl": "mycli-targeted-payload",
+		})
+		parentWorkDir := t.TempDir()
+		var observedBundleDir string
+
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "dir-spy",
+			fn: func(ctx context.Context, _ any) (*provider.Output, error) {
+				observedBundleDir, _ = provider.SolutionDirectoryFromContext(ctx)
+				return &provider.Output{Data: "spied"}, nil
+			},
+		}))
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "fail-if-called",
+			fn: func(_ context.Context, _ any) (*provider.Output, error) {
+				return nil, errors.New("unselected resolver or action should not execute")
+			},
+		}))
+
+		spyRef := "spy"
+		contentExpr := celexp.Expression("_.tmpl.content")
+		childSol := &solution.Solution{
+			Metadata: solution.Metadata{Name: "mycli-bundled-child"},
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"spy": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "dir-spy"}},
+						},
+					},
+					"tmpl": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "file",
+								Inputs: map[string]*spec.ValueRef{
+									"operation": {Literal: "read"},
+									"path":      {Literal: "templates/deploy.tmpl"},
+								},
+							}},
+						},
+					},
+					"unused_bad": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "fail-if-called"}},
+						},
+					},
+				},
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"unselected_default": {Provider: "fail-if-called"},
+						"deploy": {
+							Provider: "file",
+							Explicit: true,
+							Alias:    "ship",
+							Inputs: map[string]*spec.ValueRef{
+								"operation": {Literal: "write"},
+								"path":      {Literal: "deployed.txt"},
+								"content":   {Expr: &contentExpr},
+								"meta":      {Resolver: &spyRef},
+							},
+						},
+					},
+				},
+			},
+		}
+		childSol.SetPath("catalog:deploy-pkg@1.0.0")
+
+		p := New(
+			WithLoader(&mockBundleLoader{
+				solutions: map[string]*solution.Solution{"deploy-pkg@1.0.0": childSol},
+				bundles:   map[string][]byte{"deploy-pkg@1.0.0": bundleData},
+			}),
+			WithRegistry(reg),
+		)
+
+		ctx := settings.IntoContext(testContext(), &settings.Run{BinaryName: "mycli"})
+		ctx = provider.WithWorkingDirectory(ctx, parentWorkDir)
+		ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+		out, err := p.Execute(ctx, &Input{
+			Source:  "deploy-pkg@1.0.0",
+			Actions: []string{"ship"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "success", out.Data.(map[string]any)["status"])
+		assert.Contains(t, filepath.Base(observedBundleDir), "mycli-bundle-")
+		assert.NoDirExists(t, observedBundleDir)
+
+		written, err := os.ReadFile(filepath.Join(parentWorkDir, "deployed.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "mycli-targeted-payload", string(written))
 	})
 }
