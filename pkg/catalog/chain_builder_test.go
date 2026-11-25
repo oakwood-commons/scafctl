@@ -446,6 +446,113 @@ func TestBuildPluginFetcher_WithoutLocalBuilds(t *testing.T) {
 	require.ErrorContains(t, err, "not configured")
 }
 
+func TestBuildPluginFetcher_WithoutRemoteCache(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	f, err := BuildPluginFetcher(pluginFetcherTestConfig(), nil, logr.Discard(), WithoutRemoteCache())
+	require.NoError(t, err)
+
+	cats := f.Catalogs()
+	require.Equal(t, []string{LocalCatalogName, "embedder", config.CatalogNameOfficial}, catalogNames(cats))
+	assert.IsType(t, &LocalCatalog{}, cats[0], "local catalog remains active for source.built and local short-name probes")
+	for _, c := range cats[1:] {
+		assert.IsType(t, &RemoteCatalog{}, c, "remotes must be queried directly without CachedRemoteCatalog wrapping")
+	}
+}
+
+func TestBuildCatalogChain_WithoutRemoteCache_ExcludesPulledLocalCopies(t *testing.T) {
+	t.Parallel()
+
+	localDir := t.TempDir()
+	localCat, err := NewLocalCatalogAt(localDir, logr.Discard())
+	require.NoError(t, err)
+
+	// Store BOTH a locally built copy AND a remote-pulled copy of the exact same
+	// artifact name@version with identical content (same manifest digest) to verify
+	// builtOnlyLocalCatalog scopes Fetch/FetchWithBundle/FetchWithLayer to Built: true.
+	sharedRef, err := ParseReference(ArtifactKindSolution, "shared-sol@1.0.0")
+	require.NoError(t, err)
+	_, err = localCat.Store(t.Context(), sharedRef, []byte("identical-bytes"), nil, map[string]string{
+		AnnotationArtifactType: ArtifactKindSolution.String(),
+		AnnotationArtifactName: "shared-sol",
+		AnnotationVersion:      "1.0.0",
+		AnnotationOrigin:       "built",
+	}, false)
+	require.NoError(t, err)
+
+	pulledSameRef := sharedRef
+	pulledSameRef.Remote = "registry.example.com/solutions"
+	_, err = localCat.Store(t.Context(), pulledSameRef, []byte("identical-bytes"), nil, map[string]string{
+		AnnotationArtifactType:    ArtifactKindSolution.String(),
+		AnnotationArtifactName:    "shared-sol",
+		AnnotationVersion:         "1.0.0",
+		AnnotationOrigin:          "pulled from remote",
+		AnnotationSourceCanonical: "registry.example.com/solutions",
+	}, false)
+	require.NoError(t, err)
+
+	pulledOnlyRef, err := ParseReference(ArtifactKindSolution, "pulled-sol@1.0.0")
+	require.NoError(t, err)
+	pulledOnlyRef.Remote = "registry.example.com/solutions"
+	_, err = localCat.Store(t.Context(), pulledOnlyRef, []byte("cached-pull"), nil, map[string]string{
+		AnnotationArtifactType:    ArtifactKindSolution.String(),
+		AnnotationArtifactName:    "pulled-sol",
+		AnnotationVersion:         "1.0.0",
+		AnnotationOrigin:          "pulled from remote",
+		AnnotationSourceCanonical: "registry.example.com/solutions",
+	}, false)
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true},
+	}
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard(), WithLocalCatalog(localCat), WithoutRemoteCache())
+	require.NoError(t, err)
+
+	// Locally built solution remains resolvable and fetchable without AmbiguousArtifactError.
+	gotContent, gotInfo, err := chain.Fetch(t.Context(), sharedRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("identical-bytes"), gotContent)
+	assert.True(t, gotInfo.Reference.Built)
+
+	gotContent, gotBundle, gotInfo, err := chain.FetchWithBundle(t.Context(), sharedRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("identical-bytes"), gotContent)
+	assert.Empty(t, gotBundle)
+	assert.True(t, gotInfo.Reference.Built)
+
+	// Remote-pulled copy cached in localCat is invisible so live remotes are never shadowed.
+	_, _, err = chain.Fetch(t.Context(), Reference{Kind: ArtifactKindSolution, Name: "pulled-sol", Version: pulledOnlyRef.Version})
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+
+	listed, err := chain.List(t.Context(), ArtifactKindSolution, "")
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.Equal(t, "shared-sol", listed[0].Reference.Name)
+
+	// Exercise remaining builtOnlyLocalCatalog methods directly.
+	builtOnly := newBuiltOnlyLocalCatalog(localCat)
+	assert.Equal(t, LocalCatalogName, builtOnly.Name())
+	assert.Equal(t, localDir, builtOnly.Path())
+
+	exists, err := builtOnly.Exists(t.Context(), sharedRef)
+	require.NoError(t, err)
+	assert.True(t, exists)
+	existsPulled, err := builtOnly.Exists(t.Context(), Reference{Kind: ArtifactKindSolution, Name: "pulled-sol", Version: pulledOnlyRef.Version})
+	require.NoError(t, err)
+	assert.False(t, existsPulled)
+
+	extraRef, err := ParseReference(ArtifactKindSolution, "extra-sol@1.0.0")
+	require.NoError(t, err)
+	_, err = builtOnly.Store(t.Context(), extraRef, []byte("extra"), nil, nil, false)
+	require.NoError(t, err)
+	gotExtra, layers, _, err := builtOnly.FetchWithLayer(t.Context(), extraRef)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("extra"), gotExtra)
+	assert.Empty(t, layers)
+	require.NoError(t, builtOnly.Delete(t.Context(), extraRef))
+}
+
 func TestBuildPluginFetcher_NoSources(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
@@ -791,4 +898,21 @@ func TestBuildCatalogChain_ArtifactKindsUnwrapsCleanly(t *testing.T) {
 	offCats, offExcl := SelectPluginRemoteCatalogs(&disabledOfficialCfg, config.CatalogNameOfficial, nil, logr.Discard())
 	assert.Nil(t, offCats)
 	assert.False(t, offExcl)
+
+	// builtOnlyLocalCatalog rejects remote-qualified refs and delegates PlatformAwareCatalog for built refs.
+	localCat, err := NewLocalCatalogAt(t.TempDir(), logr.Discard())
+	require.NoError(t, err)
+	builtWrap := newBuiltOnlyLocalCatalog(localCat)
+	_, err = builtWrap.Resolve(t.Context(), Reference{Kind: ArtifactKindProvider, Name: "built-prov", Remote: "ghcr.io/acme"})
+	assert.True(t, IsNotFound(err))
+	_, _, err = builtWrap.FetchByPlatform(t.Context(), Reference{Kind: ArtifactKindProvider, Name: "built-prov", Remote: "ghcr.io/acme"}, "linux/amd64")
+	assert.True(t, IsNotFound(err))
+	_, err = builtWrap.ListPlatforms(t.Context(), Reference{Kind: ArtifactKindProvider, Name: "built-prov", Remote: "ghcr.io/acme"})
+	assert.True(t, IsNotFound(err))
+	_, err = builtWrap.ResolveContentDigest(t.Context(), Reference{Kind: ArtifactKindProvider, Name: "built-prov", Remote: "ghcr.io/acme"}, "linux/amd64", "")
+	assert.True(t, IsNotFound(err))
+	parsedBuiltRef, err := ParseReference(ArtifactKindProvider, "built-prov@1.0.0")
+	require.NoError(t, err)
+	_, err = builtWrap.ListPlatforms(t.Context(), parsedBuiltRef)
+	assert.True(t, IsNotFound(err))
 }

@@ -4,8 +4,10 @@
 package bundler
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	actionpkg "github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -24,54 +27,35 @@ const (
 	// VendorDirName is the directory name within the bundle for vendored artifacts.
 	VendorDirName = ".scafctl/vendor"
 
-	vendorDirPerm  = 0o755
+	vendorDirPerm  = 0o700
 	vendorFilePerm = 0o600
 )
 
 // VendorOptions configures dependency resolution.
 type VendorOptions struct {
-	// BundleRoot is the root directory of the solution bundle. Previously
-	// vendored files are read from it to replay ExistingLock entries.
-	BundleRoot string
-	// ExistingLock is the lock file from a previous build. Entries whose
-	// vendored file is still present and unchanged are replayed instead of
-	// re-fetched. Nil resolves every dependency from the catalog.
-	ExistingLock *LockFile
-	// CatalogFetcher fetches artifacts from catalogs by name[@version].
-	// If nil, resolution fails when a dependency cannot be replayed.
+	BundleRoot     string
+	ExistingLock   *LockFile
 	CatalogFetcher CatalogFetcher
 }
 
 // CatalogFetcher fetches solution content from a catalog by reference.
 type CatalogFetcher interface {
-	// FetchSolution retrieves a solution by name[@version] and returns
-	// the content bytes, the resolved reference info, and any error.
 	FetchSolution(ctx context.Context, nameWithVersion string) (content []byte, info catalog.ArtifactInfo, err error)
-
-	// ListSolutions returns all available versions for a named solution artifact.
-	// Used for resolving semver constraints to the best matching version.
 	ListSolutions(ctx context.Context, name string) ([]catalog.ArtifactInfo, error)
 }
 
 // VendorResult describes the outcome of dependency resolution.
 type VendorResult struct {
-	// VendoredFiles contains relative paths (from bundle root) to vendored
-	// files, both replayed and newly fetched.
 	VendoredFiles []string
-	// Fetched maps the relative path of each dependency fetched in this run
-	// to its content. Replayed dependencies are already on disk and absent.
-	Fetched map[string][]byte
-	// Replayed maps the relative path of each dependency replayed from the
-	// lock to its content, as read and digest-checked during replay.
-	Replayed map[string][]byte
-	// Lock records every resolved dependency.
-	Lock *LockFile
+	Fetched       map[string][]byte
+	Replayed      map[string][]byte
+	Lock          *LockFile
 }
 
 // Contents returns the content of every vendored file, fetched or
 // replayed, keyed by its slash-separated path relative to the bundle root.
 func (r *VendorResult) Contents() map[string][]byte {
-	out := make(map[string][]byte, len(r.Fetched)+len(r.Replayed))
+	out := make(map[string][]byte, len(r.Fetched))
 	maps.Copy(out, r.Replayed)
 	maps.Copy(out, r.Fetched)
 	return out
@@ -85,7 +69,6 @@ func ResolveDependencies(ctx context.Context, sol *solution.Solution, refs []Cat
 	if sol == nil {
 		return nil, fmt.Errorf("solution is nil")
 	}
-
 	result := &VendorResult{
 		Fetched:  make(map[string][]byte),
 		Replayed: make(map[string][]byte),
@@ -94,11 +77,7 @@ func ResolveDependencies(ctx context.Context, sol *solution.Solution, refs []Cat
 			Dependencies: make([]LockDependency, 0, len(refs)),
 		},
 	}
-
-	// Track visited refs by resolved name@version for proper dedup and conflict detection.
-	// Maps resolved "name@version" → original ref string that resolved to it.
 	visited := make(map[string]string)
-
 	for _, ref := range refs {
 		if err := vendorRef(ctx, sol, ref, opts, result, visited); err != nil {
 			return nil, fmt.Errorf("failed to vendor %s: %w", ref.Ref, err)
@@ -107,111 +86,170 @@ func ResolveDependencies(ctx context.Context, sol *solution.Solution, refs []Cat
 	return result, nil
 }
 
-// WriteFiles writes the content fetched by ResolveDependencies under
-// bundleRoot at its vendored path.
-func (r *VendorResult) WriteFiles(bundleRoot string) error {
-	for relPath, content := range r.Fetched {
-		absPath := filepath.Join(bundleRoot, filepath.FromSlash(relPath))
-		if err := os.MkdirAll(filepath.Dir(absPath), vendorDirPerm); err != nil {
-			return fmt.Errorf("failed to create vendor directory for %s: %w", relPath, err)
+func cleanVendorPath(p string) (slashPath, subRel string, ok bool) {
+	if strings.TrimSpace(p) == "" || filepath.IsAbs(p) || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "\\") || scafpath.HasWindowsDrivePrefix(p) {
+		return "", "", false
+	}
+	cleanRel := filepath.Clean(filepath.FromSlash(p))
+	rel, err := filepath.Rel(filepath.Clean(VendorDirName), cleanRel)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(filepath.ToSlash(rel), "../") || filepath.IsAbs(rel) {
+		return "", "", false
+	}
+	return filepath.ToSlash(cleanRel), rel, true
+}
+
+func openVendorSubRoot(bundleRoot string, create bool) (*os.Root, error) {
+	root, err := os.OpenRoot(bundleRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
+	var built string
+	for _, seg := range strings.Split(VendorDirName, "/") {
+		if built == "" {
+			built = seg
+		} else {
+			built = filepath.Join(built, seg)
 		}
-		if err := os.WriteFile(absPath, content, vendorFilePerm); err != nil {
+		info, statErr := root.Lstat(built)
+		switch {
+		case statErr == nil:
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return nil, fmt.Errorf("refusing non-directory vendor segment %s", built)
+			}
+		case errors.Is(statErr, os.ErrNotExist) && create:
+			if mkErr := root.Mkdir(built, vendorDirPerm); mkErr != nil {
+				return nil, mkErr
+			}
+		default:
+			return nil, statErr
+		}
+	}
+	return root.OpenRoot(filepath.FromSlash(VendorDirName))
+}
+
+// WriteFiles writes the content fetched by ResolveDependencies under
+// bundleRoot/.scafctl/vendor via a confined os.Root handle.
+func (r *VendorResult) WriteFiles(bundleRoot string) error {
+	if len(r.Fetched) == 0 {
+		return nil
+	}
+	subPaths := make(map[string]string, len(r.Fetched))
+	for relPath := range r.Fetched {
+		_, subRel, ok := cleanVendorPath(relPath)
+		if !ok {
+			return fmt.Errorf("failed to write vendored file %s: path must be within %s", relPath, VendorDirName)
+		}
+		subPaths[relPath] = subRel
+	}
+	vRoot, err := openVendorSubRoot(bundleRoot, true)
+	if err != nil {
+		return fmt.Errorf("failed to create vendor directory: %w", err)
+	}
+	defer vRoot.Close()
+
+	for relPath, content := range r.Fetched {
+		subRel := subPaths[relPath]
+		if dir := filepath.Dir(subRel); dir != "." {
+			if err := vRoot.MkdirAll(dir, vendorDirPerm); err != nil {
+				return fmt.Errorf("failed to create vendor directory for %s: %w", relPath, err)
+			}
+		}
+		if info, statErr := vRoot.Lstat(subRel); statErr == nil && !info.Mode().IsRegular() {
+			return fmt.Errorf("failed to write vendored file %s: target is not a regular file", relPath)
+		}
+		f, openErr := vRoot.OpenFile(subRel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, vendorFilePerm)
+		if openErr != nil {
+			return fmt.Errorf("failed to write vendored file %s: %w", relPath, openErr)
+		}
+		_, writeErr := f.Write(content)
+		chmodErr := f.Chmod(vendorFilePerm)
+		closeErr := f.Close()
+		if err := cmp.Or(writeErr, chmodErr, closeErr); err != nil {
 			return fmt.Errorf("failed to write vendored file %s: %w", relPath, err)
 		}
 	}
 	return nil
 }
 
-// resolvedRef holds the result of parsing and resolving a catalog reference.
 type resolvedRef struct {
-	// name is the artifact name (e.g., "deploy-to-k8s").
-	name string
-	// version is the resolved exact version (may be nil for bare names).
-	version *semver.Version
-	// constraint is the original constraint string if one was used (e.g., "^1.5.0").
-	// Empty for exact version refs.
-	constraint string
-	// resolvedKey is the canonical key "name@version" for dedup/conflict detection.
+	name        string
+	version     *semver.Version
+	constraint  string
 	resolvedKey string
 }
 
-// parseAndResolveRef parses a catalog ref string and resolves any version constraint
-// to an exact version by querying the catalog.
-func parseAndResolveRef(ctx context.Context, ref string, fetcher CatalogFetcher) (*resolvedRef, error) {
-	lgr := logger.FromContext(ctx)
+func pickBestSolutionVersion(ctx context.Context, artifacts []catalog.ArtifactInfo, constraint *semver.Constraints) *semver.Version {
+	includePre := catalog.IncludePreReleaseFromContext(ctx)
+	var best *semver.Version
+	for _, a := range artifacts {
+		v := a.Reference.Version
+		if v == nil || (catalog.IsPreRelease(v) && !includePre) {
+			continue
+		}
+		if constraint != nil && !constraint.Check(v) {
+			continue
+		}
+		if best == nil || v.GreaterThan(best) {
+			best = v
+		}
+	}
+	return best
+}
 
+func parseAndResolveRef(ctx context.Context, ref string, fetcher CatalogFetcher) (*resolvedRef, error) {
 	name, versionPart := splitRef(ref)
 
-	// No version specified — resolve to latest
-	if versionPart == "" {
-		return &resolvedRef{
-			name:        name,
-			resolvedKey: name,
-		}, nil
+	if versionPart == "" || strings.EqualFold(versionPart, "latest") {
+		var constraint string
+		if strings.EqualFold(versionPart, "latest") {
+			constraint = "latest"
+		}
+		if fetcher != nil {
+			if artifacts, err := fetcher.ListSolutions(ctx, name); err == nil {
+				if best := pickBestSolutionVersion(ctx, artifacts, nil); best != nil {
+					return &resolvedRef{
+						name: name, version: best, constraint: constraint,
+						resolvedKey: name + "@" + best.String(),
+					}, nil
+				}
+			}
+		}
+		return &resolvedRef{name: name, constraint: constraint, resolvedKey: name}, nil
 	}
 
-	// Try as exact semver version first
 	if v, err := semver.NewVersion(versionPart); err == nil {
-		return &resolvedRef{
-			name:        name,
-			version:     v,
-			resolvedKey: name + "@" + v.String(),
-		}, nil
+		return &resolvedRef{name: name, version: v, resolvedKey: name + "@" + v.String()}, nil
 	}
 
-	// Try as semver constraint (e.g., ^1.5.0, >=2.0.0, ~1.0)
 	constraint, err := semver.NewConstraint(versionPart)
 	if err != nil {
 		return nil, fmt.Errorf("invalid version or constraint %q in ref %q: %w", versionPart, ref, err)
 	}
-
+	constraint.IncludePrerelease = catalog.IncludePreReleaseFromContext(ctx)
 	if fetcher == nil {
 		return nil, fmt.Errorf("cannot resolve constraint %q for %q: no catalog fetcher configured", versionPart, name)
 	}
 
-	// List all versions and find the highest match
 	artifacts, err := fetcher.ListSolutions(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list versions for %q: %w", name, err)
 	}
-
-	var bestVersion *semver.Version
-	for _, a := range artifacts {
-		if a.Reference.Version != nil && constraint.Check(a.Reference.Version) {
-			// Skip pre-release versions unless opted in via context
-			if catalog.IsPreRelease(a.Reference.Version) && !catalog.IncludePreReleaseFromContext(ctx) {
-				lgr.V(1).Info("skipping pre-release version for constraint",
-					"name", name,
-					"version", a.Reference.Version.String(),
-					"constraint", versionPart)
-				continue
-			}
-			if bestVersion == nil || a.Reference.Version.GreaterThan(bestVersion) {
-				bestVersion = a.Reference.Version
-			}
-		}
-	}
-
+	bestVersion := pickBestSolutionVersion(ctx, artifacts, constraint)
 	if bestVersion == nil {
 		return nil, fmt.Errorf("no version of %q satisfies constraint %q (available: %s)",
 			name, versionPart, formatAvailableVersions(artifacts))
 	}
 
-	lgr.V(1).Info("resolved version constraint",
-		"name", name,
-		"constraint", versionPart,
-		"resolved", bestVersion.String(),
-		"candidates", len(artifacts))
-
+	logger.FromContext(ctx).V(1).Info("resolved version constraint",
+		"name", name, "constraint", versionPart, "resolved", bestVersion.String(), "candidates", len(artifacts))
 	return &resolvedRef{
-		name:        name,
-		version:     bestVersion,
-		constraint:  versionPart,
+		name: name, version: bestVersion, constraint: versionPart,
 		resolvedKey: name + "@" + bestVersion.String(),
 	}, nil
 }
 
-// splitRef splits a catalog reference into name and version/constraint parts.
 func splitRef(ref string) (name, versionPart string) {
 	if idx := strings.LastIndex(ref, "@"); idx > 0 {
 		return ref[:idx], ref[idx+1:]
@@ -219,11 +257,7 @@ func splitRef(ref string) (name, versionPart string) {
 	return ref, ""
 }
 
-// formatAvailableVersions returns a comma-separated list of available versions.
 func formatAvailableVersions(artifacts []catalog.ArtifactInfo) string {
-	if len(artifacts) == 0 {
-		return "none"
-	}
 	versions := make([]string, 0, len(artifacts))
 	for _, a := range artifacts {
 		if a.Reference.Version != nil {
@@ -236,125 +270,111 @@ func formatAvailableVersions(artifacts []catalog.ArtifactInfo) string {
 	return strings.Join(versions, ", ")
 }
 
-// vendorRef fetches a single catalog reference, stores it, and rewrites the solution.
-func vendorRef(ctx context.Context, sol *solution.Solution, ref CatalogRefEntry, opts VendorOptions, result *VendorResult, visited map[string]string) error {
-	lgr := logger.FromContext(ctx)
-	existingLock := opts.ExistingLock
-
-	// Pre-resolution lock check: if the ref looks like a constraint and we have a lock
-	// file, try to replay from lock before requiring a catalog fetcher for resolution.
-	name, versionPart := splitRef(ref.Ref)
-	if existingLock != nil && versionPart != "" {
-		// If it's not a valid exact semver, it might be a constraint
-		if _, exactErr := semver.NewVersion(versionPart); exactErr != nil {
-			if dep := existingLock.FindDependencyByName(name); dep != nil && dep.ResolvedVersion != "" {
-				satisfies, checkErr := CheckVersionConstraint(versionPart, dep.ResolvedVersion)
-				if checkErr == nil && satisfies {
-					// Build a resolvedRef from the lock data
-					lockedVer, _ := semver.NewVersion(dep.ResolvedVersion)
-					resolved := &resolvedRef{
-						name:        name,
-						version:     lockedVer,
-						constraint:  versionPart,
-						resolvedKey: name + "@" + dep.ResolvedVersion,
-					}
-					if _, seen := visited[resolved.resolvedKey]; !seen {
-						visited[resolved.resolvedKey] = ref.Ref
-						if replayed := tryReplayLock(ctx, sol, ref.Ref, dep, opts, result); replayed {
-							return nil
-						}
-					}
-				}
+func lockedDepMatchesRef(dep *LockDependency, rawRef string) (resolvedKey, constraint string, ok bool) {
+	if dep == nil {
+		return "", "", false
+	}
+	name, versionPart := splitRef(rawRef)
+	lockedVer := dep.ResolvedVersion
+	if lockedVer == "" {
+		if _, dv := splitRef(dep.Ref); dv != "" {
+			if pv, err := semver.NewVersion(dv); err == nil {
+				lockedVer = pv.String()
 			}
 		}
 	}
-
-	// Parse and resolve the reference (handles constraints, exact versions, bare names)
-	resolved, err := parseAndResolveRef(ctx, ref.Ref, opts.CatalogFetcher)
-	if err != nil {
-		return err
+	switch {
+	case versionPart == "":
+		if lockedVer != "" {
+			return name + "@" + lockedVer, "", true
+		}
+		return name, "", dep.Ref == rawRef && dep.VendoredAt != ""
+	case strings.EqualFold(versionPart, "latest"):
+		return name + "@" + lockedVer, "latest", lockedVer != ""
+	default:
+		if exactVer, err := semver.NewVersion(versionPart); err == nil {
+			return name + "@" + exactVer.String(), "", lockedVer == exactVer.String() || (lockedVer == "" && dep.Ref == rawRef)
+		}
+		parsedLocked, verErr := semver.NewVersion(lockedVer)
+		c, checkErr := semver.NewConstraint(versionPart)
+		if verErr != nil || checkErr != nil {
+			return "", "", false
+		}
+		c.IncludePrerelease = catalog.IsPreRelease(parsedLocked)
+		return name + "@" + lockedVer, versionPart, c.Check(parsedLocked)
 	}
+}
 
-	// Version conflict detection and dedup
-	if previousRef, seen := visited[resolved.resolvedKey]; seen {
-		lgr.V(1).Info("skipping already-vendored reference", "ref", ref.Ref, "resolvedKey", resolved.resolvedKey)
-		// Still need to rewrite sources if the original ref string differs
-		if ref.Ref != previousRef {
-			// Find the vendored path from existing result
+func checkVisitedKey(sol *solution.Solution, rawRef, name, resolvedKey string, result *VendorResult, visited map[string]string) (bool, error) {
+	if previousRef, seen := visited[resolvedKey]; seen {
+		if rawRef != previousRef {
 			for _, dep := range result.Lock.Dependencies {
-				if refName(dep.Ref) == resolved.name {
-					rewriteSolutionSources(sol, ref.Ref, dep.VendoredAt)
+				if refName(dep.Ref) == name {
+					rewriteSolutionSources(sol, rawRef, dep.VendoredAt)
 					break
 				}
 			}
 		}
-		return nil
+		return true, nil
 	}
-
-	// Check for version conflict: same name but different resolved version
-	for resolvedKey, prevRef := range visited {
-		prevName, _ := splitRef(resolvedKey)
-		if prevName == resolved.name && resolvedKey != resolved.resolvedKey {
-			return fmt.Errorf("version conflict for %q: %q resolves to %s, but %q already resolved to %s",
-				resolved.name, ref.Ref, resolved.resolvedKey, prevRef, resolvedKey)
+	for prevKey, prevRef := range visited {
+		prevName, _ := splitRef(prevKey)
+		if prevName == name && prevKey != resolvedKey {
+			return false, fmt.Errorf("version conflict for %q: %q resolves to %s, but %q already resolved to %s",
+				name, rawRef, resolvedKey, prevRef, prevKey)
 		}
 	}
+	return false, nil
+}
 
-	visited[resolved.resolvedKey] = ref.Ref
+func vendorRef(ctx context.Context, sol *solution.Solution, ref CatalogRefEntry, opts VendorOptions, result *VendorResult, visited map[string]string) error {
+	lgr := logger.FromContext(ctx)
+	name, _ := splitRef(ref.Ref)
 
-	// Build the exact ref string for fetching (name@resolvedVersion)
-	fetchRef := resolved.name
-	if resolved.version != nil {
-		fetchRef = resolved.name + "@" + resolved.version.String()
-	}
-
-	// Check if we can replay from lock file
-	if existingLock != nil {
-		if dep := existingLock.FindDependencyByName(resolved.name); dep != nil {
-			// If there's a constraint, verify the locked version still satisfies it
-			if resolved.constraint != "" && dep.ResolvedVersion != "" {
-				satisfies, checkErr := CheckVersionConstraint(resolved.constraint, dep.ResolvedVersion)
-				switch {
-				case checkErr != nil:
-					lgr.V(1).Info("lock file constraint check failed, re-fetching",
-						"ref", ref.Ref, "constraint", resolved.constraint, "error", checkErr)
-				case !satisfies:
-					lgr.V(1).Info("lock file entry no longer satisfies constraint, re-fetching",
-						"ref", ref.Ref, "constraint", resolved.constraint, "lockedVersion", dep.ResolvedVersion)
-				default:
-					// Constraint still satisfied — try replay
-					if replayed := tryReplayLock(ctx, sol, ref.Ref, dep, opts, result); replayed {
-						return nil
-					}
+	if opts.ExistingLock != nil {
+		if dep := opts.ExistingLock.FindDependencyByName(name); dep != nil {
+			if lockedKey, constraint, ok := lockedDepMatchesRef(dep, ref.Ref); ok {
+				seen, conflictErr := checkVisitedKey(sol, ref.Ref, name, lockedKey, result, visited)
+				if conflictErr != nil || seen {
+					return conflictErr
 				}
-			} else {
-				// Exact version or no constraint — try replay directly
-				if replayed := tryReplayLock(ctx, sol, ref.Ref, dep, opts, result); replayed {
-					return nil
+				replayed, missingOnDisk, replayErr := tryReplayLock(ctx, sol, ref.Ref, lockedKey, constraint, dep, opts, result, visited)
+				if replayErr != nil || replayed {
+					return replayErr
+				}
+				if missingOnDisk && dep.ResolvedVersion != "" && opts.CatalogFetcher != nil {
+					return tryMaterializeLockedDep(ctx, sol, ref.Ref, lockedKey, constraint, dep, opts, result, visited)
 				}
 			}
 		}
 	}
 
-	// Fetch from catalog
+	resolved, err := parseAndResolveRef(ctx, ref.Ref, opts.CatalogFetcher)
+	if err != nil {
+		return err
+	}
+	seen, conflictErr := checkVisitedKey(sol, ref.Ref, resolved.name, resolved.resolvedKey, result, visited)
+	if conflictErr != nil || seen {
+		return conflictErr
+	}
 	if opts.CatalogFetcher == nil {
 		return fmt.Errorf("no catalog fetcher configured; cannot vendor %s", ref.Ref)
 	}
 
+	fetchRef := resolved.name
+	if resolved.version != nil {
+		fetchRef = resolved.name + "@" + resolved.version.String()
+	}
 	content, info, err := opts.CatalogFetcher.FetchSolution(ctx, fetchRef)
 	if err != nil {
 		return fmt.Errorf("failed to fetch %s: %w", fetchRef, err)
 	}
 
-	// Determine vendor path using the resolved exact version
-	vendoredName := vendorFileName(fetchRef, info)
-	vendorRelPath := filepath.ToSlash(filepath.Join(VendorDirName, vendoredName))
+	visited[resolved.resolvedKey] = ref.Ref
+	vendorRelPath := filepath.ToSlash(filepath.Join(VendorDirName, vendorFileName(fetchRef, info)))
 	result.Fetched[vendorRelPath] = content
 
-	// Compute digest
 	contentDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(content))
-
-	// Determine resolved version string
 	resolvedVersion := ""
 	if resolved.version != nil {
 		resolvedVersion = resolved.version.String()
@@ -363,19 +383,12 @@ func vendorRef(ctx context.Context, sol *solution.Solution, ref CatalogRefEntry,
 	}
 
 	lgr.V(1).Info("vendored dependency",
-		"ref", ref.Ref,
-		"resolvedVersion", resolvedVersion,
-		"vendoredAt", vendorRelPath,
-		"digest", contentDigest,
-		"catalog", info.Catalog)
+		"ref", ref.Ref, "resolvedVersion", resolvedVersion, "vendoredAt", vendorRelPath, "digest", contentDigest, "catalog", info.Catalog)
 
-	// Rewrite solution sources for both the original ref and the resolved ref
 	rewriteSolutionSources(sol, ref.Ref, vendorRelPath)
 	if fetchRef != ref.Ref {
 		rewriteSolutionSources(sol, fetchRef, vendorRelPath)
 	}
-
-	// Record in result
 	result.VendoredFiles = append(result.VendoredFiles, vendorRelPath)
 	result.Lock.Dependencies = append(result.Lock.Dependencies, LockDependency{
 		Ref:             ref.Ref,
@@ -385,57 +398,136 @@ func vendorRef(ctx context.Context, sol *solution.Solution, ref CatalogRefEntry,
 		ResolvedFrom:    info.Catalog,
 		VendoredAt:      vendorRelPath,
 	})
+	return vendorSubRefs(ctx, sol, ref.Ref, content, opts, result, visited)
+}
 
-	// Recursive vendoring: parse the vendored solution and check for its own catalog refs
+func vendorSubRefs(ctx context.Context, sol *solution.Solution, parentRef string, content []byte, opts VendorOptions, result *VendorResult, visited map[string]string) error {
 	var vendoredSol solution.Solution
-	if unmarshalErr := vendoredSol.UnmarshalFromBytes(content); unmarshalErr != nil {
-		// Not a valid solution — skip recursive vendoring
-		lgr.V(1).Info("vendored content is not a valid solution, skipping recursive vendoring", "ref", ref.Ref, "error", unmarshalErr)
+	if err := vendoredSol.UnmarshalFromBytes(content); err != nil {
+		logger.FromContext(ctx).V(1).Info("vendored content is not a valid solution, skipping recursive vendoring", "ref", parentRef, "error", err)
 		return nil
 	}
-
 	_, subRefs := analyzeProviderInputs(&vendoredSol)
 	for _, subRef := range subRefs {
 		if err := vendorRef(ctx, sol, subRef, opts, result, visited); err != nil {
-			return fmt.Errorf("recursive vendoring of %s (from %s): %w", subRef.Ref, ref.Ref, err)
+			return fmt.Errorf("recursive vendoring of %s (from %s): %w", subRef.Ref, parentRef, err)
 		}
 	}
-
 	return nil
 }
 
-// tryReplayLock attempts to replay a vendored dependency from the lock file.
-// Returns true if replay succeeded, false if the caller should re-fetch.
-func tryReplayLock(ctx context.Context, sol *solution.Solution, originalRef string, dep *LockDependency, opts VendorOptions, result *VendorResult) bool {
+func tryReplayLock(
+	ctx context.Context,
+	sol *solution.Solution,
+	originalRef, resolvedKey, constraint string,
+	dep *LockDependency,
+	opts VendorOptions,
+	result *VendorResult,
+	visited map[string]string,
+) (replayed, missingOnDisk bool, err error) {
 	lgr := logger.FromContext(ctx)
-
 	lgr.V(1).Info("replaying from lock file", "ref", originalRef, "digest", dep.Digest)
 
-	vendorPath := dep.VendoredAt
-	absVendorPath := filepath.Join(opts.BundleRoot, vendorPath)
-	content, err := os.ReadFile(absVendorPath)
-	if err != nil {
+	if dep.VendoredAt == "" || opts.BundleRoot == "" {
+		return false, true, nil
+	}
+	vendorPath, subRel, ok := cleanVendorPath(dep.VendoredAt)
+	if !ok {
+		return false, false, fmt.Errorf("invalid vendoredAt path %q in lock file: must be within %s", dep.VendoredAt, VendorDirName)
+	}
+	vRoot, openErr := openVendorSubRoot(opts.BundleRoot, false)
+	if openErr != nil {
+		return false, errors.Is(openErr, os.ErrNotExist), nil
+	}
+	defer vRoot.Close()
+
+	info, statErr := vRoot.Lstat(subRel)
+	if statErr != nil {
 		lgr.V(1).Info("lock file entry stale (file missing), re-fetching", "ref", originalRef)
-		return false
+		return false, errors.Is(statErr, os.ErrNotExist), nil
 	}
-
-	actualDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(content))
-	if actualDigest != dep.Digest {
+	if !info.Mode().IsRegular() {
+		return false, false, fmt.Errorf("refusing non-regular vendored file %s", vendorPath)
+	}
+	content, readErr := vRoot.ReadFile(subRel)
+	if readErr != nil {
+		return false, false, nil
+	}
+	if fmt.Sprintf("sha256:%x", sha256.Sum256(content)) != dep.Digest {
 		lgr.V(1).Info("lock file entry stale (digest mismatch), re-fetching", "ref", originalRef)
-		return false
+		return false, false, nil
 	}
 
-	// Replay: rewrite sources and add to result
+	visited[resolvedKey] = originalRef
 	rewriteSolutionSources(sol, originalRef, vendorPath)
 	result.Replayed[vendorPath] = content
 	result.VendoredFiles = append(result.VendoredFiles, vendorPath)
-	result.Lock.Dependencies = append(result.Lock.Dependencies, *dep)
-	return true
+	replayedDep := *dep
+	replayedDep.Ref, replayedDep.VendoredAt = originalRef, vendorPath
+	if originalRef != dep.Ref {
+		replayedDep.Constraint = constraint
+	}
+	result.Lock.Dependencies = append(result.Lock.Dependencies, replayedDep)
+
+	if err := vendorSubRefs(ctx, sol, originalRef, content, opts, result, visited); err != nil {
+		return false, false, err
+	}
+	return true, false, nil
 }
 
-// rewriteSolutionSources rewrites catalog references to vendored paths in the solution.
+func tryMaterializeLockedDep(
+	ctx context.Context,
+	sol *solution.Solution,
+	originalRef, resolvedKey, constraint string,
+	dep *LockDependency,
+	opts VendorOptions,
+	result *VendorResult,
+	visited map[string]string,
+) error {
+	var explicitVendorPath string
+	if dep.VendoredAt != "" {
+		cleanRel, _, ok := cleanVendorPath(dep.VendoredAt)
+		if !ok {
+			return fmt.Errorf("invalid vendoredAt path %q in lock file: must be within %s", dep.VendoredAt, VendorDirName)
+		}
+		explicitVendorPath = cleanRel
+	}
+	name, _ := splitRef(originalRef)
+	fetchRef := name + "@" + dep.ResolvedVersion
+	content, info, err := opts.CatalogFetcher.FetchSolution(ctx, fetchRef)
+	if err != nil {
+		return fmt.Errorf("failed to fetch locked dependency %s: %w", fetchRef, err)
+	}
+	actualDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(content))
+	if dep.Digest != "" && actualDigest != dep.Digest {
+		return fmt.Errorf("locked dependency %s digest mismatch: expected %s, got %s", fetchRef, dep.Digest, actualDigest)
+	}
+
+	vendorRelPath := cmp.Or(explicitVendorPath, filepath.ToSlash(filepath.Join(VendorDirName, vendorFileName(fetchRef, info))))
+	effConstraint := constraint
+	if effConstraint == "" && originalRef == dep.Ref {
+		effConstraint = dep.Constraint
+	}
+
+	visited[resolvedKey] = originalRef
+	result.Fetched[vendorRelPath] = content
+	result.VendoredFiles = append(result.VendoredFiles, vendorRelPath)
+	rewriteSolutionSources(sol, originalRef, vendorRelPath)
+	if fetchRef != originalRef {
+		rewriteSolutionSources(sol, fetchRef, vendorRelPath)
+	}
+	result.Lock.Dependencies = append(result.Lock.Dependencies, LockDependency{
+		Ref:             originalRef,
+		ResolvedVersion: dep.ResolvedVersion,
+		Constraint:      effConstraint,
+		Digest:          actualDigest,
+		ResolvedFrom:    cmp.Or(info.Catalog, dep.ResolvedFrom),
+		VendoredAt:      vendorRelPath,
+	})
+	return vendorSubRefs(ctx, sol, originalRef, content, opts, result, visited)
+}
+
 func rewriteSolutionSources(sol *solution.Solution, catalogRef, vendorPath string) {
-	// Walk resolver inputs
 	for _, r := range sol.Spec.Resolvers {
 		if r == nil || r.Resolve == nil {
 			continue
@@ -446,56 +538,38 @@ func rewriteSolutionSources(sol *solution.Solution, catalogRef, vendorPath strin
 			}
 		}
 	}
-
-	// Walk action inputs
 	if sol.Spec.Workflow != nil {
 		rewriteActionSources(sol.Spec.Workflow.Actions, catalogRef, vendorPath)
 		rewriteActionSources(sol.Spec.Workflow.Finally, catalogRef, vendorPath)
 	}
 }
 
-// rewriteActionSources rewrites catalog references in action inputs.
 func rewriteActionSources(actions map[string]*actionpkg.Action, catalogRef, vendorPath string) {
 	for _, a := range actions {
-		if a == nil {
-			continue
-		}
-		if a.Provider == "solution" {
+		if a != nil && a.Provider == "solution" {
 			rewriteSourceInput(a.Inputs, catalogRef, vendorPath)
 		}
 	}
 }
 
-// rewriteSourceInput replaces a catalog ref literal with a vendored path.
 func rewriteSourceInput(inputs map[string]*spec.ValueRef, catalogRef, vendorPath string) {
 	if inputs == nil {
 		return
 	}
 	vr := inputs["source"]
-	if vr == nil {
+	if vr == nil || vr.Expr != nil || vr.Tmpl != nil || vr.Resolver != nil || vr.Secret != nil || vr.Token != nil {
 		return
 	}
-	// Only rewrite literal string values
-	if vr.Expr != nil || vr.Tmpl != nil || vr.Resolver != nil || vr.Secret != nil || vr.Token != nil {
-		return
+	if s, ok := vr.Literal.(string); ok && s == catalogRef {
+		vr.Literal = vendorPath
 	}
-	s, ok := vr.Literal.(string)
-	if !ok || s != catalogRef {
-		return
-	}
-	vr.Literal = vendorPath
 }
 
-// vendorFileName generates the file name for a vendored artifact.
 func vendorFileName(ref string, info catalog.ArtifactInfo) string {
-	name := ref
-	// Replace / and @ with safe characters
-	name = strings.ReplaceAll(name, "/", "_")
-	// If the ref doesn't have a version but info does, append it
+	name := strings.NewReplacer("/", "_", "\\", "_").Replace(ref)
 	if !strings.Contains(ref, "@") && info.Reference.Version != nil {
 		name += "@" + info.Reference.Version.String()
 	}
-	// Ensure .yaml extension
 	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
 		name += ".yaml"
 	}

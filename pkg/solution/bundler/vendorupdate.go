@@ -4,184 +4,515 @@
 package bundler
 
 import (
+	"cmp"
 	"context"
-	"crypto/sha256"
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
 
-	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
-// UpdateEntry tracks the state of a single dependency during a vendor update check.
+// Change status values recorded on UpdateEntry and PluginUpdateEntry.
+const (
+	UpdateStatusAdded     = "added"
+	UpdateStatusUpdated   = "updated"
+	UpdateStatusUnchanged = "unchanged"
+	UpdateStatusPruned    = "pruned"
+)
+
+// Domain sentinel errors returned by vendor update helpers.
+var (
+	ErrInvalidUpdateTarget = errors.New("invalid update target")
+	ErrSolutionRead        = errors.New("failed to read solution file")
+)
+
+// UpdateEntry tracks the change state of a single sub-solution dependency.
 type UpdateEntry struct {
-	// Ref is the original lock file reference (e.g., "deploy-to-k8s@2.0.0").
-	Ref string `json:"ref" yaml:"ref" doc:"Original catalog reference" maxLength:"255" example:"deploy-to-k8s@2.0.0"`
-	// LockedVersion is the version from the existing lock file.
+	Ref           string `json:"ref" yaml:"ref" doc:"Original catalog reference" maxLength:"255" example:"deploy-to-k8s@^2.0.0"`
+	Constraint    string `json:"constraint,omitempty" yaml:"constraint,omitempty" doc:"Original version constraint" maxLength:"100" example:"^2.0.0"`
+	Status        string `json:"status,omitempty" yaml:"status,omitempty" doc:"Change status (added, updated, unchanged, pruned)" maxLength:"20" example:"updated"`
 	LockedVersion string `json:"lockedVersion" yaml:"lockedVersion" doc:"Version from the existing lock file" maxLength:"50" example:"2.0.0"`
-	// LockedDigest is the digest from the existing lock file.
-	LockedDigest string `json:"lockedDigest" yaml:"lockedDigest" doc:"Digest from the existing lock file" maxLength:"128" example:"sha256:abc123..."`
-	// LatestVersion is the latest resolved version from catalog.
+	LockedDigest  string `json:"lockedDigest" yaml:"lockedDigest" doc:"Digest from the existing lock file" maxLength:"128" example:"sha256:abc123..."`
 	LatestVersion string `json:"latestVersion" yaml:"latestVersion" doc:"Latest resolved version from catalog" maxLength:"50" example:"2.1.0"`
-	// LatestDigest is the digest of the latest content.
-	LatestDigest string `json:"latestDigest" yaml:"latestDigest" doc:"Digest of the latest content" maxLength:"128" example:"sha256:def456..."`
-	// Content is the raw bytes of the latest fetched content.
-	Content []byte `json:"-" yaml:"-"`
-	// Info is the artifact info from the catalog resolution.
-	Info catalog.ArtifactInfo `json:"-" yaml:"-"`
-	// NeedsUpdate indicates whether this entry needs updating.
-	NeedsUpdate bool `json:"needsUpdate" yaml:"needsUpdate" doc:"Whether this entry needs updating"`
+	LatestDigest  string `json:"latestDigest" yaml:"latestDigest" doc:"Digest of the latest content" maxLength:"128" example:"sha256:def456..."`
+	NeedsUpdate   bool   `json:"needsUpdate" yaml:"needsUpdate" doc:"Whether this entry changed relative to the existing lock"`
 }
 
-// VendorUpdateOptions contains the domain-level options for a vendor update operation.
-type VendorUpdateOptions struct {
-	// SolutionPath is the path to the solution YAML file.
-	SolutionPath string `json:"solutionPath" yaml:"solutionPath" doc:"Path to the solution YAML file" maxLength:"500" example:"./solution.yaml"`
-	// Dependencies restricts the update to only these dependency refs.
-	Dependencies []string `json:"dependencies,omitempty" yaml:"dependencies,omitempty" doc:"Filter to these dependency refs" maxItems:"100"`
-	// DryRun previews changes without writing.
-	DryRun bool `json:"dryRun" yaml:"dryRun" doc:"Preview without writing"`
-	// LockOnly updates the lock file without re-vendoring files.
-	LockOnly bool `json:"lockOnly" yaml:"lockOnly" doc:"Update lock file only"`
-	// PreRelease includes pre-release versions when resolving.
-	PreRelease bool `json:"preRelease" yaml:"preRelease" doc:"Include pre-release versions"`
+// PluginUpdateEntry tracks the change state of a single plugin dependency.
+type PluginUpdateEntry struct {
+	Name          string `json:"name" yaml:"name" doc:"Plugin artifact name" maxLength:"100" example:"exec"`
+	Alias         string `json:"alias,omitempty" yaml:"alias,omitempty" doc:"Solution-local plugin alias when aliased" maxLength:"100" example:"custom-exec"`
+	Kind          string `json:"kind" yaml:"kind" doc:"Plugin kind" maxLength:"50" example:"provider"`
+	Constraint    string `json:"constraint,omitempty" yaml:"constraint,omitempty" doc:"Requested version constraint" maxLength:"50" example:"^1.5.0"`
+	Status        string `json:"status,omitempty" yaml:"status,omitempty" doc:"Change status (added, updated, unchanged, pruned)" maxLength:"20" example:"updated"`
+	LockedVersion string `json:"lockedVersion,omitempty" yaml:"lockedVersion,omitempty" doc:"Version from the existing lock file" maxLength:"50" example:"1.5.0"`
+	LockedDigest  string `json:"lockedDigest,omitempty" yaml:"lockedDigest,omitempty" doc:"Primary digest from the existing lock file" maxLength:"128" example:"sha256:abc123..."`
+	LatestVersion string `json:"latestVersion" yaml:"latestVersion" doc:"Latest resolved version from catalog" maxLength:"50" example:"1.5.2"`
+	LatestDigest  string `json:"latestDigest" yaml:"latestDigest" doc:"Primary digest of the latest resolved plugin" maxLength:"128" example:"sha256:def456..."`
+	ResolvedFrom  string `json:"resolvedFrom,omitempty" yaml:"resolvedFrom,omitempty" doc:"Catalog alias that served the latest version" maxLength:"255" example:"official"`
+	NeedsUpdate   bool   `json:"needsUpdate" yaml:"needsUpdate" doc:"Whether this plugin entry changed relative to the existing lock"`
 }
 
-// VendorUpdateResult describes the outcome of a vendor update check.
+// DisplayName returns "alias (name)" when the plugin is aliased, or Name otherwise.
+func (e PluginUpdateEntry) DisplayName() string {
+	if e.Alias != "" && e.Alias != e.Name {
+		return fmt.Sprintf("%s (%s)", e.Alias, e.Name)
+	}
+	return e.Name
+}
+
+// VendorUpdateRunOptions configures UpdateVendoredDependencies.
+type VendorUpdateRunOptions struct {
+	BundleRoot, LockPath string
+	Dependencies         []string
+	DryRun, LockOnly     bool
+	SolutionFetcher      CatalogFetcher
+	PluginOptions        *VendorAllPluginsOptions
+}
+
+// VendorUpdateResult describes the outcome of a vendor update operation.
 type VendorUpdateResult struct {
-	// Entries are the resolved update entries for each dependency.
-	Entries []UpdateEntry `json:"entries" yaml:"entries" doc:"Resolved update entries" maxItems:"1000"`
-	// UpdateCount is the number of entries that need updating.
-	UpdateCount int `json:"updateCount" yaml:"updateCount" doc:"Number of entries needing update" example:"3"`
-	// Messages collects informational messages produced during the operation.
-	Messages []string `json:"messages,omitempty" yaml:"messages,omitempty" doc:"Informational messages" maxItems:"500"`
-	// PluginMessages collects plugin status messages.
-	PluginMessages []string `json:"pluginMessages,omitempty" yaml:"pluginMessages,omitempty" doc:"Plugin status messages" maxItems:"100"`
+	Entries        []UpdateEntry       `json:"entries" yaml:"entries" doc:"Resolved sub-solution update entries" maxItems:"1000"`
+	PluginEntries  []PluginUpdateEntry `json:"pluginEntries" yaml:"pluginEntries" doc:"Resolved plugin update entries" maxItems:"100"`
+	UpdateCount    int                 `json:"updateCount" yaml:"updateCount" doc:"Number of entries changed" maximum:"1100" example:"3"`
+	DryRun         bool                `json:"dryRun" yaml:"dryRun" doc:"Whether the operation ran in dry-run mode"`
+	Messages       []string            `json:"messages,omitempty" yaml:"messages,omitempty" doc:"Informational messages" maxItems:"500"`
+	PluginMessages []string            `json:"pluginMessages,omitempty" yaml:"pluginMessages,omitempty" doc:"Plugin status messages" maxItems:"100"`
 }
 
-// CheckForUpdates re-resolves each dependency against the catalog and
-// returns UpdateEntry values indicating which entries need updating.
-func CheckForUpdates(ctx context.Context, deps []LockDependency, fetcher CatalogFetcher, lgr logr.Logger) ([]UpdateEntry, error) {
-	var entries []UpdateEntry
-
-	for _, dep := range deps {
-		entry := UpdateEntry{
-			Ref:           dep.Ref,
-			LockedVersion: ExtractVersionFromRef(dep.Ref),
-			LockedDigest:  dep.Digest,
+// LoadComposedSolution reads, composes, applies defaults to, and validates solutionPath via os.Root.
+func LoadComposedSolution(solutionPath string) (*solution.Solution, string, error) {
+	cleanPath := filepath.Clean(solutionPath)
+	bundleRoot, base := filepath.Dir(cleanPath), filepath.Base(cleanPath)
+	root, err := os.OpenRoot(bundleRoot)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: %w", ErrSolutionRead, err)
+	}
+	defer root.Close()
+	if info, sErr := root.Lstat(base); sErr != nil || !info.Mode().IsRegular() {
+		if sErr == nil {
+			sErr = fmt.Errorf("refusing non-regular solution file %s", base)
 		}
+		return nil, "", fmt.Errorf("%w: %w", ErrSolutionRead, sErr)
+	}
+	raw, err := root.ReadFile(base)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: %w", ErrSolutionRead, err)
+	}
+	var sol solution.Solution
+	sol.SetPath(cleanPath)
+	if err := sol.UnmarshalFromBytes(raw); err != nil {
+		return nil, "", fmt.Errorf("failed to parse solution: %w", err)
+	}
+	composed := &sol
+	if len(sol.Compose) > 0 {
+		cleanBundle := filepath.Clean(bundleRoot)
+		composed, err = Compose(&sol, bundleRoot, WithReadFileFunc(func(absTarget string) ([]byte, error) {
+			rel, relErr := filepath.Rel(cleanBundle, filepath.Clean(absTarget))
+			if relErr != nil || rel == "." || rel == ".." || strings.HasPrefix(filepath.ToSlash(rel), "../") || filepath.IsAbs(rel) {
+				return nil, fmt.Errorf("compose path %q escapes bundle root", absTarget)
+			}
+			return root.ReadFile(rel)
+		}))
+		if err != nil {
+			return nil, "", fmt.Errorf("composing solution: %w", err)
+		}
+	}
+	composed.ApplyDefaults()
+	if err := composed.Validate(); err != nil {
+		return nil, "", fmt.Errorf("solution validation failed: %w", err)
+	}
+	if err := ValidatePlugins(composed); err != nil {
+		return nil, "", fmt.Errorf("plugin validation failed: %w", err)
+	}
+	return composed, bundleRoot, nil
+}
 
-		// Re-resolve from catalog
-		latestContent, latestInfo, fetchErr := fetcher.FetchSolution(ctx, dep.Ref)
-		if fetchErr != nil {
-			lgr.V(1).Info("failed to re-resolve dependency", "ref", dep.Ref, "error", fetchErr)
-			// Keep entry with NeedsUpdate=false so caller can report the error
-			entries = append(entries, entry)
+// UpdateVendoredDependencies re-resolves targeted sub-solutions via ResolveDependencies,
+// updates targeted plugins via VendorAllPlugins, and commits changes atomically.
+func UpdateVendoredDependencies(ctx context.Context, sol *solution.Solution, existingLock *LockFile, opts VendorUpdateRunOptions) (*VendorUpdateResult, error) {
+	if sol == nil {
+		return nil, fmt.Errorf("solution is nil")
+	}
+	if existingLock == nil {
+		existingLock = &LockFile{Version: LockFileVersion}
+	}
+	var discOpts []DiscoverOption
+	if opts.BundleRoot != "" {
+		if ic, icErr := LoadScafctlIgnore(opts.BundleRoot); icErr == nil {
+			discOpts = append(discOpts, WithIgnoreChecker(ic))
+		}
+	}
+	discovery, err := DiscoverFiles(sol, opts.BundleRoot, discOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("discovering dependencies: %w", err)
+	}
+	sel, err := matchUpdateFilters(discovery.CatalogRefs, sol.Bundle.Plugins, existingLock, opts.Dependencies)
+	if err != nil {
+		return nil, err
+	}
+
+	var vendorRes *VendorResult
+	newDeps := slices.Clone(existingLock.Dependencies)
+	if len(opts.Dependencies) == 0 || len(sel.deps) > 0 {
+		var filteredLock *LockFile
+		if len(opts.Dependencies) > 0 {
+			deps := slices.DeleteFunc(slices.Clone(existingLock.Dependencies), func(d LockDependency) bool { return sel.deps[refName(d.Ref)] })
+			filteredLock = &LockFile{Version: LockFileVersion, Dependencies: deps}
+		}
+		solBytes, cloneErr := sol.ToYAML()
+		var solCopy solution.Solution
+		if cloneErr == nil {
+			cloneErr = solCopy.UnmarshalFromBytes(solBytes)
+		}
+		if cloneErr != nil {
+			return nil, fmt.Errorf("cloning solution: %w", cloneErr)
+		}
+		vOpts := VendorOptions{BundleRoot: opts.BundleRoot, ExistingLock: filteredLock, CatalogFetcher: opts.SolutionFetcher}
+		if vendorRes, err = ResolveDependencies(ctx, &solCopy, discovery.CatalogRefs, vOpts); err != nil {
+			return nil, err
+		}
+		newDeps = vendorRes.Lock.Dependencies
+	}
+
+	entries := diffLockDependencies(existingLock.Dependencies, newDeps)
+	newPlugins := slices.Clone(existingLock.Plugins)
+	pluginEntries := []PluginUpdateEntry{}
+	var pluginMessages []string
+	if opts.PluginOptions != nil {
+		if newPlugins, pluginEntries, err = resolveAndDiffPlugins(ctx, sol.Bundle.Plugins, existingLock, sel, len(opts.Dependencies) == 0, *opts.PluginOptions); err != nil {
+			return nil, err
+		}
+	} else if len(opts.Dependencies) == 0 {
+		pluginMessages = CheckPluginUpdates(existingLock)
+	}
+
+	res := buildVendorUpdateResult(entries, pluginEntries, pluginMessages, opts.DryRun)
+	if opts.DryRun || res.UpdateCount == 0 {
+		return res, nil
+	}
+	if !opts.LockOnly && opts.BundleRoot != "" {
+		if err := syncVendorDir(opts.BundleRoot, vendorRes, existingLock.Dependencies, newDeps); err != nil {
+			return nil, err
+		}
+	}
+	if opts.LockPath != "" {
+		if err := WriteLockFile(opts.LockPath, &LockFile{Version: LockFileVersion, Dependencies: newDeps, Plugins: newPlugins}); err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func formatChangeMsg(label, status, lockedVer, latestVer, unchangedSuffix string, dryRun bool) string {
+	lv := cmp.Or(lockedVer, "(unlocked)")
+	switch {
+	case status == UpdateStatusPruned && dryRun:
+		return fmt.Sprintf("%s: would prune (%s)", label, lv)
+	case status == UpdateStatusPruned:
+		return fmt.Sprintf("%s: pruned (%s)", label, lv)
+	case status == UpdateStatusUnchanged:
+		return fmt.Sprintf("%s: %s", label, unchangedSuffix)
+	case dryRun:
+		return fmt.Sprintf("%s: locked %s -> latest %s (would update)", label, lv, latestVer)
+	default:
+		return fmt.Sprintf("%s: updated %s -> %s", label, lv, latestVer)
+	}
+}
+
+func buildVendorUpdateResult(entries []UpdateEntry, pluginEntries []PluginUpdateEntry, fallbackPluginMsgs []string, dryRun bool) *VendorUpdateResult {
+	res := &VendorUpdateResult{Entries: entries, PluginEntries: pluginEntries, DryRun: dryRun, PluginMessages: fallbackPluginMsgs}
+	for _, e := range entries {
+		if e.NeedsUpdate {
+			res.UpdateCount++
+		}
+		res.Messages = append(res.Messages, formatChangeMsg(e.Ref, e.Status, e.LockedVersion, e.LatestVersion, "up to date ("+e.LatestVersion+")", dryRun))
+	}
+	for _, pe := range pluginEntries {
+		if pe.NeedsUpdate {
+			res.UpdateCount++
+		}
+		res.PluginMessages = append(res.PluginMessages, formatChangeMsg(pe.DisplayName()+" ("+pe.Kind+")", pe.Status, pe.LockedVersion, pe.LatestVersion, pe.LatestVersion+" up to date", dryRun))
+	}
+	return res
+}
+
+type filterTargets struct {
+	deps               map[string]bool
+	plugins, lockPlugs map[int]bool
+}
+
+func matchUpdateFilters(refs []CatalogRefEntry, plugins []solution.PluginDependency, lock *LockFile, filters []string) (filterTargets, error) {
+	if len(filters) == 0 {
+		return filterTargets{}, nil
+	}
+	sel := filterTargets{deps: make(map[string]bool), plugins: make(map[int]bool), lockPlugs: make(map[int]bool)}
+	var unmatched []string
+	for _, f := range filters {
+		matched := false
+		for _, cr := range refs {
+			if cr.Ref == f || refName(cr.Ref) == f {
+				sel.deps[refName(cr.Ref)], matched = true, true
+			}
+		}
+		for _, dep := range lock.Dependencies {
+			if dep.Ref == f || refName(dep.Ref) == f {
+				sel.deps[refName(dep.Ref)], matched = true, true
+			}
+		}
+		for i, p := range plugins {
+			kp := string(p.Kind) + "/"
+			if p.LocalName() == f || p.ArtifactName() == f || kp+p.LocalName() == f || kp+p.ArtifactName() == f {
+				sel.plugins[i], matched = true, true
+			}
+		}
+		for li, lp := range lock.Plugins {
+			if lp.Name == f || lp.Kind+"/"+lp.Name == f {
+				sel.lockPlugs[li], matched = true, true
+			}
+		}
+		if !matched && !slices.Contains(unmatched, f) {
+			unmatched = append(unmatched, f)
+		}
+	}
+	if len(unmatched) == 1 {
+		return filterTargets{}, fmt.Errorf("%w: dependency %q not found in solution or lock file", ErrInvalidUpdateTarget, unmatched[0])
+	}
+	if len(unmatched) > 1 {
+		return filterTargets{}, fmt.Errorf("%w: dependencies not found in solution or lock file: %s", ErrInvalidUpdateTarget, strings.Join(unmatched, ", "))
+	}
+	return sel, nil
+}
+
+func updateStatusFor(changed bool) string {
+	if changed {
+		return UpdateStatusUpdated
+	}
+	return UpdateStatusUnchanged
+}
+
+func diffLockDependencies(oldDeps, newDeps []LockDependency) []UpdateEntry {
+	entries := make([]UpdateEntry, 0, len(newDeps))
+	usedOld := make(map[int]bool, len(oldDeps))
+	for _, nd := range newDeps {
+		idx := -1
+		for i, od := range oldDeps {
+			if !usedOld[i] && (od.Ref == nd.Ref || (idx < 0 && refName(od.Ref) == refName(nd.Ref))) {
+				idx = i
+				if od.Ref == nd.Ref {
+					break
+				}
+			}
+		}
+		latestVer := cmp.Or(nd.ResolvedVersion, ExtractVersionFromRef(nd.Ref))
+		if idx < 0 {
+			entries = append(entries, UpdateEntry{Ref: nd.Ref, Constraint: nd.Constraint, Status: UpdateStatusAdded, LatestVersion: latestVer, LatestDigest: nd.Digest, NeedsUpdate: true})
 			continue
 		}
-
-		latestDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(latestContent))
-		entry.LatestVersion = ExtractVersionFromRef(dep.Ref)
-		if latestInfo.Reference.Version != nil {
-			entry.LatestVersion = latestInfo.Reference.Version.String()
-		}
-		entry.LatestDigest = latestDigest
-		entry.Content = latestContent
-		entry.Info = latestInfo
-
-		if latestDigest != dep.Digest {
-			entry.NeedsUpdate = true
-		}
-
-		entries = append(entries, entry)
+		usedOld[idx] = true
+		od := oldDeps[idx]
+		changed := od.Digest != nd.Digest || od.ResolvedVersion != nd.ResolvedVersion || od.Ref != nd.Ref || od.Constraint != nd.Constraint
+		entries = append(entries, UpdateEntry{
+			Ref: nd.Ref, Constraint: nd.Constraint, Status: updateStatusFor(changed), NeedsUpdate: changed,
+			LockedVersion: cmp.Or(od.ResolvedVersion, ExtractVersionFromRef(od.Ref)), LockedDigest: od.Digest,
+			LatestVersion: latestVer, LatestDigest: nd.Digest,
+		})
 	}
-
-	return entries, nil
+	for i, od := range oldDeps {
+		if !usedOld[i] {
+			lv := cmp.Or(od.ResolvedVersion, ExtractVersionFromRef(od.Ref))
+			entries = append(entries, UpdateEntry{Ref: od.Ref, Constraint: od.Constraint, Status: UpdateStatusPruned, LockedVersion: lv, LockedDigest: od.Digest, NeedsUpdate: true})
+		}
+	}
+	return entries
 }
 
-// ApplyUpdates writes vendored files for entries that need updating and
-// builds a new LockFile reflecting the updates.
-func ApplyUpdates(entries []UpdateEntry, existingLock *LockFile, bundleRoot string, lockOnly bool, lgr logr.Logger) (*LockFile, error) {
-	// Write updated vendored files
-	for _, entry := range entries {
-		if !entry.NeedsUpdate {
-			continue
-		}
-		if !lockOnly {
-			vendorDir := filepath.Join(bundleRoot, VendorDirName)
-			vendoredName := VendorFileNameFromRef(entry.Ref, entry.Info)
-			vendorPath := filepath.Join(vendorDir, vendoredName)
-
-			if err := os.MkdirAll(filepath.Dir(vendorPath), 0o755); err != nil {
-				return nil, fmt.Errorf("failed to create vendor directory: %w", err)
-			}
-			if err := os.WriteFile(vendorPath, entry.Content, 0o600); err != nil {
-				return nil, fmt.Errorf("failed to write vendored file: %w", err)
-			}
-			lgr.V(1).Info("wrote vendored file", "path", vendorPath)
-		}
+func lockedPluginMatchesConstraint(constraint, lockedVer string) bool {
+	verStr := strings.TrimSpace(constraint)
+	if verStr == "" || strings.EqualFold(verStr, "latest") {
+		return lockedVer != ""
 	}
-
-	// Build new lock file
-	newLock := &LockFile{
-		Version:      LockFileVersion,
-		Dependencies: make([]LockDependency, 0, len(existingLock.Dependencies)),
-		Plugins:      existingLock.Plugins,
-	}
-
-	for _, dep := range existingLock.Dependencies {
-		updated := false
-		for _, entry := range entries {
-			if entry.Ref == dep.Ref && entry.NeedsUpdate {
-				newLock.Dependencies = append(newLock.Dependencies, LockDependency{
-					Ref:          entry.Ref,
-					Digest:       entry.LatestDigest,
-					ResolvedFrom: entry.Info.Catalog,
-					VendoredAt:   dep.VendoredAt,
-				})
-				updated = true
-				break
-			}
-		}
-		if !updated {
-			newLock.Dependencies = append(newLock.Dependencies, dep)
-		}
-	}
-
-	return newLock, nil
+	_, _, ok := lockedDepMatchesRef(&LockDependency{ResolvedVersion: lockedVer}, "p@"+verStr)
+	return ok
 }
 
-// FilterDependencies returns only the dependencies whose refs match the filter list.
-// Returns an error if any filter value is not found in the deps slice.
-func FilterDependencies(deps []LockDependency, filter []string) ([]LockDependency, error) {
-	filterSet := make(map[string]bool, len(filter))
-	for _, f := range filter {
-		filterSet[f] = true
+func resolveAndDiffPlugins(ctx context.Context, declared []solution.PluginDependency, existingLock *LockFile, sel filterTargets, updateAll bool, opts VendorAllPluginsOptions) ([]LockPlugin, []PluginUpdateEntry, error) {
+	if opts.Platform == "" {
+		opts.Platform = runtime.GOOS + "/" + runtime.GOARCH
+	}
+	resolved := make([]LockPlugin, 0, len(declared))
+	entries := make([]PluginUpdateEntry, 0, len(declared))
+	usedOld := make(map[int]bool, len(existingLock.Plugins))
+	claimOld := func(p solution.PluginDependency) *LockPlugin {
+		for exact := range 2 {
+			for i := range existingLock.Plugins {
+				single := &LockFile{Plugins: existingLock.Plugins[i : i+1]}
+				if !usedOld[i] && ((exact == 0 && single.FindPluginByVersionConstraint(p) != nil) || (exact == 1 && single.FindPluginByDep(p) != nil)) {
+					usedOld[i] = true
+					return &existingLock.Plugins[i]
+				}
+			}
+		}
+		return nil
 	}
 
-	var result []LockDependency
-	for _, dep := range deps {
-		if filterSet[dep.Ref] {
-			result = append(result, dep)
-			delete(filterSet, dep.Ref)
+	for i, p := range declared {
+		locked := claimOld(p)
+		var latest LockPlugin
+		if !updateAll && !sel.plugins[i] && locked != nil && lockedPluginMatchesConstraint(p.Version, locked.Version) {
+			latest = cloneLockPlugin(*locked)
+			latest.Constraint = p.Version
+		} else {
+			vr, err := VendorAllPlugins(ctx, []solution.PluginDependency{p}, nil, opts)
+			if err != nil {
+				return nil, nil, err
+			}
+			latest = cloneLockPlugin(vr.ResolvedPlugins[0])
+			if locked != nil && locked.Version == latest.Version && lockedDigestsMatch(locked, latest.Digests, latest.Digest) &&
+				locked.IsBuilt() == latest.IsBuilt() && locked.ResolvedCanonical == latest.ResolvedCanonical &&
+				(locked.ResolvedCanonical != "" || locked.ResolvedFrom == latest.ResolvedFrom) {
+				latest.Digest = locked.Digest
+				if locked.ResolvedCanonical != "" && locked.ResolvedFrom != "" {
+					latest.ResolvedFrom = locked.ResolvedFrom
+				}
+				if opts.VerifySignature == nil && locked.Signature != nil && !latest.IsBuilt() && latest.ResolvedCanonical != "" {
+					sig := *locked.Signature
+					latest.Signature = &sig
+				}
+			}
+		}
+		resolved = append(resolved, latest)
+
+		pe := PluginUpdateEntry{
+			Name: latest.Name, Kind: latest.Kind, Constraint: latest.Constraint,
+			LatestVersion: latest.Version, LatestDigest: latest.Digest, ResolvedFrom: latest.ResolvedFrom,
+		}
+		if p.IsAliased() {
+			pe.Alias = p.LocalName()
+		}
+		if locked == nil {
+			pe.Status, pe.NeedsUpdate = UpdateStatusAdded, true
+		} else {
+			pe.LockedVersion, pe.LockedDigest = locked.Version, locked.Digest
+			pe.NeedsUpdate = !lockPluginsEqual(*locked, latest)
+			pe.Status = updateStatusFor(pe.NeedsUpdate)
+		}
+		entries = append(entries, pe)
+	}
+
+	for i, lp := range existingLock.Plugins {
+		switch {
+		case usedOld[i]:
+		case updateAll || sel.lockPlugs[i]:
+			entries = append(entries, PluginUpdateEntry{Name: lp.Name, Kind: lp.Kind, Constraint: lp.Constraint, Status: UpdateStatusPruned, LockedVersion: lp.Version, LockedDigest: lp.Digest, NeedsUpdate: true})
+		default:
+			resolved = append(resolved, cloneLockPlugin(lp))
 		}
 	}
-
-	for f := range filterSet {
-		return nil, fmt.Errorf("dependency %q not found in lock file", f)
+	if len(resolved) == 0 {
+		resolved = nil
 	}
+	return resolved, entries, nil
+}
 
-	return result, nil
+func lockPluginsEqual(a, b LockPlugin) bool {
+	srcEq := (a.Source == nil && b.Source == nil) || (a.Source != nil && b.Source != nil && *a.Source == *b.Source)
+	sigEq := (a.Signature == nil && b.Signature == nil) || (a.Signature != nil && b.Signature != nil && *a.Signature == *b.Signature)
+	return a.Name == b.Name && a.Kind == b.Kind && a.Version == b.Version && a.Constraint == b.Constraint &&
+		a.Digest == b.Digest && len(a.Digests) == len(b.Digests) && maps.Equal(a.Digests, b.Digests) &&
+		a.ResolvedFrom == b.ResolvedFrom && a.ResolvedCanonical == b.ResolvedCanonical && srcEq && sigEq
+}
+
+func syncVendorDir(bundleRoot string, vendorRes *VendorResult, oldDeps, newDeps []LockDependency) error {
+	if vendorRes != nil {
+		if err := vendorRes.WriteFiles(bundleRoot); err != nil {
+			return err
+		}
+	}
+	active := make(map[string]bool, len(newDeps))
+	for _, nd := range newDeps {
+		if slashPath, _, ok := cleanVendorPath(nd.VendoredAt); ok {
+			active[slashPath] = true
+		}
+	}
+	var toRemove []string
+	for _, od := range oldDeps {
+		if slashPath, subRel, ok := cleanVendorPath(od.VendoredAt); ok && !active[slashPath] {
+			toRemove = append(toRemove, subRel)
+		}
+	}
+	if len(toRemove) == 0 {
+		return nil
+	}
+	vRoot, err := openVendorSubRoot(bundleRoot, false)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("opening vendor root: %w", err)
+	}
+	defer vRoot.Close()
+	for _, subRel := range toRemove {
+		if rmErr := vRoot.Remove(subRel); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			return fmt.Errorf("removing pruned vendored file %s: %w", subRel, rmErr)
+		}
+	}
+	return nil
+}
+
+// CatalogChainAdapter adapts any catalog.Catalog to the CatalogFetcher interface.
+type CatalogChainAdapter struct {
+	Catalog      catalog.Catalog
+	LocalCatalog *catalog.LocalCatalog
+}
+
+// FetchSolution retrieves a solution by name[@version] from the catalog chain.
+func (a *CatalogChainAdapter) FetchSolution(ctx context.Context, nameWithVersion string) ([]byte, catalog.ArtifactInfo, error) {
+	if a == nil || a.Catalog == nil {
+		return nil, catalog.ArtifactInfo{}, fmt.Errorf("catalog is nil")
+	}
+	ref, err := catalog.ParseReference(catalog.ArtifactKindSolution, nameWithVersion)
+	if err != nil {
+		return nil, catalog.ArtifactInfo{}, fmt.Errorf("invalid reference %q: %w", nameWithVersion, err)
+	}
+	content, info, err := a.Catalog.Fetch(ctx, ref)
+	if err != nil {
+		return nil, catalog.ArtifactInfo{}, err
+	}
+	if canonical := cmp.Or(info.Canonical, info.Reference.Remote); a.LocalCatalog != nil &&
+		info.Reference.Version != nil && canonical != "" && info.Catalog != "" && !strings.EqualFold(info.Catalog, a.LocalCatalog.Name()) {
+		cacheRef := info.Reference
+		cacheRef.Remote, cacheRef.Built = canonical, false
+		ann := catalog.NewAnnotationBuilder().Set(catalog.AnnotationSource, "auto-cached").
+			Set(catalog.AnnotationOrigin, "auto-cached from "+info.Catalog).
+			Set(catalog.AnnotationSourceCanonical, canonical).Build()
+		if _, sErr := a.LocalCatalog.Store(ctx, cacheRef, content, nil, ann, true); sErr != nil {
+			logger.FromContext(ctx).V(1).Info("failed to auto-cache remote solution locally (non-fatal)", "name", cacheRef.Name, "error", sErr)
+		}
+	}
+	return content, info, nil
+}
+
+// ListSolutions returns all available versions of a named solution artifact from the catalog chain.
+func (a *CatalogChainAdapter) ListSolutions(ctx context.Context, name string) ([]catalog.ArtifactInfo, error) {
+	if a == nil || a.Catalog == nil {
+		return nil, fmt.Errorf("catalog is nil")
+	}
+	return a.Catalog.List(ctx, catalog.ArtifactKindSolution, name)
 }
 
 // ExtractVersionFromRef extracts the version part after the last '@' in a catalog reference.
-// Returns "latest" if no '@' is found.
 func ExtractVersionFromRef(ref string) string {
-	for i := len(ref) - 1; i >= 0; i-- {
-		if ref[i] == '@' {
-			return ref[i+1:]
-		}
+	if idx := strings.LastIndex(ref, "@"); idx >= 0 {
+		return ref[idx+1:]
 	}
 	return "latest"
 }
@@ -194,40 +525,14 @@ func TruncateDigest(digest string) string {
 	return digest
 }
 
-// CheckPluginUpdates returns formatted status messages for plugin dependencies.
+// CheckPluginUpdates returns formatted status messages for locked plugin entries.
 func CheckPluginUpdates(lock *LockFile) []string {
 	if lock == nil {
 		return nil
 	}
-	var messages []string
+	messages := make([]string, 0, len(lock.Plugins))
 	for _, p := range lock.Plugins {
-		messages = append(messages, fmt.Sprintf("  • %s (%s): %s (locked at %s)", p.Name, p.Kind, p.Version, TruncateDigest(p.Digest)))
+		messages = append(messages, fmt.Sprintf("  - %s (%s): %s (locked at %s)", p.Name, p.Kind, p.Version, TruncateDigest(p.Digest)))
 	}
 	return messages
-}
-
-// LocalCatalogFetcherAdapter adapts a catalog.LocalCatalog to the CatalogFetcher interface.
-type LocalCatalogFetcherAdapter struct {
-	// Catalog is the local catalog instance.
-	Catalog *catalog.LocalCatalog
-}
-
-// FetchSolution retrieves a solution by name[@version] from the local catalog.
-func (a *LocalCatalogFetcherAdapter) FetchSolution(ctx context.Context, nameWithVersion string) ([]byte, catalog.ArtifactInfo, error) {
-	ref, err := catalog.ParseReference(catalog.ArtifactKindSolution, nameWithVersion)
-	if err != nil {
-		return nil, catalog.ArtifactInfo{}, fmt.Errorf("invalid reference %q: %w", nameWithVersion, err)
-	}
-
-	content, info, err := a.Catalog.Fetch(ctx, ref)
-	if err != nil {
-		return nil, catalog.ArtifactInfo{}, err
-	}
-
-	return content, info, nil
-}
-
-// ListSolutions returns all available versions of a named solution artifact from the local catalog.
-func (a *LocalCatalogFetcherAdapter) ListSolutions(ctx context.Context, name string) ([]catalog.ArtifactInfo, error) {
-	return a.Catalog.List(ctx, catalog.ArtifactKindSolution, name)
 }

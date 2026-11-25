@@ -6,6 +6,7 @@ package bundler
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -489,7 +490,7 @@ func TestLoadLockFile_InvalidVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "solution.lock")
 
-	err := os.WriteFile(path, []byte("version: 99\n"), 0o644)
+	err := os.WriteFile(path, []byte("version: 99\n"), 0o600)
 	require.NoError(t, err)
 
 	lf, err := LoadLockFile(path)
@@ -502,7 +503,7 @@ func TestLoadLockFile_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "solution.lock")
 
-	err := os.WriteFile(path, []byte("{{invalid yaml"), 0o644)
+	err := os.WriteFile(path, []byte("{{invalid yaml"), 0o600)
 	require.NoError(t, err)
 
 	lf, err := LoadLockFile(path)
@@ -778,4 +779,59 @@ func TestParseLockYAML(t *testing.T) {
 			assert.Equal(t, "p", lf.Plugins[0].Name)
 		})
 	}
+}
+
+func TestLoadAndWriteLockFile_ConfinementAndSymlinks(t *testing.T) {
+	t.Parallel()
+
+	t.Run("LoadLockFile returns nil when parent directory does not exist", func(t *testing.T) {
+		t.Parallel()
+		lf, err := LoadLockFile(filepath.Join(t.TempDir(), "missing-parent", DefaultLockFileName))
+		require.NoError(t, err)
+		assert.Nil(t, lf)
+	})
+
+	t.Run("LoadLockFile and WriteLockFile reject symlinked target", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		other := filepath.Join(dir, "other.yaml")
+		require.NoError(t, os.WriteFile(other, []byte("version: 1\n"), 0o600))
+
+		lockPath := filepath.Join(dir, DefaultLockFileName)
+		require.NoError(t, os.Symlink("other.yaml", lockPath))
+
+		lf, err := LoadLockFile(lockPath)
+		require.ErrorContains(t, err, "symlink")
+		assert.Nil(t, lf)
+
+		writeErr := WriteLockFile(lockPath, &LockFile{Version: LockFileVersion})
+		require.ErrorContains(t, writeErr, "symlink")
+	})
+
+	t.Run("LoadLockFile and WriteLockFile reject directory target", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		lockPath := filepath.Join(dir, DefaultLockFileName)
+		require.NoError(t, os.Mkdir(lockPath, 0o700))
+
+		lf, err := LoadLockFile(lockPath)
+		require.ErrorContains(t, err, "directory")
+		assert.Nil(t, lf)
+
+		writeErr := WriteLockFile(lockPath, &LockFile{Version: LockFileVersion})
+		require.ErrorContains(t, writeErr, "directory")
+	})
+
+	t.Run("WriteLockFile writes 0600 permissions atomically", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		lockPath := filepath.Join(dir, DefaultLockFileName)
+		require.NoError(t, WriteLockFile(lockPath, &LockFile{Version: LockFileVersion}))
+
+		if runtime.GOOS != "windows" {
+			info, err := os.Stat(lockPath)
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+		}
+	})
 }

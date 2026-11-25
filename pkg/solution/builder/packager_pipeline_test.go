@@ -5,6 +5,9 @@ package builder
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -781,4 +784,105 @@ func BenchmarkPackager_Do_DryRun(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func TestPackager_Do_MaterializesLockOnlyRemoteDependency(t *testing.T) {
+	t.Parallel()
+
+	childV110 := []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: remote-dep\n  version: 1.1.0\nspec:\n  resolvers: {}\n")
+	sum := sha256.Sum256(childV110)
+	childDigest := "sha256:" + hex.EncodeToString(sum[:])
+
+	cfgBytes := []byte(`{}`)
+	cfgSum := sha256.Sum256(cfgBytes)
+	cfgDigest := "sha256:" + hex.EncodeToString(cfgSum[:])
+
+	manifestDoc := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.scafctl.solution.config.v1+json","digest":%q,"size":%d},"layers":[{"mediaType":"application/vnd.scafctl.solution.v1+yaml","digest":%q,"size":%d}],"annotations":{"dev.scafctl.artifact.name":"remote-dep","dev.scafctl.artifact.type":"solution","org.opencontainers.image.version":"1.1.0"}}`,
+		cfgDigest, len(cfgBytes), childDigest, len(childV110))
+	manifestBytes := []byte(manifestDoc)
+	manifestSum := sha256.Sum256(manifestBytes)
+	manifestDigest := "sha256:" + hex.EncodeToString(manifestSum[:])
+
+	ociSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v2/", "/v2":
+			w.WriteHeader(http.StatusOK)
+		case "/v2/acme/solutions/remote-dep/tags/list":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"acme/solutions/remote-dep","tags":["1.1.0","1.2.0"]}`))
+		case "/v2/acme/solutions/remote-dep/manifests/1.1.0", "/v2/acme/solutions/remote-dep/manifests/" + manifestDigest:
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", manifestDigest)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(manifestBytes)))
+			if r.Method == http.MethodGet {
+				_, _ = w.Write(manifestBytes)
+			}
+		case "/v2/acme/solutions/remote-dep/blobs/" + cfgDigest:
+			w.Header().Set("Docker-Content-Digest", cfgDigest)
+			_, _ = w.Write(cfgBytes)
+		case "/v2/acme/solutions/remote-dep/blobs/" + childDigest:
+			w.Header().Set("Docker-Content-Digest", childDigest)
+			_, _ = w.Write(childV110)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(ociSrv.Close)
+	host := strings.TrimPrefix(ociSrv.URL, "https://")
+
+	const parentDoc = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: demo
+  version: 1.0.0
+spec:
+  resolvers:
+    sub:
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: remote-dep@^1.0.0
+`
+	f := newPipelineFixture(t, map[string]string{"solution.yaml": parentDoc})
+	require.NoError(t, bundler.WriteLockFile(filepath.Join(f.dir, bundler.DefaultLockFileName), &bundler.LockFile{
+		Version: bundler.LockFileVersion,
+		Dependencies: []bundler.LockDependency{
+			{
+				Ref:             "remote-dep@^1.0.0",
+				ResolvedVersion: "1.1.0",
+				Constraint:      "^1.0.0",
+				Digest:          childDigest,
+				ResolvedFrom:    "solutions-remote",
+				VendoredAt:      ".scafctl/vendor/remote-dep@1.1.0.yaml",
+			},
+		},
+	}))
+
+	appCfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true},
+		Catalogs: []config.CatalogConfig{
+			{Name: "solutions-remote", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/acme", Insecure: true},
+		},
+	}
+	ctx := config.WithConfig(t.Context(), appCfg)
+
+	// DryRun fetches from remote to verify bundle completeness without writing to disk or caching locally.
+	dryRes, err := f.packager(t).DryRun(true).Do(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, dryRes.Messages, "Vendored 1 catalog dependency(ies)")
+	assert.NoDirExists(t, filepath.Join(f.dir, bundler.VendorDirName))
+	_, err = f.cat.Resolve(ctx, catalog.Reference{Kind: catalog.ArtifactKindSolution, Name: "remote-dep", Version: semver.MustParse("1.1.0")})
+	assert.True(t, catalog.IsNotFound(err), "dry-run must not auto-cache remote dependencies into local catalog")
+
+	// Full package materializes pinned 1.1.0 (not 1.2.0), writes .scafctl/vendor/remote-dep@1.1.0.yaml, and caches locally.
+	res, err := f.packager(t).Verify(VerifyOptions{Skip: true}).Do(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, res.Messages, "Vendored 1 catalog dependency(ies)")
+	assert.FileExists(t, filepath.Join(f.dir, ".scafctl", "vendor", "remote-dep@1.1.0.yaml"))
+
+	cachedInfo, err := f.cat.Resolve(ctx, catalog.Reference{Kind: catalog.ArtifactKindSolution, Name: "remote-dep", Version: semver.MustParse("1.1.0")})
+	require.NoError(t, err)
+	assert.Equal(t, "auto-cached", cachedInfo.Annotations[catalog.AnnotationSource])
+	assert.Equal(t, host+"/acme", cachedInfo.Annotations[catalog.AnnotationSourceCanonical])
 }

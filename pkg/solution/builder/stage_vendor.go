@@ -52,7 +52,7 @@ func (p *Packager) resolvePlugins(ctx context.Context, st *pipelineState) (bool,
 	if err != nil {
 		return false, fmt.Errorf("failed to build plugin catalog chain: %w", err)
 	}
-	verifySig, err := buildLockSignatureVerifier(ctx, lgr)
+	verifySig, err := BuildLockSignatureVerifier(ctx, lgr)
 	if err != nil {
 		return false, fmt.Errorf("failed to vendor plugin dependencies: %w", err)
 	}
@@ -76,26 +76,29 @@ func (p *Packager) resolvePlugins(ctx context.Context, st *pipelineState) (bool,
 // into vendored files, held in memory until written, and adds them to the
 // files to bundle.
 func (p *Packager) resolveCatalogDeps(ctx context.Context, st *pipelineState) (bool, error) {
-	// TODO: catalog dependency resolution is origin-ambiguous.
-	//   - Only the local catalog is searched (no remotes are added), so
-	//     SetCacheRemoteArtifacts below is a no-op and results depend on what
-	//     happens to be pulled/built on this machine. Plugins, by contrast,
-	//     resolve against catalog.BuildPluginFetcher.
-	//   - Refs carry no origin. Exact/no-version refs fail on mixed origins via
-	//     checkAmbiguity, but semver-range refs (bundler.parseAndResolveRef)
-	//     pick the highest version across all origins with no ambiguity check.
-	//   - The lock records ResolvedFrom as "local", not the canonical origin
-	//     (plugins record ResolvedCanonical), so replay cannot verify origin.
-	//   Consider explicit, origin-qualified dependencies (e.g. spec.dependencies)
-	//   instead of inferring them from solution provider `source` values.
-	registry := catalog.NewRegistryWithLocal(p.catalog, *logger.FromContext(ctx))
-	registry.SetCacheRemoteArtifacts(!p.dryRun)
+	lgr := *logger.FromContext(ctx)
+	solChain, err := catalog.BuildCatalogChain(
+		config.FromContext(ctx),
+		auth.RegistryFromContext(ctx),
+		lgr,
+		catalog.WithLocalCatalog(p.catalog),
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to build solution catalog chain: %w", err)
+	}
+	var cacheCat *catalog.LocalCatalog
+	if !p.dryRun {
+		cacheCat = p.catalog
+	}
 
 	discovery := st.discovery
 	deps, err := bundler.ResolveDependencies(ctx, p.src.Solution, discovery.CatalogRefs, bundler.VendorOptions{
-		BundleRoot:     p.src.BundleRoot,
-		ExistingLock:   st.existingLock,
-		CatalogFetcher: &RegistryFetcherAdapter{Registry: registry},
+		BundleRoot:   p.src.BundleRoot,
+		ExistingLock: st.existingLock,
+		CatalogFetcher: &bundler.CatalogChainAdapter{
+			Catalog:      solChain,
+			LocalCatalog: cacheCat,
+		},
 	})
 	if err != nil {
 		return false, fmt.Errorf("failed to vendor catalog dependencies: %w", err)

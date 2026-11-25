@@ -224,7 +224,7 @@ func TestValidateProviderCoverage_TransformPhase(t *testing.T) {
 
 func TestBuildLockSignatureVerifier_NilPolicy(t *testing.T) {
 	ctx := context.Background()
-	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := BuildLockSignatureVerifier(ctx, logr.Discard())
 	require.NoError(t, err)
 	assert.Nil(t, fn, "should return nil when no policy in context or config")
 }
@@ -237,7 +237,7 @@ func TestBuildLockSignatureVerifier_ConfigFallback(t *testing.T) {
 	appCfg.Plugins.Signatures.TrustedIdentities = []string{"https://github.com/org/*"}
 	ctx := config.WithConfig(context.Background(), appCfg)
 
-	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := BuildLockSignatureVerifier(ctx, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, fn, "should derive policy from config when context has no policy")
 }
@@ -249,7 +249,7 @@ func TestBuildLockSignatureVerifier_InvalidPolicyErrors(t *testing.T) {
 	// TrustedIssuers and TrustedIdentities intentionally omitted.
 	ctx := config.WithConfig(context.Background(), appCfg)
 
-	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := BuildLockSignatureVerifier(ctx, logr.Discard())
 	assert.Nil(t, fn)
 	require.ErrorContains(t, err, "plugin signature policy")
 }
@@ -260,7 +260,7 @@ func TestBuildLockSignatureVerifier_ConfigFallback_Off(t *testing.T) {
 	appCfg.Plugins.Signatures.Mode = "off"
 	ctx := config.WithConfig(context.Background(), appCfg)
 
-	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := BuildLockSignatureVerifier(ctx, logr.Discard())
 	require.NoError(t, err)
 	assert.Nil(t, fn, "should return nil when config mode is off")
 }
@@ -274,7 +274,7 @@ func TestBuildLockSignatureVerifier_ContextOverridesConfig(t *testing.T) {
 	ctx := config.WithConfig(context.Background(), appCfg)
 	ctx = plugin.WithSignaturePolicy(ctx, &plugin.SignaturePolicy{Mode: plugin.SignatureModeOff})
 
-	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := BuildLockSignatureVerifier(ctx, logr.Discard())
 	require.NoError(t, err)
 	assert.Nil(t, fn, "context policy should take precedence over config")
 }
@@ -283,7 +283,7 @@ func TestBuildLockSignatureVerifier_OffPolicy(t *testing.T) {
 	ctx := plugin.WithSignaturePolicy(context.Background(), &plugin.SignaturePolicy{
 		Mode: plugin.SignatureModeOff,
 	})
-	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := BuildLockSignatureVerifier(ctx, logr.Discard())
 	require.NoError(t, err)
 	assert.Nil(t, fn, "should return nil when policy mode is off")
 }
@@ -294,7 +294,7 @@ func TestBuildLockSignatureVerifier_EnforceReturnsError(t *testing.T) {
 		TrustedIssuers:    []string{"https://issuer.example.com"},
 		TrustedIdentities: []string{"https://github.com/org/*"},
 	})
-	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := BuildLockSignatureVerifier(ctx, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, fn, "should return a callback when policy is active")
 
@@ -311,7 +311,7 @@ func TestBuildLockSignatureVerifier_WarnReturnsNil(t *testing.T) {
 		TrustedIssuers:    []string{"https://issuer.example.com"},
 		TrustedIdentities: []string{"https://github.com/org/*"},
 	})
-	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := BuildLockSignatureVerifier(ctx, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, fn, "should return a callback when policy is active")
 
@@ -329,7 +329,7 @@ func TestBuildLockSignatureVerifier_EmptyImageRef_EnforceFailsClosed(t *testing.
 		TrustedIssuers:    []string{"https://issuer.example.com"},
 		TrustedIdentities: []string{"https://github.com/org/*"},
 	})
-	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := BuildLockSignatureVerifier(ctx, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, fn)
 
@@ -345,7 +345,7 @@ func TestBuildLockSignatureVerifier_EmptyImageRef_WarnContinues(t *testing.T) {
 		TrustedIssuers:    []string{"https://issuer.example.com"},
 		TrustedIdentities: []string{"https://github.com/org/*"},
 	})
-	fn, err := buildLockSignatureVerifier(ctx, logr.Discard())
+	fn, err := BuildLockSignatureVerifier(ctx, logr.Discard())
 	require.NoError(t, err)
 	require.NotNil(t, fn)
 
