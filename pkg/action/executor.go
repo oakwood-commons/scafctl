@@ -47,6 +47,10 @@ type Executor struct {
 	// progressCallback receives execution events
 	progressCallback ProgressCallback
 
+	// activeProgress is the mutex-synchronized wrapper around progressCallback
+	// initialized at the start of Execute and shared with nested executors.
+	activeProgress ProgressCallback
+
 	// maxConcurrency limits parallel action execution (0 = unlimited)
 	maxConcurrency int
 
@@ -323,6 +327,20 @@ func (e *Executor) Execute(ctx context.Context, w *Workflow) (*ExecutionResult, 
 	// Reset the opt-in de-duplication memo at the start of each run.
 	e.dedupMemo = call.NewMemo()
 
+	// Wrap progressCallback in a single mutex-serialized adapter so parent and
+	// nested sub-solution executors never race on unsynchronized observers.
+	e.activeProgress = SynchronizeProgressCallback(e.progressCallback)
+
+	inheritedCfg := InheritedExecutorConfig{
+		DefaultTimeout:   e.defaultTimeout,
+		GracePeriod:      e.gracePeriod,
+		MaxConcurrency:   e.maxConcurrency,
+		ProgressCallback: e.activeProgress,
+		IOStreams:        e.ioStreams,
+		Cwd:              e.cwd,
+	}
+	ctx = WithInheritedExecutorConfig(ctx, inheritedCfg)
+
 	// Ensure a run-scoped secret redaction tracker is present in ctx.
 	if redact.FromContext(ctx) == nil {
 		ctx = redact.WithTracker(ctx, redact.NewTracker())
@@ -358,21 +376,21 @@ func (e *Executor) Execute(ctx context.Context, w *Workflow) (*ExecutionResult, 
 	// Always execute finally section, regardless of main errors
 	var finallyErr error
 	if len(graph.FinallyOrder) > 0 {
-		if e.progressCallback != nil {
-			e.progressCallback.OnFinallyStart()
+		if cb := e.progress(); cb != nil {
+			cb.OnFinallyStart()
 		}
 
-		// Create a new context for finally that isn't cancelled
-		// (finally should run even if main was cancelled)
-		finallyCtx := context.Background()
-		if ctx.Err() == nil {
-			finallyCtx = ctx
+		// Create a context for finally that ignores parent cancellation while
+		// preserving all runtime values (loader, registry, ancestor stack, redaction tracker).
+		finallyCtx := ctx
+		if ctx.Err() != nil {
+			finallyCtx = context.WithoutCancel(ctx)
 		}
 
 		finallyErr = e.executePhases(finallyCtx, graph, graph.FinallyOrder, true)
 
-		if e.progressCallback != nil {
-			e.progressCallback.OnFinallyComplete()
+		if cb := e.progress(); cb != nil {
+			cb.OnFinallyComplete()
 		}
 	}
 
@@ -394,8 +412,13 @@ func (e *Executor) Execute(ctx context.Context, w *Workflow) (*ExecutionResult, 
 	// Determine final status
 	result.FinalStatus = e.determineFinalStatus(ctx, mainErr, finallyErr, result)
 
-	if mainErr != nil && result.FinalStatus == ExecutionFailed {
-		return result, mainErr
+	if result.FinalStatus == ExecutionFailed {
+		if mainErr != nil {
+			return result, mainErr
+		}
+		if finallyErr != nil {
+			return result, finallyErr
+		}
 	}
 
 	return result, nil
@@ -403,26 +426,27 @@ func (e *Executor) Execute(ctx context.Context, w *Workflow) (*ExecutionResult, 
 
 // executePhases executes actions phase by phase with parallel execution within each phase.
 func (e *Executor) executePhases(ctx context.Context, graph *Graph, phases [][]string, isFinally bool) error {
+	cb := e.progress()
 	for phaseNum, phase := range phases {
 		if ctx.Err() != nil {
 			// Mark remaining actions as cancelled
 			for _, name := range phase {
 				e.actionContext.MarkCancelled(name)
-				if e.progressCallback != nil {
-					e.progressCallback.OnActionCancelled(name)
+				if cb != nil {
+					cb.OnActionCancelled(name)
 				}
 			}
 			return ctx.Err()
 		}
 
-		if e.progressCallback != nil && !isFinally {
-			e.progressCallback.OnPhaseStart(phaseNum, phase)
+		if cb != nil && !isFinally {
+			cb.OnPhaseStart(phaseNum, phase)
 		}
 
 		err := e.executePhase(ctx, graph, phase)
 
-		if e.progressCallback != nil && !isFinally {
-			e.progressCallback.OnPhaseComplete(phaseNum)
+		if cb != nil && !isFinally {
+			cb.OnPhaseComplete(phaseNum)
 		}
 
 		if err != nil {
@@ -464,8 +488,8 @@ func (e *Executor) executePhases(ctx context.Context, graph *Graph, phases [][]s
 				for _, remainingPhase := range phases[phaseNum+1:] {
 					for _, name := range remainingPhase {
 						e.actionContext.MarkSkipped(name, SkipReasonDependencyFailed)
-						if e.progressCallback != nil {
-							e.progressCallback.OnActionSkipped(name, string(SkipReasonDependencyFailed))
+						if cb != nil {
+							cb.OnActionSkipped(name, string(SkipReasonDependencyFailed))
 						}
 					}
 				}
@@ -553,6 +577,8 @@ func (e *Executor) executePhase(ctx context.Context, graph *Graph, actionNames [
 		return nil
 	}
 
+	cb := e.progress()
+
 	// Filter out actions that should be skipped due to dependency failures
 	actionsToRun := make([]string, 0, len(actionNames))
 	for _, name := range actionNames {
@@ -574,8 +600,8 @@ func (e *Executor) executePhase(ctx context.Context, graph *Graph, actionNames [
 
 		if shouldSkip {
 			e.actionContext.MarkSkipped(name, SkipReasonDependencyFailed)
-			if e.progressCallback != nil {
-				e.progressCallback.OnActionSkipped(name, string(SkipReasonDependencyFailed))
+			if cb != nil {
+				cb.OnActionSkipped(name, string(SkipReasonDependencyFailed))
 			}
 			continue
 		}
@@ -612,8 +638,8 @@ func (e *Executor) executePhase(ctx context.Context, graph *Graph, actionNames [
 				defer func() { <-sem }()
 			case <-ctx.Done():
 				e.actionContext.MarkCancelled(actionName)
-				if e.progressCallback != nil {
-					e.progressCallback.OnActionCancelled(actionName)
+				if cb != nil {
+					cb.OnActionCancelled(actionName)
 				}
 				return
 			}
@@ -656,6 +682,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		return fmt.Errorf("action not found in graph")
 	}
 
+	cb := e.progress()
+
 	// Create a child span for this individual action execution.
 	ctx, span := telemetry.Tracer(telemetry.TracerAction).Start(ctx, "action.executeAction",
 		trace.WithAttributes(attribute.String("action.name", actionName)),
@@ -665,8 +693,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	// Evaluate condition if present
 	if action.WhenSkipped {
 		e.actionContext.MarkSkipped(actionName, SkipReasonCondition)
-		if e.progressCallback != nil {
-			e.progressCallback.OnActionSkipped(actionName, string(SkipReasonCondition))
+		if cb != nil {
+			cb.OnActionSkipped(actionName, string(SkipReasonCondition))
 		}
 		return nil
 	}
@@ -675,16 +703,16 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		shouldRun, err := action.When.EvaluateWithAdditionalVars(ctx, e.resolverData, additionalVars)
 		if err != nil {
 			e.actionContext.MarkFailed(actionName, fmt.Sprintf("condition evaluation failed: %v", err))
-			if e.progressCallback != nil {
-				e.progressCallback.OnActionFailed(actionName, err)
+			if cb != nil {
+				cb.OnActionFailed(actionName, err)
 			}
 			return err
 		}
 
 		if !shouldRun {
 			e.actionContext.MarkSkipped(actionName, SkipReasonCondition)
-			if e.progressCallback != nil {
-				e.progressCallback.OnActionSkipped(actionName, string(SkipReasonCondition))
+			if cb != nil {
+				cb.OnActionSkipped(actionName, string(SkipReasonCondition))
 			}
 			return nil
 		}
@@ -702,8 +730,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 			// validation and its containment checks).
 			if errors.Is(fpErr, fingerprint.ErrPatternInvalid) {
 				e.actionContext.MarkFailed(actionName, fmt.Sprintf("invalid sources/generates pattern: %v", fpErr))
-				if e.progressCallback != nil {
-					e.progressCallback.OnActionFailed(actionName, fpErr)
+				if cb != nil {
+					cb.OnActionFailed(actionName, fpErr)
 				}
 				span.RecordError(fpErr)
 				span.SetStatus(codes.Error, fpErr.Error())
@@ -746,8 +774,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		if scope == FingerprintScopeFiles {
 			// scope: files — skip input check, files alone determine freshness
 			e.actionContext.MarkSkipped(actionName, SkipReasonUpToDate)
-			if e.progressCallback != nil {
-				e.progressCallback.OnActionSkipped(actionName, string(SkipReasonUpToDate))
+			if cb != nil {
+				cb.OnActionSkipped(actionName, string(SkipReasonUpToDate))
 			}
 			return nil
 		}
@@ -761,8 +789,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 					"action", actionName, "error", fpErr.Error())
 			} else if !fpResult.Stale {
 				e.actionContext.MarkSkipped(actionName, SkipReasonUpToDate)
-				if e.progressCallback != nil {
-					e.progressCallback.OnActionSkipped(actionName, string(SkipReasonUpToDate))
+				if cb != nil {
+					cb.OnActionSkipped(actionName, string(SkipReasonUpToDate))
 				}
 				return nil
 			}
@@ -782,8 +810,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	if err != nil {
 		err = actionTracker.RedactError(err)
 		e.actionContext.MarkFailed(actionName, fmt.Sprintf("input resolution failed: %v", err))
-		if e.progressCallback != nil {
-			e.progressCallback.OnActionFailed(actionName, err)
+		if cb != nil {
+			cb.OnActionFailed(actionName, err)
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -802,8 +830,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	// Mark as running with redacted inputs so plaintext credentials never leak
 	// into __actions.<name>.inputs or API/CLI execution envelopes.
 	e.actionContext.MarkRunning(actionName, redactedInputs)
-	if e.progressCallback != nil {
-		e.progressCallback.OnActionStart(actionName, action.Description)
+	if cb != nil {
+		cb.OnActionStart(actionName, action.Description)
 	}
 
 	// Set up timeout
@@ -871,8 +899,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Execute with retry
 	var retryCallback RetryCallback
-	if e.progressCallback != nil {
-		retryCallback = &progressRetryAdapter{callback: e.progressCallback, actionName: actionName, tracker: actionTracker}
+	if cb != nil {
+		retryCallback = &progressRetryAdapter{callback: cb, actionName: actionName, tracker: actionTracker}
 	}
 
 	output, attempts, err := retryExecutor.ExecuteWithRetry(actionCtx, actionName, execFunc, retryCallback)
@@ -883,8 +911,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	// Handle results
 	if actionCtx.Err() == context.DeadlineExceeded {
 		e.actionContext.MarkTimeout(actionName)
-		if e.progressCallback != nil {
-			e.progressCallback.OnActionTimeout(actionName, timeout)
+		if cb != nil {
+			cb.OnActionTimeout(actionName, timeout)
 		}
 		timeoutErr := fmt.Errorf("action timed out after %v", timeout)
 		span.RecordError(timeoutErr)
@@ -894,8 +922,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	if err != nil {
 		e.actionContext.MarkFailed(actionName, err.Error())
-		if e.progressCallback != nil {
-			e.progressCallback.OnActionFailed(actionName, err)
+		if cb != nil {
+			cb.OnActionFailed(actionName, err)
 		}
 
 		// Check if we should continue on error
@@ -937,8 +965,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 				switch mode {
 				case ResultSchemaModeError:
 					e.actionContext.MarkFailed(actionName, validationErr.Error())
-					if e.progressCallback != nil {
-						e.progressCallback.OnActionFailed(actionName, validationErr)
+					if cb != nil {
+						cb.OnActionFailed(actionName, validationErr)
 					}
 					cont, decideErr := e.actionShouldContinue(ctx, action, validationErr, attempts, maxAttempts)
 					if decideErr != nil {
@@ -986,8 +1014,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		e.actionContext.MarkStreamed(actionName)
 	}
 
-	if e.progressCallback != nil {
-		e.progressCallback.OnActionComplete(actionName, results)
+	if cb != nil {
+		cb.OnActionComplete(actionName, results)
 	}
 
 	return nil
@@ -1162,7 +1190,7 @@ func (e *Executor) determineFinalStatus(ctx context.Context, mainErr, finallyErr
 	}
 
 	// Check if all failures were actions with onError:continue
-	if mainErr == nil && len(result.FailedActions) > 0 {
+	if mainErr == nil && finallyErr == nil && len(result.FailedActions) > 0 {
 		return ExecutionPartialSuccess
 	}
 
@@ -1174,9 +1202,19 @@ func (e *Executor) GetContext() *Context {
 	return e.actionContext
 }
 
+// progress returns the synchronized progress callback initialized by Execute,
+// falling back to progressCallback when internal helpers are called directly.
+func (e *Executor) progress() ProgressCallback {
+	if e.activeProgress != nil {
+		return e.activeProgress
+	}
+	return e.progressCallback
+}
+
 // Reset clears the executor state for reuse.
 func (e *Executor) Reset() {
 	e.actionContext.Reset()
+	e.activeProgress = nil
 }
 
 // progressRetryAdapter adapts RetryObserver to RetryCallback.

@@ -71,7 +71,9 @@ func (s *Spec) ResolversToSlice() []*resolver.Resolver {
 			continue
 		}
 		// Ensure the resolver's Name matches its key in the map
-		r.Name = name
+		if r.Name != name {
+			r.Name = name
+		}
 		result = append(result, r)
 	}
 	return result

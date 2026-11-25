@@ -17,7 +17,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
-	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -106,6 +105,10 @@ type ResolverExecutionConfig struct {
 	// output remains useful even when validation fails. It implies validate-all
 	// semantics so that all reachable resolvers populate their values.
 	NonFatalValidation bool `json:"nonFatalValidation,omitempty" yaml:"nonFatalValidation,omitempty" doc:"Treat validation failures as non-fatal and return partial values with diagnostics"`
+
+	// Resolvers optionally supplies a pre-filtered slice of resolvers to execute
+	// instead of all resolvers in sol.Spec.Resolvers. When nil, sol.Spec.ResolversToSlice() is used.
+	Resolvers []*resolver.Resolver `json:"-" yaml:"-"`
 }
 
 // ResolverExecutionResult holds the structured output of resolver execution.
@@ -123,6 +126,29 @@ type ResolverExecutionResult struct {
 	// when NonFatalValidation is enabled. It is nil when execution was clean.
 	// Use DiagnosticsFromError to convert it into a structured list.
 	Diagnostics error `json:"-" yaml:"-"`
+
+	// Elapsed is the wall-clock duration of resolver execution.
+	Elapsed time.Duration `json:"-" yaml:"-"`
+}
+
+// ResolverExecutionError wraps a resolver execution failure while preserving any
+// partial ResolverExecutionResult (values resolved before the failure) for callers
+// such as the solution provider running with propagateErrors: false.
+type ResolverExecutionError struct {
+	// PartialResult holds the values and context resolved prior to the failure.
+	PartialResult *ResolverExecutionResult
+	// Err is the underlying resolver execution error.
+	Err error
+}
+
+// Error implements error.
+func (e *ResolverExecutionError) Error() string {
+	return fmt.Sprintf("resolver execution failed: %s", e.Err)
+}
+
+// Unwrap returns the underlying error.
+func (e *ResolverExecutionError) Unwrap() error {
+	return e.Err
 }
 
 // ResolverDiagnostic describes a single resolver validation or execution
@@ -356,7 +382,10 @@ func Resolvers(
 	// Attach solution metadata to the context so providers (e.g., metadata) can access it.
 	ctx = provider.WithSolutionMetadata(ctx, toSolutionMeta(sol))
 
-	resolvers := sol.Spec.ResolversToSlice()
+	resolvers := cfg.Resolvers
+	if resolvers == nil {
+		resolvers = sol.Spec.ResolversToSlice()
+	}
 	resolverData := make(map[string]any)
 
 	if len(resolvers) == 0 {
@@ -370,9 +399,12 @@ func Resolvers(
 	}
 
 	// Build executor options from config
-	executorOpts := []resolver.ExecutorOption{
-		resolver.WithDefaultTimeout(cfg.Timeout),
-		resolver.WithPhaseTimeout(cfg.PhaseTimeout),
+	var executorOpts []resolver.ExecutorOption
+	if cfg.Timeout > 0 {
+		executorOpts = append(executorOpts, resolver.WithDefaultTimeout(cfg.Timeout))
+	}
+	if cfg.PhaseTimeout > 0 {
+		executorOpts = append(executorOpts, resolver.WithPhaseTimeout(cfg.PhaseTimeout))
 	}
 	if cfg.MaxConcurrency > 0 {
 		executorOpts = append(executorOpts, resolver.WithMaxConcurrency(cfg.MaxConcurrency))
@@ -412,7 +444,9 @@ func Resolvers(
 	ctx = ApplySolutionCELCostLimit(ctx, sol)
 
 	// Execute resolvers
+	start := time.Now()
 	resultCtx, execErr := executor.Execute(ctx, resolvers, params)
+	elapsed := time.Since(start)
 
 	// Get resolver context with results. This is populated even on failure, so
 	// retrieve it before deciding how to handle execErr.
@@ -456,9 +490,17 @@ func Resolvers(
 				Data:        resolverData,
 				Context:     resolverCtx,
 				Diagnostics: execErr,
+				Elapsed:     elapsed,
 			}, nil
 		}
-		return nil, fmt.Errorf("resolver execution failed: %w", execErr)
+		return nil, &ResolverExecutionError{
+			PartialResult: &ResolverExecutionResult{
+				Data:    resolverData,
+				Context: resolverCtx,
+				Elapsed: elapsed,
+			},
+			Err: execErr,
+		}
 	}
 
 	if lgr != nil {
@@ -468,6 +510,7 @@ func Resolvers(
 	return &ResolverExecutionResult{
 		Data:    resolverData,
 		Context: resolverCtx,
+		Elapsed: elapsed,
 	}, nil
 }
 
@@ -536,7 +579,10 @@ func SanitizeResolverDataForResponse(
 // ResolversWithContextForPreview runs resolvers under PlaceholderCredentialResolver
 // and returns the full ResolverExecutionResult (both Data and Context) so render
 // and preview callers can sanitize sensitive/credential-backed outputs after
-// building action graphs.
+// building action graphs. Callers must pass a non-nil registry (such as
+// builtin.DefaultRegistry(ctx)) whenever sol defines resolvers; package execute
+// does not import pkg/provider/builtin so built-in providers can reuse execute
+// pipelines without an import cycle.
 func ResolversWithContextForPreview(
 	ctx context.Context,
 	sol *solution.Solution,
@@ -550,27 +596,23 @@ func ResolversWithContextForPreview(
 		}, nil
 	}
 
+	if registry == nil {
+		return nil, fmt.Errorf("no provider registry configured: pass a non-nil ProviderLookup (for example, builtin.DefaultRegistry(ctx))")
+	}
+
 	// Use the side-effect-free placeholder CredentialResolver during render/preview
 	// so resolver-side scrt:/tkn: references emit symbolic placeholders without
 	// touching keyrings or minting live tokens.
 	ctx = spec.WithCredentialResolver(ctx, spec.PlaceholderCredentialResolver())
 
-	if registry == nil {
-		reg, err := builtin.DefaultRegistry(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create provider registry: %w", err)
-		}
-		registry = reg
-	}
-
 	cfg := ResolverExecutionConfigFromContext(ctx)
 	return Resolvers(ctx, sol, params, registry, cfg)
 }
 
-// ResolversForPreview is a convenience wrapper over Resolvers that returns
-// only the resolved data map. It initialises a default builtin registry when
-// registry is nil and reads the execution config from context. This is the
-// shared entry point for preview/render operations in both the MCP server
+// ResolversForPreview is a convenience wrapper over ResolversWithContextForPreview
+// that returns only the resolved data map. Callers must pass a non-nil registry
+// (such as builtin.DefaultRegistry(ctx)) whenever sol defines resolvers. This is
+// the shared entry point for preview/render operations in both the MCP server
 // and the CLI.
 func ResolversForPreview(
 	ctx context.Context,
@@ -636,6 +678,11 @@ type ActionExecutionConfig struct {
 	// An empty string means actions use CWD (backward-compatible default).
 	OutputDir string `json:"outputDir,omitempty" yaml:"outputDir,omitempty" doc:"Target directory for action output" maxLength:"4096"`
 
+	// TargetActions restricts execution to the named actions and their transitive
+	// dependsOn dependencies. When empty, explicit actions are excluded unless
+	// required as dependencies of non-explicit actions. Finally actions always run.
+	TargetActions []string `json:"targetActions,omitempty" yaml:"targetActions,omitempty" doc:"Target action names to execute with their transitive dependencies" maxItems:"100"`
+
 	// Cwd is the original working directory to expose as __cwd in action
 	// expressions. When empty, the executor captures os.Getwd() at creation time.
 	// Callers that change the working directory before creating the executor
@@ -645,12 +692,42 @@ type ActionExecutionConfig struct {
 	// ResolverContext optionally supplies resolver execution metadata so action
 	// input snapshots mask CredentialBacked resolvers alongside sensitive: true ones.
 	ResolverContext *resolver.Context `json:"-" yaml:"-"`
+
+	// ExecutionData optionally supplies resolver execution metadata (__execution)
+	// to action when conditions and provider inputs.
+	ExecutionData map[string]any `json:"-" yaml:"-"`
+
+	// ProgressCallback optionally receives action lifecycle events during execution.
+	ProgressCallback action.ProgressCallback `json:"-" yaml:"-"`
+
+	// IOStreams optionally supplies terminal streams for streaming action providers.
+	IOStreams *provider.IOStreams `json:"-" yaml:"-"`
 }
 
 // ActionExecutionResult wraps the action executor result with additional metadata.
 type ActionExecutionResult struct {
 	// Result is the underlying action execution result.
 	Result *action.ExecutionResult `json:"result" yaml:"result" doc:"Action execution result"`
+}
+
+// ActionExecutionError wraps an action execution failure while preserving any
+// partial *action.ExecutionResult (failed/skipped action names, final status)
+// for callers such as the solution provider running with propagateErrors: false.
+type ActionExecutionError struct {
+	// PartialResult holds the workflow execution summary if execution started.
+	PartialResult *action.ExecutionResult
+	// Err is the underlying validation or execution error.
+	Err error
+}
+
+// Error implements error.
+func (e *ActionExecutionError) Error() string {
+	return fmt.Sprintf("action execution failed: %s", e.Err)
+}
+
+// Unwrap returns the underlying error.
+func (e *ActionExecutionError) Unwrap() error {
+	return e.Err
 }
 
 // Actions runs the action execution pipeline on the given solution.
@@ -680,6 +757,18 @@ func Actions(
 		return nil, fmt.Errorf("workflow validation failed: %w", err)
 	}
 
+	// Filter workflow actions (excludes explicit actions on bare invocations, or
+	// narrows to cfg.TargetActions plus transitive dependsOn closure).
+	workflow, err := action.FilterWorkflowActions(sol.Spec.Workflow, cfg.TargetActions)
+	if err != nil {
+		return nil, err
+	}
+
+	funcBinder, err := sol.TemplateFuncBinder()
+	if err != nil {
+		return nil, fmt.Errorf("compiling spec.functions: %w", err)
+	}
+
 	// Attach solution metadata to the context.
 	ctx = provider.WithSolutionMetadata(ctx, toSolutionMeta(sol))
 
@@ -693,7 +782,7 @@ func Actions(
 		if err != nil {
 			return nil, fmt.Errorf("resolving output directory: %w", err)
 		}
-		if err := os.MkdirAll(absDir, 0o755); err != nil {
+		if err := os.MkdirAll(absDir, 0o750); err != nil {
 			return nil, fmt.Errorf("creating output directory: %w", err)
 		}
 		ctx = provider.WithOutputDirectory(ctx, absDir)
@@ -704,11 +793,24 @@ func Actions(
 		action.WithRegistry(registry),
 		action.WithResolverData(resolverData),
 		action.WithSensitiveResolvers(SensitiveResolverNames(sol, cfg.ResolverContext)),
-		action.WithDefaultTimeout(cfg.DefaultTimeout),
-		action.WithGracePeriod(cfg.GracePeriod),
+	}
+	if cfg.DefaultTimeout > 0 {
+		executorOpts = append(executorOpts, action.WithDefaultTimeout(cfg.DefaultTimeout))
+	}
+	if cfg.GracePeriod > 0 {
+		executorOpts = append(executorOpts, action.WithGracePeriod(cfg.GracePeriod))
 	}
 	if cfg.MaxConcurrency > 0 {
 		executorOpts = append(executorOpts, action.WithMaxConcurrency(cfg.MaxConcurrency))
+	}
+	if cfg.ExecutionData != nil {
+		executorOpts = append(executorOpts, action.WithExecutionData(cfg.ExecutionData))
+	}
+	if cfg.ProgressCallback != nil {
+		executorOpts = append(executorOpts, action.WithProgressCallback(cfg.ProgressCallback))
+	}
+	if cfg.IOStreams != nil {
+		executorOpts = append(executorOpts, action.WithIOStreams(cfg.IOStreams))
 	}
 	if cfg.Cwd != "" {
 		executorOpts = append(executorOpts, action.WithCwd(cfg.Cwd))
@@ -718,18 +820,27 @@ func Actions(
 	if sol.Spec.HasCalls() {
 		executorOpts = append(executorOpts, action.WithCalls(sol.Spec.Calls))
 	}
+	if funcBinder != nil {
+		executorOpts = append(executorOpts, action.WithTemplateFuncBinder(funcBinder))
+	}
 
 	executor := action.NewExecutor(executorOpts...)
 
 	if lgr != nil {
 		lgr.V(1).Info("executing actions",
-			"actionCount", len(sol.Spec.Workflow.Actions),
+			"actionCount", len(workflow.Actions),
 			"outputDir", cfg.OutputDir)
 	}
 
-	result, err := executor.Execute(ctx, sol.Spec.Workflow)
-	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
-		return nil, fmt.Errorf("action execution failed: %w", err)
+	result, err := executor.Execute(ctx, workflow)
+	if err == nil && result != nil && result.FinalStatus == action.ExecutionCancelled && ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if err != nil && (result == nil || result.FinalStatus != action.ExecutionPartialSuccess) {
+		return nil, &ActionExecutionError{
+			PartialResult: result,
+			Err:           err,
+		}
 	}
 
 	return &ActionExecutionResult{
@@ -785,8 +896,9 @@ func toSolutionMeta(sol *solution.Solution) *provider.SolutionMeta {
 }
 
 // ApplySolutionCELCostLimit injects the solution's CEL cost limit into the context
-// if the solution defines one. The effective limit is min(solutionLimit, globalLimit)
-// so that solutions cannot raise the limit above the operator-configured global default.
+// if the solution defines one. The effective limit is min(solutionLimit, globalLimit, parentLimit)
+// so that solutions cannot raise the limit above the operator-configured global default
+// or an enclosing parent solution's limit.
 // When global limiting is disabled (globalLimit == 0), solution overrides are ignored.
 func ApplySolutionCELCostLimit(ctx context.Context, sol *solution.Solution) context.Context {
 	if sol.Spec.Options == nil || sol.Spec.Options.CEL == nil || sol.Spec.Options.CEL.CostLimit == nil {
@@ -807,6 +919,9 @@ func ApplySolutionCELCostLimit(ctx context.Context, sol *solution.Solution) cont
 	effectiveLimit := solutionLimit
 	if solutionLimit > globalLimit {
 		effectiveLimit = globalLimit
+	}
+	if parentLimit, ok := celexp.CostLimitFromContext(ctx); ok && parentLimit > 0 && effectiveLimit > parentLimit {
+		effectiveLimit = parentLimit
 	}
 
 	lgr := logger.FromContext(ctx)

@@ -4,9 +4,16 @@
 package solutionprovider
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"text/template"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -17,13 +24,18 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 )
 
 // --- Mock Loader ---
@@ -398,37 +410,6 @@ func TestExtractRefsFromTemplate(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
-}
-
-// --- Registry Adapter Tests ---
-
-func TestResolverRegistryAdapter(t *testing.T) {
-	reg := provider.NewRegistry()
-	mp := &mockProvider{name: "test-provider"}
-	require.NoError(t, reg.Register(mp))
-
-	adapter := &resolverRegistryAdapter{registry: reg}
-
-	t.Run("Get existing provider", func(t *testing.T) {
-		p, ok := adapter.Get("test-provider")
-		assert.True(t, ok)
-		assert.Equal(t, "test-provider", p.Descriptor().Name)
-	})
-
-	t.Run("Get missing provider", func(t *testing.T) {
-		_, ok := adapter.Get("nonexistent")
-		assert.False(t, ok)
-	})
-
-	t.Run("List providers", func(t *testing.T) {
-		providers := adapter.List()
-		assert.Len(t, providers, 1)
-	})
-
-	t.Run("DescriptorLookup", func(t *testing.T) {
-		lookup := adapter.DescriptorLookup()
-		assert.NotNil(t, lookup)
-	})
 }
 
 // --- WorkflowResult Builder Tests ---
@@ -941,32 +922,78 @@ func TestExecute_NoResolvers(t *testing.T) {
 	assert.Empty(t, resolvers)
 }
 
+type dummyBinder struct{}
+
+func (dummyBinder) Bind(context.Context) template.FuncMap {
+	return template.FuncMap{"parentOnly": func() string { return "leaked" }}
+}
+
+func (dummyBinder) Fingerprint() string { return "parent-fp" }
+
 func TestExecute_ContextIsolation(t *testing.T) {
-	// Verify sub-solution gets isolated context.
-	// We can't test the full flow without real providers, but we can test
-	// that buildIsolatedContext creates proper isolation.
 	ctx := testContext()
 
-	// Set parent resolver data.
-	ctx = provider.WithResolverContext(ctx, map[string]any{
-		"parent_value": "secret",
+	// Populate parent-only state across all isolated keys.
+	ctx = provider.WithResolverContext(ctx, map[string]any{"parent_value": "secret"})
+	ctx = provider.WithParameters(ctx, map[string]any{"parent_param": "leaked"})
+	ctx = provider.WithIterationContext(ctx, &provider.IterationContext{
+		Item:      "server-a",
+		Index:     2,
+		ItemAlias: "srv",
 	})
+	ctx = provider.WithTemplateFuncBinder(ctx, dummyBinder{})
+	ctx = state.WithState(ctx, &state.Data{})
+	ctx = provider.WithSecretProperties(ctx, map[string]bool{"source": true})
+	ctx = provider.WithPreResolvedInputs(ctx)
+	ctx = provider.WithDeclaredScalarType(ctx, "int")
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+	parentResCtx := resolver.NewContext()
+	parentResCtx.Set("parent_res", "secret")
+	ctx = resolver.WithContext(ctx, parentResCtx)
 
 	subCtx := buildIsolatedContext(ctx, "child", map[string]any{"param1": "value1"})
 
-	// Sub-context should have empty resolver context.
+	// Sub-context has empty resolver context.
 	resolverCtx, ok := provider.ResolverContextFromContext(subCtx)
 	require.True(t, ok)
 	assert.Empty(t, resolverCtx)
 
-	// Sub-context should have parameters.
+	// Sub-context replaces parent parameters with explicit inputs.
 	params, ok := provider.ParametersFromContext(subCtx)
 	require.True(t, ok)
-	assert.Equal(t, "value1", params["param1"])
+	assert.Equal(t, map[string]any{"param1": "value1"}, params)
+
+	// Parent iteration context, template func binder, state data, and step metadata are stripped.
+	iterCtx, ok := provider.IterationContextFromContext(subCtx)
+	assert.False(t, ok)
+	assert.Nil(t, iterCtx)
+
+	binder, ok := provider.TemplateFuncBinderFromContext(subCtx)
+	assert.False(t, ok)
+	assert.Nil(t, binder)
+
+	stData, ok := state.FromContext(subCtx)
+	assert.False(t, ok)
+	assert.Nil(t, stData)
+
+	assert.Nil(t, provider.SecretPropertiesFromContext(subCtx))
+	assert.False(t, provider.PreResolvedInputsFromContext(subCtx))
+
+	scalarType, ok := provider.DeclaredScalarTypeFromContext(subCtx)
+	assert.False(t, ok)
+	assert.Empty(t, scalarType)
+
+	mode, ok := provider.ExecutionModeFromContext(subCtx)
+	assert.False(t, ok)
+	assert.Empty(t, mode)
+
+	rc, ok := resolver.FromContext(subCtx)
+	assert.False(t, ok)
+	assert.Nil(t, rc)
 }
 
 func TestExecute_ContextIsolation_NilParams(t *testing.T) {
-	ctx := testContext()
+	ctx := provider.WithParameters(testContext(), map[string]any{"parent_param": "leaked"})
 	subCtx := buildIsolatedContext(ctx, "child", nil)
 
 	// Resolver context should be empty.
@@ -974,47 +1001,1092 @@ func TestExecute_ContextIsolation_NilParams(t *testing.T) {
 	require.True(t, ok)
 	assert.Empty(t, resolverCtx)
 
-	// No parameters should be set.
+	// Parent parameters are stripped and no nil map is installed.
 	_, ok = provider.ParametersFromContext(subCtx)
 	assert.False(t, ok)
 }
 
-// --- extractResolverData Tests ---
+// --- Composition, Workflow Filtering & Inheritance Tests ---
 
-func TestExtractResolverData(t *testing.T) {
-	t.Run("with results", func(t *testing.T) {
-		rctx := resolver.NewContext()
-		rctx.SetResult("greeting", &resolver.ExecutionResult{
-			Value:  "hello",
-			Status: resolver.ExecutionStatusSuccess,
-		})
-		rctx.SetResult("failed_one", &resolver.ExecutionResult{
-			Value:  nil,
-			Status: resolver.ExecutionStatusFailed,
-		})
+type callbackProvider struct {
+	name string
+	fn   func(ctx context.Context, input any) (*provider.Output, error)
+}
 
-		ctx := context.Background()
-		ctx = resolver.WithContext(ctx, rctx)
+func (c *callbackProvider) Descriptor() *provider.Descriptor {
+	v := semver.MustParse("1.0.0")
+	return &provider.Descriptor{
+		Name:        c.name,
+		APIVersion:  "v1",
+		Version:     v,
+		Description: "callback provider for testing composed execution",
+		Capabilities: []provider.Capability{
+			provider.CapabilityFrom,
+			provider.CapabilityAction,
+		},
+		OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+			provider.CapabilityFrom: schemahelper.AnyProp("value"),
+			provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"success": schemahelper.BoolProp("success"),
+			}),
+		},
+	}
+}
 
-		sol := newTestSolution(map[string]*resolver.Resolver{
-			"greeting":   {},
-			"failed_one": {},
-		}, nil)
+func (c *callbackProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
+	return c.fn(ctx, input)
+}
 
-		data := extractResolverData(ctx, sol)
-		assert.Equal(t, "hello", data["greeting"])
-		_, hasFailed := data["failed_one"]
-		assert.False(t, hasFailed)
+type progressLog struct {
+	events []string
+}
+
+func (p *progressLog) OnActionStart(name, _ string) {
+	p.events = append(p.events, "start:"+name)
+}
+
+func (p *progressLog) OnActionComplete(name string, _ any) {
+	p.events = append(p.events, "complete:"+name)
+}
+
+func (p *progressLog) OnActionFailed(name string, _ error) {
+	p.events = append(p.events, "failed:"+name)
+}
+
+func (p *progressLog) OnActionSkipped(name, _ string) {
+	p.events = append(p.events, "skipped:"+name)
+}
+
+func (p *progressLog) OnActionTimeout(name string, _ time.Duration) {
+	p.events = append(p.events, "timeout:"+name)
+}
+
+func (p *progressLog) OnActionCancelled(name string) {
+	p.events = append(p.events, "cancelled:"+name)
+}
+func (p *progressLog) OnRetryAttempt(string, int, int, error) {}
+func (p *progressLog) OnForEachProgress(string, int, int)     {}
+func (p *progressLog) OnPhaseStart(int, []string)             {}
+func (p *progressLog) OnPhaseComplete(int)                    {}
+func (p *progressLog) OnFinallyStart()                        {}
+func (p *progressLog) OnFinallyComplete()                     {}
+
+func TestExecute_ActionMode_NoWorkflow_ReturnsActionEnvelope(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&mockProvider{
+		name:   "static",
+		output: &provider.Output{Data: "hello"},
+	}))
+
+	child := newTestSolution(map[string]*resolver.Resolver{
+		"greeting": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "static"}},
+			},
+		},
+	}, nil)
+
+	p := New(
+		WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"child": child}}),
+		WithRegistry(reg),
+	)
+
+	ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+	out, err := p.Execute(ctx, &Input{Source: "child"})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	data, ok := out.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "success", data["status"])
+	assert.Equal(t, true, data["success"], "action capability must emit success boolean even without child workflow")
+	_, hasWorkflow := data["workflow"]
+	assert.False(t, hasWorkflow)
+	resolversMap, ok := data["resolvers"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "hello", resolversMap["greeting"])
+}
+
+func TestExecute_ActionMode_ExplicitActionsExcluded(t *testing.T) {
+	var mu sync.Mutex
+	var executed []string
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&callbackProvider{
+		name: "recorder",
+		fn: func(_ context.Context, input any) (*provider.Output, error) {
+			m, _ := input.(map[string]any)
+			step, _ := m["step"].(string)
+			mu.Lock()
+			executed = append(executed, step)
+			mu.Unlock()
+			return &provider.Output{Data: map[string]any{"success": true}}, nil
+		},
+	}))
+
+	lit := func(v string) *spec.ValueRef { return &spec.ValueRef{Literal: v} }
+	child := &solution.Solution{
+		Metadata: solution.Metadata{Name: "child-explicit"},
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"prep": {
+						Provider: "recorder",
+						Explicit: true,
+						Inputs:   map[string]*spec.ValueRef{"step": lit("prep")},
+					},
+					"build": {
+						Provider:  "recorder",
+						DependsOn: []string{"prep"},
+						Inputs:    map[string]*spec.ValueRef{"step": lit("build")},
+					},
+					"deploy-optional": {
+						Provider: "recorder",
+						Explicit: true,
+						Inputs:   map[string]*spec.ValueRef{"step": lit("deploy-optional")},
+					},
+					"post-optional": {
+						Provider:  "recorder",
+						Explicit:  true,
+						DependsOn: []string{"deploy-optional"},
+						Inputs:    map[string]*spec.ValueRef{"step": lit("post-optional")},
+					},
+				},
+				Finally: map[string]*action.Action{
+					"cleanup": {
+						Provider: "recorder",
+						Inputs:   map[string]*spec.ValueRef{"step": lit("cleanup")},
+					},
+				},
+			},
+		},
+	}
+
+	p := New(
+		WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"child": child}}),
+		WithRegistry(reg),
+	)
+
+	ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+	out, err := p.Execute(ctx, &Input{Source: "child"})
+	require.NoError(t, err)
+
+	data := out.Data.(map[string]any)
+	assert.Equal(t, "success", data["status"])
+	assert.Equal(t, true, data["success"])
+
+	assert.Equal(t, []string{"prep", "build", "cleanup"}, executed,
+		"non-explicit action must pull in its explicit dependency and run finally, while standalone explicit actions stay excluded")
+}
+
+func TestExecute_ActionMode_InvalidWorkflow_Validation(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&mockProvider{
+		name:   "static",
+		output: &provider.Output{Data: "resolved-val"},
+	}))
+
+	// Action references unregistered provider -> fails action.ValidateWorkflow.
+	invalidChild := &solution.Solution{
+		Metadata: solution.Metadata{Name: "bad-wf"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"r1": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "static"}},
+					},
+				},
+			},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"broken": {Provider: "missing-provider"},
+				},
+			},
+		},
+	}
+
+	p := New(
+		WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"bad": invalidChild}}),
+		WithRegistry(reg),
+	)
+
+	t.Run("propagateErrors true returns validation error", func(t *testing.T) {
+		ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+		_, err := p.Execute(ctx, &Input{Source: "bad"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "workflow validation failed")
 	})
 
-	t.Run("no resolver context", func(t *testing.T) {
-		ctx := context.Background()
-		sol := newTestSolution(map[string]*resolver.Resolver{
-			"greeting": {},
-		}, nil)
+	t.Run("propagateErrors false records _workflow error in failed envelope", func(t *testing.T) {
+		ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+		out, err := p.Execute(ctx, &Input{
+			Source:          "bad",
+			PropagateErrors: boolPtr(false),
+		})
+		require.NoError(t, err)
+		require.NotNil(t, out)
+		require.NotEmpty(t, out.Warnings)
 
-		data := extractResolverData(ctx, sol)
-		assert.Empty(t, data)
+		data := out.Data.(map[string]any)
+		assert.Equal(t, "failed", data["status"])
+		assert.Equal(t, false, data["success"])
+
+		resolversMap := data["resolvers"].(map[string]any)
+		assert.Equal(t, "resolved-val", resolversMap["r1"], "resolved values must survive workflow validation failure")
+
+		errs := data["errors"].([]map[string]any)
+		require.Len(t, errs, 1)
+		assert.Equal(t, "_workflow", errs[0]["resolver"])
+		assert.Contains(t, errs[0]["message"], "workflow validation failed")
+	})
+}
+
+func TestExecute_ActionMode_WorkflowFailure_PropagateFalse_PreservesPartialResult(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&callbackProvider{
+		name: "failer",
+		fn: func(_ context.Context, input any) (*provider.Output, error) {
+			m, _ := input.(map[string]any)
+			if m["fail"] == true {
+				return nil, errors.New("boom")
+			}
+			return &provider.Output{Data: map[string]any{"success": true}}, nil
+		},
+	}))
+
+	child := &solution.Solution{
+		Metadata: solution.Metadata{Name: "partial-wf"},
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"step1": {
+						Provider: "failer",
+						Inputs:   map[string]*spec.ValueRef{"fail": {Literal: true}},
+					},
+					"step2": {
+						Provider:  "failer",
+						DependsOn: []string{"step1"},
+						Inputs:    map[string]*spec.ValueRef{"fail": {Literal: false}},
+					},
+				},
+			},
+		},
+	}
+
+	p := New(
+		WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"child": child}}),
+		WithRegistry(reg),
+	)
+
+	ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+	out, err := p.Execute(ctx, &Input{
+		Source:          "child",
+		PropagateErrors: boolPtr(false),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, out.Warnings)
+
+	data := out.Data.(map[string]any)
+	assert.Equal(t, "failed", data["status"])
+	assert.Equal(t, false, data["success"])
+
+	wf, ok := data["workflow"].(map[string]any)
+	require.True(t, ok, "PartialResult must populate workflow summary on action failure")
+	assert.Equal(t, "failed", wf["finalStatus"])
+	assert.Equal(t, []string{"step1"}, wf["failedActions"])
+	assert.Equal(t, []string{"step2"}, wf["skippedActions"])
+}
+
+func TestExecute_PartialResolverValuesOnFailure_PropagateFalse(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&mockProvider{
+		name:   "ok-prov",
+		output: &provider.Output{Data: "good-val"},
+	}))
+	require.NoError(t, reg.Register(&mockProvider{
+		name: "bad-prov",
+		err:  errors.New("step2 failed"),
+	}))
+
+	child := newTestSolution(map[string]*resolver.Resolver{
+		"good": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "ok-prov"}},
+			},
+		},
+		"bad": {
+			DependsOn: []string{"good"},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "bad-prov"}},
+			},
+		},
+	}, nil)
+
+	p := New(
+		WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"child": child}}),
+		WithRegistry(reg),
+	)
+
+	ctx := provider.WithExecutionMode(testContext(), provider.CapabilityFrom)
+	out, err := p.Execute(ctx, &Input{
+		Source:          "child",
+		PropagateErrors: boolPtr(false),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, out.Warnings)
+
+	data := out.Data.(map[string]any)
+	assert.Equal(t, "failed", data["status"])
+	resolversMap := data["resolvers"].(map[string]any)
+	assert.Equal(t, "good-val", resolversMap["good"])
+}
+
+func TestExecute_ChildMetadataAndCELCostLimit(t *testing.T) {
+	globalLimit := celexp.GetDefaultCostLimit()
+	if globalLimit == 0 {
+		t.Skip("global CEL cost limit is disabled")
+	}
+
+	var capturedMeta *provider.SolutionMeta
+	var capturedLimit uint64
+	var hasLimit bool
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&callbackProvider{
+		name: "inspector",
+		fn: func(ctx context.Context, _ any) (*provider.Output, error) {
+			capturedMeta, _ = provider.SolutionMetadataFromContext(ctx)
+			capturedLimit, hasLimit = celexp.CostLimitFromContext(ctx)
+			return &provider.Output{Data: map[string]any{"success": true}}, nil
+		},
+	}))
+
+	childVer := semver.MustParse("2.3.4")
+	childCost := uint64(800)
+	child := &solution.Solution{
+		Metadata: solution.Metadata{
+			Name:    "child-meta-sol",
+			Version: childVer,
+		},
+		Spec: solution.Spec{
+			Options: &solution.SpecOptions{
+				CEL: &solution.CELOptions{CostLimit: &childCost},
+			},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"inspect": {Provider: "inspector"},
+				},
+			},
+		},
+	}
+
+	p := New(
+		WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"child": child}}),
+		WithRegistry(reg),
+	)
+
+	t.Run("child receives its own metadata and CEL cost limit", func(t *testing.T) {
+		ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+		ctx = provider.WithSolutionMetadata(ctx, &provider.SolutionMeta{Name: "parent-sol"})
+
+		_, err := p.Execute(ctx, &Input{Source: "child"})
+		require.NoError(t, err)
+		require.NotNil(t, capturedMeta)
+		assert.Equal(t, "child-meta-sol", capturedMeta.Name)
+		assert.Equal(t, "2.3.4", capturedMeta.Version)
+		assert.True(t, hasLimit)
+		assert.Equal(t, uint64(800), capturedLimit)
+	})
+
+	t.Run("parent CEL cost limit caps higher child limit", func(t *testing.T) {
+		ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+		ctx = celexp.ContextWithCostLimit(ctx, 300)
+
+		_, err := p.Execute(ctx, &Input{Source: "child"})
+		require.NoError(t, err)
+		assert.True(t, hasLimit)
+		assert.Equal(t, uint64(300), capturedLimit)
+	})
+}
+
+func TestExecute_InheritsParentExecutorConfig(t *testing.T) {
+	t.Run("inherits max concurrency, progress prefix, ioStreams, and cwd", func(t *testing.T) {
+		var inFlight atomic.Int32
+		var maxInFlight atomic.Int32
+		var streamBuf bytes.Buffer
+		var observedCwd string
+		var mu sync.Mutex
+
+		reg := provider.NewRegistry()
+		solProv := New(WithRegistry(reg))
+		require.NoError(t, reg.Register(solProv))
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "worker",
+			fn: func(ctx context.Context, input any) (*provider.Output, error) {
+				cur := inFlight.Add(1)
+				for {
+					prev := maxInFlight.Load()
+					if cur <= prev || maxInFlight.CompareAndSwap(prev, cur) {
+						break
+					}
+				}
+				time.Sleep(15 * time.Millisecond)
+				inFlight.Add(-1)
+
+				if streams, ok := provider.IOStreamsFromContext(ctx); ok && streams != nil && streams.Out != nil {
+					mu.Lock()
+					_, _ = streams.Out.Write([]byte("x"))
+					mu.Unlock()
+				}
+				if m, ok := input.(map[string]any); ok {
+					if cwd, isStr := m["cwd"].(string); isStr && cwd != "" {
+						mu.Lock()
+						observedCwd = cwd
+						mu.Unlock()
+					}
+				}
+				return &provider.Output{Data: map[string]any{"success": true}}, nil
+			},
+		}))
+
+		cwdExpr := celexp.Expression("__cwd")
+		child := &solution.Solution{
+			Metadata: solution.Metadata{Name: "child-conc"},
+			Spec: solution.Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"a1": {Provider: "worker", Inputs: map[string]*spec.ValueRef{"cwd": {Expr: &cwdExpr}}},
+						"a2": {Provider: "worker"},
+						"a3": {Provider: "worker"},
+					},
+				},
+			},
+		}
+		solProv.Configure(WithLoader(&mockLoader{
+			solutions: map[string]*solution.Solution{"child-pkg@1.0.0": child},
+		}))
+
+		rec := &progressLog{}
+		streams := &provider.IOStreams{Out: &streamBuf}
+		parentExec := action.NewExecutor(
+			action.WithRegistry(reg),
+			action.WithMaxConcurrency(1),
+			action.WithProgressCallback(rec),
+			action.WithIOStreams(streams),
+			action.WithCwd("/inherited/parent/cwd"),
+		)
+
+		parentWorkflow := &action.Workflow{
+			Actions: map[string]*action.Action{
+				"invoke-child": {
+					Provider: ProviderName,
+					Inputs: map[string]*spec.ValueRef{
+						"source": {Literal: "child-pkg@1.0.0"},
+					},
+				},
+			},
+		}
+
+		res, err := parentExec.Execute(testContext(), parentWorkflow)
+		require.NoError(t, err)
+		assert.Equal(t, action.ExecutionSucceeded, res.FinalStatus)
+		assert.Equal(t, int32(1), maxInFlight.Load(), "child workflow must respect parent MaxConcurrency=1")
+		assert.Equal(t, "xxx", streamBuf.String(), "child actions must inherit parent IOStreams")
+		assert.Equal(t, "/inherited/parent/cwd", observedCwd, "child actions must inherit parent Cwd")
+
+		assert.Contains(t, rec.events, "start:invoke-child")
+		assert.Contains(t, rec.events, "start:[solution:child-pkg@1.0.0] a1")
+		assert.Contains(t, rec.events, "complete:[solution:child-pkg@1.0.0] a1")
+		assert.Contains(t, rec.events, "complete:invoke-child")
+	})
+
+	t.Run("inherits parent default timeout", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		solProv := New(WithRegistry(reg))
+		require.NoError(t, reg.Register(solProv))
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "sleeper",
+			fn: func(ctx context.Context, _ any) (*provider.Output, error) {
+				select {
+				case <-time.After(2 * time.Second):
+					return &provider.Output{Data: map[string]any{"success": true}}, nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			},
+		}))
+
+		child := &solution.Solution{
+			Metadata: solution.Metadata{Name: "child-timeout"},
+			Spec: solution.Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"slow": {Provider: "sleeper"},
+					},
+				},
+			},
+		}
+		solProv.Configure(WithLoader(&mockLoader{
+			solutions: map[string]*solution.Solution{"child-slow": child},
+		}))
+
+		parentExec := action.NewExecutor(
+			action.WithRegistry(reg),
+			action.WithDefaultTimeout(40*time.Millisecond),
+		)
+
+		parentWorkflow := &action.Workflow{
+			Actions: map[string]*action.Action{
+				"invoke": {
+					Provider: ProviderName,
+					Inputs: map[string]*spec.ValueRef{
+						"source": {Literal: "child-slow"},
+					},
+				},
+			},
+		}
+
+		start := time.Now()
+		_, err := parentExec.Execute(testContext(), parentWorkflow)
+		require.Error(t, err)
+		assert.Less(t, time.Since(start), time.Second, "child action must time out quickly under inherited DefaultTimeout")
+	})
+}
+
+func TestExecute_ConcurrentSharedSolution_RaceFree(t *testing.T) {
+	reg := provider.NewRegistry()
+	solProv := New(WithRegistry(reg))
+	require.NoError(t, reg.Register(solProv))
+	require.NoError(t, reg.Register(&callbackProvider{
+		name: "noop-step",
+		fn: func(_ context.Context, _ any) (*provider.Output, error) {
+			return &provider.Output{Data: map[string]any{"success": true}}, nil
+		},
+	}))
+
+	// Intentionally leave Resolver.Name and Action.Name empty on the shared
+	// struct literal to verify concurrent executions do not race under -race.
+	sharedChild := &solution.Solution{
+		Metadata: solution.Metadata{Name: "shared-child"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"val": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "noop-step"}},
+					},
+				},
+			},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"step-a": {Provider: "noop-step"},
+					"step-b": {Provider: "noop-step", DependsOn: []string{"step-a"}},
+				},
+				Finally: map[string]*action.Action{
+					"cleanup": {Provider: "noop-step"},
+				},
+			},
+		},
+	}
+	solProv.Configure(WithLoader(&mockLoader{
+		solutions: map[string]*solution.Solution{"shared@1.0.0": sharedChild},
+	}))
+
+	rec := &progressLog{}
+	parentActions := make(map[string]*action.Action, 8)
+	for i := range 8 {
+		parentActions[fmt.Sprintf("caller-%d", i)] = &action.Action{
+			Provider: ProviderName,
+			Inputs: map[string]*spec.ValueRef{
+				"source": {Literal: "shared@1.0.0"},
+			},
+		}
+	}
+
+	parentExec := action.NewExecutor(
+		action.WithRegistry(reg),
+		action.WithProgressCallback(rec),
+	)
+	res, err := parentExec.Execute(testContext(), &action.Workflow{Actions: parentActions})
+	require.NoError(t, err)
+	assert.Equal(t, action.ExecutionSucceeded, res.FinalStatus)
+	assert.NotEmpty(t, rec.events)
+}
+
+func TestExecute_ActionMode_RedactsSensitiveChildResolvers(t *testing.T) {
+	var actionObservedPin string
+	var actionObservedCode any
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&mockProvider{
+		name:   "short-pin",
+		output: &provider.Output{Data: "99"},
+	}))
+	require.NoError(t, reg.Register(&mockProvider{
+		name:   "num-code",
+		output: &provider.Output{Data: 7},
+	}))
+	require.NoError(t, reg.Register(&mockProvider{
+		name:   "pub-val",
+		output: &provider.Output{Data: "visible"},
+	}))
+	require.NoError(t, reg.Register(&callbackProvider{
+		name: "consumer",
+		fn: func(_ context.Context, input any) (*provider.Output, error) {
+			m, _ := input.(map[string]any)
+			actionObservedPin, _ = m["pin"].(string)
+			actionObservedCode = m["code"]
+			return &provider.Output{Data: map[string]any{"success": true}}, nil
+		},
+	}))
+
+	pinExpr := celexp.Expression("_.pin")
+	codeExpr := celexp.Expression("_.code")
+	child := &solution.Solution{
+		Metadata: solution.Metadata{Name: "child-sensitive"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"pin": {
+					Sensitive: true,
+					Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "short-pin"}}},
+				},
+				"code": {
+					Sensitive: true,
+					Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "num-code"}}},
+				},
+				"public": {
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "pub-val"}}},
+				},
+			},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"consume": {
+						Provider: "consumer",
+						Inputs: map[string]*spec.ValueRef{
+							"pin":  {Expr: &pinExpr},
+							"code": {Expr: &codeExpr},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	p := New(
+		WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"child": child}}),
+		WithRegistry(reg),
+	)
+
+	ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+	out, err := p.Execute(ctx, &Input{Source: "child"})
+	require.NoError(t, err)
+
+	// Child actions still consume raw sensitive values internally.
+	assert.Equal(t, "99", actionObservedPin)
+	assert.EqualValues(t, 7, actionObservedCode)
+
+	// Parent-visible action envelope masks sensitive resolvers regardless of length or scalar type.
+	data := out.Data.(map[string]any)
+	resolversMap := data["resolvers"].(map[string]any)
+	assert.Equal(t, redact.RedactedPlaceholder, resolversMap["pin"])
+	assert.Equal(t, redact.RedactedPlaceholder, resolversMap["code"])
+	assert.Equal(t, "visible", resolversMap["public"])
+}
+
+func TestExecute_TimeoutVsCallerCancellation(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&callbackProvider{
+		name: "slow",
+		fn: func(ctx context.Context, _ any) (*provider.Output, error) {
+			select {
+			case <-time.After(2 * time.Second):
+				return &provider.Output{Data: "late"}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}))
+
+	child := newTestSolution(map[string]*resolver.Resolver{
+		"r": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "slow"}}}},
+	}, nil)
+
+	p := New(
+		WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"slow-child": child}}),
+		WithRegistry(reg),
+	)
+
+	short := "25ms"
+
+	t.Run("input timeout with propagateErrors false returns failed envelope", func(t *testing.T) {
+		ctx := provider.WithExecutionMode(testContext(), provider.CapabilityFrom)
+		out, err := p.Execute(ctx, &Input{
+			Source:          "slow-child",
+			Timeout:         &short,
+			PropagateErrors: boolPtr(false),
+		})
+		require.NoError(t, err)
+		data := out.Data.(map[string]any)
+		assert.Equal(t, "failed", data["status"])
+	})
+
+	t.Run("input timeout with propagateErrors true returns error", func(t *testing.T) {
+		ctx := provider.WithExecutionMode(testContext(), provider.CapabilityFrom)
+		_, err := p.Execute(ctx, &Input{
+			Source:  "slow-child",
+			Timeout: &short,
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("caller context cancellation propagates even when propagateErrors is false", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(provider.WithExecutionMode(testContext(), provider.CapabilityFrom))
+		cancel()
+
+		_, err := p.Execute(ctx, &Input{
+			Source:          "slow-child",
+			PropagateErrors: boolPtr(false),
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+	})
+}
+
+func TestExecute_ActionMode_GraphBuildFailure_PropagateFalse(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(&mockProvider{
+		name:   "noop",
+		output: &provider.Output{Data: map[string]any{"success": true}},
+	}))
+
+	child := &solution.Solution{
+		Metadata: solution.Metadata{Name: "bad-graph"},
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"step": {
+						Provider: "noop",
+						ForEach:  &spec.ForEachClause{In: &spec.ValueRef{Literal: "not-an-array"}},
+					},
+				},
+			},
+		},
+	}
+
+	p := New(
+		WithLoader(&mockLoader{solutions: map[string]*solution.Solution{"bad-graph": child}}),
+		WithRegistry(reg),
+	)
+
+	ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+	out, err := p.Execute(ctx, &Input{
+		Source:          "bad-graph",
+		PropagateErrors: boolPtr(false),
+	})
+	require.NoError(t, err)
+	data := out.Data.(map[string]any)
+	assert.Equal(t, "failed", data["status"])
+	assert.Equal(t, false, data["success"])
+
+	errs := data["errors"].([]map[string]any)
+	require.Len(t, errs, 1)
+	assert.Equal(t, "_workflow", errs[0]["resolver"])
+	assert.Contains(t, errs[0]["message"], "forEach.in must evaluate to an array")
+}
+
+func TestExecute_SolutionDirectoryCanonicalizesRelativeSource(t *testing.T) {
+	reg := provider.NewRegistry()
+	solProv := New(WithRegistry(reg))
+	require.NoError(t, reg.Register(solProv))
+	require.NoError(t, reg.Register(&mockProvider{
+		name:   "noop",
+		output: &provider.Output{Data: map[string]any{"success": true}},
+	}))
+
+	child := &solution.Solution{
+		Metadata: solution.Metadata{Name: "nested-child"},
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"step": {Provider: "noop"},
+				},
+			},
+		},
+	}
+
+	const resolvedPath = "/bundle/parent/sub/child.yaml"
+	solProv.Configure(WithLoader(&mockLoader{
+		solutions: map[string]*solution.Solution{resolvedPath: child},
+	}))
+
+	rec := &progressLog{}
+	parentExec := action.NewExecutor(
+		action.WithRegistry(reg),
+		action.WithProgressCallback(rec),
+	)
+
+	ctx := testContext()
+	ctx = provider.WithWorkingDirectory(ctx, "/unrelated/cwd")
+	ctx = provider.WithSolutionDirectory(ctx, "/bundle/parent")
+
+	res, err := parentExec.Execute(ctx, &action.Workflow{
+		Actions: map[string]*action.Action{
+			"run-nested": {
+				Provider: ProviderName,
+				Inputs: map[string]*spec.ValueRef{
+					"source": {Literal: "./sub/child.yaml"},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, action.ExecutionSucceeded, res.FinalStatus)
+	assert.Contains(t, rec.events, "start:[solution:/bundle/parent/sub/child.yaml] step")
+}
+
+func TestExecute_PreservesParentZeroConcurrencyAndEmptyOutputDirOverrides(t *testing.T) {
+	unwantedOutDir := filepath.Join(t.TempDir(), "app-config-default-out")
+	appCfg := &config.Config{
+		Action: config.ActionConfig{
+			DefaultTimeout: "30s",
+			GracePeriod:    "5s",
+			MaxConcurrency: 1,
+			OutputDir:      unwantedOutDir,
+		},
+	}
+
+	var inFlight atomic.Int32
+	var maxInFlight atomic.Int32
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+
+	reg := provider.NewRegistry()
+	solProv := New(WithRegistry(reg))
+	require.NoError(t, reg.Register(solProv))
+	require.NoError(t, reg.Register(&callbackProvider{
+		name: "barrier-worker",
+		fn: func(ctx context.Context, _ any) (*provider.Output, error) {
+			outDir, hasOut := provider.OutputDirectoryFromContext(ctx)
+			if hasOut && outDir != "" {
+				return nil, fmt.Errorf("unexpected child output directory %q", outDir)
+			}
+			cur := inFlight.Add(1)
+			for {
+				prev := maxInFlight.Load()
+				if cur <= prev || maxInFlight.CompareAndSwap(prev, cur) {
+					break
+				}
+			}
+			if cur >= 2 {
+				releaseOnce.Do(func() { close(release) })
+			}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				inFlight.Add(-1)
+				return nil, ctx.Err()
+			}
+			inFlight.Add(-1)
+			return &provider.Output{Data: map[string]any{"success": true}}, nil
+		},
+	}))
+
+	child := &solution.Solution{
+		Metadata: solution.Metadata{Name: "child-overrides"},
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"p1": {Provider: "barrier-worker"},
+					"p2": {Provider: "barrier-worker"},
+				},
+			},
+		},
+	}
+	solProv.Configure(WithLoader(&mockLoader{
+		solutions: map[string]*solution.Solution{"child-overrides": child},
+	}))
+
+	// Parent explicitly runs with MaxConcurrency=0 (unlimited) and no OutputDirectory
+	// on context (equivalent to --max-action-concurrency=0 --output-dir=""), while
+	// application config carries MaxConcurrency=1 and OutputDir=unwantedOutDir.
+	parentExec := action.NewExecutor(
+		action.WithRegistry(reg),
+		action.WithMaxConcurrency(0),
+		action.WithDefaultTimeout(2*time.Second),
+	)
+
+	ctx := config.WithConfig(testContext(), appCfg)
+	res, err := parentExec.Execute(ctx, &action.Workflow{
+		Actions: map[string]*action.Action{
+			"run-child": {
+				Provider: ProviderName,
+				Inputs: map[string]*spec.ValueRef{
+					"source": {Literal: "child-overrides"},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, action.ExecutionSucceeded, res.FinalStatus)
+	assert.GreaterOrEqual(t, maxInFlight.Load(), int32(2), "child workflow must inherit parent MaxConcurrency=0 (unlimited) instead of reverting to config MaxConcurrency=1")
+
+	_, statErr := os.Stat(unwantedOutDir)
+	assert.True(t, os.IsNotExist(statErr), "child workflow must not recreate application-config OutputDir when parent opted out")
+}
+
+func TestExecute_RedactsCredentialsFromProgressAndWarnings(t *testing.T) {
+	const (
+		trackedMarker = "tracked-fixture-value"
+		rawURL        = "https://example.com/deploy.yaml?ref=" + trackedMarker
+		redactedURL   = "https://example.com/deploy.yaml?ref=" + redact.RedactedPlaceholder
+	)
+
+	t.Run("redacts tracked URL credential from progress, warnings, WhatIf, and errors while preserving errors.Is", func(t *testing.T) {
+		var observedAncestors []string
+		sentinelErr := errors.New("step failed with " + trackedMarker)
+
+		reg := provider.NewRegistry()
+		solProv := New(WithRegistry(reg))
+		require.NoError(t, reg.Register(solProv))
+		require.NoError(t, reg.Register(&callbackProvider{
+			name: "step-runner",
+			fn: func(ctx context.Context, input any) (*provider.Output, error) {
+				observedAncestors = AncestorStackFromContext(ctx)
+				m, _ := input.(map[string]any)
+				if m["fail"] == true {
+					return nil, sentinelErr
+				}
+				return &provider.Output{Data: map[string]any{"success": true}}, nil
+			},
+		}))
+
+		okChild := &solution.Solution{
+			Metadata: solution.Metadata{Name: "url-child"},
+			Spec: solution.Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"deploy": {Provider: "step-runner"},
+					},
+				},
+			},
+		}
+		failChildURL := "https://example.com/fail.yaml?ref=" + trackedMarker
+		failChild := &solution.Solution{
+			Metadata: solution.Metadata{Name: "url-fail-child"},
+			Spec: solution.Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"deploy": {
+							Provider: "step-runner",
+							Inputs:   map[string]*spec.ValueRef{"fail": {Literal: true}},
+						},
+					},
+				},
+			},
+		}
+		solProv.Configure(WithLoader(&mockLoader{
+			solutions: map[string]*solution.Solution{
+				rawURL:       okChild,
+				failChildURL: failChild,
+			},
+		}))
+
+		tracker := redact.NewTracker()
+		tracker.Track(trackedMarker)
+		ctx := redact.WithTracker(testContext(), tracker)
+
+		// WhatIf scrubs tracked credentials.
+		whatIfMsg, err := solProv.Descriptor().WhatIf(ctx, &Input{Source: rawURL})
+		require.NoError(t, err)
+		assert.Contains(t, whatIfMsg, redactedURL)
+		assert.NotContains(t, whatIfMsg, trackedMarker)
+
+		rec := &progressLog{}
+		parentExec := action.NewExecutor(
+			action.WithRegistry(reg),
+			action.WithProgressCallback(rec),
+		)
+
+		res, err := parentExec.Execute(ctx, &action.Workflow{
+			Actions: map[string]*action.Action{
+				"invoke-url": {
+					Provider: ProviderName,
+					Inputs: map[string]*spec.ValueRef{
+						"source": {Literal: rawURL},
+					},
+				},
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, action.ExecutionSucceeded, res.FinalStatus)
+		assert.Equal(t, []string{rawURL}, observedAncestors)
+		assert.Contains(t, rec.events, "start:[solution:"+redactedURL+"] deploy")
+		for _, ev := range rec.events {
+			assert.NotContains(t, ev, trackedMarker)
+		}
+
+		// propagateErrors: false scrubs Warnings as well.
+		actionCtx := provider.WithExecutionMode(ctx, provider.CapabilityAction)
+		out, err := solProv.Execute(actionCtx, &Input{
+			Source:          failChildURL,
+			PropagateErrors: boolPtr(false),
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, out.Warnings)
+		for _, w := range out.Warnings {
+			assert.NotContains(t, w, trackedMarker)
+		}
+
+		// propagateErrors: true scrubs error text while preserving errors.Is.
+		_, err = solProv.Execute(actionCtx, &Input{
+			Source:          failChildURL,
+			PropagateErrors: boolPtr(true),
+		})
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), trackedMarker)
+		assert.ErrorIs(t, err, sentinelErr)
+	})
+
+	t.Run("redacts short marked source inputs across load and cycle errors", func(t *testing.T) {
+		const shortSourceFixture = "s9"
+		loadSentinel := fmt.Errorf("missing catalog entry %q", shortSourceFixture)
+
+		solProv := New(
+			WithLoader(&mockLoader{err: loadSentinel}),
+			WithRegistry(provider.NewRegistry()),
+		)
+
+		ctx := provider.WithExecutionMode(testContext(), provider.CapabilityAction)
+		ctx = provider.WithSecretProperties(ctx, map[string]bool{"source": true})
+
+		// propagateErrors: false load failure scrubs both _loader message and Warnings.
+		out, err := solProv.Execute(ctx, &Input{
+			Source:          shortSourceFixture,
+			PropagateErrors: boolPtr(false),
+		})
+		require.NoError(t, err)
+		data := out.Data.(map[string]any)
+		errs := data["errors"].([]map[string]any)
+		require.Len(t, errs, 1)
+		assert.NotContains(t, errs[0]["message"], shortSourceFixture)
+		require.NotEmpty(t, out.Warnings)
+		assert.NotContains(t, out.Warnings[0], shortSourceFixture)
+
+		// propagateErrors: true load failure scrubs error text while preserving errors.Is.
+		_, err = solProv.Execute(ctx, &Input{
+			Source:          shortSourceFixture,
+			PropagateErrors: boolPtr(true),
+		})
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), shortSourceFixture)
+		assert.ErrorIs(t, err, loadSentinel)
+
+		// Circular reference error also scrubs the short source value.
+		cycleCtx, pushErr := PushAncestor(ctx, shortSourceFixture)
+		require.NoError(t, pushErr)
+		_, err = solProv.Execute(cycleCtx, &Input{Source: shortSourceFixture})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "circular reference detected")
+		assert.NotContains(t, err.Error(), shortSourceFixture)
 	})
 }
 

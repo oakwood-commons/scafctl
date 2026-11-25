@@ -759,7 +759,15 @@ func (s *Server) renderActionDepsGraph(resolverCtx, actionCtx context.Context, s
 }
 
 func (s *Server) executeResolversWithContextForRender(ctx context.Context, sol *solution.Solution, params map[string]any) (*execute.ResolverExecutionResult, error) {
-	return execute.ResolversWithContextForPreview(ctx, sol, params, s.providerLookup())
+	reg := s.providerLookup()
+	if reg == nil {
+		defaultReg, err := builtin.DefaultRegistry(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create provider registry: %w", err)
+		}
+		reg = defaultReg
+	}
+	return execute.ResolversWithContextForPreview(ctx, sol, params, reg)
 }
 
 // handlePreviewResolvers executes a solution's resolver chain and returns each resolver's value.

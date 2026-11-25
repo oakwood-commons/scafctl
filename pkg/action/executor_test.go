@@ -1862,3 +1862,92 @@ func TestExecutor_Execute_FingerprintScopeAll_IsDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, execCount) // Incremented — inputs changed triggers re-execution
 }
+
+func TestExecutor_Execute_FinallyPreservesContextValuesAfterCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = provider.WithOutputDirectory(ctx, "/preserved/output/dir")
+
+	var finallyOutDir string
+	var finallyHasInherited bool
+	var finallyCtxErr error
+
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "cancel-main",
+		execute: func(execCtx context.Context, _ any) (*provider.Output, error) {
+			cancel()
+			return nil, execCtx.Err()
+		},
+	})
+	registry.register(&execMockProvider{
+		name: "check-finally",
+		execute: func(execCtx context.Context, _ any) (*provider.Output, error) {
+			finallyOutDir, _ = provider.OutputDirectoryFromContext(execCtx)
+			_, finallyHasInherited = InheritedExecutorConfigFromContext(execCtx)
+			finallyCtxErr = execCtx.Err()
+			return &provider.Output{Data: map[string]any{"ok": true}}, nil
+		},
+	})
+
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"main": {Provider: "cancel-main"},
+		},
+		Finally: map[string]*Action{
+			"cleanup": {Provider: "check-finally"},
+		},
+	}
+
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithDefaultTimeout(2*time.Second),
+	)
+
+	res, _ := executor.Execute(ctx, workflow)
+	require.NotNil(t, res)
+	assert.Equal(t, ExecutionCancelled, res.FinalStatus)
+	assert.Equal(t, "/preserved/output/dir", finallyOutDir, "finally action must retain parent context values after cancellation")
+	assert.True(t, finallyHasInherited, "finally action must retain InheritedExecutorConfig")
+	assert.NoError(t, finallyCtxErr, "finally context must not be cancelled")
+}
+
+func TestExecutor_Execute_FinallyHardFailureReturnsError(t *testing.T) {
+	t.Parallel()
+
+	finallyBoom := errors.New("cleanup exploded")
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "ok-main",
+		execute: func(_ context.Context, _ any) (*provider.Output, error) {
+			return &provider.Output{Data: map[string]any{"ok": true}}, nil
+		},
+	})
+	registry.register(&execMockProvider{
+		name: "fail-finally",
+		execute: func(_ context.Context, _ any) (*provider.Output, error) {
+			return nil, finallyBoom
+		},
+	})
+
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"main": {Provider: "ok-main"},
+		},
+		Finally: map[string]*Action{
+			"cleanup": {Provider: "fail-finally"},
+		},
+	}
+
+	executor := NewExecutor(WithRegistry(registry))
+	res, err := executor.Execute(context.Background(), workflow)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, finallyBoom)
+	require.NotNil(t, res)
+	assert.Equal(t, ExecutionFailed, res.FinalStatus)
+	assert.Contains(t, res.FailedActions, "cleanup")
+
+	executor.Reset()
+	assert.Nil(t, executor.activeProgress)
+}

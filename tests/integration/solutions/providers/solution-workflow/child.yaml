@@ -1,0 +1,56 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: child-workflow-test
+  version: 1.0.0
+spec:
+  resolvers:
+    env:
+      type: string
+      description: Environment parameter passed from parent
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: env
+              default: "dev"
+
+  workflow:
+    actions:
+      prep:
+        description: Explicit setup action pulled in via dependsOn closure
+        explicit: true
+        provider: file
+        inputs:
+          operation: write
+          path: ./prep.txt
+          content:
+            expr: '"prep:" + _.env'
+
+      build:
+        description: Non-explicit action that depends on explicit prep action
+        dependsOn: [prep]
+        provider: file
+        inputs:
+          operation: write
+          path: ./build.txt
+          content:
+            expr: '"build:" + _.env'
+
+      optionalDeploy:
+        description: Standalone explicit action excluded from composed execution
+        explicit: true
+        provider: file
+        inputs:
+          operation: write
+          path: ./optional.txt
+          content: "should-not-run"
+
+    finally:
+      cleanup:
+        description: Cleanup action that always runs in finally section
+        provider: file
+        inputs:
+          operation: write
+          path: ./finally.txt
+          content: "finally-ran"

@@ -13,7 +13,61 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 )
+
+type keyProbe struct {
+	context.Context
+	captured any
+}
+
+func (p *keyProbe) Value(key any) any {
+	p.captured = key
+	return nil
+}
+
+func captureContextKey(fn func(context.Context)) any {
+	p := &keyProbe{Context: context.Background()}
+	fn(p)
+	return p.captured
+}
+
+var (
+	parentParametersKey         = captureContextKey(func(c context.Context) { _, _ = provider.ParametersFromContext(c) })
+	parentIterationContextKey   = captureContextKey(func(c context.Context) { _, _ = provider.IterationContextFromContext(c) })
+	parentTemplateFuncBinderKey = captureContextKey(func(c context.Context) { _, _ = provider.TemplateFuncBinderFromContext(c) })
+	parentStateKey              = captureContextKey(func(c context.Context) { _, _ = state.FromContext(c) })
+	parentSecretPropertiesKey   = captureContextKey(func(c context.Context) { _ = provider.SecretPropertiesFromContext(c) })
+	parentPreResolvedInputsKey  = captureContextKey(func(c context.Context) { _ = provider.PreResolvedInputsFromContext(c) })
+	parentDeclaredScalarTypeKey = captureContextKey(func(c context.Context) { _, _ = provider.DeclaredScalarTypeFromContext(c) })
+	parentExecutionModeKey      = captureContextKey(func(c context.Context) { _, _ = provider.ExecutionModeFromContext(c) })
+	parentResolverCtxKey        = captureContextKey(func(c context.Context) { _, _ = resolver.FromContext(c) })
+)
+
+// isolatedContext masks parent-only context keys so sub-solutions never observe
+// parent CLI parameters, forEach iteration variables, state snapshots,
+// author-defined template functions, or parent step execution metadata.
+type isolatedContext struct {
+	context.Context
+}
+
+func (c *isolatedContext) Value(key any) any {
+	switch key {
+	case parentParametersKey,
+		parentIterationContextKey,
+		parentTemplateFuncBinderKey,
+		parentStateKey,
+		parentSecretPropertiesKey,
+		parentPreResolvedInputsKey,
+		parentDeclaredScalarTypeKey,
+		parentExecutionModeKey,
+		parentResolverCtxKey:
+		return nil
+	default:
+		return c.Context.Value(key)
+	}
+}
 
 type ancestorStackKey struct{}
 
@@ -193,7 +247,7 @@ func Canonicalize(ctx context.Context, source string) string {
 	}
 
 	// Relative or absolute file paths - resolve to absolute
-	if strings.HasPrefix(source, ".") || strings.HasPrefix(source, "/") || strings.Contains(source, string(filepath.Separator)) {
+	if isFilePath(source) || strings.HasPrefix(source, ".") || strings.HasPrefix(source, "/") || strings.Contains(source, string(filepath.Separator)) {
 		abs, err := provider.AbsFromContext(ctx, source)
 		if err != nil {
 			return source // fallback to raw value

@@ -1,0 +1,15 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolver-only-child
+  version: 1.0.0
+spec:
+  resolvers:
+    token:
+      type: string
+      description: Static token from resolver-only child
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "from-resolver-only-child"

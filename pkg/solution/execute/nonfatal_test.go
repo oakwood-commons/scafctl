@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package execute
+package execute_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,7 +29,7 @@ func writeSolution(t *testing.T, content string) string {
 
 func TestDiagnosticsFromError(t *testing.T) {
 	t.Run("nil error returns nil", func(t *testing.T) {
-		assert.Nil(t, DiagnosticsFromError(nil))
+		assert.Nil(t, execute.DiagnosticsFromError(nil))
 	})
 
 	t.Run("aggregated execution error maps each failed resolver", func(t *testing.T) {
@@ -40,7 +41,7 @@ func TestDiagnosticsFromError(t *testing.T) {
 			},
 		}
 
-		diags := DiagnosticsFromError(aggErr)
+		diags := execute.DiagnosticsFromError(aggErr)
 		require.Len(t, diags, 2)
 		assert.Equal(t, "a", diags[0].Resolver)
 		assert.Equal(t, 1, diags[0].Phase)
@@ -51,7 +52,7 @@ func TestDiagnosticsFromError(t *testing.T) {
 	})
 
 	t.Run("generic error falls back to single diagnostic", func(t *testing.T) {
-		diags := DiagnosticsFromError(errors.New("something broke"))
+		diags := execute.DiagnosticsFromError(errors.New("something broke"))
 		require.Len(t, diags, 1)
 		assert.Empty(t, diags[0].Resolver)
 		assert.Equal(t, "something broke", diags[0].Message)
@@ -90,30 +91,30 @@ func TestResolvers_NonFatalValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("non-fatal returns partial values plus diagnostics and no error", func(t *testing.T) {
-		cfg := ResolverExecutionConfig{
-			Timeout:            ResolverExecutionConfigFromContext(ctx).Timeout,
-			PhaseTimeout:       ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
+		cfg := execute.ResolverExecutionConfig{
+			Timeout:            execute.ResolverExecutionConfigFromContext(ctx).Timeout,
+			PhaseTimeout:       execute.ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
 			NonFatalValidation: true,
 		}
 
-		result, err := Resolvers(ctx, sol, nil, reg, cfg)
+		result, err := execute.Resolvers(ctx, sol, nil, reg, cfg)
 		require.NoError(t, err, "non-fatal mode must not return an error on validation failure")
 		require.NotNil(t, result)
 		assert.Equal(t, "Bob", result.Data["name"], "partial value must still be returned")
 		require.Error(t, result.Diagnostics, "diagnostics must be populated on validation failure")
 
-		diags := DiagnosticsFromError(result.Diagnostics)
+		diags := execute.DiagnosticsFromError(result.Diagnostics)
 		require.NotEmpty(t, diags)
 		assert.Equal(t, "name", diags[0].Resolver)
 	})
 
 	t.Run("fatal mode returns error on validation failure", func(t *testing.T) {
-		cfg := ResolverExecutionConfig{
-			Timeout:      ResolverExecutionConfigFromContext(ctx).Timeout,
-			PhaseTimeout: ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
+		cfg := execute.ResolverExecutionConfig{
+			Timeout:      execute.ResolverExecutionConfigFromContext(ctx).Timeout,
+			PhaseTimeout: execute.ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
 		}
 
-		_, err := Resolvers(ctx, sol, nil, reg, cfg)
+		_, err := execute.Resolvers(ctx, sol, nil, reg, cfg)
 		require.Error(t, err, "default (fatal) mode must return an error on validation failure")
 	})
 }
@@ -161,13 +162,13 @@ func TestResolvers_NonFatalValidation_DependentsKeepRunning(t *testing.T) {
 	sol, err := inspect.LoadSolution(ctx, solFile)
 	require.NoError(t, err)
 
-	cfg := ResolverExecutionConfig{
-		Timeout:            ResolverExecutionConfigFromContext(ctx).Timeout,
-		PhaseTimeout:       ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
+	cfg := execute.ResolverExecutionConfig{
+		Timeout:            execute.ResolverExecutionConfigFromContext(ctx).Timeout,
+		PhaseTimeout:       execute.ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
 		NonFatalValidation: true,
 	}
 
-	result, err := Resolvers(ctx, sol, nil, reg, cfg)
+	result, err := execute.Resolvers(ctx, sol, nil, reg, cfg)
 	require.NoError(t, err, "non-fatal mode must not return an error on validation failure")
 	require.NotNil(t, result)
 	assert.Equal(t, "Bob", result.Data["name"], "partial value must still be returned")
@@ -206,13 +207,13 @@ func TestResolvers_NonFatalValidation_ResolvePhasePreservesValues(t *testing.T) 
 	require.NoError(t, err)
 
 	t.Run("non-fatal preserves successfully-resolved values plus diagnostics", func(t *testing.T) {
-		cfg := ResolverExecutionConfig{
-			Timeout:            ResolverExecutionConfigFromContext(ctx).Timeout,
-			PhaseTimeout:       ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
+		cfg := execute.ResolverExecutionConfig{
+			Timeout:            execute.ResolverExecutionConfigFromContext(ctx).Timeout,
+			PhaseTimeout:       execute.ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
 			NonFatalValidation: true,
 		}
 
-		result, err := Resolvers(ctx, sol, nil, reg, cfg)
+		result, err := execute.Resolvers(ctx, sol, nil, reg, cfg)
 		require.NoError(t, err, "non-fatal mode must not return a top-level error on a resolve-phase failure")
 		require.NotNil(t, result)
 		assert.Equal(t, "i-resolved", result.Data["good"],
@@ -221,10 +222,10 @@ func TestResolvers_NonFatalValidation_ResolvePhasePreservesValues(t *testing.T) 
 			"a resolver that failed in the resolve phase produced no value and must be absent")
 
 		require.Error(t, result.Diagnostics, "diagnostics must be populated on a resolve-phase failure")
-		assert.False(t, IsValidationOnlyFailure(result.Diagnostics),
+		assert.False(t, execute.IsValidationOnlyFailure(result.Diagnostics),
 			"a resolve-phase failure must not be classified as validation-only")
 
-		diags := DiagnosticsFromError(result.Diagnostics)
+		diags := execute.DiagnosticsFromError(result.Diagnostics)
 		require.NotEmpty(t, diags)
 		names := make([]string, 0, len(diags))
 		for _, d := range diags {
@@ -234,12 +235,12 @@ func TestResolvers_NonFatalValidation_ResolvePhasePreservesValues(t *testing.T) 
 	})
 
 	t.Run("fatal mode discards values and returns an error", func(t *testing.T) {
-		cfg := ResolverExecutionConfig{
-			Timeout:      ResolverExecutionConfigFromContext(ctx).Timeout,
-			PhaseTimeout: ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
+		cfg := execute.ResolverExecutionConfig{
+			Timeout:      execute.ResolverExecutionConfigFromContext(ctx).Timeout,
+			PhaseTimeout: execute.ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
 		}
 
-		result, err := Resolvers(ctx, sol, nil, reg, cfg)
+		result, err := execute.Resolvers(ctx, sol, nil, reg, cfg)
 		require.Error(t, err, "fatal mode must return an error on a resolve-phase failure")
 		assert.Nil(t, result, "fatal mode discards partial results")
 	})
@@ -247,7 +248,7 @@ func TestResolvers_NonFatalValidation_ResolvePhasePreservesValues(t *testing.T) 
 
 func TestIsValidationOnlyFailure(t *testing.T) {
 	t.Run("nil error", func(t *testing.T) {
-		assert.False(t, IsValidationOnlyFailure(nil))
+		assert.False(t, execute.IsValidationOnlyFailure(nil))
 	})
 
 	t.Run("aggregated validation error is validation-only", func(t *testing.T) {
@@ -256,7 +257,7 @@ func TestIsValidationOnlyFailure(t *testing.T) {
 				{ResolverName: "a", Phase: 1, Err: &resolver.AggregatedValidationError{ResolverName: "a"}},
 			},
 		}
-		assert.True(t, IsValidationOnlyFailure(err))
+		assert.True(t, execute.IsValidationOnlyFailure(err))
 	})
 
 	t.Run("validate-phase execution error is validation-only", func(t *testing.T) {
@@ -265,7 +266,7 @@ func TestIsValidationOnlyFailure(t *testing.T) {
 				{ResolverName: "a", Phase: 1, Err: &resolver.ExecutionError{ResolverName: "a", Phase: "validate"}},
 			},
 		}
-		assert.True(t, IsValidationOnlyFailure(err))
+		assert.True(t, execute.IsValidationOnlyFailure(err))
 	})
 
 	t.Run("resolve-phase execution error is not validation-only", func(t *testing.T) {
@@ -274,7 +275,7 @@ func TestIsValidationOnlyFailure(t *testing.T) {
 				{ResolverName: "a", Phase: 1, Err: &resolver.ExecutionError{ResolverName: "a", Phase: "resolve"}},
 			},
 		}
-		assert.False(t, IsValidationOnlyFailure(err))
+		assert.False(t, execute.IsValidationOnlyFailure(err))
 	})
 
 	t.Run("mixed failures are not validation-only", func(t *testing.T) {
@@ -284,20 +285,18 @@ func TestIsValidationOnlyFailure(t *testing.T) {
 				{ResolverName: "b", Phase: 1, Err: &resolver.ExecutionError{ResolverName: "b", Phase: "resolve"}},
 			},
 		}
-		assert.False(t, IsValidationOnlyFailure(err))
+		assert.False(t, execute.IsValidationOnlyFailure(err))
 	})
 
 	t.Run("empty aggregated error is not validation-only", func(t *testing.T) {
-		assert.False(t, IsValidationOnlyFailure(&resolver.AggregatedExecutionError{}))
+		assert.False(t, execute.IsValidationOnlyFailure(&resolver.AggregatedExecutionError{}))
 	})
 
 	t.Run("aggregated error with only nil entries is not validation-only", func(t *testing.T) {
-		// A non-empty Errors slice whose entries are all nil has no concrete
-		// failure to classify, so it must not be treated as validation-only.
 		err := &resolver.AggregatedExecutionError{
 			Errors: []*resolver.FailedResolver{nil, nil},
 		}
-		assert.False(t, IsValidationOnlyFailure(err))
+		assert.False(t, execute.IsValidationOnlyFailure(err))
 	})
 
 	t.Run("aggregated error with nils and one validation failure is validation-only", func(t *testing.T) {
@@ -307,14 +306,14 @@ func TestIsValidationOnlyFailure(t *testing.T) {
 				{ResolverName: "a", Phase: 1, Err: &resolver.AggregatedValidationError{ResolverName: "a"}},
 			},
 		}
-		assert.True(t, IsValidationOnlyFailure(err))
+		assert.True(t, execute.IsValidationOnlyFailure(err))
 	})
 
 	t.Run("bare validation error is validation-only", func(t *testing.T) {
-		assert.True(t, IsValidationOnlyFailure(&resolver.AggregatedValidationError{ResolverName: "a"}))
+		assert.True(t, execute.IsValidationOnlyFailure(&resolver.AggregatedValidationError{ResolverName: "a"}))
 	})
 
 	t.Run("bare generic error is not validation-only", func(t *testing.T) {
-		assert.False(t, IsValidationOnlyFailure(errors.New("boom")))
+		assert.False(t, execute.IsValidationOnlyFailure(errors.New("boom")))
 	})
 }

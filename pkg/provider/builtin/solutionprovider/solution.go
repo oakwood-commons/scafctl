@@ -5,6 +5,7 @@ package solutionprovider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -21,8 +22,10 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 )
 
 const (
@@ -225,76 +228,132 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 		return nil, err
 	}
 
+	// Ensure a run-scoped redaction tracker is shared between parent and child.
+	tracker := redact.FromContext(ctx)
+	if tracker == nil {
+		tracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, tracker)
+	}
+
 	lgr := logger.FromContext(ctx)
 
-	// Resolve canonical name for ancestor tracking.
-	canonicalName := Canonicalize(ctx, in.Source)
-
-	// Check circular references — always a hard error regardless of propagateErrors.
-	ctx, err = PushAncestor(ctx, canonicalName)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check depth limit — always a hard error.
-	if err := CheckDepth(ctx, in.maxDepthOrDefault()); err != nil {
-		return nil, err
-	}
-
-	// Load the sub-solution.
-	// Resolve file-based sources against the solution directory so relative
-	// paths in nested solutions work regardless of action working directory.
+	// Resolve file-based sources against the solution directory before
+	// canonicalization so ancestor tracking and progress prefixes match the
+	// resolved file path regardless of action working directory.
 	source := in.Source
 	if isFilePath(source) && !filepath.IsAbs(source) {
 		if solDir, ok := provider.SolutionDirectoryFromContext(ctx); ok && solDir != "" {
 			source = filepath.Join(solDir, source)
 		}
 	}
-	lgr.V(1).Info("loading sub-solution", "source", source)
+
+	// Retain raw canonicalName/source for loader and ancestor cycle checks, while
+	// redacting display strings exposed to progress observers, logs, warnings, and errors.
+	canonicalName := Canonicalize(ctx, source)
+	secretSource := provider.SecretPropertiesFromContext(ctx)["source"]
+	if secretSource {
+		tracker.Track(in.Source)
+		tracker.Track(source)
+		tracker.Track(canonicalName)
+	}
+	rawSourceVals := []string{canonicalName, source, in.Source}
+	displayName := redactSourceDisplay(ctx, canonicalName)
+	displaySource := redactSourceDisplay(ctx, in.Source)
+	displayResolvedSource := redactSourceDisplay(ctx, source)
+
+	// Check circular references — always a hard error regardless of propagateErrors.
+	ctx, err = PushAncestor(ctx, canonicalName)
+	if err != nil {
+		return nil, scrubSourceError(err, tracker, secretSource, rawSourceVals...)
+	}
+
+	// Check depth limit — always a hard error.
+	if err := CheckDepth(ctx, in.maxDepthOrDefault()); err != nil {
+		return nil, scrubSourceError(err, tracker, secretSource, rawSourceVals...)
+	}
+
+	lgr.V(1).Info("loading sub-solution", "source", displayResolvedSource)
 
 	sol, loadErr := loader.Get(ctx, source)
 	if loadErr != nil {
+		scrubbedLoadErr := scrubSourceError(loadErr, tracker, secretSource, rawSourceVals...)
 		if in.shouldPropagateErrors() {
-			return nil, fmt.Errorf("solution %q: failed to load: %w", source, loadErr)
+			return nil, fmt.Errorf("solution %q: failed to load: %w", displayResolvedSource, scrubbedLoadErr)
 		}
-		return buildLoadFailureOutput(ctx, source, loadErr), nil
+		return buildLoadFailureOutput(ctx, displayResolvedSource, scrubbedLoadErr), nil
 	}
+	p.normalizeSolutionNames(sol)
 
 	// Auto-resolve official providers needed by the child solution.
 	// Clients are tracked at the struct level and cleaned up via Close()
 	// to avoid killing shared plugins while parallel Execute calls are in flight.
 	if err := p.autoResolveChildProviders(ctx, sol, reg); err != nil {
+		scrubbedPluginErr := scrubSourceError(err, tracker, secretSource, rawSourceVals...)
 		if in.shouldPropagateErrors() {
-			return nil, fmt.Errorf("solution %q: %w", source, err)
+			return nil, fmt.Errorf("solution %q: %w", displayResolvedSource, scrubbedPluginErr)
 		}
-		return buildLoadFailureOutput(ctx, source, err), nil
+		return buildLoadFailureOutput(ctx, displayResolvedSource, scrubbedPluginErr), nil
 	}
 
 	// Dry-run: validate source (by loading) but don't execute.
+	mode, _ := provider.ExecutionModeFromContext(ctx)
 	if provider.DryRunFromContext(ctx) {
-		mode, _ := provider.ExecutionModeFromContext(ctx)
 		isAction := mode == provider.CapabilityAction
 		envelope := BuildDryRunEnvelope(isAction)
 		return &provider.Output{Data: envelope.ToMap()}, nil
 	}
 
 	// Build isolated context for sub-solution execution.
-	subCtx := buildIsolatedContext(ctx, canonicalName, in.Inputs)
+	subCtx := buildIsolatedContext(ctx, displayName, in.Inputs)
 
-	// Determine execution mode and run.
-	mode, _ := provider.ExecutionModeFromContext(ctx)
-	if mode == provider.CapabilityAction && sol.Spec.HasWorkflow() {
-		return p.executeWithWorkflow(subCtx, sol, in, reg)
-	}
-
-	return p.executeResolversOnly(subCtx, sol, in, reg)
+	return p.executeSubSolution(subCtx, mode, displayName, displaySource, sol, in, reg)
 }
 
-// executeResolversOnly executes only the resolver phase (from capability).
-func (p *SolutionProvider) executeResolversOnly(ctx context.Context, sol *solution.Solution, in *Input, reg *provider.Registry) (*provider.Output, error) {
-	lgr := logger.FromContext(ctx)
+// normalizeSolutionNames populates map-key-derived Name fields on resolvers and
+// workflow actions under p.mu so concurrent executions sharing an in-memory
+// *solution.Solution never race on initial Name assignment.
+func (p *SolutionProvider) normalizeSolutionNames(sol *solution.Solution) {
+	if sol == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for name, r := range sol.Spec.Resolvers {
+		if r != nil && r.Name != name {
+			r.Name = name
+		}
+	}
+	if sol.Spec.Workflow != nil {
+		for name, a := range sol.Spec.Workflow.Actions {
+			if a != nil && a.Name != name {
+				a.Name = name
+			}
+		}
+		for name, a := range sol.Spec.Workflow.Finally {
+			if a != nil && a.Name != name {
+				a.Name = name
+			}
+		}
+	}
+}
 
-	// Apply timeout if specified.
+// executeSubSolution runs the child solution through the shared execute.Resolvers
+// and (in CapabilityAction mode) execute.Actions pipelines.
+func (p *SolutionProvider) executeSubSolution(
+	ctx context.Context,
+	mode provider.Capability,
+	displayName string,
+	displaySource string,
+	sol *solution.Solution,
+	in *Input,
+	reg *provider.Registry,
+) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+	tracker := redact.FromContext(ctx)
+	isAction := mode == provider.CapabilityAction
+	parentCtx := ctx
+
+	// Apply timeout if specified across both resolver and workflow phases.
 	if d, ok, err := in.timeoutDuration(); err != nil {
 		return nil, err
 	} else if ok {
@@ -303,194 +362,221 @@ func (p *SolutionProvider) executeResolversOnly(ctx context.Context, sol *soluti
 		defer cancel()
 	}
 
-	resolverData := make(map[string]any)
-	var resolverErrors []ResolverError
-
-	if sol.Spec.HasResolvers() {
-		resolvers := sol.Spec.ResolversToSlice()
-
-		// Filter to requested resolvers if specified.
+	executedResolvers := sol.Spec.ResolversToSlice()
+	if len(in.Resolvers) > 0 {
 		var err error
-		resolvers, err = filterResolvers(resolvers, in.Resolvers)
+		executedResolvers, err = filterResolvers(executedResolvers, in.Resolvers)
 		if err != nil {
 			return nil, err
 		}
-
-		lgr.V(1).Info("executing sub-solution resolvers", "count", len(resolvers), "selected", len(in.Resolvers))
-
-		adapter := &resolverRegistryAdapter{registry: reg}
-
-		// Derive child executor timeout from the context deadline so the child
-		// respects the parent's timeout budget instead of using the default 30s.
-		var execOpts []resolver.ExecutorOption
-		if deadline, ok := ctx.Deadline(); ok {
-			remaining := time.Until(deadline)
-			if remaining > 0 {
-				execOpts = append(execOpts,
-					resolver.WithPhaseTimeout(remaining),
-					resolver.WithDefaultTimeout(remaining),
-				)
-			}
-		}
-		if sol.Spec.HasCalls() {
-			execOpts = append(execOpts, resolver.WithCalls(sol.Spec.Calls))
-		}
-		if binder, binderErr := sol.TemplateFuncBinder(); binderErr != nil {
-			return nil, fmt.Errorf("solution %q: compiling spec.functions: %w", in.Source, binderErr)
-		} else if binder != nil {
-			execOpts = append(execOpts, resolver.WithTemplateFuncBinder(binder))
-		}
-		executor := resolver.NewExecutor(adapter, execOpts...)
-
-		resultCtx, err := executor.Execute(ctx, resolvers, in.Inputs)
-		if err != nil {
-			resolverErrors = append(resolverErrors, ResolverError{
-				Resolver: "_executor",
-				Message:  err.Error(),
-			})
-
-			if in.shouldPropagateErrors() {
-				return nil, fmt.Errorf("solution %q: resolver execution failed: %w", in.Source, err)
-			}
-		}
-
-		// Extract resolver data from result context.
-		resolverData = extractResolverData(resultCtx, sol)
-	}
-
-	envelope := BuildFromEnvelope(resolverData, resolverErrors)
-	output := &provider.Output{Data: envelope.ToMap()}
-
-	if envelope.Status == "failed" {
-		output.Warnings = []string{
-			fmt.Sprintf("sub-solution %q had %d resolver error(s)", in.Source, len(resolverErrors)),
-		}
-	}
-
-	return output, nil
-}
-
-// executeWithWorkflow executes resolvers and then the workflow (action capability).
-func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solution.Solution, in *Input, reg *provider.Registry) (*provider.Output, error) {
-	lgr := logger.FromContext(ctx)
-
-	// Apply timeout if specified.
-	if d, ok, err := in.timeoutDuration(); err != nil {
-		return nil, err
-	} else if ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, d)
-		defer cancel()
-	}
-
-	// Compile the sub-solution's author-defined template functions once for both
-	// the resolver and workflow phases.
-	funcBinder, err := sol.TemplateFuncBinder()
-	if err != nil {
-		return nil, fmt.Errorf("solution %q: compiling spec.functions: %w", in.Source, err)
 	}
 
 	resolverData := make(map[string]any)
-	var resolverErrors []ResolverError
+	var (
+		resolverErrors  []ResolverError
+		resolverCtx     *resolver.Context
+		resolverElapsed time.Duration
+	)
 
-	// Phase 1: Execute resolvers.
-	if sol.Spec.HasResolvers() {
-		resolvers := sol.Spec.ResolversToSlice()
-
-		// Filter to requested resolvers if specified.
-		var err error
-		resolvers, err = filterResolvers(resolvers, in.Resolvers)
-		if err != nil {
-			return nil, err
-		}
-
-		lgr.V(1).Info("executing sub-solution resolvers", "count", len(resolvers), "selected", len(in.Resolvers))
-
-		adapter := &resolverRegistryAdapter{registry: reg}
-
-		// Derive child executor timeout from the context deadline so the child
-		// respects the parent's timeout budget instead of using the default 30s.
-		var resolverOpts []resolver.ExecutorOption
-		if deadline, ok := ctx.Deadline(); ok {
-			remaining := time.Until(deadline)
-			if remaining > 0 {
-				resolverOpts = append(resolverOpts,
-					resolver.WithPhaseTimeout(remaining),
-					resolver.WithDefaultTimeout(remaining),
-				)
-			}
-		}
-		if sol.Spec.HasCalls() {
-			resolverOpts = append(resolverOpts, resolver.WithCalls(sol.Spec.Calls))
-		}
-		if funcBinder != nil {
-			resolverOpts = append(resolverOpts, resolver.WithTemplateFuncBinder(funcBinder))
-		}
-		resolverExec := resolver.NewExecutor(adapter, resolverOpts...)
-
-		resultCtx, err := resolverExec.Execute(ctx, resolvers, in.Inputs)
-		if err != nil {
-			resolverErrors = append(resolverErrors, ResolverError{
-				Resolver: "_executor",
-				Message:  err.Error(),
-			})
-
-			if in.shouldPropagateErrors() {
-				return nil, fmt.Errorf("solution %q: resolver phase failed: %w", in.Source, err)
-			}
-
-			// If resolver failed and not propagating, return envelope without running workflow.
-			envelope := BuildActionEnvelope(resolverData, nil, resolverErrors)
-			output := &provider.Output{Data: envelope.ToMap()}
-			output.Warnings = []string{
-				fmt.Sprintf("sub-solution %q resolver phase failed", in.Source),
-			}
-			return output, nil
-		}
-
-		resolverData = extractResolverData(resultCtx, sol)
+	if len(executedResolvers) > 0 {
+		lgr.V(1).Info("executing sub-solution resolvers", "count", len(executedResolvers), "selected", len(in.Resolvers))
 	}
 
-	// Phase 2: Execute workflow.
+	resolverCfg := buildChildResolverConfig(ctx, executedResolvers)
+	resResult, resErr := execute.Resolvers(ctx, sol, in.Inputs, reg, resolverCfg)
+	if resErr != nil {
+		if parentCtx.Err() != nil {
+			return nil, fmt.Errorf("solution %q: %w", displaySource, parentCtx.Err())
+		}
+
+		var execErr *execute.ResolverExecutionError
+		if errors.As(resErr, &execErr) && execErr.PartialResult != nil {
+			resolverData = execErr.PartialResult.Data
+			resolverCtx = execErr.PartialResult.Context
+		}
+
+		resolverErrors = append(resolverErrors, ResolverError{
+			Resolver: "_executor",
+			Message:  tracker.RedactString(resErr.Error()),
+		})
+
+		if in.shouldPropagateErrors() {
+			if isAction {
+				return nil, fmt.Errorf("solution %q: resolver phase failed: %w", displaySource, tracker.RedactError(resErr))
+			}
+			return nil, fmt.Errorf("solution %q: resolver execution failed: %w", displaySource, tracker.RedactError(resErr))
+		}
+
+		if isAction {
+			sanitized := execute.SanitizeResolverDataForResponse(sol, resolverCtx, resolverData, tracker)
+			envelope := BuildActionEnvelope(sanitized, nil, resolverErrors)
+			return &provider.Output{
+				Data: envelope.ToMap(),
+				Warnings: []string{
+					fmt.Sprintf("sub-solution %q resolver phase failed", displaySource),
+				},
+			}, nil
+		}
+
+		envelope := BuildFromEnvelope(resolverData, resolverErrors)
+		return &provider.Output{
+			Data: envelope.ToMap(),
+			Warnings: []string{
+				fmt.Sprintf("sub-solution %q had %d resolver error(s)", displaySource, len(resolverErrors)),
+			},
+		}, nil
+	}
+
+	resolverData = resResult.Data
+	resolverCtx = resResult.Context
+	resolverElapsed = resResult.Elapsed
+
+	if !isAction {
+		envelope := BuildFromEnvelope(resolverData, resolverErrors)
+		return &provider.Output{Data: envelope.ToMap()}, nil
+	}
+
+	// CapabilityAction always returns an action envelope (including success: bool)
+	// even when the child solution defines no workflow. Sanitize sensitive and
+	// credential-backed child resolvers before exposing them in action results.
+	if !sol.Spec.HasWorkflow() {
+		sanitized := execute.SanitizeResolverDataForResponse(sol, resolverCtx, resolverData, tracker)
+		envelope := BuildActionEnvelope(sanitized, nil, resolverErrors)
+		return &provider.Output{Data: envelope.ToMap()}, nil
+	}
+
 	lgr.V(1).Info("executing sub-solution workflow")
 
-	actionExec := action.NewExecutor(
-		action.WithRegistry(reg),
-		action.WithResolverData(resolverData),
-		action.WithCalls(sol.Spec.Calls),
-	)
-	if funcBinder != nil {
-		action.WithTemplateFuncBinder(funcBinder)(actionExec)
-	}
-
-	execResult, err := actionExec.Execute(ctx, sol.Spec.Workflow)
+	actionCfg := buildChildActionConfig(ctx, displayName, resolverCtx, executedResolvers, resolverElapsed)
+	actResult, actErr := execute.Actions(ctx, sol, resolverData, reg, actionCfg)
 
 	var workflowResult *WorkflowResult
-	if execResult != nil {
-		workflowResult = buildWorkflowResult(execResult)
+	if actResult != nil && actResult.Result != nil {
+		workflowResult = buildWorkflowResult(actResult.Result)
+	} else if actErr != nil {
+		var execErr *execute.ActionExecutionError
+		if errors.As(actErr, &execErr) && execErr.PartialResult != nil {
+			workflowResult = buildWorkflowResult(execErr.PartialResult)
+		}
 	}
 
-	if err != nil && in.shouldPropagateErrors() {
-		return nil, fmt.Errorf("solution %q: workflow failed: %w", in.Source, err)
+	if actErr != nil {
+		if parentCtx.Err() != nil {
+			return nil, fmt.Errorf("solution %q: %w", displaySource, parentCtx.Err())
+		}
+		if in.shouldPropagateErrors() {
+			return nil, fmt.Errorf("solution %q: workflow failed: %w", displaySource, tracker.RedactError(actErr))
+		}
+		if workflowResult == nil || (workflowResult.FinalStatus == string(action.ExecutionFailed) && len(workflowResult.FailedActions) == 0) {
+			resolverErrors = append(resolverErrors, ResolverError{
+				Resolver: "_workflow",
+				Message:  tracker.RedactString(actErr.Error()),
+			})
+		}
 	}
 
-	envelope := BuildActionEnvelope(resolverData, workflowResult, resolverErrors)
+	sanitized := execute.SanitizeResolverDataForResponse(sol, resolverCtx, resolverData, tracker)
+	envelope := BuildActionEnvelope(sanitized, workflowResult, resolverErrors)
 	output := &provider.Output{Data: envelope.ToMap()}
 
 	if envelope.Status == "failed" {
 		output.Warnings = []string{
-			fmt.Sprintf("sub-solution %q failed", in.Source),
+			fmt.Sprintf("sub-solution %q failed", displaySource),
 		}
 	}
 
 	return output, nil
+}
+
+// buildChildResolverConfig derives resolver execution settings from context and
+// caps timeouts against any remaining context deadline.
+func buildChildResolverConfig(ctx context.Context, resolvers []*resolver.Resolver) execute.ResolverExecutionConfig {
+	cfg := execute.ResolverExecutionConfigFromContext(ctx)
+	cfg.Resolvers = resolvers
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 {
+			if cfg.Timeout == 0 || remaining < cfg.Timeout {
+				cfg.Timeout = remaining
+			}
+			if cfg.PhaseTimeout == 0 || remaining < cfg.PhaseTimeout {
+				cfg.PhaseTimeout = remaining
+			}
+		}
+	}
+	return cfg
+}
+
+// buildChildActionConfig derives action execution settings from application
+// config and any enclosing parent action.Executor, wrapping parent progress
+// callbacks with the child solution's redacted display name prefix.
+func buildChildActionConfig(
+	ctx context.Context,
+	displayName string,
+	resolverCtx *resolver.Context,
+	executedResolvers []*resolver.Resolver,
+	resolverElapsed time.Duration,
+) execute.ActionExecutionConfig {
+	cfg := execute.ActionExecutionConfigFromContext(ctx)
+	if outDir, hasOutDir := provider.OutputDirectoryFromContext(ctx); hasOutDir {
+		cfg.OutputDir = outDir
+	}
+
+	if inherited, ok := action.InheritedExecutorConfigFromContext(ctx); ok {
+		// Inherit the enclosing executor's effective output directory (including
+		// an explicit opt-out to CWD when OutputDirectory is absent on ctx) rather
+		// than reapplying the application config default.
+		outDir, _ := provider.OutputDirectoryFromContext(ctx)
+		cfg.OutputDir = outDir
+
+		if inherited.DefaultTimeout > 0 {
+			cfg.DefaultTimeout = inherited.DefaultTimeout
+		}
+		if inherited.GracePeriod > 0 {
+			cfg.GracePeriod = inherited.GracePeriod
+		}
+		if inherited.MaxConcurrency >= 0 {
+			cfg.MaxConcurrency = inherited.MaxConcurrency
+		}
+		if inherited.Cwd != "" {
+			cfg.Cwd = inherited.Cwd
+		}
+		if inherited.IOStreams != nil {
+			cfg.IOStreams = inherited.IOStreams
+		}
+		if inherited.ProgressCallback != nil {
+			cfg.ProgressCallback = action.NewSolutionProgressCallback(
+				inherited.ProgressCallback,
+				redactSourceDisplay(ctx, displayName),
+			)
+		}
+	}
+
+	if cfg.IOStreams == nil && !provider.IsFallbackIOStreams(ctx) {
+		if streams, ok := provider.IOStreamsFromContext(ctx); ok && streams != nil {
+			cfg.IOStreams = streams
+		}
+	}
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 && (cfg.DefaultTimeout == 0 || remaining < cfg.DefaultTimeout) {
+			cfg.DefaultTimeout = remaining
+		}
+	}
+
+	cfg.ResolverContext = resolverCtx
+	if resolverCtx != nil {
+		cfg.ExecutionData = execute.BuildExecutionData(resolverCtx, executedResolvers, resolverElapsed)
+	}
+
+	return cfg
 }
 
 // buildLoadFailureOutput constructs a degraded envelope for load/parse failures
 // when propagateErrors is false. The envelope reports status "failed" with the
 // error detail, allowing the parent to continue execution.
 func buildLoadFailureOutput(ctx context.Context, source string, loadErr error) *provider.Output {
-	errMsg := fmt.Sprintf("%s: %s", source, loadErr.Error())
+	errMsg := redact.FromContext(ctx).RedactString(fmt.Sprintf("%s: %s", source, loadErr.Error()))
 	errors := []ResolverError{{
 		Resolver: "_loader",
 		Message:  errMsg,
@@ -512,12 +598,66 @@ func buildLoadFailureOutput(ctx context.Context, source string, loadErr error) *
 	}
 }
 
+// redactSourceDisplay scrubs tracked credentials (and secret-marked source
+// inputs) from a raw or canonical source string before exposing it in progress
+// prefixes, logger names, warnings, or error messages.
+func redactSourceDisplay(ctx context.Context, s string) string {
+	if provider.SecretPropertiesFromContext(ctx)["source"] {
+		return redact.RedactedPlaceholder
+	}
+	if t := redact.FromContext(ctx); t != nil {
+		return t.RedactString(s)
+	}
+	return s
+}
+
+type scrubbedSourceError struct {
+	msg   string
+	cause error
+}
+
+func (e *scrubbedSourceError) Error() string        { return e.msg }
+func (e *scrubbedSourceError) Is(target error) bool { return errors.Is(e.cause, target) }
+func (e *scrubbedSourceError) As(target any) bool   { return errors.As(e.cause, target) }
+
+// scrubSourceError redacts tracked secrets from err and, when secretSource is
+// true, also replaces any short (< redact.MinSecretLength) raw source tokens
+// while preserving errors.Is and errors.As matching on the underlying cause.
+func scrubSourceError(err error, tracker *redact.Tracker, secretSource bool, rawVals ...string) error {
+	if err == nil {
+		return nil
+	}
+	err = tracker.RedactError(err)
+	if !secretSource {
+		return err
+	}
+	msg := err.Error()
+	changed := false
+	for _, raw := range rawVals {
+		if raw != "" && strings.Contains(msg, raw) {
+			msg = strings.ReplaceAll(msg, raw, redact.RedactedPlaceholder)
+			changed = true
+		}
+	}
+	if !changed {
+		return err
+	}
+	return &scrubbedSourceError{msg: msg, cause: err}
+}
+
 // buildIsolatedContext constructs an isolated context for sub-solution execution.
-// The sub-solution gets a fresh resolver context and parameters, but inherits
-// logger, writer, auth, config, dry-run, and ancestor stack from the parent.
-func buildIsolatedContext(ctx context.Context, canonicalName string, params map[string]any) context.Context {
+// Parent CLI parameters, forEach iteration context, persisted state data,
+// author-defined template functions, and resolved values are stripped so they
+// never leak into the child, while logger, writer, auth, config, dry-run,
+// redaction tracker, and ancestor stack are inherited from the parent.
+func buildIsolatedContext(ctx context.Context, displayName string, params map[string]any) context.Context {
+	safeName := redactSourceDisplay(ctx, displayName)
+
+	// Mask parent-scoped keys before installing child-scoped values.
+	ctx = &isolatedContext{Context: ctx}
+
 	// Scoped logger.
-	subLogger := logger.FromContext(ctx).WithName("solution:" + canonicalName)
+	subLogger := logger.FromContext(ctx).WithName("solution:" + safeName)
 	ctx = logger.WithLogger(ctx, &subLogger)
 
 	// Fresh resolver context — sub-solution cannot see parent's resolved values.
@@ -528,27 +668,7 @@ func buildIsolatedContext(ctx context.Context, canonicalName string, params map[
 		ctx = provider.WithParameters(ctx, params)
 	}
 
-	// Writer, auth, config, dry-run, and ancestor stack are inherited automatically.
 	return ctx
-}
-
-// extractResolverData builds the resolver data map from execution results.
-func extractResolverData(resultCtx context.Context, sol *solution.Solution) map[string]any {
-	data := make(map[string]any)
-
-	rctx, ok := resolver.FromContext(resultCtx)
-	if !ok {
-		return data
-	}
-
-	for name := range sol.Spec.Resolvers {
-		result, ok := rctx.GetResult(name)
-		if ok && result.Status == resolver.ExecutionStatusSuccess {
-			data[name] = result.Value
-		}
-	}
-
-	return data
 }
 
 // buildWorkflowResult converts an action.ExecutionResult to a WorkflowResult for the envelope.
@@ -851,7 +971,7 @@ func buildDescriptor() *provider.Descriptor {
 		Version:     version,
 		Description: "Executes a sub-solution and returns its results as a structured envelope",
 		Category:    "composition",
-		WhatIf: func(_ context.Context, input any) (string, error) {
+		WhatIf: func(ctx context.Context, input any) (string, error) {
 			var source string
 			switch v := input.(type) {
 			case *Input:
@@ -860,7 +980,7 @@ func buildDescriptor() *provider.Descriptor {
 				source, _ = v["source"].(string)
 			}
 			if source != "" {
-				return fmt.Sprintf("Would execute solution %q", source), nil
+				return fmt.Sprintf("Would execute solution %q", redactSourceDisplay(ctx, source)), nil
 			}
 			return "Would execute sub-solution", nil
 		},
@@ -942,33 +1062,6 @@ inputs:
 			},
 		},
 	}
-}
-
-// --- Registry Adapters ---
-
-// resolverRegistryAdapter adapts provider.Registry to resolver.RegistryInterface.
-type resolverRegistryAdapter struct {
-	registry *provider.Registry
-}
-
-func (r *resolverRegistryAdapter) Register(p provider.Provider) error {
-	return r.registry.Register(p)
-}
-
-func (r *resolverRegistryAdapter) Get(name string) (provider.Provider, bool) {
-	p, ok := r.registry.Get(name)
-	if !ok {
-		return nil, false
-	}
-	return p, true
-}
-
-func (r *resolverRegistryAdapter) List() []provider.Provider {
-	return r.registry.ListProviders()
-}
-
-func (r *resolverRegistryAdapter) DescriptorLookup() resolver.DescriptorLookup {
-	return r.registry.DescriptorLookup()
 }
 
 // autoResolveChildProviders fetches official providers needed by a child

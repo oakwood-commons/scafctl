@@ -405,18 +405,26 @@ Each sub-solution runs in an isolated context. This is critical for correctness 
 |-------|-----------|-----------|
 | Logger | `logger.WithLogger(ctx, scoped)` | Scoped with sub-solution name prefix |
 | Writer | `writer.FromContext(ctx)` (pass through) | Sub-solution output goes to same terminal |
-| Dry-run | N/A (actions are never invoked during dry-run) | WhatIf descriptions used instead |
+| Dry-run | `provider.DryRunFromContext(ctx)` | Sub-solutions observe dry-run mode |
 | Auth registry | `auth.WithRegistry(ctx, reg)` | Sub-solutions need the same auth |
 | App config | `config.WithConfig(ctx, cfg)` | Sub-solutions read the same config |
+| Redaction tracker | `redact.FromContext(ctx)` (shared) | Secrets resolved in child are tracked and redacted across parent output |
+| Parent CEL cost limit | `celexp.CostLimitFromContext(ctx)` (capped) | Child CEL cost limit cannot raise an enclosing parent's ceiling |
+| Inherited executor config | `action.InheritedExecutorConfigFromContext(ctx)` | Child workflows inherit parent timeout, grace period, concurrency, `IOStreams`, `Cwd`, and prefixed progress callbacks |
+| Output / working / solution directories | `provider.*DirectoryFromContext(ctx)` | File and action path resolution stays consistent |
 | Ancestor stack | Custom context key | For recursion detection |
 
-### Replaced (parent context stripped, sub-solution gets fresh values)
+### Replaced / Cleared (parent context stripped, sub-solution gets fresh values)
 
 | Value | Mechanism | Rationale |
 |-------|-----------|-----------|
-| Resolver context | `provider.WithResolverContext(ctx, map{})` | Sub-solution starts fresh; parent's `_` is not visible |
-| Parameters | `provider.WithParameters(ctx, inputs)` | `inputs` map replaces parent's `-r` params |
-| Iteration context | Not propagated | Sub-solution is not part of parent's forEach |
+| Resolver context | Cleared via `isolatedContext`, then `provider.WithResolverContext(ctx, map{})` | Sub-solution starts fresh; parent's `_` and `*resolver.Context` are not visible |
+| Parameters | Cleared via `isolatedContext`, then `provider.WithParameters(ctx, inputs)` when `inputs` is non-nil | `inputs` map replaces parent's `-r` params; parent CLI parameters never leak |
+| Iteration context | Cleared via `isolatedContext` | Sub-solution is not part of parent's `forEach` |
+| Persisted state | Cleared via `isolatedContext` | Sub-solution does not read parent's `state.Data` snapshot |
+| Template functions | Cleared via `isolatedContext`, then child's own `spec.functions` bound by `execute.Resolvers` / `execute.Actions` | Parent's author-defined Go template functions do not leak into child |
+| Parent step metadata | Cleared via `isolatedContext` (`ExecutionMode`, `PreResolvedInputs`, `SecretProperties`, `DeclaredScalarType`) | Parent resolver/action step flags never affect child `ValueRef` evaluation or scalar type coercion |
+| Solution metadata | Replaced by `execute.Resolvers` / `execute.Actions` (`provider.WithSolutionMetadata`) | Child providers observe the child solution's own metadata and provenance |
 | Action context | Not shared | Sub-solution builds its own `action.Context` |
 
 ### NOT Propagated
@@ -450,20 +458,21 @@ solution:deploy-k8s@2.0.0  Phase 1: executing 2 resolvers concurrently
 ### `from` Capability (Resolver Context)
 
 ~~~
-Execute(ctx, input) → *Output
-  1. Resolve `source` → string path
-  2. Resolve `inputs` → map[string]any params
+Execute(ctx, input) -> *Output
+  1. Resolve `source` -> string path
+  2. Resolve `inputs` -> map[string]any params
   3. Check ancestor stack + depth
   4. Push ancestor
   5. Load solution via the Loader (Loader.Get(ctx, path))
   6. Build isolated context:
+     - Strip parent parameters, iteration context, state snapshot, and template functions
      - Fresh resolver context (empty)
-     - Parameters from `inputs`
+     - Parameters from `inputs` (when provided)
      - Scoped logger
-  7. Create resolver.Executor with shared registry
-  8. Execute resolvers: executor.Execute(ctx, solution.Spec.Resolvers, params)
-  9. Extract resolver.Context → build envelope
-  10. If sub-solution failed AND propagateErrors → return Go error
+  7. Filter resolvers when `resolvers` allowlist is specified
+  8. Execute child resolvers via `execute.Resolvers(...)` (injects child SolutionMetadata, compiles child `spec.functions`, applies parent-capped CEL cost limit)
+  9. Build `from` envelope (preserving partial resolved values on failure when `propagateErrors: false`)
+  10. If sub-solution failed AND `propagateErrors` -> return Go error
   11. Return &Output{Data: envelope, Warnings: warnings}
 ~~~
 
@@ -472,22 +481,24 @@ Execute(ctx, input) → *Output
 Same as above through step 8, then:
 
 ~~~
-  9. Extract resolverData from resolver.Context
-  10. Build action.Graph from solution.Spec.Workflow
-  11. Create action.Executor with shared registry, resolverData, and progress callback
-  12. Execute workflow: actionExecutor.Execute(ctx, workflow)
-  13. Build envelope with resolver values + workflow summary
-  14. If sub-solution failed AND propagateErrors → return Go error
-  15. Return &Output{Data: envelope, Warnings: warnings}
+  9. If child defines no `spec.workflow`, emit `BuildActionEnvelope` with `success: true`
+  10. Inherit parent `action.Executor` settings (`InheritedExecutorConfig`: default timeout, grace period, max concurrency, IOStreams, Cwd) and wrap parent `ProgressCallback` with `[solution:<canonicalName>] ` prefix
+  11. Execute child workflow via `execute.Actions(...)`:
+      - Validate workflow (`action.ValidateWorkflow`)
+      - Filter explicit actions (`action.FilterWorkflowActions(workflow, nil)`, excluding standalone `explicit: true` actions while keeping transitive `dependsOn` dependencies and `finally` actions)
+      - Inject child `SolutionMetadata`, `__execution` metadata, `spec.functions`, and parent-capped CEL cost limit
+  12. Build `action` envelope with resolver values + workflow summary (recording `PartialResult` or `_workflow` error when `propagateErrors: false`)
+  13. If sub-solution failed AND `propagateErrors` -> return Go error
+  14. Return &Output{Data: envelope, Warnings: warnings}
 ~~~
 
 ### Progress Reporting
 
-The action executor supports `WithProgressCallback` for reporting execution progress. When the solution provider runs in `action` capability mode, it propagates progress callbacks from the sub-solution's action executor to the parent. Sub-solution progress events are prefixed with the solution's canonical name to distinguish them from parent-level progress:
+The action executor exposes its runtime settings via `action.InheritedExecutorConfig` on context and supports `WithProgressCallback` for reporting execution progress. When the solution provider runs in `action` capability mode, it wraps the parent's `ProgressCallback` with `action.NewSolutionProgressCallback`, serializing concurrent events through a mutex and prefixing child action names with `[solution:<canonicalName>] ` to distinguish them from parent-level progress:
 
 ~~~
-[solution:deploy-k8s@2.0.0] Action "provision-cluster" succeeded (3/5)
-[solution:deploy-k8s@2.0.0] Action "configure-networking" running (4/5)
+==> [solution:deploy-k8s@2.0.0] provision-cluster: Provision target cluster
+    done: [solution:deploy-k8s@2.0.0] provision-cluster (120ms)
 ~~~
 
 This ensures the parent does not block silently during long-running sub-solution workflows.

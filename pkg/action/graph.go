@@ -192,7 +192,9 @@ func expandSection(
 			continue
 		}
 		// Set name from map key
-		action.Name = name
+		if action.Name != name {
+			action.Name = name
+		}
 
 		if action.ForEach != nil {
 			forEachActions[name] = true

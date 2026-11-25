@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package execute
+package execute_test
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,8 +49,8 @@ func testRegistry(t *testing.T) *provider.Registry {
 
 // resolverCfg returns a resolver execution config with generous timeouts so
 // tests do not spuriously time out.
-func resolverCfg() ResolverExecutionConfig {
-	return ResolverExecutionConfig{Timeout: 30 * time.Second, PhaseTimeout: 30 * time.Second}
+func resolverCfg() execute.ResolverExecutionConfig {
+	return execute.ResolverExecutionConfig{Timeout: 30 * time.Second, PhaseTimeout: 30 * time.Second}
 }
 
 // countingProvider records how many times Execute runs so dedup behavior can be
@@ -103,7 +104,7 @@ func TestResolvers_ResolveStepCall(t *testing.T) {
 		},
 	}
 
-	result, err := Resolvers(context.Background(), sol, nil, testRegistry(t), resolverCfg())
+	result, err := execute.Resolvers(context.Background(), sol, nil, testRegistry(t), resolverCfg())
 	require.NoError(t, err)
 
 	assert.Equal(t, "id-abc", result.Data["thing"], "default prefix + supplied name should be bound")
@@ -132,7 +133,7 @@ func TestResolvers_TransformStepCall(t *testing.T) {
 		},
 	}
 
-	result, err := Resolvers(context.Background(), sol, nil, testRegistry(t), resolverCfg())
+	result, err := execute.Resolvers(context.Background(), sol, nil, testRegistry(t), resolverCfg())
 	require.NoError(t, err)
 
 	assert.Equal(t, "hello-x", result.Data["name"])
@@ -165,13 +166,13 @@ func TestResolvers_ValidateStepCall(t *testing.T) {
 	}
 
 	t.Run("passes when value matches", func(t *testing.T) {
-		result, err := Resolvers(context.Background(), build("^[a-z]+$", "prod"), nil, testRegistry(t), resolverCfg())
+		result, err := execute.Resolvers(context.Background(), build("^[a-z]+$", "prod"), nil, testRegistry(t), resolverCfg())
 		require.NoError(t, err)
 		assert.Equal(t, "prod", result.Data["env"])
 	})
 
 	t.Run("fails when value does not match", func(t *testing.T) {
-		_, err := Resolvers(context.Background(), build("^[a-z]+$", "PROD-123"), nil, testRegistry(t), resolverCfg())
+		_, err := execute.Resolvers(context.Background(), build("^[a-z]+$", "PROD-123"), nil, testRegistry(t), resolverCfg())
 		require.Error(t, err)
 	})
 }
@@ -208,7 +209,7 @@ func TestResolvers_DedupReusesResult(t *testing.T) {
 		},
 	}
 
-	result, err := Resolvers(context.Background(), sol, nil, reg, resolverCfg())
+	result, err := execute.Resolvers(context.Background(), sol, nil, reg, resolverCfg())
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&counter.calls), "dedup should invoke provider once for identical args")
 
@@ -237,8 +238,8 @@ func TestActions_Call(t *testing.T) {
 		},
 	}
 
-	cfg := ActionExecutionConfig{DefaultTimeout: 5 * time.Second, GracePeriod: time.Second}
-	result, err := Actions(context.Background(), sol, nil, testRegistry(t), cfg)
+	cfg := execute.ActionExecutionConfig{DefaultTimeout: 5 * time.Second, GracePeriod: time.Second}
+	result, err := execute.Actions(context.Background(), sol, nil, testRegistry(t), cfg)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, result.Result)
@@ -248,9 +249,6 @@ func TestActions_Call(t *testing.T) {
 // TestActions_CallCelArgsNamespace guards that a call invoked from an action
 // exposes the args namespace to providers that evaluate against the resolver
 // context (e.g. cel), not only to templates resolved during input binding.
-// Regression: _.args.* in an action call's cel provider previously failed with
-// "no such key: args" because the enriched resolver context was not installed
-// on the provider execution context.
 func TestActions_CallCelArgsNamespace(t *testing.T) {
 	sol := &solution.Solution{}
 	sol.Metadata.Name = "call-action-cel"
@@ -270,8 +268,8 @@ func TestActions_CallCelArgsNamespace(t *testing.T) {
 		},
 	}
 
-	cfg := ActionExecutionConfig{DefaultTimeout: 5 * time.Second, GracePeriod: time.Second}
-	result, err := Actions(context.Background(), sol, nil, testRegistry(t), cfg)
+	cfg := execute.ActionExecutionConfig{DefaultTimeout: 5 * time.Second, GracePeriod: time.Second}
+	result, err := execute.Actions(context.Background(), sol, nil, testRegistry(t), cfg)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, result.Result)
