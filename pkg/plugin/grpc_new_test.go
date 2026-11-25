@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func TestGRPCServer_ConfigureProvider(t *testing.T) {
@@ -1554,4 +1556,130 @@ type countingDescriptorPlugin struct {
 func (c *countingDescriptorPlugin) GetProviderDescriptor(ctx context.Context, name string) (*provider.Descriptor, error) {
 	*c.callCount++
 	return c.getDescFn(ctx, name)
+}
+
+type stubPluginServiceClient struct {
+	proto.PluginServiceClient
+	execResp     *proto.ExecuteProviderResponse
+	streamChunks []*proto.ExecuteProviderStreamChunk
+}
+
+func (s *stubPluginServiceClient) ExecuteProvider(_ context.Context, _ *proto.ExecuteProviderRequest, _ ...grpc.CallOption) (*proto.ExecuteProviderResponse, error) {
+	return s.execResp, nil
+}
+
+func (s *stubPluginServiceClient) ExecuteProviderStream(_ context.Context, _ *proto.ExecuteProviderRequest, _ ...grpc.CallOption) (proto.PluginService_ExecuteProviderStreamClient, error) {
+	return &stubExecuteStreamClient{chunks: s.streamChunks}, nil
+}
+
+type stubExecuteStreamClient struct {
+	proto.PluginService_ExecuteProviderStreamClient
+	chunks []*proto.ExecuteProviderStreamChunk
+	idx    int
+}
+
+func (s *stubExecuteStreamClient) Recv() (*proto.ExecuteProviderStreamChunk, error) {
+	if s.idx >= len(s.chunks) {
+		return nil, io.EOF
+	}
+	ch := s.chunks[s.idx]
+	s.idx++
+	return ch, nil
+}
+
+func TestGRPCExecuteProvider_PreservesOutputOnFailureWithoutDuplicatePrefix(t *testing.T) {
+	t.Parallel()
+
+	t.Run("server and client preserve non-nil output on unary error", func(t *testing.T) {
+		t.Parallel()
+		mock := &MockProviderPlugin{
+			execFunc: func(_ context.Context, _ string, _ map[string]any) (*provider.Output, error) {
+				return &provider.Output{
+					Data: map[string]any{
+						"stdout":   "partial test output\n",
+						"stderr":   "assertion failed\n",
+						"exitCode": 1,
+					},
+				}, exitcode.WithCode(fmt.Errorf("command exited with code 1"), 1)
+			},
+		}
+		server := &GRPCServer{Impl: mock}
+		resp, err := server.ExecuteProvider(context.Background(), &proto.ExecuteProviderRequest{
+			ProviderName: "exec",
+			Input:        []byte(`{"command":"go test"}`),
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, resp.Output, "server must serialize non-nil output alongside error")
+		assert.Equal(t, int32(1), resp.ExitCode)
+
+		client := &GRPCClient{client: &stubPluginServiceClient{execResp: resp}}
+		out, execErr := client.ExecuteProvider(context.Background(), "exec", map[string]any{"command": "go test"})
+		require.Error(t, execErr)
+		assert.Equal(t, 1, exitcode.GetCode(execErr))
+		assert.NotContains(t, execErr.Error(), "provider execution failed:", "GRPCClient must not pre-wrap with provider execution failed")
+		require.NotNil(t, out)
+		data, ok := out.Data.(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "partial test output\n", data["stdout"])
+		assert.Equal(t, int64(1), data["exitCode"])
+	})
+
+	t.Run("client returns nil output when error response carries null or empty output", func(t *testing.T) {
+		t.Parallel()
+		for _, raw := range [][]byte{nil, []byte("null"), []byte("  null  ")} {
+			client := &GRPCClient{client: &stubPluginServiceClient{
+				execResp: &proto.ExecuteProviderResponse{
+					Error:  "boom",
+					Output: raw,
+				},
+			}}
+			out, execErr := client.ExecuteProvider(context.Background(), "exec", map[string]any{})
+			require.Error(t, execErr)
+			assert.Equal(t, "boom", execErr.Error())
+			assert.Nil(t, out)
+		}
+	})
+
+	t.Run("stream client forwards non-null result output before error chunk", func(t *testing.T) {
+		t.Parallel()
+		outBytes, err := json.Marshal(&provider.Output{
+			Data: map[string]any{"stdout": "buffered\n", "exitCode": 2},
+		})
+		require.NoError(t, err)
+
+		client := &GRPCClient{client: &stubPluginServiceClient{
+			streamChunks: []*proto.ExecuteProviderStreamChunk{
+				{Chunk: &proto.ExecuteProviderStreamChunk_Stdout{Stdout: []byte("live\n")}},
+				{Chunk: &proto.ExecuteProviderStreamChunk_Result{
+					Result: &proto.ExecuteProviderResponse{
+						Output:   outBytes,
+						Error:    "exec: command exited with code 2",
+						ExitCode: 2,
+					},
+				}},
+			},
+		}}
+
+		var gotStdout string
+		var gotResult *provider.Output
+		var gotChunkErr string
+		streamErr := client.ExecuteProviderStream(context.Background(), "exec", map[string]any{}, func(ch StreamChunk) {
+			if ch.Stdout != nil {
+				gotStdout += string(ch.Stdout)
+			}
+			if ch.Result != nil {
+				gotResult = ch.Result
+			}
+			if ch.Error != "" {
+				gotChunkErr = ch.Error
+			}
+		})
+		require.Error(t, streamErr)
+		assert.Equal(t, 2, exitcode.GetCode(streamErr))
+		assert.Equal(t, "exec: command exited with code 2", streamErr.Error())
+		assert.Equal(t, "live\n", gotStdout)
+		assert.Equal(t, "exec: command exited with code 2", gotChunkErr)
+		require.NotNil(t, gotResult)
+		assert.Equal(t, "buffered\n", gotResult.Data.(map[string]any)["stdout"])
+	})
 }

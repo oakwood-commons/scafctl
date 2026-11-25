@@ -370,6 +370,7 @@ func (m *Manager) setDefaults() {
 	m.v.SetDefault("action.gracePeriod", settings.DefaultGracePeriod.String())
 	m.v.SetDefault("action.maxConcurrency", 0)
 	m.v.SetDefault("action.outputDir", "")
+	m.v.SetDefault("action.ciOutput", settings.DefaultActionCIOutput)
 
 	// Build defaults - all values from settings package
 	m.v.SetDefault("build.enableCache", true)
@@ -1132,6 +1133,17 @@ func (m *Manager) Set(key string, value any) {
 			m.config.HTTPClient.TrustedProxy = boolPtrFromValue(value)
 		case "httpClient.allowedPrivateCIDRs":
 			m.config.HTTPClient.AllowedPrivateCIDRs = stringSlicePtrFromValue(value)
+		case "action.ciOutput":
+			switch v := value.(type) {
+			case string:
+				m.config.Action.CIOutput = v
+			case bool:
+				m.config.Action.CIOutput = strconv.FormatBool(v)
+			case int:
+				m.config.Action.CIOutput = strconv.Itoa(v)
+			case nil:
+				m.config.Action.CIOutput = ""
+			}
 		case "auth.browser":
 			switch v := value.(type) {
 			case string:

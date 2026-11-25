@@ -61,6 +61,7 @@ func TestCommandAction(t *testing.T) {
 	assert.NotNil(t, flags.Lookup("force"))
 	assert.NotNil(t, flags.Lookup("backup"))
 	assert.NotNil(t, flags.Lookup("detailed-exit-code"))
+	assert.NotNil(t, flags.Lookup("ci-output"))
 }
 
 func TestCommandAction_FlagDefaults(t *testing.T) {
@@ -103,6 +104,10 @@ func TestCommandAction_FlagDefaults(t *testing.T) {
 	noState, err := flags.GetBool("no-state")
 	require.NoError(t, err)
 	assert.False(t, noState)
+
+	ciOutput, err := flags.GetString("ci-output")
+	require.NoError(t, err)
+	assert.Equal(t, settings.DefaultActionCIOutput, ciOutput)
 }
 
 func TestCommandAction_DetailedExitCodeFlag(t *testing.T) {
@@ -1272,4 +1277,61 @@ spec:
 		require.NoError(t, opts.Run(ctx), stderr.String())
 		assert.Zero(t, brokenCalls.Load())
 	})
+}
+
+func TestActionOptions_Run_InvalidCIOutput(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ActionOptions{
+		CIOutput: "gitlab-ci",
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams: streams,
+			CliParams: cliParams,
+			File:      "./testdata/basic.yaml",
+		},
+	}
+
+	w := writer.New(streams, cliParams)
+	ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), w)
+
+	err := opts.Run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid CI output mode")
+}
+
+func TestActionOptions_getEffectiveActionConfig_CIOutputPrecedence(t *testing.T) {
+	t.Parallel()
+
+	appCfg := &config.Config{
+		Action: config.ActionConfig{
+			CIOutput: "none",
+		},
+	}
+	ctx := config.WithConfig(context.Background(), appCfg)
+
+	// Unchanged flag falls back to config
+	opts := &ActionOptions{CIOutput: "auto"}
+	opts.flagsChanged = map[string]bool{}
+	assert.Equal(t, "none", opts.getEffectiveActionConfig(ctx).CIOutput)
+
+	// Explicit --ci-output flag wins over config
+	optsFlag := &ActionOptions{CIOutput: "github-actions"}
+	optsFlag.flagsChanged = map[string]bool{"ci-output": true}
+	assert.Equal(t, "github-actions", optsFlag.getEffectiveActionConfig(ctx).CIOutput)
+
+	// Invalid action config falls back cleanly to CLI defaults
+	badCfgCtx := config.WithConfig(context.Background(), &config.Config{
+		Action: config.ActionConfig{
+			DefaultTimeout: "not-a-duration",
+			CIOutput:       "none",
+		},
+	})
+	optsFallback := &ActionOptions{CIOutput: "auto"}
+	optsFallback.flagsChanged = map[string]bool{}
+	assert.Equal(t, "auto", optsFallback.getEffectiveActionConfig(badCfgCtx).CIOutput)
 }

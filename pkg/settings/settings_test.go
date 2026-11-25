@@ -480,3 +480,23 @@ func TestDefaultValidationErrorPolicy_IsError(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, ValidationError, DefaultValidationErrorPolicy)
 }
+
+func TestDefaultActionCIOutput(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "auto", DefaultActionCIOutput)
+}
+
+func TestIsNoColorEnv(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	t.Run("unset returns false", func(t *testing.T) {
+		t.Setenv("NO_COLOR", "")
+		assert.False(t, IsNoColorEnv())
+	})
+
+	t.Run("non-empty value returns true", func(t *testing.T) {
+		for _, val := range []string{"1", "true", "0", "anything"} {
+			t.Setenv("NO_COLOR", val)
+			assert.True(t, IsNoColorEnv(), "NO_COLOR=%q must enable no-color", val)
+		}
+	})
+}

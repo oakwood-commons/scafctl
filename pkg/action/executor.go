@@ -7,8 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
+	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,6 +69,10 @@ type Executor struct {
 	// ioStreams provides terminal IO for providers that support streaming output.
 	// When set, providers can write output directly to the terminal in real-time.
 	ioStreams *provider.IOStreams
+
+	// activeIOStreams holds the mutex-synchronized wrapper around ioStreams
+	// initialized at the start of Execute and cleared on Reset.
+	activeIOStreams *provider.IOStreams
 
 	// cwd is the original working directory captured at executor creation time.
 	// Exposed as __cwd in action expressions for referencing the original CWD.
@@ -331,19 +338,25 @@ func (e *Executor) Execute(ctx context.Context, w *Workflow) (*ExecutionResult, 
 	// nested sub-solution executors never race on unsynchronized observers.
 	e.activeProgress = SynchronizeProgressCallback(e.progressCallback)
 
+	// Wrap ioStreams writers in mutex-synchronized adapters so concurrent
+	// actions streaming or flushing buffered output never race.
+	e.activeIOStreams = synchronizeIOStreams(e.ioStreams)
+
 	inheritedCfg := InheritedExecutorConfig{
 		DefaultTimeout:   e.defaultTimeout,
 		GracePeriod:      e.gracePeriod,
 		MaxConcurrency:   e.maxConcurrency,
 		ProgressCallback: e.activeProgress,
-		IOStreams:        e.ioStreams,
+		IOStreams:        e.activeIOStreams,
 		Cwd:              e.cwd,
 	}
 	ctx = WithInheritedExecutorConfig(ctx, inheritedCfg)
 
 	// Ensure a run-scoped secret redaction tracker is present in ctx.
-	if redact.FromContext(ctx) == nil {
-		ctx = redact.WithTracker(ctx, redact.NewTracker())
+	runTracker := redact.FromContext(ctx)
+	if runTracker == nil {
+		runTracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, runTracker)
 	}
 
 	// Create a span for the full workflow execution.
@@ -364,6 +377,7 @@ func (e *Executor) Execute(ctx context.Context, w *Workflow) (*ExecutionResult, 
 	// Build the action graph
 	graph, err := BuildGraph(ctx, w, e.resolverData, nil)
 	if err != nil {
+		err = runTracker.RedactError(err)
 		result.FinalStatus = ExecutionFailed
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -646,8 +660,8 @@ func (e *Executor) executePhase(ctx context.Context, graph *Graph, actionNames [
 
 			// Inject IOStreams into context for streaming providers
 			actionCtx := ctx
-			if e.ioStreams != nil {
-				actionCtx = provider.WithIOStreams(ctx, e.ioStreams)
+			if streams := e.streams(); streams != nil {
+				actionCtx = provider.WithIOStreams(ctx, streams)
 			}
 
 			// Execute the action
@@ -690,6 +704,12 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	)
 	defer span.End()
 
+	actionTracker := redact.FromContext(ctx)
+	if actionTracker == nil {
+		actionTracker = redact.NewTracker()
+		ctx = redact.WithTracker(ctx, actionTracker)
+	}
+
 	// Evaluate condition if present
 	if action.WhenSkipped {
 		e.actionContext.MarkSkipped(actionName, SkipReasonCondition)
@@ -702,6 +722,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		additionalVars := e.buildAdditionalVars(graph.AliasMap)
 		shouldRun, err := action.When.EvaluateWithAdditionalVars(ctx, e.resolverData, additionalVars)
 		if err != nil {
+			err = actionTracker.RedactError(err)
 			e.actionContext.MarkFailed(actionName, fmt.Sprintf("condition evaluation failed: %v", err))
 			if cb != nil {
 				cb.OnActionFailed(actionName, err)
@@ -729,6 +750,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 			// silently executing it (fail-open would defeat the pattern
 			// validation and its containment checks).
 			if errors.Is(fpErr, fingerprint.ErrPatternInvalid) {
+				fpErr = actionTracker.RedactError(fpErr)
 				e.actionContext.MarkFailed(actionName, fmt.Sprintf("invalid sources/generates pattern: %v", fpErr))
 				if cb != nil {
 					cb.OnActionFailed(actionName, fpErr)
@@ -739,7 +761,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 			}
 			// Other errors are non-fatal: log and continue execution (fail-open).
 			logger.FromContext(ctx).V(0).Info("fingerprint file check failed, executing action",
-				"action", actionName, "error", fpErr.Error())
+				"action", actionName, "error", actionTracker.RedactError(fpErr).Error())
 		} else {
 			e.warnEmptySources(ctx, actionName, fpResult.SourcesEmptyPatterns, fpResult.SourcesAllEmpty)
 			if !fpResult.Stale {
@@ -756,11 +778,6 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		callPlan       *actionCallPlan
 		err            error
 	)
-	actionTracker := redact.FromContext(ctx)
-	if actionTracker == nil {
-		actionTracker = redact.NewTracker()
-		ctx = redact.WithTracker(ctx, actionTracker)
-	}
 
 	// Phase 2: Input-based fingerprint check (only when files were fresh).
 	// Compares fingerprint-normalized inputs hash against stored state so rotating
@@ -847,7 +864,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	retryExecutor := NewRetryExecutor(action.Retry)
 
 	// Create the execution function
-	execFunc := func(execCtx context.Context) (*provider.Output, error) {
+	callFn := func(execCtx context.Context) (*provider.Output, provider.CapturedStreamLogs, error) {
 		// Install the resolver data as the provider resolver context so
 		// providers that render templates or expressions internally (e.g. the
 		// file provider's write-tree outputPath, or cel) can read resolver
@@ -878,23 +895,34 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Opt-in de-duplication: identical call args within a run run the provider once.
 	if callPlan != nil && callPlan.Dedup && e.dedupMemo != nil {
-		inner := execFunc
-		execFunc = func(execCtx context.Context) (*provider.Output, error) {
-			out, dedupErr := e.dedupMemo.Do(callPlan.DedupKey, func() (any, error) {
-				return inner(execCtx)
+		inner := callFn
+		callFn = func(execCtx context.Context) (*provider.Output, provider.CapturedStreamLogs, error) {
+			val, dedupErr := e.dedupMemo.Do(callPlan.DedupKey, func() (any, error) {
+				out, logs, callErr := inner(execCtx)
+				return dedupProviderResult{output: out, logs: logs}, callErr
 			})
-			if dedupErr != nil {
-				return nil, dedupErr
+			var res dedupProviderResult
+			if val != nil {
+				var ok bool
+				res, ok = val.(dedupProviderResult)
+				if !ok && dedupErr == nil {
+					return nil, provider.CapturedStreamLogs{}, fmt.Errorf("action %q: dedup memo returned unexpected type %T (want dedupProviderResult)", actionName, val)
+				}
 			}
-			if out == nil {
-				return nil, nil
-			}
-			output, ok := out.(*provider.Output)
-			if !ok {
-				return nil, fmt.Errorf("action %q: dedup memo returned unexpected type %T (want *provider.Output)", actionName, out)
-			}
-			return output, nil
+			return res.output, res.logs, dedupErr
 		}
+	}
+
+	var lastCapturedLogs provider.CapturedStreamLogs
+	execFunc := func(execCtx context.Context) (*provider.Output, error) {
+		out, logs, callErr := callFn(execCtx)
+		if out == nil && !logs.Empty() {
+			out = &provider.Output{}
+		}
+		if callErr == nil || out != nil {
+			lastCapturedLogs = logs
+		}
+		return out, callErr
 	}
 
 	// Execute with retry
@@ -910,6 +938,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Handle results
 	if actionCtx.Err() == context.DeadlineExceeded {
+		failedResults, streamed := e.flushBufferedActionOutput(ctx, output, lastCapturedLogs, actionTracker)
+		e.actionContext.RecordOutput(actionName, failedResults, streamed)
 		e.actionContext.MarkTimeout(actionName)
 		if cb != nil {
 			cb.OnActionTimeout(actionName, timeout)
@@ -921,19 +951,22 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	}
 
 	if err != nil {
+		failedResults, streamed := e.flushBufferedActionOutput(ctx, output, lastCapturedLogs, actionTracker)
+		e.actionContext.RecordOutput(actionName, failedResults, streamed)
+
+		// Evaluate continueOnError before recording/reporting the failure so any
+		// expression evaluation error (decideErr) is included in ActionResult.Error
+		// and observer diagnostics rather than swallowed.
+		cont, decideErr := e.actionShouldContinue(ctx, action, err, attempts, maxAttempts)
+		if decideErr != nil {
+			err = errors.Join(err, actionTracker.RedactError(decideErr))
+			cont = false
+		}
 		e.actionContext.MarkFailed(actionName, err.Error())
 		if cb != nil {
 			cb.OnActionFailed(actionName, err)
 		}
-
-		// Check if we should continue on error
-		cont, decideErr := e.actionShouldContinue(ctx, action, err, attempts, maxAttempts)
-		if decideErr != nil {
-			// An invalid continueOnError expression/config is itself a failure;
-			// surface it (and record it on the span) instead of masking it
-			// behind the original action error.
-			err = errors.Join(err, actionTracker.RedactError(decideErr))
-		} else if cont {
+		if cont {
 			return nil
 		}
 		span.RecordError(err)
@@ -948,10 +981,9 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		rawResults = output.Data
 	}
 
-	// Validate original provider output against schema before redacting so
-	// credential-bearing fields do not fail length, pattern, enum, or format
-	// constraints after placeholder substitution. Any validation diagnostic is
-	// scrubbed before logging, callbacks, or error publication.
+	// Validate original provider output against schema before redacting or
+	// merging captured stream chunks so credential-bearing fields and non-TTY
+	// JSON/YAML log capture never change resultSchema validation outcomes.
 	if action.ResultSchema != nil {
 		mode := action.ResultSchemaMode
 		if mode == "" {
@@ -964,19 +996,27 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 				validationErr = actionTracker.RedactError(validationErr)
 				switch mode {
 				case ResultSchemaModeError:
-					e.actionContext.MarkFailed(actionName, validationErr.Error())
-					if cb != nil {
-						cb.OnActionFailed(actionName, validationErr)
-					}
+					failedResults, streamed := e.flushBufferedActionOutput(ctx, output, lastCapturedLogs, actionTracker)
+					e.actionContext.RecordOutput(actionName, failedResults, streamed)
 					cont, decideErr := e.actionShouldContinue(ctx, action, validationErr, attempts, maxAttempts)
+					reportErr := validationErr
+					retErr := fmt.Errorf("result schema validation failed: %w", validationErr)
 					if decideErr != nil {
 						decideErr = actionTracker.RedactError(decideErr)
-						return errors.Join(fmt.Errorf("result schema validation failed: %w", validationErr), decideErr)
+						reportErr = errors.Join(validationErr, decideErr)
+						retErr = errors.Join(retErr, decideErr)
+						cont = false
+					}
+					e.actionContext.MarkFailed(actionName, reportErr.Error())
+					if cb != nil {
+						cb.OnActionFailed(actionName, reportErr)
 					}
 					if cont {
 						return nil
 					}
-					return fmt.Errorf("result schema validation failed: %w", validationErr)
+					span.RecordError(retErr)
+					span.SetStatus(codes.Error, retErr.Error())
+					return retErr
 				case ResultSchemaModeWarn:
 					logger.FromContext(ctx).V(0).Info("result schema validation warning",
 						"action", actionName,
@@ -987,10 +1027,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		}
 	}
 
-	var results any
-	if rawResults != nil {
-		results = actionTracker.RedactAny(rawResults)
-	}
+	results, streamed := e.flushBufferedActionOutput(ctx, output, lastCapturedLogs, actionTracker)
 
 	e.actionContext.MarkSucceeded(actionName, results)
 
@@ -1009,8 +1046,8 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		}
 	}
 
-	// Track whether the provider streamed output to the terminal
-	if output != nil && output.Streamed {
+	// Track whether the provider streamed or flushed output to the terminal
+	if streamed {
 		e.actionContext.MarkStreamed(actionName)
 	}
 
@@ -1019,6 +1056,72 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	}
 
 	return nil
+}
+
+type dedupProviderResult struct {
+	output *provider.Output
+	logs   provider.CapturedStreamLogs
+}
+
+// flushBufferedActionOutput scrubs output.Data via actionTracker, merges any
+// non-TTY captured stream chunks into the result envelope, and -- when terminal
+// IOStreams are attached and the provider did not already stream its
+// output -- writes exact buffered stdout/stderr bytes before completion/failure
+// callbacks run so output stays inside the action's log group and is never lost
+// on failure.
+func (e *Executor) flushBufferedActionOutput(
+	ctx context.Context,
+	output *provider.Output,
+	capturedLogs provider.CapturedStreamLogs,
+	actionTracker *redact.Tracker,
+) (any, bool) {
+	if output == nil && capturedLogs.Empty() {
+		return nil, false
+	}
+
+	var streamed bool
+	var results any
+	if output != nil {
+		streamed = output.Streamed
+		if output.Data != nil {
+			results = actionTracker.RedactAny(output.Data)
+		}
+	}
+	if !capturedLogs.Empty() {
+		redactedLogs := provider.CapturedStreamLogs{
+			Stdout: actionTracker.RedactString(capturedLogs.Stdout),
+			Stderr: actionTracker.RedactString(capturedLogs.Stderr),
+		}
+		results = redactedLogs.MergeIntoData(results)
+	}
+
+	streams := e.streams()
+	if streamed || streams == nil {
+		return results, streamed
+	}
+	if cliParams, ok := settings.FromContext(ctx); ok && cliParams != nil && cliParams.IsQuiet {
+		return results, streamed
+	}
+
+	resMap, ok := results.(map[string]any)
+	if !ok {
+		return results, false
+	}
+
+	stdout, _ := resMap["stdout"].(string)
+	stderr, _ := resMap["stderr"].(string)
+	if stdout == "" && stderr == "" {
+		return results, false
+	}
+
+	if stdout != "" && streams.Out != nil {
+		_, _ = io.WriteString(streams.Out, stdout)
+	}
+	if stderr != "" && streams.ErrOut != nil {
+		_, _ = io.WriteString(streams.ErrOut, stderr)
+	}
+
+	return results, true
 }
 
 // resolveFingerprintInputs evaluates action inputs against FingerprintCredentialResolver
@@ -1137,14 +1240,14 @@ func (e *Executor) buildAdditionalVars(aliasMap map[string]string) map[string]an
 // callProvider executes the provider for an action. providerName is the
 // effective provider (the action's own provider, or a call definition's provider
 // for call-based actions).
-func (e *Executor) callProvider(ctx context.Context, providerName string, inputs map[string]any) (*provider.Output, error) {
+func (e *Executor) callProvider(ctx context.Context, providerName string, inputs map[string]any) (*provider.Output, provider.CapturedStreamLogs, error) {
 	if e.registry == nil {
-		return nil, fmt.Errorf("no provider registry configured")
+		return nil, provider.CapturedStreamLogs{}, fmt.Errorf("no provider registry configured")
 	}
 
 	prov, ok := e.registry.Get(providerName)
 	if !ok {
-		return nil, fmt.Errorf("provider %q not found", providerName)
+		return nil, provider.CapturedStreamLogs{}, fmt.Errorf("provider %q not found", providerName)
 	}
 
 	// Check for CapabilityAction
@@ -1157,26 +1260,133 @@ func (e *Executor) callProvider(ctx context.Context, providerName string, inputs
 		}
 	}
 	if !hasActionCap {
-		return nil, fmt.Errorf("provider %q does not support action capability", providerName)
+		return nil, provider.CapturedStreamLogs{}, fmt.Errorf("provider %q does not support action capability", providerName)
 	}
 
-	// Set up execution context with action mode and mark inputs pre-resolved so
-	// InputResolver does not re-parse or re-evaluate untrusted ValueRef-shaped maps.
-	execCtx := provider.WithPreResolvedInputs(provider.WithExecutionMode(ctx, provider.CapabilityAction))
+	// Set up execution context with action mode, pre-resolved input marker, and
+	// a CapturedStreamSink so non-TTY stream chunks stay separate during
+	// resultSchema validation.
+	sink := &provider.CapturedStreamSink{}
+	execCtx := provider.WithCapturedStreamSink(
+		provider.WithPreResolvedInputs(provider.WithExecutionMode(ctx, provider.CapabilityAction)),
+		sink,
+	)
 
 	// Pass through IOStreams from context if available (set by executePhase)
-	if streams, ok := provider.IOStreamsFromContext(ctx); ok {
+	if streams, ok := provider.IOStreamsFromContext(ctx); ok && streams != nil {
 		execCtx = provider.WithIOStreams(execCtx, streams)
 	}
 
 	// Create executor and run
 	providerExecutor := provider.NewExecutor()
 	result, err := providerExecutor.Execute(execCtx, prov, inputs)
+	logs := sink.Logs()
 	if err != nil {
-		return nil, err
+		if result != nil {
+			return &result.Output, logs, err
+		}
+		return nil, logs, err
 	}
 
-	return &result.Output, nil
+	return &result.Output, logs, nil
+}
+
+// syncWriter serializes concurrent writes to an underlying io.Writer while
+// keeping ordinary Write calls strictly byte-preserving. Explicit CI directives
+// use WriteDirectiveLine to align onto column 0 after unterminated output.
+type syncWriter struct {
+	mu          sync.Mutex
+	w           io.Writer
+	atLineStart bool
+}
+
+func wrapSyncWriter(w io.Writer) io.Writer {
+	if w == nil {
+		return nil
+	}
+	if _, ok := w.(*syncWriter); ok {
+		return w
+	}
+	return &syncWriter{w: w, atLineStart: true}
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, err := s.w.Write(p)
+	if n > 0 {
+		s.atLineStart = p[n-1] == '\n'
+	}
+	return n, err
+}
+
+// WriteDirectiveLine writes a CI workflow directive on its own line, inserting
+// a leading newline first when preceding output did not end with '\n'.
+func (s *syncWriter) WriteDirectiveLine(line string) error {
+	trimmed := strings.TrimRight(line, "\r\n")
+	if trimmed == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dlw, ok := s.w.(interface{ WriteDirectiveLine(string) error }); ok {
+		if err := dlw.WriteDirectiveLine(trimmed); err != nil {
+			return err
+		}
+		s.atLineStart = true
+		return nil
+	}
+	if !s.atLineStart {
+		if _, err := s.w.Write([]byte{'\n'}); err != nil {
+			return err
+		}
+		s.atLineStart = true
+	}
+	target := trimmed + "\n"
+	n, err := io.WriteString(s.w, target)
+	if n > 0 {
+		s.atLineStart = target[n-1] == '\n'
+	}
+	return err
+}
+
+func sameUnderlyingWriter(a, b io.Writer) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	ta := reflect.TypeOf(a)
+	tb := reflect.TypeOf(b)
+	if ta != tb || !ta.Comparable() {
+		return false
+	}
+	return a == b
+}
+
+func synchronizeIOStreams(streams *provider.IOStreams) *provider.IOStreams {
+	if streams == nil {
+		return nil
+	}
+	syncOut := wrapSyncWriter(streams.Out)
+	var syncErr io.Writer
+	if sameUnderlyingWriter(streams.Out, streams.ErrOut) {
+		syncErr = syncOut
+	} else {
+		syncErr = wrapSyncWriter(streams.ErrOut)
+	}
+	return &provider.IOStreams{
+		Out:    syncOut,
+		ErrOut: syncErr,
+	}
+}
+
+func (e *Executor) streams() *provider.IOStreams {
+	if e.activeIOStreams != nil {
+		return e.activeIOStreams
+	}
+	return e.ioStreams
 }
 
 // determineFinalStatus determines the overall execution status.
@@ -1215,6 +1425,7 @@ func (e *Executor) progress() ProgressCallback {
 func (e *Executor) Reset() {
 	e.actionContext.Reset()
 	e.activeProgress = nil
+	e.activeIOStreams = nil
 }
 
 // progressRetryAdapter adapts RetryObserver to RetryCallback.

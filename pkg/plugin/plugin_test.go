@@ -4,8 +4,10 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,8 +16,10 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -28,6 +32,7 @@ type MockProviderPlugin struct {
 	providers       []string
 	descriptors     map[string]*provider.Descriptor
 	execFunc        func(ctx context.Context, name string, input map[string]any) (*provider.Output, error)
+	streamFunc      func(ctx context.Context, name string, input map[string]any, cb func(StreamChunk)) error
 	extractDepsFunc func(ctx context.Context, name string, inputs map[string]any) ([]string, error)
 	configureErr    error
 	lastConfig      *ProviderConfig
@@ -84,7 +89,10 @@ func (m *MockProviderPlugin) ConfigureProvider(_ context.Context, _ string, cfg 
 	return m.configureErr
 }
 
-func (m *MockProviderPlugin) ExecuteProviderStream(_ context.Context, _ string, _ map[string]any, _ func(StreamChunk)) error {
+func (m *MockProviderPlugin) ExecuteProviderStream(ctx context.Context, name string, input map[string]any, cb func(StreamChunk)) error {
+	if m.streamFunc != nil {
+		return m.streamFunc(ctx, name, input, cb)
+	}
 	return ErrStreamingNotSupported
 }
 
@@ -546,4 +554,325 @@ func TestGRPCServer_ExecuteProvider(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWrapProviderError_AvoidsDuplicatePrefixAndPreservesChain(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, wrapProviderError("exec", nil))
+
+	inner := exitcode.WithCode(errors.New("command exited with code 2"), 2)
+	wrapped := wrapProviderError("exec", inner)
+	assert.Equal(t, "exec: command exited with code 2", wrapped.Error())
+	assert.Equal(t, 2, exitcode.GetCode(wrapped))
+
+	alreadyPrefixed := exitcode.WithCode(errors.New("exec: command exited with code 2"), 2)
+	deduped := wrapProviderError("exec", alreadyPrefixed)
+	assert.Equal(t, "exec: command exited with code 2", deduped.Error())
+	assert.Equal(t, 2, exitcode.GetCode(deduped))
+}
+
+func TestProviderWrapper_Execute_PreservesOutputAndStreamedOnFailure(t *testing.T) {
+	t.Parallel()
+
+	t.Run("streaming failure preserves partial output, marks Streamed, and avoids double prefix", func(t *testing.T) {
+		t.Parallel()
+		mock := &MockProviderPlugin{
+			providers: []string{"exec"},
+			descriptors: map[string]*provider.Descriptor{
+				"exec": {
+					Name:         "exec",
+					APIVersion:   "v1",
+					Version:      semver.MustParse("1.0.0"),
+					Capabilities: []provider.Capability{provider.CapabilityAction},
+				},
+			},
+			streamFunc: func(_ context.Context, _ string, _ map[string]any, cb func(StreamChunk)) error {
+				cb(StreamChunk{Stdout: []byte("step 1 ok\n")})
+				cb(StreamChunk{Result: &provider.Output{
+					Data:     map[string]any{"stdout": "step 1 ok\n", "exitCode": 1},
+					Streamed: true,
+					Warnings: []string{"warn with tok-secret"},
+				}})
+				return errors.New("exec: command exited with code 1")
+			},
+		}
+
+		wrapper, err := NewProviderWrapper(&Client{plugin: mock, name: "exec"}, "exec")
+		require.NoError(t, err)
+
+		var stdout, stderr bytes.Buffer
+		tracker := redact.NewTracker()
+		tracker.Track("tok-secret")
+		ctx := redact.WithTracker(context.Background(), tracker)
+		ctx = provider.WithIOStreams(ctx, &provider.IOStreams{Out: &stdout, ErrOut: &stderr})
+
+		out, execErr := wrapper.Execute(ctx, map[string]any{"command": "test"})
+		require.Error(t, execErr)
+		assert.Equal(t, "exec: command exited with code 1", execErr.Error())
+		assert.Equal(t, "step 1 ok\n", stdout.String())
+		require.NotNil(t, out)
+		assert.True(t, out.Streamed)
+		assert.Equal(t, []string{"warn with [REDACTED]"}, out.Warnings)
+	})
+
+	t.Run("unary fallback failure preserves buffered output and scrubs metadata", func(t *testing.T) {
+		t.Parallel()
+		mock := &MockProviderPlugin{
+			providers: []string{"exec"},
+			descriptors: map[string]*provider.Descriptor{
+				"exec": {
+					Name:         "exec",
+					APIVersion:   "v1",
+					Version:      semver.MustParse("1.0.0"),
+					Capabilities: []provider.Capability{provider.CapabilityAction},
+				},
+			},
+			execFunc: func(_ context.Context, _ string, _ map[string]any) (*provider.Output, error) {
+				return &provider.Output{
+					Data:     map[string]any{"stdout": "failing test details my-secret-val\n", "exitCode": 1},
+					Metadata: map[string]any{"secret": "my-secret-val"},
+				}, errors.New("command exited with code 1")
+			},
+		}
+
+		wrapper, err := NewProviderWrapper(&Client{plugin: mock, name: "exec"}, "exec")
+		require.NoError(t, err)
+
+		tracker := redact.NewTracker()
+		tracker.Track("my-secret-val")
+		ctx := redact.WithTracker(context.Background(), tracker)
+
+		out, execErr := wrapper.Execute(ctx, map[string]any{"command": "go test"})
+		require.Error(t, execErr)
+		assert.Equal(t, "exec: command exited with code 1", execErr.Error())
+		require.NotNil(t, out)
+		assert.False(t, out.Streamed)
+		assert.Equal(t, "failing test details [REDACTED]\n", out.Data.(map[string]any)["stdout"])
+		assert.Equal(t, "[REDACTED]", out.Metadata["secret"])
+	})
+
+	t.Run("action mode without IOStreams uses ExecuteProviderStream to preserve SDK failure result with Streamed=false", func(t *testing.T) {
+		t.Parallel()
+		mock := &MockProviderPlugin{
+			providers: []string{"exec"},
+			descriptors: map[string]*provider.Descriptor{
+				"exec": {
+					Name:         "exec",
+					APIVersion:   "v1",
+					Version:      semver.MustParse("1.0.0"),
+					Capabilities: []provider.Capability{provider.CapabilityAction},
+				},
+			},
+			streamFunc: func(_ context.Context, _ string, _ map[string]any, cb func(StreamChunk)) error {
+				cb(StreamChunk{Stdout: []byte("live chunk suppressed in json mode\n")})
+				cb(StreamChunk{Result: &provider.Output{
+					Data:     map[string]any{"stdout": "captured stdout\n", "exitCode": 1},
+					Streamed: true,
+				}})
+				cb(StreamChunk{Error: "command exited with code 1"})
+				return nil
+			},
+		}
+
+		wrapper, err := NewProviderWrapper(&Client{plugin: mock, name: "exec"}, "exec")
+		require.NoError(t, err)
+
+		ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityAction)
+		out, execErr := wrapper.Execute(ctx, map[string]any{"command": "go test"})
+		require.Error(t, execErr)
+		assert.Equal(t, "exec: command exited with code 1", execErr.Error())
+		require.NotNil(t, out)
+		assert.False(t, out.Streamed, "Streamed must be false when IOStreams were nil")
+		assert.Equal(t, "captured stdout\n", out.Data.(map[string]any)["stdout"])
+	})
+
+	t.Run("mixed streamed stderr progress with buffered stdout preserves Streamed=false on success and failure", func(t *testing.T) {
+		t.Parallel()
+		for _, shouldFail := range []bool{false, true} {
+			mock := &MockProviderPlugin{
+				providers: []string{"exec"},
+				descriptors: map[string]*provider.Descriptor{
+					"exec": {
+						Name:         "exec",
+						APIVersion:   "v1",
+						Version:      semver.MustParse("1.0.0"),
+						Capabilities: []provider.Capability{provider.CapabilityAction},
+					},
+				},
+				streamFunc: func(_ context.Context, _ string, _ map[string]any, cb func(StreamChunk)) error {
+					cb(StreamChunk{Stderr: []byte("downloading index...\n")})
+					cb(StreamChunk{Result: &provider.Output{
+						Data:     map[string]any{"stdout": "buffered final report\n"},
+						Streamed: false,
+					}})
+					if shouldFail {
+						cb(StreamChunk{Error: "validation failed"})
+					}
+					return nil
+				},
+			}
+
+			wrapper, err := NewProviderWrapper(&Client{plugin: mock, name: "exec"}, "exec")
+			require.NoError(t, err)
+
+			var stdout, stderr bytes.Buffer
+			ctx := provider.WithIOStreams(context.Background(), &provider.IOStreams{Out: &stdout, ErrOut: &stderr})
+			out, execErr := wrapper.Execute(ctx, map[string]any{"command": "report"})
+			if shouldFail {
+				require.Error(t, execErr)
+			} else {
+				require.NoError(t, execErr)
+			}
+			assert.Equal(t, "downloading index...\n", stderr.String())
+			assert.Empty(t, stdout.String(), "buffered stdout was returned in Result.Data, not streamed")
+			require.NotNil(t, out)
+			assert.False(t, out.Streamed, "Result.Streamed=false must be honored so caller flushes Data[stdout]")
+			assert.Equal(t, "buffered final report\n", out.Data.(map[string]any)["stdout"])
+		}
+	})
+
+	t.Run("action mode without IOStreams captures and redacts chunk-only logs without duplicating provider Data", func(t *testing.T) {
+		t.Parallel()
+		mock := &MockProviderPlugin{
+			providers: []string{"exec"},
+			descriptors: map[string]*provider.Descriptor{
+				"exec": {
+					Name:         "exec",
+					APIVersion:   "v1",
+					Version:      semver.MustParse("1.0.0"),
+					Capabilities: []provider.Capability{provider.CapabilityAction},
+				},
+			},
+			streamFunc: func(_ context.Context, _ string, _ map[string]any, cb func(StreamChunk)) error {
+				// Split secret across two chunks to verify StreamWriter boundary redaction.
+				cb(StreamChunk{Stdout: []byte("out chunk tok-")})
+				cb(StreamChunk{Stdout: []byte("secret\n")})
+				cb(StreamChunk{Stderr: []byte("err chunk tok-secret\n")})
+				cb(StreamChunk{Result: &provider.Output{
+					Data:     map[string]any{"exitCode": 1},
+					Streamed: true,
+				}})
+				cb(StreamChunk{Error: "command exited with code 1"})
+				return nil
+			},
+		}
+
+		wrapper, err := NewProviderWrapper(&Client{plugin: mock, name: "exec"}, "exec")
+		require.NoError(t, err)
+
+		tracker := redact.NewTracker()
+		tracker.Track("tok-secret")
+		ctx := redact.WithTracker(provider.WithExecutionMode(context.Background(), provider.CapabilityAction), tracker)
+
+		out, execErr := wrapper.Execute(ctx, map[string]any{"command": "go test"})
+		require.Error(t, execErr)
+		require.NotNil(t, out)
+		assert.False(t, out.Streamed)
+		dataMap := out.Data.(map[string]any)
+		assert.Equal(t, "out chunk [REDACTED]\n", dataMap["stdout"])
+		assert.Equal(t, "err chunk [REDACTED]\n", dataMap["stderr"])
+		assert.Equal(t, 1, dataMap["exitCode"])
+	})
+
+	t.Run("mergeCapturedStreamChunks handles nil output nil Data structured fields and success without IOStreams", func(t *testing.T) {
+		t.Parallel()
+
+		// 1. Nil output with captured chunks synthesizes Output.Data.
+		fromNil := mergeCapturedStreamChunks(nil, "out\n", "err\n")
+		require.NotNil(t, fromNil)
+		assert.False(t, fromNil.Streamed)
+		assert.Equal(t, map[string]any{"stdout": "out\n", "stderr": "err\n"}, fromNil.Data)
+
+		// 2. Output with nil Data populates Data map.
+		fromNilData := mergeCapturedStreamChunks(&provider.Output{Streamed: true}, "only-out\n", "")
+		require.NotNil(t, fromNilData)
+		assert.False(t, fromNilData.Streamed)
+		assert.Equal(t, map[string]any{"stdout": "only-out\n"}, fromNilData.Data)
+
+		// 3. Non-string structured Data["stdout"] and non-map Data are never clobbered.
+		structuredSlot := []string{"line1", "line2"}
+		preserved := mergeCapturedStreamChunks(&provider.Output{
+			Data: map[string]any{
+				"stdout": structuredSlot,
+				"stderr": "existing-err\n",
+			},
+			Streamed: true,
+		}, "chunk-out\n", "chunk-err\n")
+		assert.False(t, preserved.Streamed)
+		assert.Equal(t, structuredSlot, preserved.Data.(map[string]any)["stdout"])
+		assert.Equal(t, "existing-err\n", preserved.Data.(map[string]any)["stderr"])
+
+		scalarData := mergeCapturedStreamChunks(&provider.Output{Data: "raw-scalar", Streamed: true}, "chunk\n", "")
+		assert.False(t, scalarData.Streamed)
+		assert.Equal(t, "raw-scalar", scalarData.Data)
+
+		// 4. Successful chunk-only execution without IOStreams captures redacted stdout/stderr.
+		mock := &MockProviderPlugin{
+			providers: []string{"exec"},
+			descriptors: map[string]*provider.Descriptor{
+				"exec": {
+					Name:         "exec",
+					APIVersion:   "v1",
+					Version:      semver.MustParse("1.0.0"),
+					Capabilities: []provider.Capability{provider.CapabilityAction},
+				},
+			},
+			streamFunc: func(_ context.Context, _ string, _ map[string]any, cb func(StreamChunk)) error {
+				cb(StreamChunk{Stdout: []byte("ok s3cr3t\n")})
+				return nil
+			},
+		}
+		wrapper, err := NewProviderWrapper(&Client{plugin: mock, name: "exec"}, "exec")
+		require.NoError(t, err)
+		tracker := redact.NewTracker()
+		tracker.Track("s3cr3t")
+		ctx := redact.WithTracker(provider.WithExecutionMode(context.Background(), provider.CapabilityAction), tracker)
+		out, execErr := wrapper.Execute(ctx, map[string]any{"command": "echo"})
+		require.NoError(t, execErr)
+		require.NotNil(t, out)
+		assert.False(t, out.Streamed)
+		assert.Equal(t, map[string]any{"stdout": "ok [REDACTED]\n"}, out.Data)
+	})
+
+	t.Run("WithCapturedStreamSink keeps Output.Data unmodified for strict schema validation", func(t *testing.T) {
+		t.Parallel()
+		mock := &MockProviderPlugin{
+			providers: []string{"exec"},
+			descriptors: map[string]*provider.Descriptor{
+				"exec": {
+					Name:         "exec",
+					APIVersion:   "v1",
+					Version:      semver.MustParse("1.0.0"),
+					Capabilities: []provider.Capability{provider.CapabilityAction},
+				},
+			},
+			streamFunc: func(_ context.Context, _ string, _ map[string]any, cb func(StreamChunk)) error {
+				cb(StreamChunk{Stderr: []byte("progress tok-secret\n")})
+				cb(StreamChunk{Result: &provider.Output{
+					Data:     map[string]any{"id": 1},
+					Streamed: true,
+				}})
+				return nil
+			},
+		}
+
+		wrapper, err := NewProviderWrapper(&Client{plugin: mock, name: "exec"}, "exec")
+		require.NoError(t, err)
+
+		tracker := redact.NewTracker()
+		tracker.Track("tok-secret")
+		sink := &provider.CapturedStreamSink{}
+		ctx := provider.WithCapturedStreamSink(
+			redact.WithTracker(provider.WithExecutionMode(context.Background(), provider.CapabilityAction), tracker),
+			sink,
+		)
+
+		out, execErr := wrapper.Execute(ctx, map[string]any{"command": "provision"})
+		require.NoError(t, execErr)
+		require.NotNil(t, out)
+		assert.False(t, out.Streamed)
+		assert.Equal(t, map[string]any{"id": 1}, out.Data, "Output.Data must stay untouched while sink captures stream chunks")
+		assert.Equal(t, provider.CapturedStreamLogs{Stderr: "progress [REDACTED]\n"}, sink.Logs())
+	})
 }

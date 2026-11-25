@@ -230,6 +230,30 @@ func (c *Context) MarkStreamed(name string) {
 	}
 }
 
+// RecordOutput stores partial or buffered output metadata on an existing or new
+// ActionResult before terminal status transitions such as MarkFailed or MarkTimeout.
+func (c *Context) RecordOutput(name string, results any, streamed bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if existing, ok := c.actions[name]; ok {
+		if results != nil {
+			existing.Results = results
+		}
+		if streamed {
+			existing.Streamed = true
+		}
+		return
+	}
+	now := time.Now()
+	c.actions[name] = &ActionResult{
+		Results:   results,
+		Streamed:  streamed,
+		Status:    StatusRunning,
+		StartTime: &now,
+	}
+}
+
 // RecordAttempts stores the number of execution attempts performed for an
 // action. It is recorded after retry completes so the continue-on-error
 // decision (and any later re-evaluation) can build an __error context with the
@@ -358,6 +382,8 @@ func (c *Context) Clone() *Context {
 			Status:     result.Status,
 			SkipReason: result.SkipReason,
 			Error:      result.Error,
+			Attempts:   result.Attempts,
+			Streamed:   result.Streamed,
 		}
 		if result.StartTime != nil {
 			t := *result.StartTime

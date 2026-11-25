@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 )
 
 // NormalizeCIDR converts a single address-allowlist entry into CIDR form,
@@ -435,6 +436,12 @@ func (a *ActionConfig) Validate() error {
 	// Validate numeric ranges
 	if a.MaxConcurrency < 0 {
 		return fmt.Errorf("maxConcurrency: must be non-negative, got %d", a.MaxConcurrency)
+	}
+
+	if a.CIOutput != "" {
+		if _, err := output.ParseCIMode(a.CIOutput); err != nil {
+			return fmt.Errorf("ciOutput: %w", err)
+		}
 	}
 
 	return nil

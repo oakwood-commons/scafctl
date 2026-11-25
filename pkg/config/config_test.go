@@ -41,6 +41,7 @@ func TestManager_Load_NoFile(t *testing.T) {
 	assert.Equal(t, "official", cfg.Settings.DefaultCatalog)
 	assert.False(t, cfg.Settings.NoColor)
 	assert.False(t, cfg.Settings.Quiet)
+	assert.Equal(t, settings.DefaultActionCIOutput, cfg.Action.CIOutput)
 	assert.Nil(t, cfg.APIServer.TokenPassThrough)
 	assert.Equal(t, []string{"Github"}, cfg.APIServer.TokenPassThroughAllowedHeaders())
 }
@@ -1652,4 +1653,70 @@ func TestManager_Save_SaveAs_Delete_AtomicPrivateReplacement(t *testing.T) {
 	jsonDirectBytes, err := os.ReadFile(jsonMgrPath)
 	require.NoError(t, err)
 	assert.True(t, json.Valid(jsonDirectBytes), "Save() on a .json config path must write valid JSON, got: %s", string(jsonDirectBytes))
+}
+
+func TestManager_ActionCIOutput_SetSaveAndEnvOverride(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	t.Run("Set and Save persist action.ciOutput across reload", func(t *testing.T) {
+		cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+		mgr := NewManager(cfgPath)
+		cfg, err := mgr.Load()
+		require.NoError(t, err)
+		assert.Equal(t, "auto", cfg.Action.CIOutput)
+
+		mgr.Set("action.ciOutput", "none")
+		assert.Equal(t, "none", cfg.Action.CIOutput)
+		require.NoError(t, mgr.Save())
+
+		reloaded, err := NewManager(cfgPath).Load()
+		require.NoError(t, err)
+		assert.Equal(t, "none", reloaded.Action.CIOutput)
+
+		vals, err := reloaded.Action.ToActionValues()
+		require.NoError(t, err)
+		assert.Equal(t, "none", vals.CIOutput)
+	})
+
+	t.Run("custom env prefix overrides action.ciOutput", func(t *testing.T) {
+		t.Setenv("MYCLI_ACTION_CIOUTPUT", "github-actions")
+		cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+		mgr := NewManager(cfgPath, WithEnvPrefix("mycli"))
+		cfg, err := mgr.Load()
+		require.NoError(t, err)
+		assert.Equal(t, "github-actions", cfg.Action.CIOutput)
+	})
+
+	t.Run("Set coerces bool and int values so Save rejects invalid modes", func(t *testing.T) {
+		cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+		mgr := NewManager(cfgPath)
+		_, err := mgr.Load()
+		require.NoError(t, err)
+
+		mgr.Set("action.ciOutput", false)
+		assert.Equal(t, "false", mgr.Config().Action.CIOutput)
+		require.Error(t, mgr.Save())
+
+		mgr.Set("action.ciOutput", 1)
+		assert.Equal(t, "1", mgr.Config().Action.CIOutput)
+		require.Error(t, mgr.Save())
+	})
+
+	t.Run("Set and Save persist action.ciOutput when config.d drop-in fragments are present", func(t *testing.T) {
+		dir := t.TempDir()
+		dropInDir := filepath.Join(dir, ConfigDirName)
+		require.NoError(t, os.MkdirAll(dropInDir, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dropInDir, "10-logging.yaml"), []byte("logging:\n  level: info\n"), 0o600))
+
+		cfgPath := filepath.Join(dir, "config.yaml")
+		mgr := NewManager(cfgPath)
+		_, err := mgr.Load()
+		require.NoError(t, err)
+
+		mgr.Set("action.ciOutput", "none")
+		require.NoError(t, mgr.Save())
+
+		reloaded, err := NewManager(cfgPath).Load()
+		require.NoError(t, err)
+		assert.Equal(t, "none", reloaded.Action.CIOutput)
+	})
 }

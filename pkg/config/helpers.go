@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 )
 
 // CELConfigValues holds parsed CEL configuration values.
@@ -128,7 +129,8 @@ type ActionConfigValues struct {
 	DefaultTimeout time.Duration `json:"defaultTimeout" yaml:"defaultTimeout" doc:"Default per-action execution timeout"`
 	GracePeriod    time.Duration `json:"gracePeriod" yaml:"gracePeriod" doc:"Cancellation grace period"`
 	MaxConcurrency int           `json:"maxConcurrency" yaml:"maxConcurrency" doc:"Maximum concurrent action executions" maximum:"1000" example:"5"`
-	OutputDir      string        `json:"outputDir" yaml:"outputDir" doc:"Default target directory for action file operations"`
+	OutputDir      string        `json:"outputDir" yaml:"outputDir" doc:"Default target directory for action file operations" maxLength:"4096" example:"/tmp/output"`
+	CIOutput       string        `json:"ciOutput" yaml:"ciOutput" doc:"CI output format for action execution (auto|none|github-actions)" enum:"auto,none,github-actions" example:"auto" maxLength:"32"`
 }
 
 // ToActionValues converts ActionConfig to an ActionConfigValues struct.
@@ -152,10 +154,20 @@ func (a *ActionConfig) ToActionValues() (ActionConfigValues, error) {
 		gracePeriod = d
 	}
 
+	ciOutput := settings.DefaultActionCIOutput
+	if a.CIOutput != "" {
+		parsed, err := output.ParseCIMode(a.CIOutput)
+		if err != nil {
+			return ActionConfigValues{}, err
+		}
+		ciOutput = parsed
+	}
+
 	return ActionConfigValues{
 		DefaultTimeout: defaultTimeout,
 		GracePeriod:    gracePeriod,
 		MaxConcurrency: a.MaxConcurrency,
 		OutputDir:      a.OutputDir,
+		CIOutput:       ciOutput,
 	}, nil
 }

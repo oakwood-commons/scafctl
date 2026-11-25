@@ -65,6 +65,8 @@ func TestContext_GetNamespace(t *testing.T) {
 		Status:    StatusSucceeded,
 		StartTime: &now,
 		EndTime:   &now,
+		Attempts:  2,
+		Streamed:  true,
 	})
 
 	ctx.SetResult("deploy", &ActionResult{
@@ -371,6 +373,8 @@ func TestContext_Clone(t *testing.T) {
 		Status:    StatusSucceeded,
 		StartTime: &now,
 		EndTime:   &now,
+		Attempts:  2,
+		Streamed:  true,
 	})
 
 	ctx.AddIteration("foreach", &ForEachIterationResult{
@@ -388,6 +392,8 @@ func TestContext_Clone(t *testing.T) {
 	result, ok := clone.GetResult("build")
 	require.True(t, ok)
 	assert.Equal(t, StatusSucceeded, result.Status)
+	assert.Equal(t, 2, result.Attempts)
+	assert.True(t, result.Streamed)
 
 	iterations := clone.GetIterations("foreach")
 	require.Len(t, iterations, 1)
@@ -566,4 +572,27 @@ func TestContext_MarkStreamed_NonExistent(t *testing.T) {
 	ctx := NewContext()
 	// Should not panic when action doesn't exist
 	ctx.MarkStreamed("nonexistent")
+}
+
+func TestContext_RecordOutput(t *testing.T) {
+	t.Parallel()
+	ctx := NewContext()
+	ctx.MarkRunning("test", map[string]any{"command": "go test"})
+	ctx.RecordOutput("test", map[string]any{"stdout": "FAIL\n", "exitCode": 1}, true)
+	ctx.MarkFailed("test", "exit code 1")
+
+	res, ok := ctx.GetResult("test")
+	require.True(t, ok)
+	assert.Equal(t, StatusFailed, res.Status)
+	assert.True(t, res.Streamed)
+	assert.Equal(t, map[string]any{"stdout": "FAIL\n", "exitCode": 1}, res.Results)
+
+	// RecordOutput without prior MarkRunning creates entry
+	ctx.RecordOutput("late", map[string]any{"stdout": "timeout partial"}, false)
+	ctx.MarkTimeout("late")
+	lateRes, ok := ctx.GetResult("late")
+	require.True(t, ok)
+	assert.Equal(t, StatusTimeout, lateRes.Status)
+	assert.False(t, lateRes.Streamed)
+	assert.Equal(t, map[string]any{"stdout": "timeout partial"}, lateRes.Results)
 }

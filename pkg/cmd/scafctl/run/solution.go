@@ -8,8 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +40,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -83,6 +87,9 @@ type SolutionOptions struct {
 	// success exits 0 (non-breaking).
 	DetailedExitCode bool
 
+	// CIOutput controls CI workflow annotations and log grouping ("auto", "none", "github-actions").
+	CIOutput string
+
 	// Backup enables .bak backup creation before mutating existing files.
 	Backup bool
 
@@ -102,6 +109,13 @@ type SolutionOptions struct {
 	// envelope so the warning is visible in structured output. Reset per run.
 	validationWarn          error
 	validationWarnResolvers map[string]any
+
+	// progressPrintedFailure records whether ActionProgressCallback already
+	// emitted a failure/timeout line during execution so writeActionOutputDefault
+	// does not repeat it.
+	progressPrintedFailure bool
+	hasProgressCallback    bool
+	ciDialect              output.CIDialect
 }
 
 // CommandSolution creates the 'run solution' subcommand
@@ -281,6 +295,7 @@ Examples:
 	// Detailed exit code: opt-in distinct exit code (12) on partial success.
 	// Defaults from cliParams (embedder/config); the flag overrides it.
 	cCmd.Flags().BoolVar(&options.DetailedExitCode, "detailed-exit-code", cliParams.DetailedExitCode, "Return a distinct exit code (12) when the run completes with partial success (some continueOnError actions failed); default off (partial success exits 0)")
+	cCmd.Flags().StringVar(&options.CIOutput, "ci-output", settings.DefaultActionCIOutput, "CI output format for action banners and annotations (auto|none|github-actions)")
 
 	return cCmd
 }
@@ -288,11 +303,16 @@ Examples:
 // getEffectiveActionConfig returns action config values, using app config
 // as defaults when CLI flags weren't explicitly set.
 func (o *SolutionOptions) getEffectiveActionConfig(ctx context.Context) config.ActionConfigValues {
+	ciOutput := o.CIOutput
+	if ciOutput == "" {
+		ciOutput = settings.DefaultActionCIOutput
+	}
 	// Start with CLI flag values
 	result := config.ActionConfigValues{
 		DefaultTimeout: o.ActionTimeout,
 		GracePeriod:    settings.DefaultGracePeriod, // Not a CLI flag
 		MaxConcurrency: o.MaxActionConcurrency,
+		CIOutput:       ciOutput,
 	}
 
 	// If config is available, use its values for non-changed flags
@@ -320,6 +340,11 @@ func (o *SolutionOptions) getEffectiveActionConfig(ctx context.Context) config.A
 		if !o.flagsChanged["output-dir"] {
 			result.OutputDir = configValues.OutputDir
 		}
+		if !o.flagsChanged["ci-output"] {
+			result.CIOutput = configValues.CIOutput
+		}
+	} else if o.CIOutput == "" {
+		result.CIOutput = configValues.CIOutput
 	}
 
 	// GracePeriod always comes from config (no CLI flag)
@@ -339,6 +364,9 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// options instance is reused in-process (e.g. an embedder re-executing).
 	o.validationWarn = nil
 	o.validationWarnResolvers = nil
+	o.progressPrintedFailure = false
+	o.hasProgressCallback = false
+	o.ciDialect = nil
 
 	// Fail early if PreRun detected a local file path as positional arg
 	if o.positionalPathErr != nil {
@@ -361,14 +389,18 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
+	actionCfg := o.getEffectiveActionConfig(ctx)
+	ciDialect, err := output.ResolveCIDialect(actionCfg.CIOutput, os.Getenv)
+	if err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+	o.ciDialect = ciDialect
+
 	lgr := logger.FromContext(ctx)
 
 	// Apply config default for output-dir when the CLI flag wasn't explicitly set
-	if o.flagsChanged != nil && !o.flagsChanged["output-dir"] {
-		actionCfg := o.getEffectiveActionConfig(ctx)
-		if actionCfg.OutputDir != "" {
-			o.OutputDir = actionCfg.OutputDir
-		}
+	if o.flagsChanged != nil && !o.flagsChanged["output-dir"] && actionCfg.OutputDir != "" {
+		o.OutputDir = actionCfg.OutputDir
 	}
 
 	// --force overrides --on-conflict to skip-unchanged
@@ -656,6 +688,9 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Build action graph
 	graph, err := action.BuildGraph(ctx, workflow, resolverData, nil)
 	if err != nil {
+		if t := redact.FromContext(ctx); t != nil {
+			err = t.RedactError(err)
+		}
 		return o.exitWithCode(ctx, fmt.Errorf("failed to build action graph: %w", err), exitcode.InvalidInput)
 	}
 
@@ -667,13 +702,16 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Action banners are always enabled (default-on like go-task/make); suppressed by --quiet.
 	// writer.FromContext returns nil when no writer is in context (e.g. direct Run calls in tests);
 	// in that case we skip the callback so the executor's nil-guard suppresses output safely.
+	actionStreams := o.getActionIOStreams()
+	var progressCB *ActionProgressCallback
 	var actionProgressCallback action.ProgressCallback
-	if w := writer.FromContext(ctx); w != nil {
-		actionProgressCallback = NewActionProgressCallback(w)
+	if w := writer.FromContext(ctx); w != nil && o.Output != "quiet" {
+		cbWriter, syncedStreams := synchronizeActionStreams(w, actionStreams)
+		actionStreams = syncedStreams
+		actionCtx = writer.WithWriter(actionCtx, cbWriter)
+		progressCB = NewActionProgressCallbackWithDialect(cbWriter, ciDialect)
+		actionProgressCallback = progressCB
 	}
-
-	// Get effective action config (CLI flags override app config)
-	actionCfg := o.getEffectiveActionConfig(ctx)
 
 	// Build execution metadata before constructing the action executor so it can be
 	// injected as __execution into action when conditions and provider inputs,
@@ -694,7 +732,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		action.WithDefaultTimeout(actionCfg.DefaultTimeout),
 		action.WithGracePeriod(actionCfg.GracePeriod),
 		action.WithMaxConcurrency(actionCfg.MaxConcurrency),
-		action.WithIOStreams(o.getActionIOStreams()),
+		action.WithIOStreams(actionStreams),
 		action.WithCwd(originalCwd),
 		action.WithFingerprintChecker(fingerprint.NewChecker(stateData)),
 		action.WithNoCache(o.SkipFingerprint),
@@ -705,23 +743,42 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 
 	result, err := actionExecutor.Execute(actionCtx, workflow)
+	if progressCB != nil {
+		o.hasProgressCallback = true
+		o.progressPrintedFailure = progressCB.PrintedFailure()
+	}
 	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
+		var executionData map[string]any
+		if o.ShowExecution {
+			executionData = resolverExecutionData
+		}
+		alreadyPrinted := o.progressPrintedFailure && result.FinalStatus != action.ExecutionCancelled
+		errMsg := fmt.Sprintf("action execution failed: %v", err)
+		if ciDialect != nil {
+			errMsg = ciDialect.SanitizeMultiline(errMsg)
+		}
 		// An action failed hard. In structured output the full action envelope
 		// (status:"failed", per-action error, failedActions) is far more useful
 		// than an empty stdout, so emit it before returning the non-zero exit.
 		if o.isStructuredOutput() {
-			var executionData map[string]any
-			if o.ShowExecution {
-				executionData = resolverExecutionData
-			}
 			if writeErr := o.writeActionOutput(ctx, result, executionData); writeErr == nil {
-				if w := writer.FromContext(ctx); w != nil {
-					w.Errorf("action execution failed: %v", err)
+				if !alreadyPrinted {
+					if w := writer.FromContext(ctx); w != nil {
+						w.Error(errMsg)
+					}
 				}
 				return exitcode.WithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 			}
+		} else {
+			_ = o.writeActionOutput(ctx, result, executionData)
 		}
-		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
+		if alreadyPrinted {
+			return exitcode.WithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
+		}
+		if w := writer.FromContext(ctx); w != nil {
+			w.Error(errMsg)
+		}
+		return exitcode.WithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
 
 	// State lifecycle: write every save target after successful action
@@ -963,6 +1020,13 @@ func (o *SolutionOptions) writeActionOutput(ctx context.Context, result *action.
 	}
 }
 
+func (o *SolutionOptions) effectiveCIDialect() output.CIDialect {
+	if o.ciDialect != nil {
+		return o.ciDialect
+	}
+	return output.PlainCIDialect()
+}
+
 // writeActionOutputDefault writes the default/table output for action execution.
 // Actions that already streamed to the terminal are skipped. For non-streamed actions,
 // any stdout/stderr from the results is printed. Failed/skipped actions show a status line.
@@ -972,17 +1036,20 @@ func (o *SolutionOptions) writeActionOutputDefault(ctx context.Context, result *
 	if w == nil {
 		return nil
 	}
-	for name, ar := range result.Actions {
+	dialect := o.effectiveCIDialect()
+	names := slices.Sorted(maps.Keys(result.Actions))
+	for _, name := range names {
+		ar := result.Actions[name]
+		safeName := dialect.SanitizeInline(name)
 		// Verbose: show a status line for every action on stderr
 		if o.Verbose {
 			o.writeVerboseActionStatus(w, name, ar)
 		}
 
-		// Skip actions that already streamed their output to the terminal
+		// Skip actions that already streamed or flushed their output to the terminal
 		if ar.Streamed {
-			// If the action failed despite streaming, show the error
-			if ar.Status == action.StatusFailed || ar.Status == action.StatusTimeout {
-				w.Errorf("Error [%s]: %s", name, ar.Error)
+			if (ar.Status == action.StatusFailed || ar.Status == action.StatusTimeout) && !o.progressPrintedFailure {
+				w.Errorf("Error [%s]: %s", safeName, dialect.SanitizeMultiline(ar.Error))
 			}
 			continue
 		}
@@ -997,18 +1064,23 @@ func (o *SolutionOptions) writeActionOutputDefault(ctx context.Context, result *
 				}
 			}
 		case action.StatusFailed, action.StatusTimeout:
-			// Show stderr if available, then error
+			// Preserve buffered stdout first, then stderr, then error (unless progress callback already reported it)
 			if results, ok := ar.Results.(map[string]any); ok {
+				if stdout, ok := results["stdout"].(string); ok && stdout != "" {
+					w.Plain(stdout)
+				}
 				if stderr, ok := results["stderr"].(string); ok && stderr != "" {
-					w.WarnStderrf("%s", stderr)
+					w.WarnStderrf("%s", dialect.SanitizeMultiline(stderr))
 				}
 			}
-			w.Errorf("Error [%s]: %s", name, ar.Error)
+			if !o.progressPrintedFailure {
+				w.Errorf("Error [%s]: %s", safeName, dialect.SanitizeMultiline(ar.Error))
+			}
 		case action.StatusSkipped:
-			// Verbose mode already shows skip status via writeVerboseActionStatus.
-			// Only show the non-verbose skip line when verbose is off and it's not a condition skip.
-			if !o.Verbose && ar.SkipReason != action.SkipReasonCondition {
-				w.WarnStderrf("Skipped [%s]: %s", name, ar.SkipReason)
+			// Verbose mode already shows skip status via writeVerboseActionStatus, and
+			// ActionProgressCallback.OnActionSkipped already reported skips during live runs.
+			if !o.Verbose && !o.hasProgressCallback && ar.SkipReason != action.SkipReasonCondition {
+				w.WarnStderrf("Skipped [%s]: %s", safeName, dialect.SanitizeInline(string(ar.SkipReason)))
 			}
 		case action.StatusPending, action.StatusRunning, action.StatusCancelled:
 			// These statuses should not appear in final results; ignore.
@@ -1021,17 +1093,42 @@ func (o *SolutionOptions) writeActionOutputDefault(ctx context.Context, result *
 // writeVerboseActionStatus writes a single action status line to stderr.
 func (o *SolutionOptions) writeVerboseActionStatus(w *writer.Writer, name string, ar *action.ActionResult) {
 	dur := ar.Duration()
+	noColor := w.NoColor()
+	dialect := o.effectiveCIDialect()
+	safeName := dialect.SanitizeInline(name)
+	safeSkip := dialect.SanitizeInline(string(ar.SkipReason))
+	safeErr := dialect.SanitizeMultiline(ar.Error)
 	switch ar.Status {
 	case action.StatusSucceeded:
-		w.PlainStderrf("  ✓ %s (%s)", name, dur)
+		if noColor {
+			w.PlainStderrf("  [ok] %s (%s)", safeName, dur)
+		} else {
+			w.PlainStderrf("  ✓ %s (%s)", safeName, dur)
+		}
 	case action.StatusSkipped:
-		w.PlainStderrf("  ○ %s (skipped: %s)", name, ar.SkipReason)
+		if noColor {
+			w.PlainStderrf("  [skip] %s (skipped: %s)", safeName, safeSkip)
+		} else {
+			w.PlainStderrf("  ○ %s (skipped: %s)", safeName, safeSkip)
+		}
 	case action.StatusFailed:
-		w.PlainStderrf("  ✗ %s (failed: %s)", name, ar.Error)
+		if noColor {
+			w.PlainStderrf("  [fail] %s (failed: %s)", safeName, safeErr)
+		} else {
+			w.PlainStderrf("  ✗ %s (failed: %s)", safeName, safeErr)
+		}
 	case action.StatusTimeout:
-		w.PlainStderrf("  ✗ %s (timeout)", name)
+		if noColor {
+			w.PlainStderrf("  [fail] %s (timeout)", safeName)
+		} else {
+			w.PlainStderrf("  ✗ %s (timeout)", safeName)
+		}
 	case action.StatusCancelled:
-		w.PlainStderrf("  ○ %s (cancelled)", name)
+		if noColor {
+			w.PlainStderrf("  [cancel] %s (cancelled)", safeName)
+		} else {
+			w.PlainStderrf("  ○ %s (cancelled)", safeName)
+		}
 	case action.StatusPending, action.StatusRunning:
 		// Should not appear in final results; ignore.
 	}
@@ -1150,58 +1247,273 @@ func (o *SolutionOptions) writeActionTestOutput(ctx context.Context, result *act
 	return nil
 }
 
-// ActionProgressCallback implements action.ProgressCallback for CLI output.
-// Action banners are written to stderr by default (like go-task/make) and are
-// suppressed only by --quiet. Use --verbose for additional debug detail.
-type ActionProgressCallback struct {
-	w      *writer.Writer
-	starts sync.Map // actionName -> time.Time
+// sharedSyncWriter serializes concurrent writes from ActionProgressCallback,
+// writer.FromContext(actionCtx), and provider IOStreams when targeting the same
+// underlying stream while keeping ordinary Write calls strictly byte-preserving.
+// Explicit CI directives use WriteDirectiveLine to align onto column 0.
+type sharedSyncWriter struct {
+	mu          sync.Mutex
+	w           io.Writer
+	atLineStart bool
 }
 
-// NewActionProgressCallback creates a new action progress callback.
+func newSharedSyncWriter(w io.Writer) io.Writer {
+	if w == nil {
+		return nil
+	}
+	if _, ok := w.(*sharedSyncWriter); ok {
+		return w
+	}
+	return &sharedSyncWriter{w: w, atLineStart: true}
+}
+
+func (s *sharedSyncWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, err := s.w.Write(p)
+	if n > 0 {
+		s.atLineStart = p[n-1] == '\n'
+	}
+	return n, err
+}
+
+// WriteDirectiveLine writes a CI workflow directive on its own line, inserting
+// a leading newline first when preceding output did not end with '\n'.
+func (s *sharedSyncWriter) WriteDirectiveLine(line string) error {
+	trimmed := strings.TrimRight(line, "\r\n")
+	if trimmed == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dlw, ok := s.w.(interface{ WriteDirectiveLine(string) error }); ok {
+		if err := dlw.WriteDirectiveLine(trimmed); err != nil {
+			return err
+		}
+		s.atLineStart = true
+		return nil
+	}
+	if !s.atLineStart {
+		if _, err := s.w.Write([]byte{'\n'}); err != nil {
+			return err
+		}
+		s.atLineStart = true
+	}
+	target := trimmed + "\n"
+	n, err := io.WriteString(s.w, target)
+	if n > 0 {
+		s.atLineStart = target[n-1] == '\n'
+	}
+	return err
+}
+
+func sameUnderlyingWriter(a, b io.Writer) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	ta := reflect.TypeOf(a)
+	tb := reflect.TypeOf(b)
+	if ta != tb || !ta.Comparable() {
+		return false
+	}
+	return a == b
+}
+
+func synchronizeActionStreams(w *writer.Writer, actionStreams *provider.IOStreams) (*writer.Writer, *provider.IOStreams) {
+	if w == nil || w.IOStreams() == nil {
+		return w, actionStreams
+	}
+	base := w.IOStreams()
+	syncOut := newSharedSyncWriter(base.Out)
+	var syncErr io.Writer
+	if sameUnderlyingWriter(base.Out, base.ErrOut) {
+		syncErr = syncOut
+	} else {
+		syncErr = newSharedSyncWriter(base.ErrOut)
+	}
+	termStreams := &terminal.IOStreams{
+		In:           base.In,
+		Out:          syncOut,
+		ErrOut:       syncErr,
+		ColorEnabled: base.ColorEnabled,
+	}
+	clonedWriter := w.Clone(writer.WithIOStreams(termStreams))
+	if actionStreams == nil {
+		return clonedWriter, nil
+	}
+
+	actOut := syncOut
+	if !sameUnderlyingWriter(actionStreams.Out, base.Out) {
+		if sameUnderlyingWriter(actionStreams.Out, base.ErrOut) {
+			actOut = syncErr
+		} else {
+			actOut = newSharedSyncWriter(actionStreams.Out)
+		}
+	}
+	actErr := syncErr
+	if !sameUnderlyingWriter(actionStreams.ErrOut, base.ErrOut) {
+		switch {
+		case sameUnderlyingWriter(actionStreams.ErrOut, base.Out):
+			actErr = syncOut
+		case sameUnderlyingWriter(actionStreams.ErrOut, actionStreams.Out):
+			actErr = actOut
+		default:
+			actErr = newSharedSyncWriter(actionStreams.ErrOut)
+		}
+	}
+	return clonedWriter, &provider.IOStreams{
+		Out:    actOut,
+		ErrOut: actErr,
+	}
+}
+
+// ActionProgressCallback implements action.ProgressCallback for CLI output.
+// Action banners are written to stderr by default (like go-task/make) and are
+// suppressed only by --quiet. When configured with a CI dialect (such as
+// GitHub Actions), it wraps at most one active action at a time in ::group:: /
+// ::endgroup:: markers and emits ::error annotations on failure or timeout.
+type ActionProgressCallback struct {
+	w           *writer.Writer
+	dialect     output.CIDialect
+	mu          sync.Mutex
+	activeGroup string
+	printedFail bool
+	starts      sync.Map // actionName -> time.Time
+}
+
+// NewActionProgressCallback creates a new action progress callback with plain formatting.
 func NewActionProgressCallback(w *writer.Writer) *ActionProgressCallback {
-	return &ActionProgressCallback{w: w}
+	return NewActionProgressCallbackWithDialect(w, output.PlainCIDialect())
+}
+
+// NewActionProgressCallbackWithDialect creates a new action progress callback configured with a CIDialect.
+func NewActionProgressCallbackWithDialect(w *writer.Writer, dialect output.CIDialect) *ActionProgressCallback {
+	if dialect == nil {
+		dialect = output.PlainCIDialect()
+	}
+	return &ActionProgressCallback{
+		w:       w,
+		dialect: dialect,
+	}
+}
+
+// PrintedFailure reports whether this callback emitted a failure or timeout diagnostic.
+func (a *ActionProgressCallback) PrintedFailure() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.printedFail
+}
+
+func (a *ActionProgressCallback) closeGroupLocked(actionName string) {
+	if a.activeGroup != "" && a.activeGroup == actionName {
+		if end := a.dialect.GroupEnd(); end != "" {
+			a.w.PlainStderrDirective(end)
+		}
+		a.activeGroup = ""
+	}
+}
+
+func (a *ActionProgressCallback) forceCloseGroupLocked() {
+	if a.activeGroup != "" {
+		if end := a.dialect.GroupEnd(); end != "" {
+			a.w.PlainStderrDirective(end)
+		}
+		a.activeGroup = ""
+	}
 }
 
 func (a *ActionProgressCallback) OnActionStart(actionName, description string) {
 	a.starts.Store(actionName, time.Now())
-	if description != "" {
-		a.w.PlainStderrf("==> %s: %s", actionName, description)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if !a.w.IsQuiet() && a.activeGroup == "" {
+		if grp := a.dialect.GroupStart(actionName, description); grp != "" {
+			a.w.PlainStderrDirective(grp)
+			a.activeGroup = actionName
+		}
+	}
+	safeName := a.dialect.SanitizeInline(actionName)
+	safeDesc := a.dialect.SanitizeInline(description)
+	if safeDesc != "" {
+		a.w.PlainStderrf("==> %s: %s", safeName, safeDesc)
 	} else {
-		a.w.PlainStderrf("==> %s", actionName)
+		a.w.PlainStderrf("==> %s", safeName)
 	}
 }
 
 func (a *ActionProgressCallback) OnActionComplete(actionName string, _ any) {
 	elapsed := a.elapsed(actionName)
-	a.w.PlainStderrf("    done: %s (%s)", actionName, formatElapsed(elapsed))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.w.PlainStderrf("    done: %s (%s)", a.dialect.SanitizeInline(actionName), formatElapsed(elapsed))
+	a.closeGroupLocked(actionName)
 }
 
 func (a *ActionProgressCallback) OnActionFailed(actionName string, err error) {
 	elapsed := a.elapsed(actionName)
-	a.w.Errorf("    failed: %s (%s): %v", actionName, formatElapsed(elapsed), err)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.printedFail = true
+	safeName := a.dialect.SanitizeInline(actionName)
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	a.w.Errorf("    failed: %s (%s): %s", safeName, formatElapsed(elapsed), a.dialect.SanitizeMultiline(errText))
+	a.forceCloseGroupLocked()
+	if err != nil {
+		if ann := a.dialect.ErrorAnnotation(actionName, errText); ann != "" {
+			a.w.StderrDirective(ann)
+		}
+	}
 }
 
 func (a *ActionProgressCallback) OnActionSkipped(actionName, reason string) {
-	a.w.PlainStderrf("    skipped: %s (%s)", actionName, reason)
+	a.w.PlainStderrf("    skipped: %s (%s)", a.dialect.SanitizeInline(actionName), a.dialect.SanitizeInline(reason))
 }
 
-func (a *ActionProgressCallback) OnActionTimeout(actionName string, _ time.Duration) {
+func (a *ActionProgressCallback) OnActionTimeout(actionName string, timeout time.Duration) {
 	elapsed := a.elapsed(actionName)
-	a.w.PlainStderrf("    timeout: %s (after %s)", actionName, formatElapsed(elapsed))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.printedFail = true
+	a.w.Errorf("    timeout: %s (after %s)", a.dialect.SanitizeInline(actionName), formatElapsed(elapsed))
+	a.forceCloseGroupLocked()
+	msg := fmt.Sprintf("action timed out after %s", formatElapsed(elapsed))
+	if timeout > 0 {
+		msg = fmt.Sprintf("action timed out after %v", timeout)
+	}
+	if ann := a.dialect.ErrorAnnotation(actionName, msg); ann != "" {
+		a.w.StderrDirective(ann)
+	}
 }
 
 func (a *ActionProgressCallback) OnActionCancelled(actionName string) {
 	elapsed := a.elapsed(actionName)
-	a.w.PlainStderrf("    cancelled: %s (%s)", actionName, formatElapsed(elapsed))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.w.PlainStderrf("    cancelled: %s (%s)", a.dialect.SanitizeInline(actionName), formatElapsed(elapsed))
+	a.closeGroupLocked(actionName)
 }
 
 func (a *ActionProgressCallback) OnRetryAttempt(actionName string, attempt, maxAttempts int, err error) {
-	a.w.PlainStderrf("    retry %d/%d: %s: %v", attempt, maxAttempts, actionName, err)
+	errText := ""
+	if err != nil {
+		errText = a.dialect.SanitizeMultiline(err.Error())
+	}
+	a.w.PlainStderrf("    retry %d/%d: %s: %s", attempt, maxAttempts, a.dialect.SanitizeInline(actionName), errText)
 }
 
 func (a *ActionProgressCallback) OnForEachProgress(actionName string, completed, total int) {
-	a.w.Verbosef("[ACTION] %s: %d/%d iterations complete", actionName, completed, total)
+	a.w.Verbosef("[ACTION] %s: %d/%d iterations complete", a.dialect.SanitizeInline(actionName), completed, total)
 }
 
 func (a *ActionProgressCallback) OnPhaseStart(_ int, _ []string) {}

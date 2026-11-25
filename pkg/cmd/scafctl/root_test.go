@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/kube"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -812,4 +813,63 @@ spec:
 		assert.Contains(t, buf.String(), "envOverrideParam", "args %v must honor MY_CLI_DISCOVERY_ACTIONFILES", args)
 		assert.Contains(t, buf.String(), "target environment from env override")
 	}
+}
+
+func TestRoot_NoColorPrecedence(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	emptyCfg := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(emptyCfg, []byte("{}\n"), 0o600))
+
+	cfgNoColor := filepath.Join(t.TempDir(), "config-nocolor.yaml")
+	require.NoError(t, os.WriteFile(cfgNoColor, []byte("settings:\n  noColor: true\n"), 0o600))
+
+	runCheck := func(t *testing.T, cfgPath string, extraArgs ...string) (noColor, colorEnabled bool) {
+		t.Helper()
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		ioStreams.ColorEnabled = true
+
+		var gotParams *settings.Run
+		cmd, cleanup := Root(&RootOptions{
+			IOStreams:  ioStreams,
+			ConfigPath: cfgPath,
+			PreRunHook: func(c *cobra.Command, _ []string) error {
+				gotParams, _ = settings.FromContext(c.Context())
+				return nil
+			},
+		})
+		defer cleanup()
+
+		cmd.SetArgs(append([]string{"version", "-o", "json"}, extraArgs...))
+		require.NoError(t, cmd.Execute())
+		require.NotNil(t, gotParams)
+		return gotParams.NoColor, ioStreams.ColorEnabled
+	}
+
+	t.Run("default keeps color enabled when NO_COLOR is empty", func(t *testing.T) {
+		t.Setenv("NO_COLOR", "")
+		noColor, colorEnabled := runCheck(t, emptyCfg)
+		assert.False(t, noColor)
+		assert.True(t, colorEnabled)
+	})
+
+	t.Run("NO_COLOR=1 disables color and ioStreams.ColorEnabled", func(t *testing.T) {
+		t.Setenv("NO_COLOR", "1")
+		noColor, colorEnabled := runCheck(t, emptyCfg)
+		assert.True(t, noColor)
+		assert.False(t, colorEnabled)
+	})
+
+	t.Run("explicit --no-color=false overrides NO_COLOR=1 and config", func(t *testing.T) {
+		t.Setenv("NO_COLOR", "1")
+		noColor, colorEnabled := runCheck(t, cfgNoColor, "--no-color=false")
+		assert.False(t, noColor)
+		assert.True(t, colorEnabled)
+	})
+
+	t.Run("config settings.noColor disables color when NO_COLOR is unset", func(t *testing.T) {
+		t.Setenv("NO_COLOR", "")
+		noColor, colorEnabled := runCheck(t, cfgNoColor)
+		assert.True(t, noColor)
+		assert.False(t, colorEnabled)
+	})
 }

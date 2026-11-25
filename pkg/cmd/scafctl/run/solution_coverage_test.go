@@ -6,14 +6,18 @@ package run
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/dryrun"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -657,4 +661,217 @@ func BenchmarkGetActionIOStreams(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		opts.getActionIOStreams()
 	}
+}
+
+func TestActionProgressCallback_GitHubActionsSingleActiveGroup(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sequential actions wrap in group and emit error annotation after endgroup", func(t *testing.T) {
+		t.Parallel()
+		var outBuf, errBuf bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		w := writer.New(&terminal.IOStreams{Out: &outBuf, ErrOut: &errBuf}, cliParams)
+		cb := NewActionProgressCallbackWithDialect(w, output.GitHubActionsDialect())
+
+		cb.OnActionStart("build", "Compile")
+		cb.OnActionComplete("build", nil)
+
+		cb.OnActionStart("test", "Unit tests")
+		cb.OnActionFailed("test", assert.AnError)
+
+		lines := strings.Split(strings.TrimSpace(errBuf.String()), "\n")
+		require.Equal(t, "::group::build: Compile", lines[0])
+		assert.Contains(t, lines[1], "==> build: Compile")
+		assert.Contains(t, lines[2], "done: build")
+		assert.Equal(t, "::endgroup::", lines[3])
+		assert.Equal(t, "::group::test: Unit tests", lines[4])
+		assert.Contains(t, lines[5], "==> test: Unit tests")
+		assert.Contains(t, lines[6], "failed: test")
+		assert.Equal(t, "::endgroup::", lines[7])
+		assert.Contains(t, lines[8], "::error title=test::")
+		assert.True(t, cb.PrintedFailure())
+	})
+
+	t.Run("concurrent parallel actions never emit nested group markers", func(t *testing.T) {
+		t.Parallel()
+		var errBuf bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		w := writer.New(&terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &errBuf}, cliParams)
+		cb := NewActionProgressCallbackWithDialect(w, output.GitHubActionsDialect())
+
+		cb.OnActionStart("lint", "Lint")
+		cb.OnActionStart("test", "Test")
+		cb.OnActionComplete("test", nil)
+		cb.OnActionComplete("lint", nil)
+
+		stderr := errBuf.String()
+		assert.Equal(t, 1, strings.Count(stderr, "::group::"), "parallel actions must not nest ::group::")
+		assert.Equal(t, 1, strings.Count(stderr, "::endgroup::"), "::endgroup:: must close once when activeGroup finishes")
+		assert.Contains(t, stderr, "==> lint: Lint")
+		assert.Contains(t, stderr, "==> test: Test")
+	})
+
+	t.Run("timeout closes active group and emits error annotation", func(t *testing.T) {
+		t.Parallel()
+		var errBuf bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		w := writer.New(&terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &errBuf}, cliParams)
+		cb := NewActionProgressCallbackWithDialect(w, output.GitHubActionsDialect())
+
+		cb.OnActionStart("slow", "")
+		cb.OnActionTimeout("slow", 5*time.Second)
+
+		stderr := errBuf.String()
+		endIdx := strings.Index(stderr, "::endgroup::")
+		errIdx := strings.Index(stderr, "::error title=slow::action timed out after 5s")
+		require.NotEqual(t, -1, endIdx)
+		require.NotEqual(t, -1, errIdx)
+		assert.Less(t, endIdx, errIdx, "::error annotation must be emitted after ::endgroup::")
+	})
+
+	t.Run("parallel sibling failure force-closes active group before emitting error annotation", func(t *testing.T) {
+		t.Parallel()
+		var errBuf bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		w := writer.New(&terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &errBuf}, cliParams)
+		cb := NewActionProgressCallbackWithDialect(w, output.GitHubActionsDialect())
+
+		cb.OnActionStart("lint", "Lint")
+		cb.OnActionStart("test", "Test")
+		cb.OnActionFailed("test", fmt.Errorf("unit test failed"))
+		cb.OnActionComplete("lint", nil)
+
+		stderr := errBuf.String()
+		endIdx := strings.Index(stderr, "::endgroup::")
+		errIdx := strings.Index(stderr, "::error title=test::unit test failed")
+		require.NotEqual(t, -1, endIdx)
+		require.NotEqual(t, -1, errIdx)
+		assert.Less(t, endIdx, errIdx, "active group must close before sibling ::error annotation")
+		assert.Equal(t, 1, strings.Count(stderr, "::endgroup::"))
+	})
+
+	t.Run("sanitizes workflow command injection in banners and error lines", func(t *testing.T) {
+		t.Parallel()
+		var errBuf bytes.Buffer
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		w := writer.New(&terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &errBuf}, cliParams)
+		cb := NewActionProgressCallbackWithDialect(w, output.GitHubActionsDialect())
+
+		cb.OnActionStart("step", "Desc\r\n::stop-commands::tok")
+		cb.OnActionFailed("step", fmt.Errorf("line1\r::add-matcher::evil.json\n  ::error file=a.go::spoof"))
+
+		stderr := errBuf.String()
+		for _, line := range strings.Split(stderr, "\n") {
+			trimmed := strings.TrimLeft(line, " \t")
+			if strings.HasPrefix(trimmed, "::") {
+				assert.True(t,
+					strings.HasPrefix(trimmed, "::group::") ||
+						strings.HasPrefix(trimmed, "::endgroup::") ||
+						strings.HasPrefix(trimmed, "::error title=step::"),
+					"unexpected raw workflow command on stderr line: %q", line,
+				)
+			}
+		}
+	})
+}
+
+func TestSynchronizeActionStreams_PreservesCloneAndAlignsDirectives(t *testing.T) {
+	t.Parallel()
+
+	var combined bytes.Buffer
+	cliParams := settings.NewCliParams()
+	cliParams.NoColor = true
+	base := &terminal.IOStreams{Out: &combined, ErrOut: &combined}
+	w := writer.New(base, cliParams, writer.WithHumanToStderr())
+
+	cbWriter, synced := synchronizeActionStreams(w, &provider.IOStreams{Out: &combined, ErrOut: &combined})
+	require.NotNil(t, cbWriter)
+	require.NotNil(t, synced)
+	assert.Same(t, synced.Out, synced.ErrOut, "identical Out and ErrOut must share one synchronized writer")
+
+	// Ordinary provider writes split across chunks remain byte-preserving.
+	_, err := synced.Out.Write([]byte("prefix"))
+	require.NoError(t, err)
+	_, err = synced.Out.Write([]byte("::error::literal\n"))
+	require.NoError(t, err)
+	assert.Equal(t, "prefix::error::literal\n", combined.String())
+
+	// Write unterminated provider output followed by an explicit CI workflow directive.
+	_, err = synced.ErrOut.Write([]byte("partial stderr without newline"))
+	require.NoError(t, err)
+	cbWriter.PlainStderrDirective("::endgroup::")
+	assert.Equal(t, "prefix::error::literal\npartial stderr without newline\n::endgroup::\n", combined.String())
+
+	// Also works when actionStreams is nil (structured output modes).
+	cbWriterNil, syncedNil := synchronizeActionStreams(w, nil)
+	assert.NotNil(t, cbWriterNil)
+	assert.Nil(t, syncedNil)
+}
+
+func BenchmarkActionProgressCallback_GitHubActions(b *testing.B) {
+	cliParams := settings.NewCliParams()
+	cliParams.NoColor = true
+	w := writer.New(&terminal.IOStreams{Out: io.Discard, ErrOut: io.Discard}, cliParams)
+	cb := NewActionProgressCallbackWithDialect(w, output.GitHubActionsDialect())
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		cb.OnActionStart("build", "Compile binary")
+		cb.OnActionComplete("build", nil)
+	}
+}
+
+func TestWriteActionOutputDefault_DeterministicOrderStdoutBeforeStderrAndNoColorVerbose(t *testing.T) {
+	t.Parallel()
+
+	var outBuf, errBuf bytes.Buffer
+	cliParams := settings.NewCliParams()
+	cliParams.NoColor = true
+	cliParams.Verbose = true
+	w := writer.New(&terminal.IOStreams{Out: &outBuf, ErrOut: &errBuf}, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	opts := &SolutionOptions{
+		Verbose:                true,
+		progressPrintedFailure: true,
+	}
+	result := &action.ExecutionResult{
+		Actions: map[string]*action.ActionResult{
+			"z-cancel": {Status: action.StatusCancelled},
+			"a-ok":     {Status: action.StatusSucceeded, Streamed: true},
+			"b-skip":   {Status: action.StatusSkipped, SkipReason: action.SkipReasonCondition},
+			"c-fail": {
+				Status: action.StatusFailed,
+				Error:  "exit 1",
+				Results: map[string]any{
+					"stdout": "unstreamed failure stdout\n",
+					"stderr": "unstreamed failure stderr\n",
+				},
+			},
+			"d-timeout": {Status: action.StatusTimeout, Error: "action timed out"},
+		},
+	}
+
+	require.NoError(t, opts.writeActionOutputDefault(ctx, result))
+	assert.Equal(t, "unstreamed failure stdout\n", outBuf.String())
+
+	stderr := errBuf.String()
+	assert.NotContains(t, stderr, "✓")
+	assert.NotContains(t, stderr, "✗")
+	assert.NotContains(t, stderr, "○")
+	assert.NotContains(t, stderr, "Error [c-fail]", "duplicate Error line must be suppressed when progress callback already printed failure")
+
+	idxA := strings.Index(stderr, "  [ok] a-ok")
+	idxB := strings.Index(stderr, "  [skip] b-skip")
+	idxC := strings.Index(stderr, "  [fail] c-fail")
+	idxD := strings.Index(stderr, "  [fail] d-timeout")
+	idxZ := strings.Index(stderr, "  [cancel] z-cancel")
+	assert.True(t, idxA >= 0 && idxA < idxB && idxB < idxC && idxC < idxD && idxD < idxZ,
+		"actions must be rendered in deterministic sorted order: %s", stderr)
 }

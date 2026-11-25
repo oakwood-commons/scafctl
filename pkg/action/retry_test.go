@@ -837,4 +837,39 @@ func TestRetryExecutor_ExecuteWithRetry_WithRetryIf(t *testing.T) {
 		assert.Equal(t, 3, calls) // 2 failures + 1 success
 		assert.Equal(t, 3, attempts)
 	})
+
+	t.Run("preserves last non-nil output when retries exhaust or fail", func(t *testing.T) {
+		tenMillis := duration.New(10 * time.Millisecond)
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  2,
+			InitialDelay: &tenMillis,
+		})
+
+		calls := 0
+		output, attempts, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"flaky-test",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				return &provider.Output{Data: map[string]any{"attempt": calls, "stdout": "failure log\n"}}, errors.New("exit 1")
+			},
+			nil,
+		)
+		require.Error(t, err)
+		assert.Equal(t, 2, attempts)
+		require.NotNil(t, output)
+		assert.Equal(t, map[string]any{"attempt": 2, "stdout": "failure log\n"}, output.Data)
+
+		detailed := executor.ExecuteWithRetryDetailed(
+			context.Background(),
+			"flaky-test",
+			func(_ context.Context) (*provider.Output, error) {
+				return &provider.Output{Data: map[string]any{"stdout": "detailed failure\n"}}, errors.New("exit 1")
+			},
+			nil,
+		)
+		require.Error(t, detailed.FinalError)
+		require.NotNil(t, detailed.Output)
+		assert.Equal(t, map[string]any{"stdout": "detailed failure\n"}, detailed.Output.Data)
+	})
 }

@@ -574,6 +574,44 @@ Embedders that wrap scafctl as a library can set the same default for their
 callers via `RootOptions.DetailedExitCode` (the per-invocation
 `--detailed-exit-code` flag still overrides it).
 
+### CI-Aware Output and Failure Diagnostics
+
+Both `run action` and `run solution` automatically adapt their stderr banners
+when running inside GitHub Actions (`GITHUB_ACTIONS=true`):
+
+- Each sequential action opens a collapsible `::group::<name>: <description>`
+  block and closes it with `::endgroup::` when the action completes, fails,
+  times out, or is cancelled (concurrent parallel actions share a single active
+  group so log groups never nest).
+- Failed or timed-out actions emit `::error title=<name>::<message>` after
+  `::endgroup::` so failures surface directly in GitHub pull request checks and
+  job summaries.
+- Buffered `stdout` and `stderr` produced by a failing action are always
+  preserved -- flushed before the failure banner in default terminal output and
+  retained under `actions.<name>.results` in `-o json` and `-o yaml` envelopes.
+- Action failure diagnostics are emitted once without duplicate wrapper lines.
+
+Control CI formatting explicitly with `--ci-output`, `action.ciOutput` in
+`config.yaml`, or `SCAFCTL_ACTION_CIOUTPUT`:
+
+| Mode | Behavior |
+|------|----------|
+| `auto` (default) | Emits GitHub Actions groups and `::error` annotations when `GITHUB_ACTIONS=true`; plain banners otherwise |
+| `github-actions` | Always emits GitHub Actions workflow commands (useful when testing locally) |
+| `none` | Suppresses CI workflow commands even when `GITHUB_ACTIONS=true` |
+
+~~~bash
+# Preview GitHub Actions groups and annotations locally
+scafctl run action test --ci-output=github-actions
+
+# Disable CI workflow commands inside a GitHub Actions step
+scafctl run action test --ci-output=none
+~~~
+
+Set `NO_COLOR=1` (or `--no-color`) in plain-log environments to strip ANSI
+escape sequences and replace status icons with ASCII text markers (`[ok]`,
+`[skip]`, `[fail]`, `[cancel]`).
+
 ---
 
 ## Action Results

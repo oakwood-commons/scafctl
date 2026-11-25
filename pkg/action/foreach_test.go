@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -165,9 +166,13 @@ func TestForEachExecutor_Execute(t *testing.T) {
 		)
 		items := []any{1, 2, 3}
 
-		result, err := exec.Execute(context.Background(), "test", items, func(_ context.Context, _ any, index int) (*provider.Output, error) {
+		tracker := redact.NewTracker()
+		tracker.Track("iter-secret")
+		ctx := redact.WithTracker(context.Background(), tracker)
+
+		result, err := exec.Execute(ctx, "test", items, func(_ context.Context, _ any, index int) (*provider.Output, error) {
 			if index == 1 {
-				return nil, errors.New("item 1 failed")
+				return &provider.Output{Data: map[string]any{"stdout": "item 1 partial iter-secret\n"}}, errors.New("item 1 failed iter-secret")
 			}
 			return &provider.Output{Data: map[string]any{"index": index}}, nil
 		})
@@ -180,10 +185,12 @@ func TestForEachExecutor_Execute(t *testing.T) {
 		assert.Equal(t, 1, result.FailureCount)
 		assert.NotNil(t, result.FirstError)
 
-		// All iterations should have results
+		// All iterations should have results, including redacted partial output from failed iteration
 		require.Len(t, result.Iterations, 3)
 		assert.Equal(t, StatusSucceeded, result.Iterations[0].Status)
 		assert.Equal(t, StatusFailed, result.Iterations[1].Status)
+		assert.Equal(t, map[string]any{"stdout": "item 1 partial [REDACTED]\n"}, result.Iterations[1].Results)
+		assert.Equal(t, "item 1 failed [REDACTED]", result.Iterations[1].Error)
 		assert.Equal(t, StatusSucceeded, result.Iterations[2].Status)
 	})
 

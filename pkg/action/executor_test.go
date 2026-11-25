@@ -4,6 +4,7 @@
 package action
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
@@ -1090,6 +1092,7 @@ func TestExecutor_IOStreamsInjectedIntoActionContext(t *testing.T) {
 	// Verify that IOStreams set on the executor are propagated to actions
 	// via the provider context, so streaming providers can write output.
 	var receivedStreams *provider.IOStreams
+	var outBuf, errBuf bytes.Buffer
 
 	registry := newExecMockRegistry()
 	registry.register(&execMockProvider{
@@ -1097,14 +1100,16 @@ func TestExecutor_IOStreamsInjectedIntoActionContext(t *testing.T) {
 		execute: func(ctx context.Context, _ any) (*provider.Output, error) {
 			if streams, ok := provider.IOStreamsFromContext(ctx); ok {
 				receivedStreams = streams
+				_, _ = streams.Out.Write([]byte("hello out"))
+				_, _ = streams.ErrOut.Write([]byte("hello err"))
 			}
 			return &provider.Output{Data: map[string]any{"success": true}}, nil
 		},
 	})
 
 	streams := &provider.IOStreams{
-		Out:    os.Stdout,
-		ErrOut: os.Stderr,
+		Out:    &outBuf,
+		ErrOut: &errBuf,
 	}
 	executor := NewExecutor(
 		WithRegistry(registry),
@@ -1123,8 +1128,9 @@ func TestExecutor_IOStreamsInjectedIntoActionContext(t *testing.T) {
 	result, err := executor.Execute(context.Background(), workflow)
 	require.NoError(t, err)
 	assert.Equal(t, ExecutionSucceeded, result.FinalStatus)
-	assert.NotNil(t, receivedStreams, "IOStreams should be injected into action context")
-	assert.Equal(t, streams, receivedStreams, "Action should receive the same IOStreams as the executor")
+	require.NotNil(t, receivedStreams, "IOStreams should be injected into action context")
+	assert.Equal(t, "hello out", outBuf.String(), "Action writes to Out should reach executor IOStreams.Out")
+	assert.Equal(t, "hello err", errBuf.String(), "Action writes to ErrOut should reach executor IOStreams.ErrOut")
 }
 
 func TestExecutor_NoIOStreams_NilContext(t *testing.T) {
@@ -1950,4 +1956,481 @@ func TestExecutor_Execute_FinallyHardFailureReturnsError(t *testing.T) {
 
 	executor.Reset()
 	assert.Nil(t, executor.activeProgress)
+}
+
+func TestExecutor_Execute_PreservesAndFlushesBufferedOutputOnFailure(t *testing.T) {
+	t.Parallel()
+
+	t.Run("flushes redacted buffered stdout and stderr before OnActionFailed and sets Streamed", func(t *testing.T) {
+		t.Parallel()
+		var outBuf, errBuf bytes.Buffer
+		var stdoutAtFailCallback string
+
+		registry := newExecMockRegistry()
+		registry.register(&execMockProvider{
+			name: "buffered-exec",
+			execute: func(_ context.Context, _ any) (*provider.Output, error) {
+				return &provider.Output{
+					Data: map[string]any{
+						"stdout":   "--- FAIL: TestAuth (token=super-secret)\n",
+						"stderr":   "FAIL\tpkg/auth\t0.012s\n",
+						"exitCode": 1,
+					},
+				}, errors.New("buffered-exec: command exited with code 1")
+			},
+		})
+
+		cb := &orderCheckingCallback{
+			onFail: func() {
+				stdoutAtFailCallback = outBuf.String()
+			},
+		}
+
+		executor := NewExecutor(
+			WithRegistry(registry),
+			WithProgressCallback(cb),
+			WithIOStreams(&provider.IOStreams{Out: &outBuf, ErrOut: &errBuf}),
+		)
+
+		tracker := redact.NewTracker()
+		tracker.Track("super-secret")
+		ctx := redact.WithTracker(context.Background(), tracker)
+
+		res, err := executor.Execute(ctx, &Workflow{
+			Actions: map[string]*Action{
+				"unit-test": {Provider: "buffered-exec"},
+			},
+		})
+		require.Error(t, err)
+		require.NotNil(t, res)
+
+		assert.Equal(t, "--- FAIL: TestAuth (token=[REDACTED])\n", stdoutAtFailCallback,
+			"buffered stdout must be flushed before OnActionFailed runs")
+		assert.Equal(t, "--- FAIL: TestAuth (token=[REDACTED])\n", outBuf.String())
+		assert.Equal(t, "FAIL\tpkg/auth\t0.012s\n", errBuf.String())
+
+		ar := res.Actions["unit-test"]
+		require.NotNil(t, ar)
+		assert.Equal(t, StatusFailed, ar.Status)
+		assert.True(t, ar.Streamed, "flushed action must be marked Streamed so CLI default output does not double-print")
+		resMap, ok := ar.Results.(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "--- FAIL: TestAuth (token=[REDACTED])\n", resMap["stdout"])
+	})
+
+	t.Run("structured mode without IOStreams preserves redacted failed results with Streamed=false", func(t *testing.T) {
+		t.Parallel()
+		registry := newExecMockRegistry()
+		registry.register(&execMockProvider{
+			name: "buffered-exec",
+			execute: func(_ context.Context, _ any) (*provider.Output, error) {
+				return &provider.Output{
+					Data: map[string]any{
+						"stdout":   "diagnostic line\n",
+						"exitCode": 2,
+					},
+				}, errors.New("exit 2")
+			},
+		})
+
+		executor := NewExecutor(WithRegistry(registry))
+		res, err := executor.Execute(context.Background(), &Workflow{
+			Actions: map[string]*Action{
+				"check": {Provider: "buffered-exec"},
+			},
+		})
+		require.Error(t, err)
+		require.NotNil(t, res)
+		ar := res.Actions["check"]
+		require.NotNil(t, ar)
+		assert.False(t, ar.Streamed)
+		assert.Equal(t, map[string]any{"stdout": "diagnostic line\n", "exitCode": 2}, ar.Results)
+	})
+
+	t.Run("parallel buffered actions synchronize shared IOStreams under -race", func(t *testing.T) {
+		t.Parallel()
+		var outBuf, errBuf bytes.Buffer
+		registry := newExecMockRegistry()
+		registry.register(&execMockProvider{
+			name: "parallel-buffered",
+			execute: func(_ context.Context, _ any) (*provider.Output, error) {
+				return &provider.Output{
+					Data: map[string]any{
+						"stdout": "out\n",
+						"stderr": "err\n",
+					},
+				}, nil
+			},
+		})
+
+		actions := make(map[string]*Action, 8)
+		for i := range 8 {
+			actions["act-"+string(rune('a'+i))] = &Action{Provider: "parallel-buffered"}
+		}
+
+		executor := NewExecutor(
+			WithRegistry(registry),
+			WithIOStreams(&provider.IOStreams{Out: &outBuf, ErrOut: &errBuf}),
+		)
+		res, err := executor.Execute(context.Background(), &Workflow{Actions: actions})
+		require.NoError(t, err)
+		assert.Equal(t, ExecutionSucceeded, res.FinalStatus)
+		assert.Len(t, outBuf.String(), 8*len("out\n"))
+		assert.Len(t, errBuf.String(), 8*len("err\n"))
+	})
+
+	t.Run("parallel actions share one mutex when Out and ErrOut use the same writer", func(t *testing.T) {
+		t.Parallel()
+		var combined bytes.Buffer
+		synced := synchronizeIOStreams(&provider.IOStreams{Out: &combined, ErrOut: &combined})
+		require.NotNil(t, synced)
+		assert.Same(t, synced.Out, synced.ErrOut, "identical Out and ErrOut must reuse a single syncWriter")
+
+		registry := newExecMockRegistry()
+		registry.register(&execMockProvider{
+			name: "parallel-combined",
+			execute: func(ctx context.Context, _ any) (*provider.Output, error) {
+				streams, ok := provider.IOStreamsFromContext(ctx)
+				if ok && streams != nil {
+					_, _ = streams.Out.Write([]byte("s-out\n"))
+					_, _ = streams.ErrOut.Write([]byte("s-err\n"))
+				}
+				return &provider.Output{
+					Data: map[string]any{
+						"stdout": "b-out\n",
+						"stderr": "b-err\n",
+					},
+				}, nil
+			},
+		})
+
+		actions := make(map[string]*Action, 8)
+		for i := range 8 {
+			actions["comb-"+string(rune('a'+i))] = &Action{Provider: "parallel-combined"}
+		}
+
+		executor := NewExecutor(
+			WithRegistry(registry),
+			WithIOStreams(&provider.IOStreams{Out: &combined, ErrOut: &combined}),
+		)
+		res, err := executor.Execute(context.Background(), &Workflow{Actions: actions})
+		require.NoError(t, err)
+		assert.Equal(t, ExecutionSucceeded, res.FinalStatus)
+		expectedLen := 8 * (len("s-out\n") + len("s-err\n") + len("b-out\n") + len("b-err\n"))
+		assert.Len(t, combined.String(), expectedLen)
+	})
+
+	t.Run("resultSchema error mode preserves redacted failed results and joins continueOnError decideErr", func(t *testing.T) {
+		t.Parallel()
+		registry := newExecMockRegistry()
+		registry.register(&execMockProvider{
+			name: "schema-exec",
+			execute: func(_ context.Context, _ any) (*provider.Output, error) {
+				return &provider.Output{
+					Data: map[string]any{"stdout": "schema failure out schema-secret\n"},
+				}, nil
+			},
+		})
+
+		var reportedErr error
+		cb := &orderCheckingCallback{
+			onFailErr: func(err error) { reportedErr = err },
+		}
+
+		badExpr := celexp.Expression("1 / 0 == 1")
+		executor := NewExecutor(
+			WithRegistry(registry),
+			WithProgressCallback(cb),
+		)
+
+		tracker := redact.NewTracker()
+		tracker.Track("schema-secret")
+		ctx := redact.WithTracker(context.Background(), tracker)
+
+		res, err := executor.Execute(ctx, &Workflow{
+			Actions: map[string]*Action{
+				"validate-me": {
+					Provider:         "schema-exec",
+					ResultSchemaMode: ResultSchemaModeError,
+					ResultSchema: schemahelper.ObjectSchema(
+						[]string{"requiredField"},
+						map[string]*jsonschema.Schema{"requiredField": schemahelper.StringProp("req")},
+					),
+					ContinueOnError: &spec.Condition{Expr: &badExpr},
+				},
+			},
+		})
+		require.Error(t, err)
+		require.NotNil(t, res)
+		ar := res.Actions["validate-me"]
+		require.NotNil(t, ar)
+		assert.Equal(t, StatusFailed, ar.Status)
+		assert.Equal(t, map[string]any{"stdout": "schema failure out [REDACTED]\n"}, ar.Results)
+		assert.Contains(t, ar.Error, "continueOnError")
+		require.Error(t, reportedErr)
+		assert.Contains(t, reportedErr.Error(), "continueOnError")
+	})
+
+	t.Run("when condition runtime error scrubs tracked secrets before OnActionFailed", func(t *testing.T) {
+		t.Parallel()
+		registry := newExecMockRegistry()
+		registry.register(&execMockProvider{
+			name: "noop",
+			execute: func(_ context.Context, _ any) (*provider.Output, error) {
+				return &provider.Output{}, nil
+			},
+		})
+
+		var reportedErr error
+		cb := &orderCheckingCallback{
+			onFailErr: func(err error) { reportedErr = err },
+		}
+
+		// Reference __actions so When is deferred past BuildGraph to executeAction runtime.
+		whenExpr := celexp.Expression("__actions.first.status == 'succeeded' && int(_.secretTok) > 0")
+		executor := NewExecutor(
+			WithRegistry(registry),
+			WithResolverData(map[string]any{"secretTok": "top-secret-value"}),
+			WithProgressCallback(cb),
+		)
+
+		tracker := redact.NewTracker()
+		tracker.Track("top-secret-value")
+		ctx := redact.WithTracker(context.Background(), tracker)
+
+		res, err := executor.Execute(ctx, &Workflow{
+			Actions: map[string]*Action{
+				"first":  {Provider: "noop"},
+				"second": {Provider: "noop", DependsOn: []string{"first"}, When: &spec.Condition{Expr: &whenExpr}},
+			},
+		})
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "top-secret-value")
+		require.Error(t, reportedErr)
+		assert.NotContains(t, reportedErr.Error(), "top-secret-value")
+		require.NotNil(t, res)
+		assert.NotContains(t, res.Actions["second"].Error, "top-secret-value")
+	})
+
+	t.Run("syncWriter keeps ordinary writes byte-preserving and aligns explicit directives", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		sw := wrapSyncWriter(&buf)
+
+		// Ordinary writes split across chunks must remain byte-for-byte identical,
+		// even when the second chunk begins with "::error::".
+		_, err := sw.Write([]byte("prefix"))
+		require.NoError(t, err)
+		_, err = sw.Write([]byte("::error::literal\n"))
+		require.NoError(t, err)
+		assert.Equal(t, "prefix::error::literal\n", buf.String())
+
+		// Explicit directive emission aligns onto column 0 after unterminated output.
+		_, err = sw.Write([]byte("partial line without newline"))
+		require.NoError(t, err)
+		dlw, ok := sw.(interface{ WriteDirectiveLine(string) error })
+		require.True(t, ok)
+		require.NoError(t, dlw.WriteDirectiveLine("::add-mask::masked-secret"))
+		assert.Equal(t, "prefix::error::literal\npartial line without newline\n::add-mask::masked-secret\n", buf.String())
+	})
+
+	t.Run("strict resultSchema with additionalProperties false succeeds identically in terminal and non-TTY modes", func(t *testing.T) {
+		t.Parallel()
+
+		strictSchema := schemahelper.ObjectSchema(
+			[]string{"id"},
+			map[string]*jsonschema.Schema{
+				"id": schemahelper.IntProp("Created resource ID"),
+			},
+		)
+		strictSchema.AdditionalProperties = &jsonschema.Schema{Not: &jsonschema.Schema{}}
+
+		buildStreamingIDProvider := func() *execMockProvider {
+			return &execMockProvider{
+				name: "strict-plugin",
+				execute: func(ctx context.Context, _ any) (*provider.Output, error) {
+					rawStreams, hasIO := provider.IOStreamsFromContext(ctx)
+					canStream := hasIO && rawStreams != nil && !provider.IsFallbackIOStreams(ctx)
+					if canStream {
+						_, _ = rawStreams.ErrOut.Write([]byte("provisioning resource...\n"))
+						return &provider.Output{
+							Data:     map[string]any{"id": 1},
+							Streamed: true,
+						}, nil
+					}
+					if sink, ok := provider.CapturedStreamSinkFromContext(ctx); ok {
+						sink.Set("", "provisioning resource...\n")
+					}
+					return &provider.Output{
+						Data:     map[string]any{"id": 1},
+						Streamed: false,
+					}, nil
+				},
+			}
+		}
+
+		// 1. Terminal streaming mode (IOStreams present).
+		var termOut, termErr bytes.Buffer
+		termRegistry := newExecMockRegistry()
+		termRegistry.register(buildStreamingIDProvider())
+		termExec := NewExecutor(
+			WithRegistry(termRegistry),
+			WithIOStreams(&provider.IOStreams{Out: &termOut, ErrOut: &termErr}),
+		)
+		termRes, err := termExec.Execute(context.Background(), &Workflow{
+			Actions: map[string]*Action{
+				"create": {
+					Provider:         "strict-plugin",
+					ResultSchema:     strictSchema,
+					ResultSchemaMode: ResultSchemaModeError,
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, termRes)
+		assert.Equal(t, "provisioning resource...\n", termErr.String())
+		assert.Equal(t, map[string]any{"id": 1}, termRes.Actions["create"].Results)
+
+		// 2. Non-TTY / structured output mode (IOStreams nil): validation still
+		// succeeds against {id: 1}, and captured stderr is merged into Results afterwards.
+		jsonRegistry := newExecMockRegistry()
+		jsonRegistry.register(buildStreamingIDProvider())
+		jsonExec := NewExecutor(WithRegistry(jsonRegistry))
+		jsonRes, err := jsonExec.Execute(context.Background(), &Workflow{
+			Actions: map[string]*Action{
+				"create": {
+					Provider:         "strict-plugin",
+					ResultSchema:     strictSchema,
+					ResultSchemaMode: ResultSchemaModeError,
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, jsonRes)
+		assert.Equal(t, map[string]any{
+			"id":     1,
+			"stderr": "provisioning resource...\n",
+		}, jsonRes.Actions["create"].Results)
+	})
+}
+
+type dynamicCredMockProvider struct {
+	execMockProvider
+}
+
+func (d *dynamicCredMockProvider) UsesDynamicHostCredentials() bool {
+	return true
+}
+
+func TestExecutor_LazyGitHubActionsMasks_AlignDynamicAndKeepSilentActionsClean(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "true")
+
+	t.Run("silent action with tracked secret emits zero stdout bytes", func(t *testing.T) {
+		var outBuf, errBuf bytes.Buffer
+		registry := newExecMockRegistry()
+		registry.register(&execMockProvider{
+			name: "silent-file",
+			execute: func(_ context.Context, _ any) (*provider.Output, error) {
+				return &provider.Output{Data: map[string]any{"written": true}}, nil
+			},
+		})
+		tracker := redact.NewTracker()
+		tracker.Track("silent-secret-token")
+		ctx := redact.WithTracker(context.Background(), tracker)
+
+		executor := NewExecutor(
+			WithRegistry(registry),
+			WithIOStreams(&provider.IOStreams{Out: &outBuf, ErrOut: &errBuf}),
+		)
+		_, err := executor.Execute(ctx, &Workflow{
+			Actions: map[string]*Action{
+				"write": {Provider: "silent-file"},
+			},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, outBuf.String(), "silent action must not pollute stdout with eager ::add-mask:: lines")
+	})
+
+	t.Run("dynamic mid-execution secret aligns ::add-mask:: onto column 0 after unterminated stdout", func(t *testing.T) {
+		var outBuf, errBuf bytes.Buffer
+		registry := newExecMockRegistry()
+		registry.register(&execMockProvider{
+			name: "partial-out",
+			execute: func(ctx context.Context, _ any) (*provider.Output, error) {
+				streams, ok := provider.IOStreamsFromContext(ctx)
+				require.True(t, ok)
+				_, _ = streams.Out.Write([]byte("unterminated-prefix"))
+				return &provider.Output{Streamed: true}, nil
+			},
+		})
+		registry.register(&dynamicCredMockProvider{
+			execMockProvider: execMockProvider{
+				name: "dyn-secret-stream",
+				execute: func(ctx context.Context, _ any) (*provider.Output, error) {
+					tracker := redact.FromContext(ctx)
+					require.NotNil(t, tracker)
+					// Track credential dynamically mid-execution (tracker started empty).
+					tracker.Track("dyn-tok-987654")
+					streams, ok := provider.IOStreamsFromContext(ctx)
+					require.True(t, ok)
+					_, _ = streams.Out.Write([]byte("token=dyn-tok-987654\n"))
+					return &provider.Output{Streamed: true}, nil
+				},
+			},
+		})
+
+		executor := NewExecutor(
+			WithRegistry(registry),
+			WithIOStreams(&provider.IOStreams{Out: &outBuf, ErrOut: &errBuf}),
+		)
+		_, err := executor.Execute(context.Background(), &Workflow{
+			Actions: map[string]*Action{
+				"first":  {Provider: "partial-out"},
+				"second": {Provider: "dyn-secret-stream", DependsOn: []string{"first"}},
+			},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "unterminated-prefix\n::add-mask::dyn-tok-987654\ntoken=[REDACTED]\n", outBuf.String())
+	})
+}
+
+type orderCheckingCallback struct {
+	NoOpProgressCallback
+	onFail    func()
+	onFailErr func(error)
+}
+
+func (c *orderCheckingCallback) OnActionFailed(_ string, err error) {
+	if c.onFail != nil {
+		c.onFail()
+	}
+	if c.onFailErr != nil {
+		c.onFailErr(err)
+	}
+}
+
+func BenchmarkFlushBufferedActionOutput(b *testing.B) {
+	var outBuf, errBuf bytes.Buffer
+	executor := NewExecutor(
+		WithIOStreams(&provider.IOStreams{Out: &outBuf, ErrOut: &errBuf}),
+	)
+	executor.activeIOStreams = synchronizeIOStreams(executor.ioStreams)
+	tracker := redact.NewTracker()
+	tracker.Track("secret-value")
+	out := &provider.Output{
+		Data: map[string]any{
+			"stdout":   "--- FAIL: TestExample (0.01s)\n",
+			"stderr":   "FAIL\texample/pkg\t0.010s\n",
+			"exitCode": 1,
+		},
+	}
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		outBuf.Reset()
+		errBuf.Reset()
+		_, _ = executor.flushBufferedActionOutput(ctx, out, provider.CapturedStreamLogs{}, tracker)
+	}
 }

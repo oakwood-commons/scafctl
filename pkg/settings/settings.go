@@ -5,6 +5,7 @@ package settings
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -42,6 +43,12 @@ func SafeEnvPrefix(binaryName string) string {
 	return strings.ToUpper(replacer.Replace(binaryName))
 }
 
+// IsNoColorEnv reports whether the NO_COLOR environment variable is set to a
+// non-empty value, per https://no-color.org.
+func IsNoColorEnv() bool {
+	return os.Getenv("NO_COLOR") != ""
+}
+
 // Timeout defaults
 const (
 	// DefaultResolverTimeout is the default timeout for individual resolver execution.
@@ -55,6 +62,9 @@ const (
 
 	// DefaultGracePeriod is the default grace period for action cancellation.
 	DefaultGracePeriod = 30 * time.Second
+
+	// DefaultActionCIOutput is the default CI output mode for action execution ("auto", "none", "github-actions").
+	DefaultActionCIOutput = "auto"
 
 	// DefaultPluginFetchTimeout is the default timeout for fetching plugins from catalogs.
 	DefaultPluginFetchTimeout = 2 * time.Minute

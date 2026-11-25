@@ -327,6 +327,7 @@ func TestActionConfig_ToActionValues(t *testing.T) {
 				GracePeriod:    settings.DefaultGracePeriod,
 				MaxConcurrency: 0,
 				OutputDir:      "",
+				CIOutput:       settings.DefaultActionCIOutput,
 			},
 		},
 		{
@@ -342,6 +343,7 @@ func TestActionConfig_ToActionValues(t *testing.T) {
 				GracePeriod:    1 * time.Minute,
 				MaxConcurrency: 3,
 				OutputDir:      "/custom/output",
+				CIOutput:       settings.DefaultActionCIOutput,
 			},
 		},
 		{
