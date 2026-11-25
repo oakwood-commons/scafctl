@@ -290,6 +290,9 @@ func (o *SolutionOptions) renderUsageText(ctx context.Context, u *inspect.UsageI
 		w.Plainln("ACTIONS")
 		for _, a := range u.Actions {
 			name := "  " + a.Name
+			if a.Alias != "" {
+				name += " (" + a.Alias + ")"
+			}
 			if a.Default {
 				name += " (default)"
 			}

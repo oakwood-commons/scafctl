@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -47,9 +49,111 @@ type ParamUsage struct {
 // ActionUsage describes a runnable action and the command to invoke it.
 type ActionUsage struct {
 	Name        string `json:"name" yaml:"name" doc:"Action name" maxLength:"150"`
+	Alias       string `json:"alias,omitempty" yaml:"alias,omitempty" doc:"Short alias accepted in place of the action name" maxLength:"100" example:"b" pattern:"^[a-zA-Z_][a-zA-Z0-9_-]*$" patternDescription:"Must start with letter/underscore, followed by alphanumerics, underscores, or hyphens"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"What the action does" maxLength:"512"`
 	Default     bool   `json:"default,omitempty" yaml:"default,omitempty" doc:"Runs on a bare invocation (not explicit, not gated by a when clause)"`
 	Command     string `json:"command" yaml:"command" doc:"CLI command to run this action" maxLength:"2048"`
+}
+
+// ActionListEntry is a single row in 'run action --list' output. Fields
+// intentionally omit omitempty so every serialized row carries an identical key
+// set for kvx homogeneous-array detection and CEL -w/-e filters.
+type ActionListEntry struct {
+	Name        string `json:"name" yaml:"name" doc:"Action name" maxLength:"150" example:"build" pattern:"^[a-zA-Z_][a-zA-Z0-9_-]*$" patternDescription:"Must start with letter/underscore, followed by alphanumerics, underscores, or hyphens"`
+	Alias       string `json:"alias" yaml:"alias" doc:"Short alias accepted in place of the action name (empty when unset)" maxLength:"100" example:"b" pattern:"^([a-zA-Z_][a-zA-Z0-9_-]*)?$" patternDescription:"Empty or an identifier starting with a letter/underscore, followed by alphanumerics, underscores, or hyphens"`
+	Default     bool   `json:"default" yaml:"default" doc:"Whether the action runs on a bare invocation (not explicit and not gated by when)"`
+	Description string `json:"description" yaml:"description" doc:"Human-readable description of what the action does" maxLength:"512" example:"Compile the binary" pattern:"^[\\s\\S]*$" patternDescription:"Free-form action description"`
+	Command     string `json:"command" yaml:"command" doc:"CLI command to run this action" maxLength:"2048" example:"scafctl run action build" pattern:"^\\S.*$" patternDescription:"Non-empty CLI invocation command"`
+}
+
+// AllActionsExplicit reports whether w declares at least one non-nil regular
+// action and every non-nil regular action has Explicit set to true.
+func AllActionsExplicit(w *action.Workflow) bool {
+	if w == nil || len(w.Actions) == 0 {
+		return false
+	}
+	hasAction := false
+	for _, act := range w.Actions {
+		if act == nil {
+			continue
+		}
+		hasAction = true
+		if !act.Explicit {
+			return false
+		}
+	}
+	return hasAction
+}
+
+// BuildActionList returns the sorted list of regular workflow actions for a
+// solution, suitable for 'run action --list' and kvx array rendering. It always
+// returns a non-nil slice so structured serialization emits [] instead of null
+// when the solution defines no regular actions.
+func BuildActionList(ctx context.Context, sol *solution.Solution, path, binaryName string, opts ...RunCommandOption) []ActionListEntry {
+	if sol == nil || !sol.Spec.HasWorkflow() || sol.Spec.Workflow == nil || len(sol.Spec.Workflow.Actions) == 0 {
+		return []ActionListEntry{}
+	}
+	usage, err := BuildUsage(ctx, sol, path, binaryName, opts...)
+	if err != nil || len(usage.Actions) == 0 {
+		return []ActionListEntry{}
+	}
+	entries := make([]ActionListEntry, 0, len(usage.Actions))
+	for _, a := range usage.Actions {
+		entries = append(entries, ActionListEntry{
+			Name:        a.Name,
+			Alias:       a.Alias,
+			Default:     a.Default,
+			Description: a.Description,
+			Command:     a.Command,
+		})
+	}
+	return entries
+}
+
+// FormatAvailableActions formats ActionUsage entries into aligned single-line
+// rows suitable for terminal stderr output, sanitizing inline text.
+func FormatAvailableActions(actions []ActionUsage) []string {
+	if len(actions) == 0 {
+		return []string{}
+	}
+
+	type formattedRow struct {
+		label string
+		desc  string
+		width int
+	}
+
+	rows := make([]formattedRow, 0, len(actions))
+	maxWidth := 0
+	for _, a := range actions {
+		label := provdetail.SanitizeInlineText(a.Name)
+		if alias := provdetail.SanitizeInlineText(a.Alias); alias != "" {
+			label += " (" + alias + ")"
+		}
+		if a.Default {
+			label += " (default)"
+		}
+		width := utf8.RuneCountInString(label)
+		if width > maxWidth {
+			maxWidth = width
+		}
+		rows = append(rows, formattedRow{
+			label: label,
+			desc:  provdetail.SanitizeInlineText(a.Description),
+			width: width,
+		})
+	}
+
+	lines := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.desc != "" {
+			pad := strings.Repeat(" ", maxWidth-r.width)
+			lines = append(lines, "  "+r.label+pad+"  "+r.desc)
+		} else {
+			lines = append(lines, "  "+r.label)
+		}
+	}
+	return lines
 }
 
 // BuildUsage assembles the user-facing usage view for a solution. It never fails
@@ -58,14 +162,19 @@ type ActionUsage struct {
 //
 // binaryName is used to generate embedder-safe commands; it falls back to the
 // default CLI binary name when empty.
-func BuildUsage(ctx context.Context, sol *solution.Solution, path, binaryName string) (*UsageInfo, error) {
+func BuildUsage(ctx context.Context, sol *solution.Solution, path, binaryName string, opts ...RunCommandOption) (*UsageInfo, error) {
 	if binaryName == "" {
 		binaryName = settings.CliBinaryName
 	}
 
-	runInfo, err := BuildRunCommand(sol, path, binaryName)
+	runInfo, err := BuildRunCommand(sol, path, binaryName, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("building usage view: %w", err)
+	}
+
+	runSubcommand := runInfo.Subcommand
+	if AllActionsExplicit(sol.Spec.Workflow) {
+		runSubcommand = binaryName + " run action <name>"
 	}
 
 	info := &UsageInfo{
@@ -73,7 +182,7 @@ func BuildUsage(ctx context.Context, sol *solution.Solution, path, binaryName st
 		DisplayName: sol.Metadata.DisplayName,
 		Synopsis:    usageSynopsis(sol),
 		Source:      sol.Metadata.Source,
-		Run:         runInfo.Subcommand,
+		Run:         runSubcommand,
 		Tags:        sol.Metadata.Tags,
 		Links:       usageLinks(sol.Metadata.Links),
 	}
@@ -100,7 +209,7 @@ func BuildUsage(ctx context.Context, sol *solution.Solution, path, binaryName st
 	}
 
 	info.Params = buildParamUsage(runInfo.Parameters, allowed)
-	info.Actions = buildActionUsage(ctx, sol, runInfo.BaseCommand, binaryName, resolverToKey)
+	info.Actions = buildActionUsage(ctx, sol, runInfo.BaseCommand, runInfo.actionSource, binaryName, resolverToKey)
 
 	return info, nil
 }
@@ -190,7 +299,7 @@ func buildParamUsage(params []ParamInfo, allowedByResolver map[string][]any) []P
 // clause. Explicit actions and when-gated actions get an explanatory command
 // that names the action or the parameter that enables it. base is the run
 // command with the solution source already included (e.g. "... -f ./sol.yaml").
-func buildActionUsage(ctx context.Context, sol *solution.Solution, base, binaryName string, resolverToKey map[string]string) []ActionUsage {
+func buildActionUsage(ctx context.Context, sol *solution.Solution, base, actionSource, binaryName string, resolverToKey map[string]string) []ActionUsage {
 	if !sol.Spec.HasWorkflow() || sol.Spec.Workflow == nil {
 		return nil
 	}
@@ -209,9 +318,10 @@ func buildActionUsage(ctx context.Context, sol *solution.Solution, base, binaryN
 		isDefault := !act.Explicit && act.When == nil
 		out = append(out, ActionUsage{
 			Name:        name,
+			Alias:       act.Alias,
 			Description: act.Description,
 			Default:     isDefault,
-			Command:     actionCommand(ctx, binaryName, base, name, act, resolverToKey),
+			Command:     actionCommand(ctx, binaryName, base, actionSource, name, act, resolverToKey),
 		})
 	}
 	return out
@@ -219,19 +329,15 @@ func buildActionUsage(ctx context.Context, sol *solution.Solution, base, binaryN
 
 // actionCommand generates the CLI command that triggers a specific action.
 //   - default action: the bare run command (with the solution source).
-//   - explicit action: 'run action <name>' against the same source.
+//   - explicit action: 'run action <name>' against the same source (preserving
+//     -f, catalog, version, and pre-release selectors).
 //   - when-gated action: only when the ENTIRE when-clause reduces to a single
 //     `_.param == value` (or membership with one value) do we suggest the
 //     enabling `-r <key>=value`; otherwise we fall back to the base command so
 //     we never print a command that would not actually satisfy the gate.
-func actionCommand(ctx context.Context, binaryName, base, name string, act *action.Action, resolverToKey map[string]string) string {
+func actionCommand(ctx context.Context, binaryName, base, actionSource, name string, act *action.Action, resolverToKey map[string]string) string {
 	if act.Explicit {
-		// base is "<bin> run solution -f <src>"; swap the subcommand for
-		// "run action <name>" while preserving the source flags.
-		if src, ok := sourceArgs(base, binaryName); ok {
-			return fmt.Sprintf("%s run action %s%s", binaryName, name, src)
-		}
-		return fmt.Sprintf("%s run action %s", binaryName, name)
+		return fmt.Sprintf("%s run action %s%s", binaryName, shellQuote(name), actionSource)
 	}
 	if act.When != nil && act.When.Expr != nil {
 		eqs, reducible, ok := act.When.Expr.ParamEqualitiesFullyReducible(ctx)
@@ -244,31 +350,12 @@ func actionCommand(ctx context.Context, binaryName, base, name string, act *acti
 					if k, mapped := resolverToKey[resolverName]; mapped {
 						key = k
 					}
-					return fmt.Sprintf("%s -r %s=%s", base, key, shellQuote(fmt.Sprintf("%v", vals[0])))
+					return fmt.Sprintf("%s -r %s=%s", base, shellQuote(key), shellQuote(fmt.Sprintf("%v", vals[0])))
 				}
 			}
 		}
 	}
 	return base
-}
-
-// sourceArgs extracts the source portion (everything after "<bin> run solution")
-// from a base command like "<bin> run solution -f ./sol.yaml", so it can be
-// reattached to a "run action" variant. Only "-f <path>" sources are reattached
-// -- `run action` treats bare positional args as action names, so a positional
-// solution ref (catalog/URL) must NOT be appended. Returns ("", false) when
-// there is no reattachable -f source.
-func sourceArgs(base, binaryName string) (string, bool) {
-	prefix := binaryName + " run solution"
-	suffix, ok := strings.CutPrefix(base, prefix)
-	if !ok {
-		return "", false
-	}
-	// Only "-f <path>" is safe to reattach to `run action`.
-	if strings.HasPrefix(strings.TrimSpace(suffix), "-f ") {
-		return suffix, true
-	}
-	return "", false
 }
 
 // shellQuote wraps a value in single quotes when it contains characters that
@@ -278,7 +365,7 @@ func shellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
-	if !strings.ContainsAny(s, " \t\n\"'`$&|;<>(){}[]*?!#~\\") {
+	if !strings.ContainsAny(s, " \t\n\"'`$&|;<>(){}[]*?!#~\\^") {
 		return s
 	}
 	// Single-quote and escape embedded single quotes as '\''.

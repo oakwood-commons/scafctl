@@ -150,7 +150,7 @@ Auto-discovery works with every command that accepts `-f`:
 | Command | Auto-Discovery | Notes |
 |---------|:--------------:|-------|
 | `scafctl run solution` | Yes | Also supports catalog bare names and URLs |
-| `scafctl run action` | Yes | Searches `actions.yaml`/`actions.yml` first, then solution files |
+| `scafctl run action` | Yes | Searches `actions.yaml`/`actions.yml` first, then solution files (including `--list` / `-l`) |
 | `scafctl run resolver` | Yes | Searches solution files first, falls back to `actions.yaml`/`actions.yml`, then valid catalog bare names |
 | `scafctl validate resolver` | Yes | Same discovery and catalog fallback as `run resolver` |
 | `scafctl lint` | Yes | Discovers and lints the local solution |
@@ -175,6 +175,7 @@ Auto-discovery works with every command that accepts `-f`:
 
 cd my-project
 scafctl run solution          # discovers ./solution.yaml
+scafctl run action --list     # discovers ./actions.yaml (or ./solution.yaml) and lists actions
 scafctl lint                  # discovers ./solution.yaml
 scafctl test functional       # discovers ./solution.yaml
 ```
@@ -189,6 +190,7 @@ scafctl test functional       # discovers ./solution.yaml
 
 cd my-project
 scafctl run solution          # discovers ./solution.yaml
+scafctl run action --list     # discovers ./actions.yaml (or ./solution.yaml) and lists actions
 scafctl lint                  # discovers ./solution.yaml
 scafctl test functional       # discovers ./solution.yaml
 ```

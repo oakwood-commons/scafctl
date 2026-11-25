@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
@@ -24,8 +25,10 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
+	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -43,6 +46,10 @@ type ActionOptions struct {
 	// Only the specified actions and their transitive dependsOn dependencies
 	// are executed. Finally actions always run.
 	Names []string
+
+	// List prints the available actions in the solution without executing
+	// resolvers or actions (-l / --list).
+	List bool
 
 	// Action execution options
 	ActionTimeout        time.Duration
@@ -119,9 +126,12 @@ SOLUTION SOURCE:
   - Auto-discovery: If no source is specified, searches for solution.yaml in current directory
 
 ACTION SELECTION:
-  Pass action names as positional arguments to execute only those actions
-  and their transitive dependsOn dependencies. When no names are provided,
-  all actions in the workflow are executed (equivalent to 'scafctl run solution').
+  Pass action names (or aliases) as positional arguments to execute only those
+  actions and their transitive dependsOn dependencies. When no names are
+  provided, all non-explicit actions in the workflow are executed (if every
+  action is marked explicit: true, available actions are listed on stderr and
+  the command exits with code 3). Pass -l/--list to list available actions
+  without executing resolvers or actions.
 
   Finally actions always execute regardless of the filter.
 
@@ -139,12 +149,18 @@ EXIT CODES:
   0   Success (also partial success unless --detailed-exit-code is set)
   1   Resolver execution failed
   2   Validation failed
-  3   Invalid solution (no workflow, cycle, or parse error)
+  3   Invalid solution or input (no workflow, no default actions, cycle, or parse error)
   4   File not found
   6   Action/workflow execution failed
   12  Partial success (only with --detailed-exit-code; some continueOnError actions failed)
 
 Examples:
+  # List available actions in the solution
+  scafctl run action --list
+
+  # List available actions as JSON
+  scafctl run action -l -o json
+
   # Run the 'lint' action (auto-discovery)
   scafctl run action lint
 
@@ -176,6 +192,9 @@ Examples:
 
 	// Shared resolver flags
 	addSharedResolverFlags(cCmd, &options.sharedResolverOptions)
+
+	// Action discovery / listing flag
+	cCmd.Flags().BoolVarP(&options.List, "list", "l", false, "List available actions without executing")
 
 	// Action execution flags
 	cCmd.Flags().DurationVar(&options.ActionTimeout, "action-timeout", settings.DefaultActionTimeout, "Default timeout per action")
@@ -255,6 +274,18 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	o.validationWarn = nil
 	o.validationWarnResolvers = nil
 
+	// Include pre-release versions in catalog resolution when --pre-release is set.
+	if o.PreRelease {
+		ctx = catalog.WithIncludePreRelease(ctx)
+	}
+
+	// Prefer action files during auto-discovery.
+	o.discoveryMode = settings.DiscoveryModeAction
+
+	if o.List {
+		return o.runList(ctx)
+	}
+
 	// Reject mutually exclusive state flags before any work begins.
 	if err := o.validateStateFlags(); err != nil {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
@@ -292,14 +323,6 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		"names", o.Names,
 		"resolveAll", o.ResolveAll,
 		"dryRun", o.DryRun)
-
-	// Prefer action files during auto-discovery.
-	o.discoveryMode = settings.DiscoveryModeAction
-
-	absOutputDir, err := o.resolveOutputDir(ctx, o.DryRun)
-	if err != nil {
-		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
-	}
 
 	// Detect @- / -f - conflict early
 	if o.File == "-" && flags.ContainsStdinRef(o.ResolverParams) {
@@ -379,6 +402,15 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		if len(names) > 0 {
 			lgr.V(1).Info("action filter applied", "targets", names, "remaining", len(workflow.Actions))
 		}
+	}
+
+	if len(names) == 0 && len(sol.Spec.Workflow.Actions) > 0 && len(workflow.Actions) == 0 {
+		return o.failNoDefaultActions(ctx, sol, sel.Source)
+	}
+
+	absOutputDir, err := o.resolveOutputDir(provider.WithWorkingDirectory(ctx, originalCwd), o.DryRun)
+	if err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
 	// Parse resolver parameters
@@ -642,6 +674,33 @@ func (o *ActionOptions) exitWithCode(ctx context.Context, err error, code int) e
 		w.Error(err.Error())
 	}
 	return exitcode.WithCode(err, code)
+}
+
+// failNoDefaultActions reports the workflow's available actions on stderr and
+// returns InvalidInput when bare 'run action' is invoked on a workflow whose
+// regular actions are all marked explicit: true.
+func (o *ActionOptions) failNoDefaultActions(ctx context.Context, sol *solution.Solution, src source.Classification) error {
+	var actions []inspect.ActionUsage
+	if usage, err := inspect.BuildUsage(ctx, sol, src.Ref, o.BinaryName, o.usageCommandOptions(src)...); err == nil {
+		actions = usage.Actions
+	}
+
+	actionNames := make([]string, 0, len(actions))
+	for _, a := range actions {
+		actionNames = append(actionNames, a.Name)
+	}
+
+	if o.Output != "quiet" {
+		if w := writer.FromContext(ctx); w != nil && len(actions) > 0 {
+			w.PlainStderr("Available actions:")
+			for _, line := range inspect.FormatAvailableActions(actions) {
+				w.PlainStderr(line)
+			}
+		}
+	}
+
+	err := fmt.Errorf("no default actions; specify one of: %s", strings.Join(actionNames, ", "))
+	return o.failStructured(ctx, nil, err, exitcode.InvalidInput)
 }
 
 // failStructured delegates to SolutionOptions.failStructured so setup and

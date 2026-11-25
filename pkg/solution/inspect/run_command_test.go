@@ -185,6 +185,32 @@ func TestBuildRunCommand_SourceArg(t *testing.T) {
 			wantContains: "run resolver ghcr.io/org/app@1.0.0",
 			wantMissing:  "-f",
 		},
+		{
+			name:         "stdin uses -f - without ./ prefix",
+			resolvedPath: "-",
+			rawPath:      "-",
+			wantContains: "run resolver -f -",
+			wantMissing:  "-f ./-",
+		},
+		{
+			name:         "local path with spaces is shell-quoted",
+			resolvedPath: "/abs/task files/solution.yaml",
+			rawPath:      "task files/solution.yaml",
+			wantContains: "run resolver -f './task files/solution.yaml'",
+		},
+		{
+			name:         "local path with trailing whitespace preserves filename",
+			resolvedPath: "/tmp/solution.yaml ",
+			rawPath:      "/tmp/solution.yaml ",
+			wantContains: "run resolver -f '/tmp/solution.yaml '",
+		},
+		{
+			name:         "URL with shell metacharacters is shell-quoted",
+			resolvedPath: "https://example.com/sol.yaml?a=1&b=2",
+			rawPath:      "https://example.com/sol.yaml?a=1&b=2",
+			wantContains: "run resolver 'https://example.com/sol.yaml?a=1&b=2'",
+			wantMissing:  "-f",
+		},
 	}
 
 	for _, tt := range tests {
