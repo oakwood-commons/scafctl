@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -24,8 +26,12 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 const (
@@ -43,6 +49,15 @@ const (
 // prepare.subSolutionLoader adapts a load.Loader to it.
 type Loader interface {
 	Get(ctx context.Context, path string) (*solution.Solution, error)
+}
+
+// BundleLoader is an optional extension of Loader implemented by loaders that
+// also return the solution's raw bundle tar archive (nil when unbundled).
+// When a Loader does not implement BundleLoader, the provider falls back to
+// Loader.Get with no bundle archive.
+type BundleLoader interface {
+	Loader
+	GetWithBundle(ctx context.Context, path string) (*solution.Solution, []byte, error)
 }
 
 // SolutionProvider executes sub-solutions and returns their results.
@@ -237,29 +252,28 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 
 	lgr := logger.FromContext(ctx)
 
-	// Resolve file-based sources against the solution directory before
-	// canonicalization so ancestor tracking and progress prefixes match the
-	// resolved file path regardless of action working directory.
-	source := in.Source
-	if isFilePath(source) && !filepath.IsAbs(source) {
-		if solDir, ok := provider.SolutionDirectoryFromContext(ctx); ok && solDir != "" {
-			source = filepath.Join(solDir, source)
-		}
+	// Resolve relative local file sources against the parent solution directory
+	// before canonicalization so ancestor tracking, progress prefixes, and child
+	// loading target the parent solution's tree regardless of action working directory.
+	resolvedSource := in.Source
+	isLocalFile := isLocalFileSource(resolvedSource)
+	if isLocalFile {
+		resolvedSource = resolveLocalSourcePath(ctx, resolvedSource)
 	}
 
-	// Retain raw canonicalName/source for loader and ancestor cycle checks, while
+	// Retain raw canonicalName/resolvedSource for loader and ancestor cycle checks, while
 	// redacting display strings exposed to progress observers, logs, warnings, and errors.
-	canonicalName := Canonicalize(ctx, source)
+	canonicalName := Canonicalize(ctx, resolvedSource)
 	secretSource := provider.SecretPropertiesFromContext(ctx)["source"]
 	if secretSource {
 		tracker.Track(in.Source)
-		tracker.Track(source)
+		tracker.Track(resolvedSource)
 		tracker.Track(canonicalName)
 	}
-	rawSourceVals := []string{canonicalName, source, in.Source}
+	rawSourceVals := []string{canonicalName, resolvedSource, in.Source}
 	displayName := redactSourceDisplay(ctx, canonicalName)
 	displaySource := redactSourceDisplay(ctx, in.Source)
-	displayResolvedSource := redactSourceDisplay(ctx, source)
+	displayResolvedSource := redactSourceDisplay(ctx, resolvedSource)
 
 	// Check circular references — always a hard error regardless of propagateErrors.
 	ctx, err = PushAncestor(ctx, canonicalName)
@@ -274,7 +288,7 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 
 	lgr.V(1).Info("loading sub-solution", "source", displayResolvedSource)
 
-	sol, loadErr := loader.Get(ctx, source)
+	sol, bundleData, loadErr := loadSubSolution(ctx, loader, resolvedSource)
 	if loadErr != nil {
 		scrubbedLoadErr := scrubSourceError(loadErr, tracker, secretSource, rawSourceVals...)
 		if in.shouldPropagateErrors() {
@@ -295,7 +309,7 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 		return buildLoadFailureOutput(ctx, displayResolvedSource, scrubbedPluginErr), nil
 	}
 
-	// Dry-run: validate source (by loading) but don't execute.
+	// Dry-run: validate source (by loading) without extracting bundles or executing.
 	mode, _ := provider.ExecutionModeFromContext(ctx)
 	if provider.DryRunFromContext(ctx) {
 		isAction := mode == provider.CapabilityAction
@@ -303,15 +317,128 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 		return &provider.Output{Data: envelope.ToMap()}, nil
 	}
 
-	// Build isolated context for sub-solution execution.
-	subCtx := buildIsolatedContext(ctx, displayName, in.Inputs)
+	var bundleDir string
+	if len(bundleData) > 0 {
+		var cleanupBundle func()
+		var extractErr error
+		bundleDir, cleanupBundle, extractErr = extractChildBundle(ctx, bundleData)
+		if extractErr != nil {
+			scrubbedExtractErr := scrubSourceError(extractErr, tracker, secretSource, rawSourceVals...)
+			if in.shouldPropagateErrors() {
+				return nil, fmt.Errorf("solution %q: failed to load: %w", displayResolvedSource, scrubbedExtractErr)
+			}
+			return buildLoadFailureOutput(ctx, displayResolvedSource, scrubbedExtractErr), nil
+		}
+		defer cleanupBundle()
+	}
 
-	return p.executeSubSolution(subCtx, mode, displayName, displaySource, sol, in, reg)
+	childSolutionDir := resolveChildSolutionDir(ctx, sol, canonicalName, isLocalFile, bundleDir)
+	parentWorkDir := resolveParentWorkingDir(ctx)
+
+	// Build isolated context for sub-solution execution.
+	subCtx := buildIsolatedContext(ctx, displayName, in.Inputs, childSolutionDir)
+
+	return p.executeSubSolution(subCtx, mode, displayName, displaySource, parentWorkDir, sol, in, reg)
+}
+
+func loadSubSolution(ctx context.Context, loader Loader, path string) (*solution.Solution, []byte, error) {
+	if bl, ok := loader.(BundleLoader); ok {
+		return bl.GetWithBundle(ctx, path)
+	}
+	sol, err := loader.Get(ctx, path)
+	return sol, nil, err
+}
+
+func extractChildBundle(ctx context.Context, bundleData []byte) (string, func(), error) {
+	noop := func() {}
+	prefix := settings.SanitizeBinaryName(settings.BinaryNameFromContext(ctx)) + "-bundle-*"
+	dir, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		return "", noop, fmt.Errorf("creating temp directory for bundle: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+
+	manifest, err := bundler.ExtractBundleTarLimited(bundleData, dir, bundler.DefaultMaxBundleSize)
+	if err != nil {
+		cleanup()
+		return "", noop, fmt.Errorf("extracting bundle: %w", err)
+	}
+
+	if lgr := logger.FromContext(ctx); lgr != nil {
+		lgr.V(1).Info("extracted sub-solution bundle", "files", len(manifest.Files), "dir", dir)
+	}
+	return dir, cleanup, nil
+}
+
+// resolveLocalSourcePath resolves a relative local file path against the parent
+// SolutionDirectory when present on ctx, leaving anchored or tilde-prefixed paths unchanged.
+func resolveLocalSourcePath(ctx context.Context, p string) string {
+	if isAnchoredPath(p) || strings.HasPrefix(p, "~") {
+		return p
+	}
+	if solDir, ok := provider.SolutionDirectoryFromContext(ctx); ok && solDir != "" {
+		baseDir := solDir
+		if !isAnchoredPath(baseDir) {
+			if absBase, absErr := filepath.Abs(baseDir); absErr == nil {
+				baseDir = absBase
+			}
+		}
+		return filepath.Join(baseDir, p)
+	}
+	return p
+}
+
+// resolveChildSolutionDir determines the child solution's directory for
+// relative path reads: the extracted bundle directory when present, the parent
+// directory of the resolved local file path for file sources, or empty for
+// unbundled catalog, registry, and URL sources.
+func resolveChildSolutionDir(
+	ctx context.Context,
+	sol *solution.Solution,
+	canonicalName string,
+	isLocalFile bool,
+	bundleDir string,
+) string {
+	if bundleDir != "" {
+		return bundleDir
+	}
+	if !isLocalFile {
+		return ""
+	}
+	if sol != nil {
+		if solPath := sol.GetPath(); solPath != "" && !strings.HasPrefix(solPath, "catalog:") && isLocalFileSource(solPath) {
+			resolvedSolPath := resolveLocalSourcePath(ctx, solPath)
+			if absPath, err := provider.AbsFromContext(ctx, resolvedSolPath); err == nil {
+				return filepath.Dir(absPath)
+			}
+		}
+	}
+	if absPath, err := provider.AbsFromContext(ctx, canonicalName); err == nil {
+		return filepath.Dir(absPath)
+	}
+	return ""
+}
+
+// resolveParentWorkingDir captures the caller's logical working directory
+// before isolatedContext masks it, preferring WorkingDirectoryFromContext,
+// then an enclosing action executor's Cwd, and finally os.Getwd().
+func resolveParentWorkingDir(ctx context.Context) string {
+	if cwd, ok := provider.WorkingDirectoryFromContext(ctx); ok && cwd != "" {
+		return cwd
+	}
+	if inherited, ok := action.InheritedExecutorConfigFromContext(ctx); ok && inherited.Cwd != "" {
+		return inherited.Cwd
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return ""
 }
 
 // normalizeSolutionNames populates map-key-derived Name fields on resolvers and
-// workflow actions under p.mu so concurrent executions sharing an in-memory
-// *solution.Solution never race on initial Name assignment.
+// workflow actions and merges declared bundle plugin defaults under p.mu so
+// concurrent executions sharing an in-memory *solution.Solution never race on
+// initial mutation.
 func (p *SolutionProvider) normalizeSolutionNames(sol *solution.Solution) {
 	if sol == nil {
 		return
@@ -335,6 +462,111 @@ func (p *SolutionProvider) normalizeSolutionNames(sol *solution.Solution) {
 			}
 		}
 	}
+	if len(sol.Bundle.Plugins) > 0 {
+		mergeChildPluginDefaults(sol)
+	}
+}
+
+func mergeChildPluginDefaults(sol *solution.Solution) {
+	defaultsMap := make(map[string]map[string]*spec.ValueRef)
+	for _, plug := range sol.Bundle.Plugins {
+		if plug.Kind == solution.PluginKindProvider && len(plug.Defaults) > 0 {
+			defaultsMap[plug.LocalName()] = plug.Defaults
+		}
+	}
+	if len(defaultsMap) == 0 {
+		return
+	}
+
+	// Pre-initialize nil Inputs maps on resolver steps whose provider declares
+	// defaults so bundler.MergePluginDefaults populates steps that omitted `inputs:`.
+	for _, r := range sol.Spec.Resolvers {
+		if r == nil {
+			continue
+		}
+		if r.Resolve != nil {
+			for i := range r.Resolve.With {
+				if r.Resolve.With[i].Inputs == nil && len(defaultsMap[r.Resolve.With[i].Provider]) > 0 {
+					r.Resolve.With[i].Inputs = make(map[string]*spec.ValueRef)
+				}
+			}
+		}
+		if r.Transform != nil {
+			for i := range r.Transform.With {
+				if r.Transform.With[i].Inputs == nil && len(defaultsMap[r.Transform.With[i].Provider]) > 0 {
+					r.Transform.With[i].Inputs = make(map[string]*spec.ValueRef)
+				}
+			}
+		}
+		if r.Validate != nil {
+			for i := range r.Validate.With {
+				if r.Validate.With[i].Inputs == nil && len(defaultsMap[r.Validate.With[i].Provider]) > 0 {
+					r.Validate.With[i].Inputs = make(map[string]*spec.ValueRef)
+				}
+			}
+		}
+	}
+
+	hasNilAction := false
+	if sol.Spec.Workflow != nil {
+		for _, a := range sol.Spec.Workflow.Actions {
+			if a == nil {
+				hasNilAction = true
+				break
+			}
+		}
+	}
+	if !hasNilAction {
+		bundler.MergePluginDefaults(sol)
+	} else {
+		for _, r := range sol.Spec.Resolvers {
+			if r == nil {
+				continue
+			}
+			if r.Resolve != nil {
+				for i := range r.Resolve.With {
+					applyStepDefaults(&r.Resolve.With[i].Inputs, defaultsMap[r.Resolve.With[i].Provider])
+				}
+			}
+			if r.Transform != nil {
+				for i := range r.Transform.With {
+					applyStepDefaults(&r.Transform.With[i].Inputs, defaultsMap[r.Transform.With[i].Provider])
+				}
+			}
+			if r.Validate != nil {
+				for i := range r.Validate.With {
+					applyStepDefaults(&r.Validate.With[i].Inputs, defaultsMap[r.Validate.With[i].Provider])
+				}
+			}
+		}
+		for _, a := range sol.Spec.Workflow.Actions {
+			if a != nil {
+				applyStepDefaults(&a.Inputs, defaultsMap[a.Provider])
+			}
+		}
+	}
+
+	if sol.Spec.Workflow != nil {
+		for _, a := range sol.Spec.Workflow.Finally {
+			if a != nil {
+				applyStepDefaults(&a.Inputs, defaultsMap[a.Provider])
+			}
+		}
+	}
+}
+
+func applyStepDefaults(inputs *map[string]*spec.ValueRef, defaults map[string]*spec.ValueRef) {
+	if len(defaults) == 0 {
+		return
+	}
+	if *inputs == nil {
+		*inputs = make(map[string]*spec.ValueRef, len(defaults))
+	}
+	for k, v := range defaults {
+		if _, exists := (*inputs)[k]; !exists {
+			(*inputs)[k] = v
+		}
+	}
 }
 
 // executeSubSolution runs the child solution through the shared execute.Resolvers
@@ -344,6 +576,7 @@ func (p *SolutionProvider) executeSubSolution(
 	mode provider.Capability,
 	displayName string,
 	displaySource string,
+	parentWorkDir string,
 	sol *solution.Solution,
 	in *Input,
 	reg *provider.Registry,
@@ -447,8 +680,12 @@ func (p *SolutionProvider) executeSubSolution(
 
 	lgr.V(1).Info("executing sub-solution workflow")
 
-	actionCfg := buildChildActionConfig(ctx, displayName, resolverCtx, executedResolvers, resolverElapsed)
-	actResult, actErr := execute.Actions(ctx, sol, resolverData, reg, actionCfg)
+	childActionCtx := ctx
+	if parentWorkDir != "" {
+		childActionCtx = provider.WithWorkingDirectory(childActionCtx, parentWorkDir)
+	}
+	actionCfg := buildChildActionConfig(childActionCtx, displayName, parentWorkDir, resolverCtx, executedResolvers, resolverElapsed)
+	actResult, actErr := execute.Actions(childActionCtx, sol, resolverData, reg, actionCfg)
 
 	var workflowResult *WorkflowResult
 	if actResult != nil && actResult.Result != nil {
@@ -513,6 +750,7 @@ func buildChildResolverConfig(ctx context.Context, resolvers []*resolver.Resolve
 func buildChildActionConfig(
 	ctx context.Context,
 	displayName string,
+	parentWorkDir string,
 	resolverCtx *resolver.Context,
 	executedResolvers []*resolver.Resolver,
 	resolverElapsed time.Duration,
@@ -551,6 +789,9 @@ func buildChildActionConfig(
 			)
 		}
 	}
+	if parentWorkDir != "" {
+		cfg.Cwd = parentWorkDir
+	}
 
 	if cfg.IOStreams == nil && !provider.IsFallbackIOStreams(ctx) {
 		if streams, ok := provider.IOStreamsFromContext(ctx); ok && streams != nil {
@@ -575,8 +816,8 @@ func buildChildActionConfig(
 // buildLoadFailureOutput constructs a degraded envelope for load/parse failures
 // when propagateErrors is false. The envelope reports status "failed" with the
 // error detail, allowing the parent to continue execution.
-func buildLoadFailureOutput(ctx context.Context, source string, loadErr error) *provider.Output {
-	errMsg := redact.FromContext(ctx).RedactString(fmt.Sprintf("%s: %s", source, loadErr.Error()))
+func buildLoadFailureOutput(ctx context.Context, src string, loadErr error) *provider.Output {
+	errMsg := redact.FromContext(ctx).RedactString(fmt.Sprintf("%s: %s", src, loadErr.Error()))
 	errors := []ResolverError{{
 		Resolver: "_loader",
 		Message:  errMsg,
@@ -647,10 +888,11 @@ func scrubSourceError(err error, tracker *redact.Tracker, secretSource bool, raw
 
 // buildIsolatedContext constructs an isolated context for sub-solution execution.
 // Parent CLI parameters, forEach iteration context, persisted state data,
-// author-defined template functions, and resolved values are stripped so they
-// never leak into the child, while logger, writer, auth, config, dry-run,
-// redaction tracker, and ancestor stack are inherited from the parent.
-func buildIsolatedContext(ctx context.Context, displayName string, params map[string]any) context.Context {
+// author-defined template functions, working/solution directories, and resolved
+// values are stripped so they never leak into the child, while logger, writer,
+// auth, config, dry-run, output directory, conflict/backup settings, redaction
+// tracker, and ancestor stack are inherited from the parent.
+func buildIsolatedContext(ctx context.Context, displayName string, params map[string]any, childSolutionDir string) context.Context {
 	safeName := redactSourceDisplay(ctx, displayName)
 
 	// Mask parent-scoped keys before installing child-scoped values.
@@ -662,6 +904,12 @@ func buildIsolatedContext(ctx context.Context, displayName string, params map[st
 
 	// Fresh resolver context — sub-solution cannot see parent's resolved values.
 	ctx = provider.WithResolverContext(ctx, map[string]any{})
+
+	// Attach child solution directory when present (extracted bundle directory or
+	// local file's parent directory). Unbundled catalog/URL sources leave it unset.
+	if childSolutionDir != "" {
+		ctx = provider.WithSolutionDirectory(ctx, childSolutionDir)
+	}
 
 	// Inject inputs as parameters for the sub-solution's parameter provider.
 	if params != nil {
@@ -759,11 +1007,11 @@ func filterResolvers(all []*resolver.Resolver, allowlist []string) ([]*resolver.
 func decodeInput(m map[string]any) (any, error) {
 	in := &Input{}
 
-	source, ok := m["source"].(string)
-	if !ok || source == "" {
+	src, ok := m["source"].(string)
+	if !ok || src == "" {
 		return nil, fmt.Errorf("%s: 'source' is required and must be a string", ProviderName)
 	}
-	in.Source = source
+	in.Source = src
 
 	if inputs, ok := m["inputs"].(map[string]any); ok {
 		in.Inputs = inputs
@@ -827,8 +1075,8 @@ func decodeInput(m map[string]any) (any, error) {
 func extractDependencies(inputs map[string]any) []string {
 	var deps []string
 
-	if source, ok := inputs["source"]; ok {
-		deps = append(deps, extractRefsFromValue(source)...)
+	if src, ok := inputs["source"]; ok {
+		deps = append(deps, extractRefsFromValue(src)...)
 	}
 
 	if subInputs, ok := inputs["inputs"].(map[string]any); ok {
@@ -944,19 +1192,19 @@ func isIdentStartChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
 }
 
-// isFilePath reports whether source looks like a file path rather than a
-// catalog reference (e.g. "deploy-to-k8s@2.0.0") or URL. It returns true
-// when the source is an absolute path, starts with "./" or "../", or ends
-// with a YAML extension.
-func isFilePath(source string) bool {
-	if filepath.IsAbs(source) {
-		return true
-	}
-	if strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") {
-		return true
-	}
-	ext := strings.ToLower(filepath.Ext(source))
-	return ext == ".yaml" || ext == ".yml"
+// isLocalFileSource reports whether src classifies syntactically as a local
+// filesystem path rather than a URL, OCI registry reference, catalog name, or stdin.
+func isLocalFileSource(src string) bool {
+	c, err := source.Classify(src)
+	return err == nil && c.Kind == source.KindLocalFile
+}
+
+// isAnchoredPath reports whether p is an absolute or root-anchored filesystem path.
+func isAnchoredPath(p string) bool {
+	return filepath.IsAbs(p) ||
+		scafpath.HasWindowsDrivePrefix(p) ||
+		strings.HasPrefix(p, "/") ||
+		strings.HasPrefix(p, "\\")
 }
 
 // --- Descriptor ---
@@ -972,15 +1220,15 @@ func buildDescriptor() *provider.Descriptor {
 		Description: "Executes a sub-solution and returns its results as a structured envelope",
 		Category:    "composition",
 		WhatIf: func(ctx context.Context, input any) (string, error) {
-			var source string
+			var src string
 			switch v := input.(type) {
 			case *Input:
-				source = v.Source
+				src = v.Source
 			case map[string]any:
-				source, _ = v["source"].(string)
+				src, _ = v["source"].(string)
 			}
-			if source != "" {
-				return fmt.Sprintf("Would execute solution %q", redactSourceDisplay(ctx, source)), nil
+			if src != "" {
+				return fmt.Sprintf("Would execute solution %q", redactSourceDisplay(ctx, src)), nil
 			}
 			return "Would execute sub-solution", nil
 		},

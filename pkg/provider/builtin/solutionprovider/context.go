@@ -6,7 +6,6 @@ package solutionprovider
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -43,11 +42,14 @@ var (
 	parentDeclaredScalarTypeKey = captureContextKey(func(c context.Context) { _, _ = provider.DeclaredScalarTypeFromContext(c) })
 	parentExecutionModeKey      = captureContextKey(func(c context.Context) { _, _ = provider.ExecutionModeFromContext(c) })
 	parentResolverCtxKey        = captureContextKey(func(c context.Context) { _, _ = resolver.FromContext(c) })
+	parentWorkingDirectoryKey   = captureContextKey(func(c context.Context) { _, _ = provider.WorkingDirectoryFromContext(c) })
+	parentSolutionDirectoryKey  = captureContextKey(func(c context.Context) { _, _ = provider.SolutionDirectoryFromContext(c) })
 )
 
 // isolatedContext masks parent-only context keys so sub-solutions never observe
 // parent CLI parameters, forEach iteration variables, state snapshots,
-// author-defined template functions, or parent step execution metadata.
+// author-defined template functions, parent step execution metadata, or parent
+// working and solution directories during child resolver execution.
 type isolatedContext struct {
 	context.Context
 }
@@ -62,7 +64,9 @@ func (c *isolatedContext) Value(key any) any {
 		parentPreResolvedInputsKey,
 		parentDeclaredScalarTypeKey,
 		parentExecutionModeKey,
-		parentResolverCtxKey:
+		parentResolverCtxKey,
+		parentWorkingDirectoryKey,
+		parentSolutionDirectoryKey:
 		return nil
 	default:
 		return c.Context.Value(key)
@@ -239,22 +243,14 @@ func CheckDepth(ctx context.Context, maxDepth int) error {
 }
 
 // Canonicalize normalizes a source reference into a canonical name for ancestor tracking.
-// File paths are resolved to absolute paths, catalog references and URLs are used as-is.
-func Canonicalize(ctx context.Context, source string) string {
-	// URLs - use as-is
-	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
-		return source
-	}
-
-	// Relative or absolute file paths - resolve to absolute
-	if isFilePath(source) || strings.HasPrefix(source, ".") || strings.HasPrefix(source, "/") || strings.Contains(source, string(filepath.Separator)) {
-		abs, err := provider.AbsFromContext(ctx, source)
+// Local file paths are resolved to absolute paths; catalog references, OCI refs, and URLs are used as-is.
+func Canonicalize(ctx context.Context, src string) string {
+	if isLocalFileSource(src) {
+		abs, err := provider.AbsFromContext(ctx, src)
 		if err != nil {
-			return source // fallback to raw value
+			return src // fallback to raw value
 		}
 		return abs
 	}
-
-	// Catalog references (bare name or name@version) - use as-is
-	return source
+	return src
 }

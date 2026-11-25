@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -152,6 +153,8 @@ func TestCanonicalize_CatalogReference(t *testing.T) {
 		{"deploy-to-k8s", "deploy-to-k8s"},
 		{"deploy-to-k8s@2.0.0", "deploy-to-k8s@2.0.0"},
 		{"my-solution@sha256:abc123", "my-solution@sha256:abc123"},
+		{"ghcr.io/example-org/deploy-to-k8s@2.0.0", "ghcr.io/example-org/deploy-to-k8s@2.0.0"},
+		{"oci://ghcr.io/example-org/deploy-to-k8s:latest", "oci://ghcr.io/example-org/deploy-to-k8s:latest"},
 	}
 
 	for _, tt := range tests {
@@ -168,8 +171,31 @@ func TestCanonicalize_AbsolutePath(t *testing.T) {
 }
 
 func TestCanonicalize_RelativePath(t *testing.T) {
-	got := Canonicalize(context.Background(), "./child.yaml")
-	// Should be resolved to an absolute path
-	assert.True(t, len(got) > len("./child.yaml"), "expected absolute path, got: %s", got)
-	assert.NotEqual(t, "./child.yaml", got)
+	for _, rel := range []string{"./child.yaml", "child.json", "sub/child"} {
+		got := Canonicalize(context.Background(), rel)
+		assert.True(t, len(got) > len(rel), "expected absolute path for %s, got: %s", rel, got)
+		assert.NotEqual(t, rel, got)
+	}
+}
+
+func TestIsolatedContext_MasksParentDirectories(t *testing.T) {
+	ctx := context.Background()
+	ctx = provider.WithWorkingDirectory(ctx, "/parent/work")
+	ctx = provider.WithSolutionDirectory(ctx, "/parent/solution")
+	ctx = provider.WithOutputDirectory(ctx, "/parent/output")
+
+	isolated := &isolatedContext{Context: ctx}
+
+	workDir, hasWork := provider.WorkingDirectoryFromContext(isolated)
+	assert.False(t, hasWork)
+	assert.Empty(t, workDir)
+
+	solDir, hasSol := provider.SolutionDirectoryFromContext(isolated)
+	assert.False(t, hasSol)
+	assert.Empty(t, solDir)
+
+	// Output directory remains visible for child action writes.
+	outDir, hasOut := provider.OutputDirectoryFromContext(isolated)
+	assert.True(t, hasOut)
+	assert.Equal(t, "/parent/output", outDir)
 }

@@ -65,3 +65,12 @@ spec:
           - expression: '"child-result" in __output'
           - expression: '__output["child-result"].resolvers["child-template"] == "child template content"'
             message: "Child should resolve its own local template file"
+
+      grandchild-file-resolved:
+        description: Verify 3-level nested grandchild resolves files against its own directory
+        extends: [_base]
+        assertions:
+          - expression: '__output["child-result"].resolvers["grandchild-result"].status == "success"'
+            message: "Grandchild solution should succeed"
+          - expression: '__output["child-result"].resolvers["grandchild-result"].resolvers["grandchild-template"] == "grandchild template content"'
+            message: "Grandchild should resolve its own local template file"

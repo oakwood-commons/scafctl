@@ -61,8 +61,8 @@ The provider resolves sub-solutions from multiple locations, using the same load
 
 | Source Type | Example `source` Value | Resolution |
 |-------------|----------------------|------------|
-| **Local file** | `./infra/database.yaml`, `/absolute/path.yaml` | Loaded from the filesystem relative to the working directory |
-| **Catalog** | `deploy-to-k8s`, `deploy-to-k8s@2.0.0` | Searches local catalog first, then configured remote catalogs |
+| **Local file** | `./infra/database.yaml`, `/absolute/path.yaml` | Loaded from the filesystem relative to the parent solution's directory (or working directory when unset) |
+| **Catalog** | `deploy-to-k8s`, `deploy-to-k8s@2.0.0` | Searches local catalog first, then configured remote catalogs (bundle tar extracted to an ephemeral per-run temp directory) |
 | **URL** | `https://example.com/solution.yaml` | Fetched via HTTP(S) |
 
 The `source` value is classified with `source.Classify` (purely syntactic, first match wins): `http(s)://` is a URL; paths starting with `/`, `./`, `~/`, or ending in `.yaml`/`.yml`/`.json` are local files; `host.tld/.../name` and `oci://` are registry references; anything else (`name`, `name@1.2.3`) is a catalog name. Stdin (`-`) is rejected for sub-solutions because the parent solution owns it.
@@ -411,7 +411,7 @@ Each sub-solution runs in an isolated context. This is critical for correctness 
 | Redaction tracker | `redact.FromContext(ctx)` (shared) | Secrets resolved in child are tracked and redacted across parent output |
 | Parent CEL cost limit | `celexp.CostLimitFromContext(ctx)` (capped) | Child CEL cost limit cannot raise an enclosing parent's ceiling |
 | Inherited executor config | `action.InheritedExecutorConfigFromContext(ctx)` | Child workflows inherit parent timeout, grace period, concurrency, `IOStreams`, `Cwd`, and prefixed progress callbacks |
-| Output / working / solution directories | `provider.*DirectoryFromContext(ctx)` | File and action path resolution stays consistent |
+| Output directory, conflict strategy, backup | `provider.OutputDirectoryFromContext(ctx)`, `ConflictStrategyFromContext(ctx)`, `BackupFromContext(ctx)` | Child action writes land in the parent's `--output-dir` (with path-containment validation) and honor `--on-conflict` / `--backup` |
 | Ancestor stack | Custom context key | For recursion detection |
 
 ### Replaced / Cleared (parent context stripped, sub-solution gets fresh values)
@@ -420,12 +420,27 @@ Each sub-solution runs in an isolated context. This is critical for correctness 
 |-------|-----------|-----------|
 | Resolver context | Cleared via `isolatedContext`, then `provider.WithResolverContext(ctx, map{})` | Sub-solution starts fresh; parent's `_` and `*resolver.Context` are not visible |
 | Parameters | Cleared via `isolatedContext`, then `provider.WithParameters(ctx, inputs)` when `inputs` is non-nil | `inputs` map replaces parent's `-r` params; parent CLI parameters never leak |
+| Solution directory | Cleared via `isolatedContext`, then `provider.WithSolutionDirectory(ctx, childSolutionDir)` when known | Child reads resolve against the child's own file directory or extracted bundle directory (unset for unbundled catalog/URL) |
+| Working directory | Cleared via `isolatedContext` during child resolvers; restored via `provider.WithWorkingDirectory(childActionCtx, parentWorkDir)` for child actions | Prevents parent action `WorkingDirectory` from shadowing `childSolutionDir` during child resolver reads while keeping child action writes anchored to parent working/output directory |
 | Iteration context | Cleared via `isolatedContext` | Sub-solution is not part of parent's `forEach` |
 | Persisted state | Cleared via `isolatedContext` | Sub-solution does not read parent's `state.Data` snapshot |
 | Template functions | Cleared via `isolatedContext`, then child's own `spec.functions` bound by `execute.Resolvers` / `execute.Actions` | Parent's author-defined Go template functions do not leak into child |
 | Parent step metadata | Cleared via `isolatedContext` (`ExecutionMode`, `PreResolvedInputs`, `SecretProperties`, `DeclaredScalarType`) | Parent resolver/action step flags never affect child `ValueRef` evaluation or scalar type coercion |
 | Solution metadata | Replaced by `execute.Resolvers` / `execute.Actions` (`provider.WithSolutionMetadata`) | Child providers observe the child solution's own metadata and provenance |
 | Action context | Not shared | Sub-solution builds its own `action.Context` |
+
+### Path Resolution & Bundle Extraction Contract
+
+`provider.AbsFromContext` checks `WorkingDirectory` before `SolutionDirectory`. When a parent workflow action invokes `provider: solution`, the parent's `WorkingDirectory` is set on `ctx`, so inheriting it into child resolvers would shadow `childSolutionDir`. The solution provider splits directory scoping across two phases:
+
+| Operation in child | Resolves against |
+|--------------------|------------------|
+| Resolver reads (`file` read, templates, `relativeTo: solution`, nested local `source`) | Child's own directory (`filepath.Dir(absPath)` for local file sources, or the per-execution bundle temp directory for bundled catalog/OCI artifacts; falls back to CWD for unbundled catalog/URL sources) |
+| Workflow action reads (`file` `read` / `exists`) | With `relativeTo: solution`: child's own directory or extracted bundle directory (validated against the child directory even when `--output-dir` points elsewhere). With `relativeTo: cwd`: parent's working directory (validated against that working directory). With default `relativeTo: auto`: follows `provider.ResolvePath` (`--output-dir` when set, else parent's working directory) so multi-step workflows can read prior action outputs |
+| Workflow action writes (`file` `write`, `write-tree`, `delete`, `exec` CWD, `__cwd`) | Parent's `--output-dir` (with path-containment validation across all `relativeTo` modes) when set, otherwise the parent's logical working directory (`WorkingDirectoryFromContext` -> `InheritedExecutorConfig.Cwd` -> `os.Getwd()`) -- never inside the ephemeral bundle temp directory |
+| Nested composition (`parent -> child -> grandchild`) | Each level resolves its own `source` and resolver/`relativeTo: solution` reads against its own directory while propagating the root caller's output/working directory to action writes |
+
+When the configured `Loader` implements the optional `BundleLoader` interface (`GetWithBundle(ctx, path)`), non-empty bundle archives are extracted after the dry-run check into `<binaryName>-bundle-*` under `os.TempDir()` via `bundler.ExtractBundleTarLimited` (`DefaultMaxBundleSize`) and removed via `defer` when `Execute` returns (including on child failure or context cancellation). Dry-run invocations return before extraction so zero temp directories are created.
 
 ### NOT Propagated
 
@@ -459,37 +474,39 @@ solution:deploy-k8s@2.0.0  Phase 1: executing 2 resolvers concurrently
 
 ~~~
 Execute(ctx, input) -> *Output
-  1. Resolve `source` -> string path
+  1. Classify and resolve `source` (relative local files resolve against parent `SolutionDirectory`)
   2. Resolve `inputs` -> map[string]any params
-  3. Check ancestor stack + depth
-  4. Push ancestor
-  5. Load solution via the Loader (Loader.Get(ctx, path))
-  6. Build isolated context:
-     - Strip parent parameters, iteration context, state snapshot, and template functions
+  3. Check ancestor stack + depth; push ancestor
+  4. Load solution (and raw bundle tar when `Loader` implements `BundleLoader.GetWithBundle`)
+  5. Normalize names, merge `bundle.plugins` defaults, and auto-resolve child official providers
+  6. Short-circuit if `provider.DryRunFromContext(ctx)` (returns dry-run envelope without extracting bundle)
+  7. Extract non-empty bundle tar to `<binaryName>-bundle-*` temp dir (`defer` cleanup)
+  8. Compute `childSolutionDir` and capture `parentWorkDir`; build isolated context:
+     - Mask parent parameters, iteration context, state snapshot, template functions, step metadata, and parent working/solution directories
      - Fresh resolver context (empty)
-     - Parameters from `inputs` (when provided)
+     - Attach `childSolutionDir` (when non-empty) and `inputs` parameters
      - Scoped logger
-  7. Filter resolvers when `resolvers` allowlist is specified
-  8. Execute child resolvers via `execute.Resolvers(...)` (injects child SolutionMetadata, compiles child `spec.functions`, applies parent-capped CEL cost limit)
-  9. Build `from` envelope (preserving partial resolved values on failure when `propagateErrors: false`)
-  10. If sub-solution failed AND `propagateErrors` -> return Go error
-  11. Return &Output{Data: envelope, Warnings: warnings}
+  9. Filter resolvers when `resolvers` allowlist is specified
+  10. Execute child resolvers via `execute.Resolvers(...)` (injects child SolutionMetadata, compiles child `spec.functions`, applies parent-capped CEL cost limit)
+  11. Build `from` envelope (preserving partial resolved values on failure when `propagateErrors: false`)
+  12. If sub-solution failed AND `propagateErrors` -> return Go error
+  13. Return &Output{Data: envelope, Warnings: warnings}
 ~~~
 
 ### `action` Capability (Workflow Context)
 
-Same as above through step 8, then:
+Same as above through step 10, then:
 
 ~~~
-  9. If child defines no `spec.workflow`, emit `BuildActionEnvelope` with `success: true`
-  10. Inherit parent `action.Executor` settings (`InheritedExecutorConfig`: default timeout, grace period, max concurrency, IOStreams, Cwd) and wrap parent `ProgressCallback` with `[solution:<canonicalName>] ` prefix
-  11. Execute child workflow via `execute.Actions(...)`:
+  11. If child defines no `spec.workflow`, emit `BuildActionEnvelope` with `success: true`
+  12. Restore `provider.WithWorkingDirectory(childActionCtx, parentWorkDir)` alongside inherited `OutputDirectory`, `ConflictStrategy`, and `Backup`; inherit parent `action.Executor` settings (`InheritedExecutorConfig`: default timeout, grace period, max concurrency, IOStreams, Cwd) and wrap parent `ProgressCallback` with `[solution:<canonicalName>] ` prefix
+  13. Execute child workflow via `execute.Actions(...)`:
       - Validate workflow (`action.ValidateWorkflow`)
       - Filter explicit actions (`action.FilterWorkflowActions(workflow, nil)`, excluding standalone `explicit: true` actions while keeping transitive `dependsOn` dependencies and `finally` actions)
       - Inject child `SolutionMetadata`, `__execution` metadata, `spec.functions`, and parent-capped CEL cost limit
-  12. Build `action` envelope with resolver values + workflow summary (recording `PartialResult` or `_workflow` error when `propagateErrors: false`)
-  13. If sub-solution failed AND `propagateErrors` -> return Go error
-  14. Return &Output{Data: envelope, Warnings: warnings}
+  14. Build `action` envelope with resolver values + workflow summary (recording `PartialResult` or `_workflow` error when `propagateErrors: false`)
+  15. If sub-solution failed AND `propagateErrors` -> return Go error
+  16. Return &Output{Data: envelope, Warnings: warnings}
 ~~~
 
 ### Progress Reporting
@@ -748,6 +765,11 @@ type Loader interface {
     Get(ctx context.Context, path string) (*solution.Solution, error)
 }
 
+type BundleLoader interface {
+    Loader
+    GetWithBundle(ctx context.Context, path string) (*solution.Solution, []byte, error)
+}
+
 type SolutionProvider struct {
     loader   Loader
     registry *provider.Registry
@@ -762,10 +784,12 @@ func WithRegistry(r *provider.Registry) Option
 func New(opts ...Option) *SolutionProvider
 ~~~
 
-The provider depends only on the local `Loader` interface. In production,
-`prepare` adapts its `load.Loader` (the same router used for the parent
-solution) with `subSolutionLoader`, which classifies the path, rejects stdin,
-and returns the loaded solution. Tests supply a mock `Loader`.
+The provider depends only on the local `Loader` interface (and optional
+`BundleLoader` extension). In production, `prepare` adapts its `load.Loader`
+(the same router used for the parent solution) with `subSolutionLoader`, which
+implements `BundleLoader` (`Get` + `GetWithBundle`), classifies the path,
+rejects stdin, and returns both the loaded solution and any raw bundle tar
+archive. Tests supply a mock `Loader` or `BundleLoader`.
 
 The provider also receives a reference to the provider registry so sub-solutions have access to all built-in and plugin providers.
 

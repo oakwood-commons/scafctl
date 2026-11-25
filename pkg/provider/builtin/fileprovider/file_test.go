@@ -2970,7 +2970,7 @@ func TestResolvePathRel_Auto_UsesResolvePath(t *testing.T) {
 	// resolve via os.Getwd().
 	ctx := context.Background()
 
-	got, err := resolvePathRel(ctx, "foo.txt", "auto")
+	got, err := resolvePathRel(ctx, "foo.txt", "auto", "read")
 	require.NoError(t, err)
 
 	cwd, _ := os.Getwd()
@@ -2983,7 +2983,7 @@ func TestResolvePathRel_Solution_UsesSolutionDir(t *testing.T) {
 	// Also set a WorkingDirectory to confirm it is ignored for "solution".
 	ctx = provider.WithWorkingDirectory(ctx, t.TempDir())
 
-	got, err := resolvePathRel(ctx, "output/result.yaml", "solution")
+	got, err := resolvePathRel(ctx, "output/result.yaml", "solution", "read")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(solDir, "output/result.yaml"), got)
 }
@@ -2991,7 +2991,7 @@ func TestResolvePathRel_Solution_UsesSolutionDir(t *testing.T) {
 func TestResolvePathRel_Solution_FallsBackToCwd_WhenNoSolutionDir(t *testing.T) {
 	ctx := context.Background()
 
-	got, err := resolvePathRel(ctx, "output/result.yaml", "solution")
+	got, err := resolvePathRel(ctx, "output/result.yaml", "solution", "read")
 	require.NoError(t, err)
 
 	cwd, _ := os.Getwd()
@@ -3004,7 +3004,7 @@ func TestResolvePathRel_Cwd_UsesWorkingDirectory(t *testing.T) {
 	// Also set a SolutionDirectory to confirm it is ignored for "cwd".
 	ctx = provider.WithSolutionDirectory(ctx, t.TempDir())
 
-	got, err := resolvePathRel(ctx, "out/file.txt", "cwd")
+	got, err := resolvePathRel(ctx, "out/file.txt", "cwd", "read")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(cwdDir, "out/file.txt"), got)
 }
@@ -3012,7 +3012,7 @@ func TestResolvePathRel_Cwd_UsesWorkingDirectory(t *testing.T) {
 func TestResolvePathRel_Cwd_FallsBackToOsGetwd_WhenNoContextCwd(t *testing.T) {
 	ctx := context.Background()
 
-	got, err := resolvePathRel(ctx, "out/file.txt", "cwd")
+	got, err := resolvePathRel(ctx, "out/file.txt", "cwd", "read")
 	require.NoError(t, err)
 
 	cwd, _ := os.Getwd()
@@ -3025,7 +3025,7 @@ func TestResolvePathRel_AbsPath_ReturnedUnchanged(t *testing.T) {
 
 	absPath := filepath.FromSlash("/absolute/path/to/file.txt")
 	for _, rel := range []string{"solution", "cwd", "auto", ""} {
-		got, err := resolvePathRel(ctx, absPath, rel)
+		got, err := resolvePathRel(ctx, absPath, rel, "read")
 		require.NoError(t, err, "relativeTo=%q", rel)
 		assert.Equal(t, absPath, got, "relativeTo=%q", rel)
 	}
@@ -3139,21 +3139,20 @@ func TestFileProvider_Execute_Write_RelativeTo_Solution(t *testing.T) {
 }
 
 func TestResolvePathRel_OutputDir_ContainmentEnforced_Solution(t *testing.T) {
-	// When --output-dir is set and relativeTo is "solution", paths that
-	// escape the output-dir must be rejected.
+	// Mutating operations with --output-dir and relativeTo="solution" must reject
+	// paths that resolve outside output-dir.
 	solDir := t.TempDir()
-	outputDir := t.TempDir() // separate directory
+	outputDir := t.TempDir()
 
-	// Anchoring to solDir with a traversal that would escape outputDir.
 	ctx := provider.WithSolutionDirectory(context.Background(), solDir)
 	ctx = provider.WithOutputDirectory(ctx, outputDir)
 	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
 
-	// A plain relative path that resolves inside solDir (which is outside outputDir)
-	// should be rejected.
-	_, err := resolvePathRel(ctx, "output.txt", "solution")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "outside output directory")
+	for _, op := range []string{"write", "write-tree", "delete"} {
+		_, err := resolvePathRel(ctx, "output.txt", "solution", op)
+		require.Error(t, err, "operation=%s", op)
+		assert.Contains(t, err.Error(), "outside output directory")
+	}
 }
 
 func TestResolvePathRel_OutputDir_ContainmentEnforced_Cwd(t *testing.T) {
@@ -3164,20 +3163,22 @@ func TestResolvePathRel_OutputDir_ContainmentEnforced_Cwd(t *testing.T) {
 	ctx = provider.WithOutputDirectory(ctx, outputDir)
 	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
 
-	_, err := resolvePathRel(ctx, "output.txt", "cwd")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "outside output directory")
+	for _, op := range []string{"write", "write-tree", "delete"} {
+		_, err := resolvePathRel(ctx, "output.txt", "cwd", op)
+		require.Error(t, err, "operation=%s", op)
+		assert.Contains(t, err.Error(), "outside output directory")
+	}
 }
 
 func TestResolvePathRel_OutputDir_ContainmentAllowed_WhenInsideOutputDir(t *testing.T) {
-	// When the solution dir IS the output dir, resolution should succeed.
+	// When the solution dir IS the output dir, mutating resolution succeeds.
 	outputDir := t.TempDir()
 
 	ctx := provider.WithSolutionDirectory(context.Background(), outputDir)
 	ctx = provider.WithOutputDirectory(ctx, outputDir)
 	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
 
-	got, err := resolvePathRel(ctx, "result.txt", "solution")
+	got, err := resolvePathRel(ctx, "result.txt", "solution", "write")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(outputDir, "result.txt"), got)
 }
@@ -3191,7 +3192,97 @@ func TestResolvePathRel_Auto_NoOutputDirContainmentCheck(t *testing.T) {
 
 	// provider.ResolvePath will anchor to outputDir and validate containment;
 	// traversal should be rejected.
-	_, err := resolvePathRel(ctx, "../../escape.txt", "auto")
+	_, err := resolvePathRel(ctx, "../../escape.txt", "auto", "write")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "output directory")
+}
+
+func TestResolvePathRel_ReadOnly_AllowedOutsideOutputDir_AndContainedInAnchor(t *testing.T) {
+	solDir := t.TempDir()
+	cwdDir := t.TempDir()
+	outputDir := t.TempDir()
+	outsideDir := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(solDir, "tmpl.txt"), []byte("from-sol"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(cwdDir, "caller.txt"), []byte("from-cwd"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(outsideDir, "secret.txt"), []byte("outside"), 0o600))
+
+	ctx := provider.WithSolutionDirectory(context.Background(), solDir)
+	ctx = provider.WithWorkingDirectory(ctx, cwdDir)
+	ctx = provider.WithOutputDirectory(ctx, outputDir)
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+	p := NewFileProvider()
+
+	for _, op := range []string{"read", "exists"} {
+		// relativeTo: solution succeeds even though solDir is outside outputDir.
+		outSol, err := p.Execute(ctx, map[string]any{
+			"operation":  op,
+			"path":       "tmpl.txt",
+			"relativeTo": "solution",
+		})
+		require.NoError(t, err, "solution %s", op)
+		if op == "read" {
+			assert.Equal(t, "from-sol", outSol.Data.(map[string]any)["content"])
+		} else {
+			assert.Equal(t, true, outSol.Data.(map[string]any)["exists"])
+		}
+
+		// relativeTo: cwd succeeds even though cwdDir is outside outputDir.
+		outCwd, err := p.Execute(ctx, map[string]any{
+			"operation":  op,
+			"path":       "caller.txt",
+			"relativeTo": "cwd",
+		})
+		require.NoError(t, err, "cwd %s", op)
+		if op == "read" {
+			assert.Equal(t, "from-cwd", outCwd.Data.(map[string]any)["content"])
+		} else {
+			assert.Equal(t, true, outCwd.Data.(map[string]any)["exists"])
+		}
+
+		// Parent traversal out of solDir is rejected (even without OutputDirectory).
+		noOutCtx := provider.WithSolutionDirectory(context.Background(), solDir)
+		_, err = p.Execute(noOutCtx, map[string]any{
+			"operation":  op,
+			"path":       "../secret.txt",
+			"relativeTo": "solution",
+		})
+		require.Error(t, err, "solution traversal %s", op)
+		assert.Contains(t, err.Error(), "outside solution directory")
+
+		// Parent traversal out of cwdDir is rejected (even without OutputDirectory).
+		noOutCwdCtx := provider.WithWorkingDirectory(context.Background(), cwdDir)
+		_, err = p.Execute(noOutCwdCtx, map[string]any{
+			"operation":  op,
+			"path":       "../secret.txt",
+			"relativeTo": "cwd",
+		})
+		require.Error(t, err, "cwd traversal %s", op)
+		assert.Contains(t, err.Error(), "outside working directory")
+	}
+
+	// Symlink escaping solDir is rejected on read and exists.
+	escapeLink := filepath.Join(solDir, "escape-link.txt")
+	if symlinkErr := os.Symlink(filepath.Join(outsideDir, "secret.txt"), escapeLink); symlinkErr == nil {
+		for _, op := range []string{"read", "exists"} {
+			_, err := p.Execute(ctx, map[string]any{
+				"operation":  op,
+				"path":       "escape-link.txt",
+				"relativeTo": "solution",
+			})
+			require.Error(t, err, "symlink escape %s", op)
+			assert.Contains(t, err.Error(), "outside solution directory")
+		}
+	}
+
+	// Mutating write with relativeTo: solution still fails when solDir != outputDir.
+	_, err := p.Execute(ctx, map[string]any{
+		"operation":  "write",
+		"path":       "escaped-write.txt",
+		"content":    "blocked",
+		"relativeTo": "solution",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside output directory")
 }

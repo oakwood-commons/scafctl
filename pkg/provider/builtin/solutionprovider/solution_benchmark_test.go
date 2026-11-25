@@ -117,3 +117,47 @@ func BenchmarkSolutionProvider_Action(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkSolutionProvider_From_Bundled(b *testing.B) {
+	bundleData := buildTestBundleTar(b, map[string]string{
+		"templates/bench.tmpl": "bench-bundle-data",
+	})
+
+	reg := provider.NewRegistry()
+	_ = reg.Register(&mockProvider{
+		name:   "static",
+		output: &provider.Output{Data: "bench-val"},
+	})
+
+	child := &solution.Solution{
+		Metadata: solution.Metadata{Name: "bench-bundled-child"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"r1": {
+					Name: "r1",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "static"}},
+					},
+				},
+			},
+		},
+	}
+
+	p := New(
+		WithLoader(&mockBundleLoader{
+			solutions: map[string]*solution.Solution{"bench-bundled@1.0.0": child},
+			bundles:   map[string][]byte{"bench-bundled@1.0.0": bundleData},
+		}),
+		WithRegistry(reg),
+	)
+	ctx := provider.WithExecutionMode(testContext(), provider.CapabilityFrom)
+	input := &Input{Source: "bench-bundled@1.0.0"}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := p.Execute(ctx, input); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
