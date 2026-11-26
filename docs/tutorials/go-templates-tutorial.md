@@ -2206,10 +2206,11 @@ spec:
             inputs:
               name: safe-len-demo
               template: |
-                {{- if eq (len .optionalItems) 0 -}}
+                {{- $items := index . "optionalItems" -}}
+                {{- if eq (len $items) 0 -}}
                 No optional items configured
                 {{- else -}}
-                Configured {{ len .optionalItems }} item(s)
+                Configured {{ len $items }} item(s)
                 {{- end -}}
 ```
 
