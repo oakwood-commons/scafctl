@@ -1245,7 +1245,7 @@ func (f *Fetcher) fetchAndVerify(ctx context.Context, dep pluginArtifact, locked
 				return FetchResult{}, withStage(StageSignature, err)
 			}
 		} else {
-			sigResult, err = f.verifySignature(ctx, dep.ArtifactName(), version, fetchInfo.ImageRef)
+			sigResult, err = f.verifySignature(ctx, kind, dep.ArtifactName(), version, fetchInfo.ImageRef)
 			if err != nil {
 				return FetchResult{}, withStage(StageSignature, err)
 			}
@@ -1292,24 +1292,34 @@ func (f *Fetcher) fetchAndVerify(ctx context.Context, dep pluginArtifact, locked
 }
 
 // verifySignature performs Sigstore/cosign signature verification against the
-// configured policy. In "warn" mode, failures are logged but do not block
-// execution. In "enforce" mode, failures return an error.
-func (f *Fetcher) verifySignature(ctx context.Context, name, version, imageRef string) (*SignatureResult, error) {
+// configured policy scoped to the artifact kind and short name. In "warn" mode,
+// failures are logged but do not block execution. In "enforce" mode, failures
+// return an error.
+func (f *Fetcher) verifySignature(ctx context.Context, kind catalog.ArtifactKind, name, version, imageRef string) (*SignatureResult, error) {
 	f.logger.V(1).Info("verifying plugin signature",
+		"kind", string(kind),
 		"name", name,
 		"version", version,
 		"imageRef", imageRef,
 		"mode", string(f.sigPolicy.Mode))
 
-	result, err := f.sigVerifier.VerifySignature(ctx, imageRef, f.sigPolicy)
+	effectivePolicy, err := f.sigPolicy.ForArtifact(kind, name)
 	if err != nil {
 		wrapped := fmt.Errorf("plugin %s@%s: %w", name, version, err)
 		return nil, HandleVerificationError(f.sigPolicy, wrapped, f.logger,
-			"name", name, "version", version)
+			"kind", string(kind), "name", name, "version", version)
+	}
+
+	result, err := f.sigVerifier.VerifySignature(ctx, imageRef, effectivePolicy)
+	if err != nil {
+		wrapped := fmt.Errorf("plugin %s@%s: %w", name, version, err)
+		return nil, HandleVerificationError(f.sigPolicy, wrapped, f.logger,
+			"kind", string(kind), "name", name, "version", version)
 	}
 
 	if result != nil && result.Verified {
 		f.logger.V(1).Info("plugin signature verified",
+			"kind", string(kind),
 			"name", name,
 			"version", version,
 			"issuer", result.Issuer,

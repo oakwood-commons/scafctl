@@ -194,6 +194,13 @@ func resolveCatalog(catalogResolver RegistryAliasResolver, registry string) (str
 	return "", fmt.Errorf("registry %q does not match any configured catalog", registry)
 }
 
+// SignatureVerifyFunc verifies a resolved plugin's OCI signature at lock time
+// and returns the audit metadata to record in the lock entry. kind and name
+// identify the declared artifact (used to expand {kind} and {name} placeholders
+// in trusted identity patterns); imageRef is the OCI image reference (empty
+// when the artifact has no published registry origin, such as a local build).
+type SignatureVerifyFunc func(ctx context.Context, kind catalog.ArtifactKind, name, imageRef string) (*LockPluginSignature, error)
+
 // VendorAllPluginsOptions configures VendorAllPlugins.
 type VendorAllPluginsOptions struct {
 	// CatalogResolver maps a plugin's canonical OCI origin to a configured
@@ -211,10 +218,11 @@ type VendorAllPluginsOptions struct {
 
 	// VerifySignature, if set, verifies a resolved plugin's signature at lock
 	// time and returns the metadata to record in the lock entry. It receives
-	// the plugin's OCI image reference (empty when the resolved copy has no
-	// registry origin, such as a locally built plugin) and decides itself
-	// whether a failure is fatal (enforce mode) or yields nil (warn mode).
-	VerifySignature func(ctx context.Context, imageRef string) (*LockPluginSignature, error)
+	// the declared artifact kind and short name plus the plugin's OCI image
+	// reference (empty when the resolved copy has no registry origin, such as a
+	// locally built plugin) and decides itself whether a failure is fatal
+	// (enforce mode) or yields nil (warn mode).
+	VerifySignature SignatureVerifyFunc
 }
 
 // VendorAllPlugins resolves plugin dependencies to lock entries. Plugins are
@@ -387,7 +395,7 @@ func reverifyLockedPlugin(
 	locked *LockPlugin,
 	p solution.PluginDependency,
 	catalogAlias, buildPlatform string,
-	signatureFunc func(ctx context.Context, imageRef string) (*LockPluginSignature, error),
+	signatureFunc SignatureVerifyFunc,
 ) (*LockPluginSignature, error) {
 	if r == nil {
 		return nil, fmt.Errorf("plugin %q: no plugin fetcher configured", p.DisplayName())
@@ -424,7 +432,9 @@ func reverifyLockedPlugin(
 	if !lockedDigestsMatch(locked, digests, primary) {
 		return nil, fmt.Errorf("plugin %q: locked version %q content digest in catalog %q does not match lock file", p.DisplayName(), locked.Version, catalogAlias)
 	}
-	sig, err := signatureFunc(ctx, found.ImageRef)
+	// Pass the declared artifact name p.ArtifactName() (never remote-supplied
+	// found.Reference.Name) so a registry cannot steer {name} template trust.
+	sig, err := signatureFunc(ctx, kind, p.ArtifactName(), found.ImageRef)
 	if err != nil {
 		return nil, fmt.Errorf("plugin %q: signature verification failed during lock: %w", p.DisplayName(), err)
 	}
@@ -485,7 +495,7 @@ func probeLocalBuiltShortName(
 	r PluginResolver,
 	p solution.PluginDependency,
 	buildPlatform string,
-	signatureFunc func(ctx context.Context, imageRef string) (*LockPluginSignature, error),
+	signatureFunc SignatureVerifyFunc,
 ) (LockPlugin, bool, error) {
 	kind := pluginKindToArtifactKind(p.Kind)
 	query := catalog.ArtifactQuery{
@@ -551,7 +561,7 @@ func resolveDependency(
 	r PluginResolver,
 	p solution.PluginDependency,
 	buildPlatform string,
-	signatureFunc func(ctx context.Context, imageRef string) (*LockPluginSignature, error),
+	signatureFunc SignatureVerifyFunc,
 	findOpts ...catalog.Option,
 ) (LockPlugin, error) {
 	kind := pluginKindToArtifactKind(p.Kind)
@@ -581,7 +591,7 @@ func finishResolveDependency(
 	kind catalog.ArtifactKind,
 	found catalog.ArtifactInfo,
 	buildPlatform string,
-	signatureFunc func(ctx context.Context, imageRef string) (*LockPluginSignature, error),
+	signatureFunc SignatureVerifyFunc,
 ) (LockPlugin, error) {
 	if found.Reference.Version == nil {
 		return LockPlugin{}, fmt.Errorf("plugin %q: catalog returned no resolved version", p.DisplayName())
@@ -609,7 +619,9 @@ func finishResolveDependency(
 	}
 	var sig *LockPluginSignature
 	if signatureFunc != nil {
-		s, err := signatureFunc(ctx, found.ImageRef)
+		// Pass the declared artifact name p.ArtifactName() (never remote-supplied
+		// found.Reference.Name) so a registry cannot steer {name} template trust.
+		s, err := signatureFunc(ctx, kind, p.ArtifactName(), found.ImageRef)
 		if err != nil {
 			return LockPlugin{}, fmt.Errorf("plugin %q: signature verification failed during lock: %w", p.DisplayName(), err)
 		}

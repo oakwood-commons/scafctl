@@ -31,10 +31,14 @@ spec:
       # Verify that config init --full output includes plugins.signatures
       # section so users can discover and configure signature verification.
       config-help-shows-plugins:
-        description: Config init --full includes plugins.signatures
+        description: Config init --full includes plugins.signatures and placeholder docs
         command: [config, init, --full, --dry-run]
         injectFile: false
         assertions:
           - expression: __exitCode == 0
           - contains: "signatures"
+            target: combined
+          - contains: "{name}"
+            target: combined
+          - contains: "{kind}"
             target: combined

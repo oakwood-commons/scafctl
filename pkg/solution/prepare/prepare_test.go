@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1641,6 +1642,245 @@ func TestSignaturePolicyFromConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := signaturePolicyFromConfig(tt.cfg, logr.Discard())
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestResolveSignaturePolicy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fails closed when configuration load error is present in context", func(t *testing.T) {
+		t.Parallel()
+		ctx := config.WithLoadError(context.Background(), fmt.Errorf("invalid plugins.signatures: mode \"enforce\" requires at least one trustedIssuers"))
+		policy, err := ResolveSignaturePolicy(ctx, &config.Config{}, nil, logr.Discard())
+		assert.Nil(t, policy)
+		require.ErrorIs(t, err, ErrSignaturePolicy)
+		assert.ErrorContains(t, err, "configuration failed to load")
+	})
+
+	t.Run("explicit override and context policy bypass configuration load error", func(t *testing.T) {
+		t.Parallel()
+		ctx := config.WithLoadError(context.Background(), fmt.Errorf("broken config file"))
+		override := &plugin.SignaturePolicy{
+			Mode:              plugin.SignatureModeEnforce,
+			TrustedIssuers:    []string{"https://issuer.example.com"},
+			TrustedIdentities: []string{"https://github.com/my-org/{kind}-{name}/*"},
+		}
+		got, err := ResolveSignaturePolicy(ctx, &config.Config{}, override, logr.Discard())
+		require.NoError(t, err)
+		assert.Equal(t, override, got)
+
+		ctxWithPolicy := plugin.WithSignaturePolicy(ctx, override)
+		got, err = ResolveSignaturePolicy(ctxWithPolicy, &config.Config{}, nil, logr.Discard())
+		require.NoError(t, err)
+		assert.Equal(t, override, got)
+	})
+
+	t.Run("validates disabled config policies before discarding them", func(t *testing.T) {
+		t.Parallel()
+		for _, mode := range []string{"", "off"} {
+			appCfg := &config.Config{}
+			appCfg.Plugins.Signatures.Mode = mode
+			appCfg.Plugins.Signatures.TrustedIdentities = []string{"https://github.com/my-org/{repo}/*"}
+
+			policy, err := ResolveSignaturePolicy(context.Background(), appCfg, nil, logr.Discard())
+			assert.Nil(t, policy, "mode=%q", mode)
+			require.ErrorIs(t, err, ErrSignaturePolicy, "mode=%q", mode)
+			require.ErrorIs(t, err, plugin.ErrInvalidIdentityPattern, "mode=%q", mode)
+		}
+	})
+
+	t.Run("rejects unknown mode in app config", func(t *testing.T) {
+		t.Parallel()
+		appCfg := &config.Config{}
+		appCfg.Plugins.Signatures.Mode = "bogus"
+		policy, err := ResolveSignaturePolicy(context.Background(), appCfg, nil, logr.Discard())
+		assert.Nil(t, policy)
+		require.ErrorIs(t, err, ErrSignaturePolicy)
+	})
+
+	t.Run("official resolution helpers propagate ErrSignaturePolicy on config load error", func(t *testing.T) {
+		t.Parallel()
+		sigErr := fmt.Errorf("%w: configuration failed to load", ErrSignaturePolicy)
+		sol := &solution.Solution{
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r1": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{Provider: "git"}},
+						},
+					},
+				},
+			},
+		}
+		officialReg := official.NewRegistry()
+		reg := provider.NewRegistry()
+
+		_, err := autoResolveOfficialProviders(context.Background(), sol, reg, &prepareConfig{
+			officialProviders: officialReg,
+			pluginFetcherErr:  sigErr,
+		})
+		require.ErrorIs(t, err, ErrSignaturePolicy)
+
+		ctx := config.WithLoadError(context.Background(), fmt.Errorf("bad signature config"))
+		ctx = official.WithRegistry(ctx, officialReg)
+		_, err = ResolveOfficialProviders(ctx, sol, reg)
+		require.ErrorIs(t, err, ErrSignaturePolicy)
+
+		ctx = authofficial.WithRegistry(ctx, authofficial.NewRegistry())
+		_, err = ResolveOfficialAuthHandlers(ctx, auth.NewRegistry(), nil, nil)
+		require.ErrorIs(t, err, ErrSignaturePolicy)
+	})
+}
+
+func TestSolutionFromLoader_SavedSignaturePolicyErrorAndCleanup(t *testing.T) {
+	sigErr := fmt.Errorf("%w: configuration failed to load", ErrSignaturePolicy)
+	catalogRef := source.Classification{Kind: source.KindBareName, Ref: "starter-kit@1.0.0"}
+
+	bundleRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bundleRoot, "template.txt"), []byte("hello"), 0o600))
+	files, err := bundler.ReadFileSnapshot(bundleRoot, []bundler.FileEntry{
+		{RelPath: "template.txt"},
+	})
+	require.NoError(t, err)
+	bundleData, _, err := bundler.CreateBundleTar(files, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		usePool     bool
+		setupReg    func(t *testing.T, reg *provider.Registry)
+		buildSol    func() *solution.Solution
+		wantErr     error
+		wantErrText string
+	}{
+		{
+			name:    "already registered provider in pool mode fails closed and cleans up",
+			usePool: true,
+			setupReg: func(t *testing.T, reg *provider.Registry) {
+				t.Helper()
+				require.NoError(t, reg.Register(&mockProvider{name: "custom-provider"}))
+			},
+			buildSol: func() *solution.Solution {
+				sol := minimalSolution()
+				sol.SetPath("catalog:starter-kit@1.0.0")
+				sol.Bundle.Plugins = []solution.PluginDependency{
+					{Name: "custom-provider", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+				}
+				sol.Spec.Resolvers = map[string]*resolver.Resolver{
+					"r1": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "custom-provider"}}}},
+				}
+				return sol
+			},
+			wantErr:     ErrSignaturePolicy,
+			wantErrText: "ensuring provider plugins via pool",
+		},
+		{
+			name:    "auth-handler-only bundle in pool mode fails closed and cleans up",
+			usePool: true,
+			buildSol: func() *solution.Solution {
+				sol := minimalSolution()
+				sol.SetPath("catalog:starter-kit@1.0.0")
+				sol.Bundle.Plugins = []solution.PluginDependency{
+					{Name: "custom-auth", Kind: solution.PluginKindAuthHandler, Version: "1.0.0"},
+				}
+				return sol
+			},
+			wantErr:     ErrSignaturePolicy,
+			wantErrText: "bundle declares auth handler plugins",
+		},
+		{
+			name:    "builtin-only solution in pool mode succeeds with saved signature policy error",
+			usePool: true,
+			setupReg: func(t *testing.T, reg *provider.Registry) {
+				t.Helper()
+				require.NoError(t, reg.Register(&mockProvider{name: "static"}))
+			},
+			buildSol: func() *solution.Solution {
+				sol := minimalSolution()
+				sol.SetPath("catalog:starter-kit@1.0.0")
+				sol.Spec.Resolvers = map[string]*resolver.Resolver{
+					"r1": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+				}
+				return sol
+			},
+		},
+		{
+			name:    "per-call provider bundle fails closed and cleans up",
+			usePool: false,
+			buildSol: func() *solution.Solution {
+				sol := minimalSolution()
+				sol.SetPath("catalog:starter-kit@1.0.0")
+				sol.Bundle.Plugins = []solution.PluginDependency{
+					{Name: "custom-provider", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+				}
+				sol.Spec.Resolvers = map[string]*resolver.Resolver{
+					"r1": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "custom-provider"}}}},
+				}
+				return sol
+			},
+			wantErr: ErrSignaturePolicy,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			origDir, wdErr := os.Getwd()
+			require.NoError(t, wdErr)
+			t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+			tmpBase := t.TempDir()
+			t.Setenv("TMPDIR", tmpBase)
+
+			reg := provider.NewRegistry()
+			if tt.setupReg != nil {
+				tt.setupReg(t, reg)
+			}
+
+			opts := []Option{
+				WithRegistry(reg),
+				WithAuthRegistry(auth.NewRegistry()),
+				WithPluginFetcherError(sigErr),
+			}
+			if tt.usePool {
+				pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard())
+				defer pool.Shutdown()
+				opts = append(opts, WithPluginPool(pool))
+			}
+
+			res, prepErr := SolutionFromLoader(
+				context.Background(),
+				&fakeLoader{sol: tt.buildSol(), bundle: bundleData},
+				catalogRef,
+				opts...,
+			)
+
+			if tt.wantErr != nil {
+				assert.Nil(t, res)
+				require.ErrorIs(t, prepErr, tt.wantErr)
+				if tt.wantErrText != "" {
+					assert.ErrorContains(t, prepErr, tt.wantErrText)
+				}
+
+				// Verify cleanup restored the working directory and removed the extracted bundle directory.
+				wdAfter, err := os.Getwd()
+				require.NoError(t, err)
+				assert.Equal(t, origDir, wdAfter)
+				entries, err := os.ReadDir(tmpBase)
+				require.NoError(t, err)
+				assert.Empty(t, entries)
+				return
+			}
+
+			require.NoError(t, prepErr)
+			require.NotNil(t, res)
+			assert.DirExists(t, res.SolutionDir)
+			res.Cleanup()
+
+			wdAfter, err := os.Getwd()
+			require.NoError(t, err)
+			assert.Equal(t, origDir, wdAfter)
+			assert.NoDirExists(t, res.SolutionDir)
 		})
 	}
 }

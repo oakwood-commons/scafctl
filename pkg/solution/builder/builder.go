@@ -186,33 +186,57 @@ func validateProviderCoverage(sol *solution.Solution, builtins []string, officia
 // BuildLockSignatureVerifier returns a VerifySignature callback for the bundler
 // when a signature policy is active. It checks the context for an explicit
 // policy override first, then falls back to the app configuration
-// (config.Plugins.Signatures). Returns (nil, nil) when signatures are disabled,
-// which causes VendorAllPlugins to skip verification, or an error when an
-// active policy fails validation.
-func BuildLockSignatureVerifier(ctx context.Context, lgr logr.Logger) (func(context.Context, string) (*bundler.LockPluginSignature, error), error) {
+// (config.Plugins.Signatures). Returns (nil, nil) when signatures are disabled
+// (after validating any configured patterns), which causes VendorAllPlugins to
+// skip verification, or an error when policy validation fails.
+func BuildLockSignatureVerifier(ctx context.Context, lgr logr.Logger) (bundler.SignatureVerifyFunc, error) {
+	return buildLockSignatureVerifierWith(ctx, lgr, nil)
+}
+
+func buildLockSignatureVerifierWith(ctx context.Context, lgr logr.Logger, verifier plugin.SignatureVerifier) (bundler.SignatureVerifyFunc, error) {
 	policy := plugin.SignaturePolicyFromContext(ctx)
 	if policy == nil {
-		policy = signaturePolicyFromAppConfig(config.FromContext(ctx), lgr)
-	}
-	if !policy.IsEnabled() {
-		return nil, nil
+		if loadErr := config.LoadErrorFromContext(ctx); loadErr != nil {
+			return nil, fmt.Errorf("plugin signature policy: configuration failed to load: %w", loadErr)
+		}
+		appCfg := config.FromContext(ctx)
+		if appCfg != nil {
+			if err := appCfg.Plugins.Signatures.Validate(); err != nil {
+				return nil, fmt.Errorf("plugin signature policy: %w", err)
+			}
+		}
+		policy = signaturePolicyFromAppConfig(appCfg, lgr)
 	}
 	if err := policy.Validate(); err != nil {
 		return nil, fmt.Errorf("plugin signature policy: %w", err)
 	}
-	verifier := plugin.NewSignatureVerifier()
-	return func(ctx context.Context, imageRef string) (*bundler.LockPluginSignature, error) {
+	if !policy.IsEnabled() {
+		return nil, nil
+	}
+	if verifier == nil {
+		verifier = plugin.NewSignatureVerifier()
+	}
+	return func(ctx context.Context, kind catalog.ArtifactKind, name, imageRef string) (*bundler.LockPluginSignature, error) {
 		if imageRef == "" {
 			err := fmt.Errorf("plugin has no published origin (as for a local build): %w", plugin.ErrSignatureUnverifiable)
-			if handleErr := plugin.HandleVerificationError(policy, err, lgr); handleErr != nil {
+			if handleErr := plugin.HandleVerificationError(policy, err, lgr,
+				"kind", string(kind), "name", name); handleErr != nil {
 				return nil, handleErr
 			}
 			return nil, nil
 		}
-		result, err := verifier.VerifySignature(ctx, imageRef, policy)
+		effectivePolicy, err := policy.ForArtifact(kind, name)
 		if err != nil {
 			if handleErr := plugin.HandleVerificationError(policy, err, lgr,
-				"imageRef", imageRef); handleErr != nil {
+				"kind", string(kind), "name", name, "imageRef", imageRef); handleErr != nil {
+				return nil, handleErr
+			}
+			return nil, nil
+		}
+		result, err := verifier.VerifySignature(ctx, imageRef, effectivePolicy)
+		if err != nil {
+			if handleErr := plugin.HandleVerificationError(policy, err, lgr,
+				"kind", string(kind), "name", name, "imageRef", imageRef); handleErr != nil {
 				return nil, handleErr
 			}
 			return nil, nil

@@ -363,7 +363,7 @@ func TestVendorAllPlugins_VerifySignature(t *testing.T) {
 	tests := []struct {
 		name     string
 		imageRef string
-		verify   func(context.Context, string) (*LockPluginSignature, error)
+		verify   SignatureVerifyFunc
 		wantSig  *LockPluginSignature
 		wantErr  error
 		wantRefs []string
@@ -371,7 +371,7 @@ func TestVendorAllPlugins_VerifySignature(t *testing.T) {
 		{
 			name:     "records signature when verified",
 			imageRef: imageRef,
-			verify: func(context.Context, string) (*LockPluginSignature, error) {
+			verify: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
 				return &LockPluginSignature{Issuer: "https://issuer.example", Identity: "release"}, nil
 			},
 			wantSig:  &LockPluginSignature{Issuer: "https://issuer.example", Identity: "release"},
@@ -380,21 +380,27 @@ func TestVendorAllPlugins_VerifySignature(t *testing.T) {
 		{
 			name:     "verification failure is fatal",
 			imageRef: imageRef,
-			verify:   func(context.Context, string) (*LockPluginSignature, error) { return nil, sigErr },
+			verify: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
+				return nil, sigErr
+			},
 			wantErr:  sigErr,
 			wantRefs: []string{imageRef},
 		},
 		{
 			name:     "empty image reference is still passed to verifier (enforce fails closed)",
 			imageRef: "",
-			verify:   func(context.Context, string) (*LockPluginSignature, error) { return nil, sigErr },
+			verify: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
+				return nil, sigErr
+			},
 			wantErr:  sigErr,
 			wantRefs: []string{""},
 		},
 		{
 			name:     "empty image reference allowed when verifier returns nil (warn mode)",
 			imageRef: "",
-			verify:   func(context.Context, string) (*LockPluginSignature, error) { return nil, nil },
+			verify: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
+				return nil, nil
+			},
 			wantSig:  nil,
 			wantRefs: []string{""},
 		},
@@ -405,9 +411,11 @@ func TestVendorAllPlugins_VerifySignature(t *testing.T) {
 			remote := newFakeRemote()
 			remote.findInfo.ImageRef = tt.imageRef
 			var gotRefs []string
-			verify := func(ctx context.Context, ref string) (*LockPluginSignature, error) {
+			verify := func(ctx context.Context, kind catalog.ArtifactKind, artName, ref string) (*LockPluginSignature, error) {
+				assert.Equal(t, catalog.ArtifactKindProvider, kind)
+				assert.Equal(t, "exec", artName)
 				gotRefs = append(gotRefs, ref)
-				return tt.verify(ctx, ref)
+				return tt.verify(ctx, kind, artName, ref)
 			}
 
 			result, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep("^1.0.0")}, nil, VendorAllPluginsOptions{
@@ -427,6 +435,64 @@ func TestVendorAllPlugins_VerifySignature(t *testing.T) {
 			assert.Equal(t, tt.wantSig, result.ResolvedPlugins[0].Signature)
 		})
 	}
+}
+
+func TestVendorAllPlugins_VerifySignature_UsesDeclaredArtifactNameNotRemote(t *testing.T) {
+	t.Parallel()
+
+	// Remote returns a different Reference.Name ("spoofed-by-remote"); the
+	// verifier callback must still receive the declared artifact name ("entra")
+	// and kind ("auth-handler"), never the local alias or remote-supplied name.
+	remote := &fakeCatalogSource{
+		name:         "myorg",
+		platforms:    nil,
+		digestByPlat: map[string]string{"linux/amd64": "sha256:entra-bin"},
+		findInfo: catalog.ArtifactInfo{
+			Reference: catalog.Reference{
+				Kind:    catalog.ArtifactKindAuthHandler,
+				Name:    "spoofed-by-remote",
+				Version: semver.MustParse("1.0.0"),
+			},
+			Catalog:   "myorg",
+			Canonical: "ghcr.io/myorg",
+			Digest:    "sha256:manifest",
+			ImageRef:  "ghcr.io/myorg/auth-handlers/entra@sha256:manifest",
+		},
+	}
+
+	dep := solution.PluginDependency{
+		Name:    "corp-sso",
+		Kind:    solution.PluginKindAuthHandler,
+		Version: "^1.0.0",
+		Source:  &solution.PluginSource{Registry: "ghcr.io/myorg", Artifact: "entra"},
+	}
+
+	var gotKinds []catalog.ArtifactKind
+	var gotNames []string
+	verify := func(_ context.Context, kind catalog.ArtifactKind, name, _ string) (*LockPluginSignature, error) {
+		gotKinds = append(gotKinds, kind)
+		gotNames = append(gotNames, name)
+		return &LockPluginSignature{Issuer: "https://issuer.example", Identity: "entra-ci"}, nil
+	}
+
+	opts := VendorAllPluginsOptions{
+		CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
+		PluginFetcher:   mustPluginFetcher(t, remote),
+		Platform:        "linux/amd64",
+		VerifySignature: verify,
+	}
+
+	// 1. Fresh resolution path (finishResolveDependency).
+	res, err := VendorAllPlugins(testContext(), []solution.PluginDependency{dep}, nil, opts)
+	require.NoError(t, err)
+	require.Len(t, res.ResolvedPlugins, 1)
+
+	// 2. Lock replay path (reverifyLockedPlugin).
+	_, err = VendorAllPlugins(testContext(), []solution.PluginDependency{dep}, &LockFile{Plugins: res.ResolvedPlugins}, opts)
+	require.NoError(t, err)
+
+	assert.Equal(t, []catalog.ArtifactKind{catalog.ArtifactKindAuthHandler, catalog.ArtifactKindAuthHandler}, gotKinds)
+	assert.Equal(t, []string{"entra", "entra"}, gotNames)
 }
 
 func TestVendorAllPlugins_RegistryMixedCaseAlias(t *testing.T) {
@@ -550,7 +616,7 @@ func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 		lock         *LockFile
 		constraint   string
 		mutateRemote func(*fakeCatalogSource)
-		verifySig    func(context.Context, string) (*LockPluginSignature, error)
+		verifySig    SignatureVerifyFunc
 		wantVersion  string
 		wantDigest   string
 		wantSig      *LockPluginSignature
@@ -574,9 +640,9 @@ func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 				multiLocked("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}, nil),
 			}},
 			constraint: "^1.0",
-			verifySig: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
-				if imageRef != lockedImageRef {
-					return nil, errors.New("unexpected imageRef: " + imageRef)
+			verifySig: func(_ context.Context, kind catalog.ArtifactKind, name, imageRef string) (*LockPluginSignature, error) {
+				if kind != catalog.ArtifactKindProvider || name != "exec" || imageRef != lockedImageRef {
+					return nil, errors.New("unexpected args: " + string(kind) + "/" + name + "/" + imageRef)
 				}
 				return signerB, nil
 			},
@@ -592,9 +658,9 @@ func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 				multiLocked("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}, signerA),
 			}},
 			constraint: "^1.0",
-			verifySig: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
-				if imageRef != lockedImageRef {
-					return nil, errors.New("unexpected imageRef: " + imageRef)
+			verifySig: func(_ context.Context, kind catalog.ArtifactKind, name, imageRef string) (*LockPluginSignature, error) {
+				if kind != catalog.ArtifactKindProvider || name != "exec" || imageRef != lockedImageRef {
+					return nil, errors.New("unexpected args: " + string(kind) + "/" + name + "/" + imageRef)
 				}
 				return signerA, nil
 			},
@@ -610,7 +676,7 @@ func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 				multiLocked("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}, signerA),
 			}},
 			constraint: "^1.0",
-			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
+			verifySig: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
 				return nil, sigErr
 			},
 			wantErr: "signature verification failed during lock: signer-a is not trusted by active policy",
@@ -621,7 +687,7 @@ func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 				multiLocked("1.1.0", &LockPluginSource{Registry: "ghcr.io/myorg"}, signerA),
 			}},
 			constraint: "^1.0",
-			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
+			verifySig: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
 				return nil, nil
 			},
 			wantVersion: "1.1.0",
@@ -644,7 +710,7 @@ func TestVendorAllPlugins_RegistryLockReplay(t *testing.T) {
 				}
 				remote.byVersion["1.1.0"] = entry
 			},
-			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
+			verifySig: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
 				return signerA, nil
 			},
 			wantErr: "content digest in catalog \"myorg\" does not match lock file",
@@ -815,7 +881,9 @@ func TestVendorAllPlugins_ShortNameChainResolutionAndScoping(t *testing.T) {
 		),
 		PluginFetcher: mustPluginFetcher(t, local, corp, official, mirror),
 		Platform:      "linux/amd64",
-		VerifySignature: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
+		VerifySignature: func(_ context.Context, kind catalog.ArtifactKind, name, imageRef string) (*LockPluginSignature, error) {
+			assert.Equal(t, catalog.ArtifactKindProvider, kind)
+			assert.Equal(t, "directory", name)
 			verifiedRefs = append(verifiedRefs, imageRef)
 			return &LockPluginSignature{Issuer: "https://token.actions.githubusercontent.com", Identity: "official-ci"}, nil
 		},
@@ -1045,7 +1113,7 @@ func TestVendorAllPlugins_ShortNameLockReplay(t *testing.T) {
 		name         string
 		existingLock *LockFile
 		resolver     RegistryAliasResolver
-		verifySig    func(context.Context, string) (*LockPluginSignature, error)
+		verifySig    SignatureVerifyFunc
 		wantVersion  string
 		wantDigest   string
 		wantFrom     string
@@ -1102,9 +1170,9 @@ func TestVendorAllPlugins_ShortNameLockReplay(t *testing.T) {
 				remoteLockEntry("1.1.0", "ghcr.io/oakwood-commons", nil),
 			}},
 			resolver: newTestAliasResolver("official", "oci://ghcr.io/oakwood-commons"),
-			verifySig: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
-				if imageRef != lockedImageRef {
-					return nil, errors.New("unexpected imageRef: " + imageRef)
+			verifySig: func(_ context.Context, kind catalog.ArtifactKind, name, imageRef string) (*LockPluginSignature, error) {
+				if kind != catalog.ArtifactKindProvider || name != "exec" || imageRef != lockedImageRef {
+					return nil, errors.New("unexpected args: " + string(kind) + "/" + name + "/" + imageRef)
 				}
 				return signerB, nil
 			},
@@ -1121,9 +1189,9 @@ func TestVendorAllPlugins_ShortNameLockReplay(t *testing.T) {
 				remoteLockEntry("1.1.0", "ghcr.io/oakwood-commons", signerA),
 			}},
 			resolver: newTestAliasResolver("official", "oci://ghcr.io/oakwood-commons"),
-			verifySig: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
-				if imageRef != lockedImageRef {
-					return nil, errors.New("unexpected imageRef: " + imageRef)
+			verifySig: func(_ context.Context, kind catalog.ArtifactKind, name, imageRef string) (*LockPluginSignature, error) {
+				if kind != catalog.ArtifactKindProvider || name != "exec" || imageRef != lockedImageRef {
+					return nil, errors.New("unexpected args: " + string(kind) + "/" + name + "/" + imageRef)
 				}
 				return signerA, nil
 			},
@@ -1140,7 +1208,7 @@ func TestVendorAllPlugins_ShortNameLockReplay(t *testing.T) {
 				remoteLockEntry("1.1.0", "ghcr.io/oakwood-commons", signerA),
 			}},
 			resolver: newTestAliasResolver("official", "oci://ghcr.io/oakwood-commons"),
-			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
+			verifySig: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
 				return nil, sigErr
 			},
 			wantErr: "signature verification failed during lock: signer-a is not trusted by active policy",
@@ -1151,7 +1219,7 @@ func TestVendorAllPlugins_ShortNameLockReplay(t *testing.T) {
 				remoteLockEntry("1.1.0", "ghcr.io/oakwood-commons", signerA),
 			}},
 			resolver: newTestAliasResolver("official", "oci://ghcr.io/oakwood-commons"),
-			verifySig: func(context.Context, string) (*LockPluginSignature, error) {
+			verifySig: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
 				return nil, nil
 			},
 			wantVersion: "1.1.0",
@@ -1401,7 +1469,9 @@ func TestVendorAllPlugins_LiveAndCachedRemoteImageRef(t *testing.T) {
 		CatalogResolver: catalogindex.FromCatalogs(pf.Catalogs()),
 		PluginFetcher:   pf,
 		Platform:        "linux/amd64",
-		VerifySignature: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
+		VerifySignature: func(_ context.Context, kind catalog.ArtifactKind, name, imageRef string) (*LockPluginSignature, error) {
+			assert.Equal(t, catalog.ArtifactKindProvider, kind)
+			assert.Equal(t, "directory", name)
 			liveRef = imageRef
 			return &LockPluginSignature{Issuer: "https://issuer.example", Identity: "live"}, nil
 		},
@@ -1430,7 +1500,9 @@ func TestVendorAllPlugins_LiveAndCachedRemoteImageRef(t *testing.T) {
 		CatalogResolver: catalogindex.FromCatalogs(pf.Catalogs()),
 		PluginFetcher:   pf,
 		Platform:        "linux/amd64",
-		VerifySignature: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
+		VerifySignature: func(_ context.Context, kind catalog.ArtifactKind, name, imageRef string) (*LockPluginSignature, error) {
+			assert.Equal(t, catalog.ArtifactKindProvider, kind)
+			assert.Equal(t, "directory", name)
 			cachedRef = imageRef
 			return &LockPluginSignature{Issuer: "https://issuer.example", Identity: "cached"}, nil
 		},
@@ -1451,7 +1523,9 @@ func TestVendorAllPlugins_LiveAndCachedRemoteImageRef(t *testing.T) {
 		CatalogResolver: catalogindex.FromCatalogs(pf.Catalogs()),
 		PluginFetcher:   pf,
 		Platform:        "linux/amd64",
-		VerifySignature: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
+		VerifySignature: func(_ context.Context, kind catalog.ArtifactKind, name, imageRef string) (*LockPluginSignature, error) {
+			assert.Equal(t, catalog.ArtifactKindProvider, kind)
+			assert.Equal(t, "directory", name)
 			replayRef = imageRef
 			return nil, errors.New("signer rejected by tightened policy")
 		},
@@ -1485,7 +1559,7 @@ func TestVendorAllPlugins_LockReplayReverifyEdgeCases(t *testing.T) {
 			CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
 			PluginFetcher:   mustPluginFetcher(t, remote),
 			Platform:        "linux/amd64",
-			VerifySignature: func(context.Context, string) (*LockPluginSignature, error) {
+			VerifySignature: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
 				return wantSig, nil
 			},
 		})
@@ -1504,7 +1578,7 @@ func TestVendorAllPlugins_LockReplayReverifyEdgeCases(t *testing.T) {
 		_, err := VendorAllPlugins(testContext(), []solution.PluginDependency{registryExecDep("^1.0.0")}, lock, VendorAllPluginsOptions{
 			CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
 			Platform:        "linux/amd64",
-			VerifySignature: func(context.Context, string) (*LockPluginSignature, error) {
+			VerifySignature: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
 				return nil, nil
 			},
 		})
@@ -1521,7 +1595,7 @@ func TestVendorAllPlugins_LockReplayReverifyEdgeCases(t *testing.T) {
 			CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
 			PluginFetcher:   mustPluginFetcher(t, remote),
 			Platform:        "linux/amd64",
-			VerifySignature: func(context.Context, string) (*LockPluginSignature, error) {
+			VerifySignature: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
 				return nil, nil
 			},
 		})
@@ -1538,7 +1612,7 @@ func TestVendorAllPlugins_LockReplayReverifyEdgeCases(t *testing.T) {
 			CatalogResolver: newTestAliasResolver("myorg", "oci://ghcr.io/myorg"),
 			PluginFetcher:   mustPluginFetcher(t, remote),
 			Platform:        "linux/amd64",
-			VerifySignature: func(context.Context, string) (*LockPluginSignature, error) {
+			VerifySignature: func(context.Context, catalog.ArtifactKind, string, string) (*LockPluginSignature, error) {
 				return nil, nil
 			},
 		})

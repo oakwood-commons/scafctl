@@ -223,7 +223,7 @@ Beyond digest verification, scafctl supports [Sigstore/cosign](https://docs.sigs
 
 Add the `plugins.signatures` section to your config:
 
-```yaml
+~~~yaml
 # ~/.config/scafctl/config.yaml
 plugins:
   signatures:
@@ -232,7 +232,11 @@ plugins:
       - "https://token.actions.githubusercontent.com"
     trustedIdentities:
       - "https://github.com/oakwood-commons/*"
-```
+      - "https://github.com/my-org/scafctl-plugin-{name}/.github/workflows/*"
+      - "https://github.com/my-org/scafctl-{kind}-{name}/.github/workflows/*"
+~~~
+
+`trustedIdentities` supports optional `{name}` (artifact short name) and `{kind}` (`solution`, `provider`, `auth-handler`) placeholders to bind repository-local signing workflows 1-to-1 to the verified artifact. See [OCI Artifact Signing & Verification](../design/artifact-signing.md) for safe-identifier validation rules and how Fulcio URI SANs differ between repository-local release workflows and shared reusable workflows (`sign-plugin.yml`).
 
 ### Verification Modes
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
+	"github.com/oakwood-commons/scafctl/pkg/plugin/identity"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -754,6 +755,178 @@ func TestAPIServerConfig_TagsMatchRuntimeLimits(t *testing.T) {
 			require.NoError(t, err, "%s `%s` tag is not an integer", tt.field, tt.tag)
 			assert.Equal(t, tt.want, got,
 				"%s `%s:%q` disagrees with the constant Validate enforces", tt.field, tt.tag, raw)
+		})
+	}
+}
+
+func TestPluginSignaturesConfig_Validate(t *testing.T) {
+	t.Parallel()
+
+	issuerList := func(n int) []string {
+		out := make([]string, 0, n)
+		for i := range n {
+			out = append(out, fmt.Sprintf("https://issuer%d.example.com", i))
+		}
+		return out
+	}
+	identityList := func(n int) []string {
+		out := make([]string, 0, n)
+		for i := range n {
+			out = append(out, fmt.Sprintf("https://github.com/my-org/repo-%d/*", i))
+		}
+		return out
+	}
+
+	tests := []struct {
+		name      string
+		sig       PluginSignaturesConfig
+		wantErr   string
+		wantErrIs error
+	}{
+		{name: "empty default valid", sig: PluginSignaturesConfig{}},
+		{name: "off mode valid without pairs", sig: PluginSignaturesConfig{Mode: "off"}},
+		{
+			name: "off mode with valid {name} and {kind} templates",
+			sig: PluginSignaturesConfig{
+				Mode: "off",
+				TrustedIdentities: []string{
+					"https://github.com/my-org/sln-{name}/.github/workflows/*",
+					"https://github.com/my-org/scafctl-{kind}-{name}/.github/workflows/*",
+				},
+			},
+		},
+		{
+			name: "off mode still validates malformed placeholder syntax",
+			sig: PluginSignaturesConfig{
+				Mode:              "off",
+				TrustedIdentities: []string{"https://github.com/my-org/{repo}/*"},
+			},
+			wantErr:   "plugins: signatures: trustedIdentities[0]",
+			wantErrIs: identity.ErrInvalidIdentityPattern,
+		},
+		{
+			name: "empty mode still validates unbalanced braces",
+			sig: PluginSignaturesConfig{
+				TrustedIdentities: []string{"https://github.com/my-org/{name/*"},
+			},
+			wantErr:   "plugins: signatures: trustedIdentities[0]",
+			wantErrIs: identity.ErrInvalidIdentityPattern,
+		},
+		{
+			name: "warn mode valid with pairs",
+			sig: PluginSignaturesConfig{
+				Mode:              "warn",
+				TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+				TrustedIdentities: []string{"https://github.com/oakwood-commons/*"},
+			},
+		},
+		{
+			name: "enforce mode valid with templates at max caps",
+			sig: PluginSignaturesConfig{
+				Mode:              "enforce",
+				TrustedIssuers:    issuerList(MaxTrustedIssuers),
+				TrustedIdentities: identityList(MaxTrustedIdentities),
+			},
+		},
+		{
+			name:    "unknown mode rejected",
+			sig:     PluginSignaturesConfig{Mode: "strict"},
+			wantErr: `plugins: signatures: mode: unknown signature mode "strict"`,
+		},
+		{
+			name: "warn mode missing trustedIssuers rejected",
+			sig: PluginSignaturesConfig{
+				Mode:              "warn",
+				TrustedIdentities: []string{"https://github.com/my-org/*"},
+			},
+			wantErr: `mode "warn" requires at least one trustedIssuers and one trustedIdentities entry`,
+		},
+		{
+			name: "enforce mode missing trustedIdentities rejected",
+			sig: PluginSignaturesConfig{
+				Mode:           "enforce",
+				TrustedIssuers: []string{"https://token.actions.githubusercontent.com"},
+			},
+			wantErr: `mode "enforce" requires at least one trustedIssuers and one trustedIdentities entry`,
+		},
+		{
+			name: "blank issuer rejected",
+			sig: PluginSignaturesConfig{
+				Mode:              "enforce",
+				TrustedIssuers:    []string{"   "},
+				TrustedIdentities: []string{"https://github.com/my-org/*"},
+			},
+			wantErr: "trustedIssuers[0]: must not be empty",
+		},
+		{
+			name: "trustedIssuers over cap rejected",
+			sig: PluginSignaturesConfig{
+				Mode:              "off",
+				TrustedIssuers:    issuerList(MaxTrustedIssuers + 1),
+				TrustedIdentities: []string{"https://github.com/my-org/*"},
+			},
+			wantErr: fmt.Sprintf("trustedIssuers: %d entries exceed the maximum of %d", MaxTrustedIssuers+1, MaxTrustedIssuers),
+		},
+		{
+			name: "trustedIdentities over cap rejected",
+			sig: PluginSignaturesConfig{
+				Mode:              "off",
+				TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+				TrustedIdentities: identityList(MaxTrustedIdentities + 1),
+			},
+			wantErr: fmt.Sprintf("trustedIdentities: %d entries exceed the maximum of %d", MaxTrustedIdentities+1, MaxTrustedIdentities),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{Plugins: PluginsConfig{Signatures: tt.sig}}
+			err := cfg.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			if tt.wantErrIs != nil {
+				assert.ErrorIs(t, err, tt.wantErrIs)
+			}
+		})
+	}
+
+	var nilPlugins *PluginsConfig
+	assert.NoError(t, nilPlugins.Validate())
+	var nilSigs *PluginSignaturesConfig
+	assert.NoError(t, nilSigs.Validate())
+}
+
+func TestPluginSignaturesConfig_TagsMatchRuntimeLimits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		field string
+		tag   string
+		want  int
+	}{
+		{"TrustedIssuers", "maxItems", MaxTrustedIssuers},
+		{"TrustedIdentities", "maxItems", MaxTrustedIdentities},
+	}
+
+	typ := reflect.TypeOf(PluginSignaturesConfig{})
+	for _, tt := range tests {
+		t.Run(tt.field, func(t *testing.T) {
+			t.Parallel()
+
+			field, ok := typ.FieldByName(tt.field)
+			require.True(t, ok, "PluginSignaturesConfig has no field %s", tt.field)
+
+			raw, ok := field.Tag.Lookup(tt.tag)
+			require.True(t, ok, "%s is missing its `%s` tag", tt.field, tt.tag)
+
+			got, err := strconv.Atoi(raw)
+			require.NoError(t, err, "%s `%s` tag is not an integer", tt.field, tt.tag)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

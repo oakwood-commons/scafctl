@@ -47,6 +47,8 @@ func (s *Server) prepareOptions(ctx context.Context, extra ...prepare.Option) []
 	// plugin providers trigger automatic download from configured catalogs.
 	if fetcher, err := prepare.BuildPluginFetcher(ctx); err == nil {
 		opts = append(opts, prepare.WithPluginFetcher(fetcher))
+	} else {
+		opts = append(opts, prepare.WithPluginFetcherError(err))
 	}
 
 	// Wire official provider auto-resolution from context.

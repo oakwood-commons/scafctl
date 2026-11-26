@@ -1617,6 +1617,106 @@ func TestFetcher_FetchPlugins_WarnMode_UsesCache(t *testing.T) {
 	assert.True(t, results[0].FromCache, "warn mode should allow cache hits")
 }
 
+func TestFetcher_FetchPlugins_SignaturePolicyPlaceholders(t *testing.T) {
+	t.Parallel()
+
+	t.Run("expands {kind} and {name} using declared artifact short name", func(t *testing.T) {
+		t.Parallel()
+		remote := newMockCatalog()
+		remote.name = "myorg"
+		provRef := catalog.Reference{Kind: catalog.ArtifactKindProvider, Name: "github", Version: semver.MustParse("1.0.0")}
+		remote.addArtifact(provRef, []byte("github-bin"))
+		provArt := remote.artifacts[provRef.String()]
+		provArt.info.ImageRef = "ghcr.io/my-org/providers/github@sha256:aaa"
+		remote.artifacts[provRef.String()] = provArt
+
+		authRef := catalog.Reference{Kind: catalog.ArtifactKindAuthHandler, Name: "entra", Version: semver.MustParse("2.0.0")}
+		remote.addArtifact(authRef, []byte("entra-bin"))
+		authArt := remote.artifacts[authRef.String()]
+		authArt.info.ImageRef = "ghcr.io/my-org/auth-handlers/entra@sha256:bbb"
+		remote.artifacts[authRef.String()] = authArt
+
+		pf, err := catalog.NewPluginFetcher(logr.Discard(), nil, mockPluginSource{remote})
+		require.NoError(t, err)
+
+		verifier := &mockVerifier{result: &SignatureResult{Verified: true}}
+		f := NewFetcher(FetcherConfig{
+			CatalogFetcher: indexedPluginFetcher{
+				PluginFetcher: pf,
+				cats:          []catalog.Catalog{registryCatalog{mockCatalog: remote, registry: "ghcr.io/my-org"}},
+			},
+			Cache:    NewCache(t.TempDir()),
+			Platform: "linux/amd64",
+			Logger:   logr.Discard(),
+			SignaturePolicy: &SignaturePolicy{
+				Mode:           SignatureModeEnforce,
+				TrustedIssuers: []string{"https://token.actions.githubusercontent.com"},
+				TrustedIdentities: []string{
+					"https://github.com/my-org/scafctl-{kind}-{name}/.github/workflows/*",
+				},
+			},
+			SignatureVerifier: verifier,
+		})
+
+		deps := []solution.PluginDependency{
+			{
+				Name:    "gh-alias",
+				Kind:    solution.PluginKindProvider,
+				Version: "1.0.0",
+				Source:  &solution.PluginSource{Registry: "ghcr.io/my-org", Artifact: "github"},
+			},
+			{
+				Name:    "entra",
+				Kind:    solution.PluginKindAuthHandler,
+				Version: "2.0.0",
+			},
+		}
+
+		results, err := f.FetchPlugins(t.Context(), deps, nil)
+		require.NoError(t, err)
+		require.Len(t, results, 2)
+
+		verifier.mu.Lock()
+		defer verifier.mu.Unlock()
+		require.Len(t, verifier.policies, 2)
+		gotIdentities := []string{
+			verifier.policies[0].TrustedIdentities[0],
+			verifier.policies[1].TrustedIdentities[0],
+		}
+		assert.ElementsMatch(t, []string{
+			"https://github.com/my-org/scafctl-provider-github/.github/workflows/*",
+			"https://github.com/my-org/scafctl-auth-handler-entra/.github/workflows/*",
+		}, gotIdentities)
+	})
+
+	t.Run("invalid artifact name fails closed in enforce mode and logs in warn mode", func(t *testing.T) {
+		t.Parallel()
+		for _, mode := range []SignatureMode{SignatureModeEnforce, SignatureModeWarn} {
+			t.Run(string(mode), func(t *testing.T) {
+				t.Parallel()
+				verifier := &mockVerifier{result: &SignatureResult{Verified: true}}
+				f := &Fetcher{
+					sigPolicy: &SignaturePolicy{
+						Mode:              mode,
+						TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+						TrustedIdentities: []string{"https://github.com/my-org/{name}/.github/workflows/*"},
+					},
+					sigVerifier: verifier,
+					logger:      logr.Discard(),
+				}
+				res, err := f.verifySignature(t.Context(), catalog.ArtifactKindProvider, "../spoof", "1.0.0", "ghcr.io/my-org/providers/spoof@sha256:abc")
+				assert.Nil(t, res)
+				assert.Empty(t, verifier.imageRefs, "verifier must not be called when ForArtifact fails")
+				if mode == SignatureModeEnforce {
+					require.ErrorIs(t, err, ErrInvalidArtifactIdentity)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	})
+}
+
 func TestFetcher_FetchPlugins_NoCache_BypassesLatestCached(t *testing.T) {
 	cat := newMockCatalog()
 	ref := testRef("unlocked-plugin", "2.0.0")

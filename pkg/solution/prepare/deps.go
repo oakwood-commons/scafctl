@@ -542,6 +542,9 @@ func FetchBinder(composite *provider.CompositeRegistry, cfg *prepareConfig) Prov
 		// A fetcher is only required once there are external deps to fetch;
 		// builtin-only and pure-CEL solutions reach the early return above.
 		if cfg.pluginFetcher == nil {
+			if cfg.pluginFetcherErr != nil {
+				return nil, nil, fmt.Errorf("%w: %w", errNilPluginFetcher, cfg.pluginFetcherErr)
+			}
 			return nil, nil, errNilPluginFetcher
 		}
 		fetchResults, vClients, err := fetchAndRegisterIntoComposite(ctx, composite, deps, cfg)
