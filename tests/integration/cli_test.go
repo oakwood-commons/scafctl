@@ -16156,9 +16156,9 @@ func TestIntegration_PluginsListHelp(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "--all-versions")
 	// Line-anchored so this only matches "--all" as its own flag (e.g.
-	// "    --all    Alias for --all-versions"), not merely as a substring
-	// of "--all-versions" which assert.Contains alone would also satisfy.
-	allFlagPattern := regexp.MustCompile(`(?m)^\s+--all\s`)
+	// "    --all[=true|false]    Alias for --all-versions"), not merely as a
+	// substring of "--all-versions" which assert.Contains alone would also satisfy.
+	allFlagPattern := regexp.MustCompile(`(?m)^\s+--all(\[=true\|false\])?\s`)
 	assert.True(t, allFlagPattern.MatchString(stdout), "expected --help to document --all as its own flag, got:\n%s", stdout)
 }
 
