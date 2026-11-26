@@ -33,9 +33,12 @@ func TestRoot_CommandProperties(t *testing.T) {
 	if cmd.Use != "scafctl" {
 		t.Errorf("Root().Use = %q, want %q", cmd.Use, "scafctl")
 	}
-	if cmd.Short != "A configuration discovery and scaffolding tool" {
-		t.Errorf("Root().Short = %q, want %q", cmd.Short, "A configuration discovery and scaffolding tool")
+	wantShort := "Declaratively discover data, shape configuration, and run portable workflows for humans and AI agents"
+	if cmd.Short != wantShort {
+		t.Errorf("Root().Short = %q, want %q", cmd.Short, wantShort)
 	}
+	assert.Contains(t, cmd.Long, wantShort)
+	assert.Contains(t, cmd.Long, "MCP")
 	if cmd.Annotations["commandType"] != "main" {
 		t.Errorf("Root().Annotations[\"commandType\"] = %q, want %q", cmd.Annotations["commandType"], "main")
 	}

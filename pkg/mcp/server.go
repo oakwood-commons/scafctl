@@ -295,8 +295,8 @@ func WithSupplementalInstructions(instructions string) ServerOption {
 	}
 }
 
-const serverInstructionsTemplate = `scafctl is a CLI tool for managing infrastructure solutions using CEL expressions, 
-Go templates, and a provider-based architecture. This MCP server exposes tools 
+const serverInstructionsTemplate = `scafctl is a CLI and workflow engine to declaratively discover data, shape configuration,
+and run portable workflows using CEL expressions, Go templates, and a provider-based architecture. This MCP server exposes tools 
 for inspecting solutions, validating configurations, evaluating CEL expressions, 
 browsing the solution catalog, previewing resolver outputs, and running functional tests.
 

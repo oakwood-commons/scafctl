@@ -17,6 +17,7 @@ func TestBuildHumaConfig(t *testing.T) {
 
 	assert.NotNil(t, cfg.Info)
 	assert.Equal(t, "scafctl API", cfg.Info.Title)
+	assert.Equal(t, "REST API to declaratively discover data, shape configuration, and run portable workflows", cfg.Info.Description)
 	assert.Contains(t, cfg.DocsPath, settings.DefaultAPIVersion)
 	assert.Contains(t, cfg.OpenAPIPath, settings.DefaultAPIVersion)
 }

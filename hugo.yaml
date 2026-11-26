@@ -28,7 +28,7 @@ module:
 
 # Repository information
 params:
-  description: "CLI tool using CEL for dynamic configuration evaluation and template processing"
+  description: "Declaratively discover data, shape configuration, and run portable workflows for humans and AI agents"
   github_repo: "https://github.com/oakwood-commons/scafctl"
   github_project_repo: "https://github.com/oakwood-commons/scafctl"
 

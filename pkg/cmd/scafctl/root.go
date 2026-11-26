@@ -273,8 +273,8 @@ func NewRootOptions() *RootOptions {
 
 // Root creates and returns the root cobra.Command for the scafctl CLI tool.
 // It sets up persistent flags, configures logging, handles profiler options,
-// validates command arguments, and adds subcommands. The command provides
-// configuration discovery and scaffolding functionality.
+// validates command arguments, and adds subcommands to declaratively discover
+// data, shape configuration, and run portable workflows.
 //
 // opts may be nil, in which case production defaults are used.
 // Each invocation creates its own isolated state so multiple Root()
@@ -352,9 +352,11 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 	cCmd := &cobra.Command{
 		Use:   binaryName,
-		Short: "A configuration discovery and scaffolding tool",
+		Short: "Declaratively discover data, shape configuration, and run portable workflows for humans and AI agents",
 		Long: heredoc.Doc(`
-			A configuration discovery and scaffolding tool
+			Declaratively discover data, shape configuration, and run portable workflows for humans and AI agents.
+
+			Define testable Solutions that gather values from APIs, files, Git, and environments, transform data safely with CEL, execute parallel cross-platform action graphs, share versioned bundles via OCI registries, and expose live schemas and dry-run validation to AI assistants over MCP.
 		`),
 		SilenceUsage:  false,
 		SilenceErrors: true,

@@ -1,14 +1,14 @@
 ---
 title: "scafctl"
-description: "Define, discover, and deliver configuration as code using CEL-powered solutions."
+description: "Declaratively discover data, shape configuration, and run portable workflows for humans and AI agents."
 type: docs
 ---
 
 <div class="bp-hero">
   <div class="bp-hero__eyebrow"><span class="bp-hero__dot" aria-hidden="true"></span><span>CONFIGURATION FLOW // DECLARATIVE BY DESIGN</span></div>
   <img class="bp-hero__logo" src="images/scafctl-logo.svg" alt="scafctl" width="300" height="93">
-  <h1 class="bp-hero__tagline">Define, discover, and deliver configuration as code using CEL-powered solutions.</h1>
-  <p class="bp-hero__desc">scafctl is a CLI tool that lets you declaratively gather data from any source -- APIs, files, environment variables, Git, and more -- transform it with <a href="https://cel.dev/">CEL</a> expressions, and execute side-effect workflows, all defined in a single <strong>Solution</strong> file.</p>
+  <h1 class="bp-hero__tagline">Declaratively discover data, shape configuration, and run portable workflows for humans and AI agents.</h1>
+  <p class="bp-hero__desc"><code>scafctl</code> is a cross-platform CLI and workflow engine that turns project setup, configuration, and automation into testable, reusable <strong>Solutions</strong>. Gather live data from APIs, files, Git, and environments, transform and merge configuration safely with <a href="https://cel.dev/">CEL</a>, execute parallel action graphs across Linux, macOS, Windows, and CI, share versioned bundles via OCI registries, and let AI coding assistants inspect schemas and preview changes deterministically over MCP.</p>
   <div class="bp-hero__actions">
     <a class="bp-hero__btn bp-hero__btn--primary" href="docs/tutorials/getting-started/">Get Started</a>
     <a class="bp-hero__btn bp-hero__btn--secondary" href="docs/tutorials/">Explore Tutorials</a>
@@ -91,29 +91,33 @@ scafctl explain provider http
 
 ## Key Features
 
-- **CEL Integration** -- Use [Common Expression Language](https://cel.dev/) for dynamic evaluation, filtering, and transformation
-- **Dependency Graph** -- Resolvers and actions model their dependencies; scafctl executes in parallel where possible
-- **Catalog** -- Publish, version, and share reusable solutions via OCI-compatible registries
-- **Secrets** -- Encrypted secrets management backed by the OS keyring
-- **Plugins** -- Extend scafctl with custom providers via a gRPC plugin system
-- **Snapshots** -- Capture and diff resolver output over time
-- **Dry Run** -- Preview what actions would do without executing them
-- **Linting** -- Validate solution files before execution
-- **Auth** -- Microsoft Entra ID (Azure AD), GitHub, and Google Cloud Platform authentication (interactive browser OAuth + PKCE, device code, service principals, and workload identity)
+- **CEL Integration**: Use [Common Expression Language](https://cel.dev/) for dynamic evaluation, filtering, and transformation
+- **Dependency Graph**: Resolvers and actions model their dependencies; `scafctl` executes independent steps in parallel
+- **Cross-Platform Shell**: Run shell actions identically on Linux, macOS, and Windows using an embedded POSIX shell with zero WSL or Git Bash dependency
+- **AI Agent Integration (`MCP`)**: Expose live schemas, CEL/template evaluation, linting, refactoring, and dry-run previews to AI coding tools via `scafctl mcp serve`
+- **Functional Testing**: Verify resolvers, validation rules, and workflows deterministically with `scafctl test functional`
+- **Catalog**: Publish, version, and share reusable solutions via OCI-compatible registries
+- **Secrets**: Encrypted secrets management backed by the OS keyring
+- **Plugins**: Extend `scafctl` with custom providers via a gRPC plugin system
+- **Snapshots**: Capture and diff resolver output over time
+- **Dry Run**: Preview what actions would do without executing them
+- **Linting**: Validate solution files before execution
+- **Auth**: Microsoft Entra ID (Azure AD), GitHub, and Google Cloud Platform authentication (interactive browser OAuth + PKCE, device code, service principals, and workload identity)
 
 ---
 
 ## Documentation
 
 ### Get Started
-- [Getting Started](docs/tutorials/getting-started/) -- Install and run your first solution
-- [Resolvers](docs/tutorials/resolver-tutorial/) -- Gather and transform data
-- [Actions](docs/tutorials/actions-tutorial/) -- Execute operations
+- [Getting Started](docs/tutorials/getting-started/): Install and run your first solution
+- [Resolvers](docs/tutorials/resolver-tutorial/): Gather and transform data
+- [Actions](docs/tutorials/actions-tutorial/): Execute operations
 
 ### Go Deeper
-- [CEL Expressions](docs/tutorials/cel-tutorial/) -- Dynamic evaluation
-- [Catalog](docs/tutorials/catalog-tutorial/) -- Share solutions via OCI
-- [Provider Reference](docs/tutorials/provider-reference/) -- All 22 providers
+- [CEL Expressions](docs/tutorials/cel-tutorial/): Dynamic evaluation
+- [Catalog](docs/tutorials/catalog-tutorial/): Share solutions via OCI
+- [MCP Server](docs/tutorials/mcp-server-tutorial/): Connect AI coding agents (`scafctl mcp serve`)
+- [Provider Reference](docs/tutorials/provider-reference/): All 22 providers
 
 ---
 

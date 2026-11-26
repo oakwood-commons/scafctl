@@ -54,7 +54,7 @@ homebrew_casks:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://scafctl.oakwood-commons.org"
-    description: "A configuration discovery and scaffolding tool using CEL for dynamic evaluation"
+    description: "Declaratively discover data, shape configuration, and run portable workflows for humans and AI agents"
     license: "Apache-2.0"
 release:
   draft: false

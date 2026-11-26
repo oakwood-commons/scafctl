@@ -1,7 +1,7 @@
-# scafctl - AI Agent Instructions
+# scafctl: AI Agent Instructions
 
-scafctl is a Go-based CLI tool using CEL (Common Expression Language) for
-dynamic configuration evaluation and template processing.
+`scafctl` is a Go-based CLI and workflow engine to declaratively discover data,
+shape configuration, and run portable workflows for humans and AI agents.
 
 `AGENTS.md` at the repo root is the canonical guidance for authors and tools:
 build/test/lint commands, key patterns, business-logic placement, the
