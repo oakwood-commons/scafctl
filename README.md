@@ -12,7 +12,7 @@
   <a href="https://github.com/oakwood-commons/scafctl/releases"><img src="https://img.shields.io/github/v/release/oakwood-commons/scafctl" alt="Release"></a>
   <a href="https://github.com/oakwood-commons/scafctl/actions/workflows/test.yml"><img src="https://github.com/oakwood-commons/scafctl/actions/workflows/test.yml/badge.svg" alt="CI"></a>
   <a href="https://codecov.io/gh/oakwood-commons/scafctl"><img src="https://codecov.io/gh/oakwood-commons/scafctl/graph/badge.svg" alt="codecov"></a>
-  <a href="https://oakwood-commons.github.io/scafctl/"><img src="https://img.shields.io/badge/docs-github.io-blue" alt="Documentation"></a>
+  <a href="https://scafctl.oakwood-commons.org/"><img src="https://img.shields.io/badge/docs-scafctl.oakwood--commons.org-blue" alt="Documentation"></a>
 </p>
 
 > **Alpha** -- scafctl is under active development. APIs and CLI commands may
@@ -41,29 +41,33 @@ brew install oakwood-commons/tap/scafctl
 
 ### From Release Binaries
 
-Download the latest binary for your platform from the
-[GitHub Releases](https://github.com/oakwood-commons/scafctl/releases) page.
+Signed archives (`x86_64` and `arm64`) are published on
+[GitHub Releases](https://github.com/oakwood-commons/scafctl/releases/latest).
 
-#### macOS / Linux
+#### Linux (`x86_64`)
 
 ```bash
-# Download (replace VERSION and OS/ARCH as needed)
-curl -LO https://github.com/oakwood-commons/scafctl/releases/latest/download/scafctl_VERSION_OS_ARCH.tar.gz
-tar xzf scafctl_*.tar.gz
-sudo mv scafctl /usr/local/bin/
+TAG=$(basename "$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/oakwood-commons/scafctl/releases/latest)")
+curl -fsSL "https://github.com/oakwood-commons/scafctl/releases/download/${TAG}/scafctl_${TAG#v}_Linux_x86_64.tar.gz" \
+  | sudo tar -xz -C /usr/local/bin scafctl
 ```
 
-> **macOS note:** You may need to remove the quarantine attribute before running:
+> **macOS binary note:** If you download a `Darwin` `.tar.gz` archive directly instead of using Homebrew, remove the quarantine attribute if prompted:
 >
 > ```bash
 > xattr -dr 'com.apple.quarantine' /usr/local/bin/scafctl
 > ```
 
-#### Windows
+#### Windows (PowerShell)
 
-Download the `.zip` archive for your architecture from
-[GitHub Releases](https://github.com/oakwood-commons/scafctl/releases),
-extract it, and add the directory to your `PATH`.
+```powershell
+$rel = Invoke-RestMethod "https://api.github.com/repos/oakwood-commons/scafctl/releases/latest"
+$ver = $rel.tag_name.TrimStart('v')
+Invoke-WebRequest -Uri "https://github.com/oakwood-commons/scafctl/releases/download/$($rel.tag_name)/scafctl_${ver}_Windows_x86_64.zip" -OutFile scafctl.zip
+Expand-Archive -Force scafctl.zip -DestinationPath .
+```
+
+Extract `scafctl.exe` and add its directory to your `PATH` (`Windows_arm64.zip` is also available on [GitHub Releases](https://github.com/oakwood-commons/scafctl/releases/latest)).
 
 #### From Source
 

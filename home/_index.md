@@ -25,11 +25,9 @@ type: docs
 {{% steps %}}
 1. **Install `scafctl`**
 
-   Install via Homebrew or download a prebuilt binary from [GitHub Releases](https://github.com/oakwood-commons/scafctl/releases):
+   Install on macOS, Linux, or Windows (`x86_64` and `arm64` archives on [GitHub Releases](https://github.com/oakwood-commons/scafctl/releases/latest)):
 
-   ```bash
-   brew install oakwood-commons/tap/scafctl
-   ```
+   {{< install-tabs "walkthrough" >}}
 
 2. **Define a Solution (`hello.yaml`)**
 

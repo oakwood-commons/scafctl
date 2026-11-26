@@ -19,26 +19,7 @@ Think of it as a way to define "what you want" (data + operations) in YAML, and 
 
 ## Installation
 
-{{< tabs "getting-started-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
-# Build from source
-go build -ldflags "-s -w" -o scafctl ./cmd/scafctl/scafctl.go
-
-# Move to PATH
-mv scafctl /usr/local/bin/
-```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Build from source
-go build -ldflags "-s -w" -o scafctl ./cmd/scafctl/scafctl.go
-
-# Move to PATH (macOS/Linux)
-Move-Item -Force ./scafctl /usr/local/bin/scafctl
-```
-{{% /tab %}}
-{{< /tabs >}}
+{{< install-tabs "getting-started" "source" >}}
 
 ## Quick Start
 

@@ -32,5 +32,47 @@
 
     el.appendChild(btn);
   });
+
+  function applyLatestReleaseTag(tag) {
+    if (!tag || !/^v\d+\.\d+\.\d+$/.test(tag)) return;
+    var ver = tag.slice(1);
+    document.querySelectorAll('.highlight pre code').forEach(function (code) {
+      if (code.textContent.indexOf('oakwood-commons/scafctl/releases/download/') === -1) return;
+      var walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT, null);
+      var node;
+      while ((node = walker.nextNode())) {
+        if (node.nodeValue.indexOf('scafctl') !== -1 || /v?\d+\.\d+\.\d+/.test(node.nodeValue)) {
+          node.nodeValue = node.nodeValue
+            .replace(/\/releases\/download\/v\d+\.\d+\.\d+\//g, '/releases/download/' + tag + '/')
+            .replace(/scafctl_\d+\.\d+\.\d+_/g, 'scafctl_' + ver + '_');
+        }
+      }
+    });
+  }
+
+  var codeBlocks = document.querySelectorAll('.highlight pre code');
+  var hasReleaseSnippet = Array.prototype.some.call(codeBlocks, function (c) {
+    return c.textContent.indexOf('oakwood-commons/scafctl/releases/download/') !== -1;
+  });
+  if (hasReleaseSnippet) {
+    var cacheKey = 'oc-latest:oakwood-commons/scafctl';
+    var cached = null;
+    try { cached = sessionStorage.getItem(cacheKey); } catch (_) {}
+    if (cached) {
+      applyLatestReleaseTag(cached);
+    } else {
+      fetch('https://api.github.com/repos/oakwood-commons/scafctl/releases/latest', {
+        headers: { Accept: 'application/vnd.github+json' }
+      })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          var tag = d && typeof d.tag_name === 'string' ? d.tag_name.trim() : '';
+          if (!tag) return;
+          try { sessionStorage.setItem(cacheKey, tag); } catch (_) {}
+          applyLatestReleaseTag(tag);
+        })
+        .catch(function () {});
+    }
+  }
 })();
 </script>
