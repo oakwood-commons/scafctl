@@ -193,7 +193,9 @@ can clean up with `KillAll` on shutdown.
 4. **GetProviderDescriptor**: scafctl fetches and caches descriptors
 5. **ConfigureProvider**: Host sends config + protocol version + HostService ID
 6. **Execution**: `ExecuteProvider` or `ExecuteProviderStream` on invocation
-7. **Shutdown**: `StopProvider` for graceful cleanup, then `Kill()` the process
+7. **Shutdown**: `Client.Kill()` asks the plugin to shut down and waits briefly for
+   it to exit, force-killing it if it does not, then removes the directory that
+   held its socket (see [Process Cleanup](#process-cleanup))
 
 ### Auth Handler Plugins
 
@@ -202,7 +204,70 @@ can clean up with `KillAll` on shutdown.
 3. **GetAuthHandlers**: Plugin advertises handler names, flows, and capabilities
 4. **ConfigureAuthHandler**: Host sends config + protocol version + HostService ID + host capabilities + callback pages
 5. **Authentication**: `Login`, `Logout`, `GetStatus`, `GetToken`, and optional `GetGroups` on user or provider request
-6. **Shutdown**: `StopAuthHandler` for graceful cleanup, then `Kill()` the process
+6. **Shutdown**: `AuthHandlerClient.Kill()`, as for provider plugins
+
+`StopProvider` and `StopAuthHandler` are part of the protocol and let a plugin
+abort in-flight work, but the host does not call them as part of shutting a
+plugin down: a plugin process ends when the host kills its client.
+
+## Process Cleanup
+
+A plugin is a separate operating-system process, and it ignores SIGINT. Nothing
+else will stop it if the host forgets to, so every path that starts a plugin
+client must end with `Kill()` (or `KillAll` for a list). The host guarantees the
+following when it does.
+
+- **Graceful first.** `Kill()` asks the plugin's go-plugin server to shut down and
+  gives it two seconds to exit, closing its own socket. Only a plugin that does
+  not exit in that time, or has already died, is force-killed. This holds even
+  when a call to the plugin is still blocked.
+- **The host owns the socket directory.** On Unix the host creates a private
+  `plugin-dir*` directory under the temp directory for each plugin and passes it
+  in `PLUGIN_UNIX_SOCKET_DIR`; the plugin creates its socket there. `Kill()`
+  deletes the directory. A plugin that crashes, panics, is killed, or fails its
+  handshake cannot remove its own socket, so without this its socket file would
+  stay in the temp directory forever. If the temp directory path is too long for
+  a socket path inside a subdirectory, or on Windows (where go-plugin uses TCP),
+  the plugin creates its socket itself as before. So it does if
+  `PLUGIN_UNIX_SOCKET_DIR` is already set in the environment scafctl runs in:
+  that choice is honored, and the operator's directory is never deleted.
+- **A failed start leaves nothing.** If the handshake fails, the plugin is killed
+  and the socket directory removed before `NewClient` returns the error.
+- **Pools and servers release what they hold.** `Pool.Shutdown` and
+  `VersionPool.Shutdown` kill every managed plugin. A client handed to a pool
+  that is already closed (`Adopt`) is killed, not dropped. `api.Server.Start`
+  releases its pool and preloaded clients on every exit path, after in-flight
+  requests drain: a signal, a cancelled server context, a failure to listen, or
+  invalid TLS configuration.
+
+A plugin built without the SDK should create its socket inside the directory named
+by `PLUGIN_UNIX_SOCKET_DIR` when that variable is set, so the host can remove it.
+
+Known limitation: the CLI does not yet intercept SIGINT or SIGTERM, so interrupting
+a command with Ctrl+C while a plugin is running ends the command without running
+its cleanup, and the plugin process outlives it.
+
+## Testing Plugin Lifecycle
+
+The `plugintest` package builds a configurable fixture plugin
+(`testdata/lifecycleplugin`) that can fail to start, hang, crash or panic mid-call,
+return undecodable output, end a stream early, report a different protocol version,
+or send fields the schema does not define. Its `Sandbox` gives each test its own temp
+directory, so the processes, sockets and socket directories found there are exactly
+the ones that test caused:
+
+```go
+sb := plugintest.NewSandbox(t, plugintest.Config{})
+client, err := plugin.NewClient(sb.Binary)
+require.NoError(t, err)
+// ... use client ...
+client.Kill()
+sb.RequireClean(t, 5*time.Second)
+```
+
+`NewDetachedSandbox` and `Sandbox.Env` do the same for a host that runs as a
+subprocess, such as the `scafctl` binary. See `lifecycle_test.go` for the lifecycle
+tests built on it.
 
 ## Example Plugin
 

@@ -35,7 +35,9 @@ Each plugin binary exposes **one** extension type (provider OR auth handler). Th
 3. **Configure** -- scafctl calls `ConfigureProvider` once per provider with host settings (quiet, color, binary name, HostService broker ID)
 4. **Execute** -- scafctl invokes providers as needed (unary or streaming)
 5. **Callbacks** -- plugins can call back to the host for secrets and auth tokens via the `HostService` gRPC service
-6. **Shutdown** -- scafctl terminates the plugin process when done
+6. **Shutdown** -- scafctl asks the plugin to shut down, force-kills it if it does not exit promptly, and removes the directory that held its socket
+
+On Unix the host passes the plugin a private directory in the `PLUGIN_UNIX_SOCKET_DIR` environment variable (unless you have already set that variable for scafctl, in which case your value is used). Plugins built with the SDK use it automatically. If you implement the go-plugin protocol without the SDK, create your socket inside that directory when the variable is set, so the host can remove it even if your plugin crashes.
 
 ## Plugin Discovery
 

@@ -97,6 +97,10 @@ All notable changes to this project will be documented in this file.
 - *(httpc)* Policy-denial errors no longer give contradictory advice for non-exemptible destinations. A cloud-metadata or IPv4-derived IPv6 denial now says no configuration setting can permit the destination, while an ordinary private-address denial still names `httpClient.allowedPrivateCIDRs` as the control that would allow it (#846)
 - *(provider)* [**breaking**] The `parameter` provider no longer applies `auto` type inference to an authored `default`. A default keeps its YAML-authored type (a quoted `"false"` stays the string `"false"`, `"0123"` keeps its leading zeros, a bare `false`/`42` stays a bool/int), which stops surprising, lossy coercions of quoted string defaults. Inference and `file://`/stdin source resolution now apply only to CLI-supplied values (always untyped strings), matching how Terraform/Helm treat typed defaults vs. stringly-typed overrides. Set an explicit `type` (e.g. `type: int`) to coerce a default. The `parameter-numeric-matches` lint rule now fires only for a *bare* numeric default, and quoting the default is a valid fix.
 - *(auth)* Preserve login-time client ID during token rotation (#79)
+- *(plugin)* Plugin processes and their sockets no longer outlive an invocation that ends badly. On Unix the host now creates a private `plugin-dir*` directory for each plugin's socket, passes it to the plugin in `PLUGIN_UNIX_SOCKET_DIR`, and removes it when the client is killed, so a plugin that crashes, panics, is killed, or fails its handshake no longer leaves a socket file in the temp directory. The host makes no directory on Windows (go-plugin uses TCP), when the socket path would exceed the platform limit, or when `PLUGIN_UNIX_SOCKET_DIR` is already set in its environment, which it honors.
+- *(plugin)* `Pool.Adopt` and `VersionPool.Adopt` now kill the client they are handed when the pool is already closed, instead of dropping it and leaving the plugin process running. `VersionPool.Adopt` also checks that the pool is open under the lock `Shutdown` takes, so an adopted client can no longer slip in after `Shutdown` has taken its snapshot.
+- *(api)* `Server.Start` now releases the plugin pool and any clients passed to `WithServerPluginClients` on every exit path, after in-flight requests drain: on SIGINT/SIGTERM, when the server context is cancelled, when the server cannot listen, and on invalid TLS configuration. Previously only `Server.Shutdown` did, so a `scafctl serve` stopped by a signal left its plugin processes running. An embedder that keeps using a client it passed to the server after `Start` returns will find it killed.
+- *(docs)* The plugin documentation no longer says the host calls `StopProvider`/`StopAuthHandler` when shutting a plugin down: `Client.Kill()` asks the go-plugin server to shut down, waits briefly, then force-kills. A new "Process Cleanup" section documents the cleanup guarantees and the known limitation that the CLI does not yet intercept SIGINT/SIGTERM.
 
 ### 💼 Other
 
@@ -119,6 +123,7 @@ All notable changes to this project will be documented in this file.
 ### 🧪 Testing
 
 - Add solution integration tests for exclusive actions, forEach f… (#83)
+- *(plugin)* Add the `plugintest` package: a configurable fixture plugin (start failures, hangs, crashes, panics, undecodable output, early stream end, protocol-version and unknown-field behavior, host callbacks) and a per-test sandbox that counts the processes, sockets and socket directories a test leaves behind, with lifecycle tests for the plugin client, pools, `api.Server` and the `scafctl` binary.
 
 ## [0.4.0] - 2026-02-17
 

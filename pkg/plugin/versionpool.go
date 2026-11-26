@@ -1091,6 +1091,13 @@ func (vp *VersionPool) unregisterProviders(entry *poolEntry, providers []string)
 // Adopt registers an already-running plugin client into the pool so that its
 // lifecycle (idle eviction, shutdown) is managed by the pool. This is used
 // for official providers pre-loaded at startup.
+//
+// The pool owns the client from the moment it is handed over. If the pool is
+// closed it cannot manage the client, and nothing else holds a reference to
+// stop it, so the client is killed rather than left running. The closed check
+// is made under the same lock Shutdown takes to snapshot the entries, so an
+// Adopt that races Shutdown either lands in the snapshot or sees the pool
+// closed; it can never insert an entry after the snapshot and escape both.
 func (vp *VersionPool) Adopt(
 	id pluginIdentity,
 	version *semver.Version,
@@ -1098,9 +1105,6 @@ func (vp *VersionPool) Adopt(
 	dep solution.PluginDependency,
 	registeredProviders []string,
 ) {
-	if vp.closed.Load() {
-		return
-	}
 	ready := make(chan struct{})
 	close(ready) // already ready — no spawn to wait on
 	entry := &poolEntry{
@@ -1114,9 +1118,14 @@ func (vp *VersionPool) Adopt(
 		client:              client,
 	}
 	vp.mu.Lock()
-	defer vp.mu.Unlock()
-
+	if vp.closed.Load() {
+		vp.mu.Unlock()
+		// Kill can block while the process exits, so it runs outside the lock.
+		client.Kill()
+		return
+	}
 	vp.insert(id, version, entry)
+	vp.mu.Unlock()
 }
 
 // Stats returns a point-in-time snapshot of pool metrics. It walks the index

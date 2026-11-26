@@ -230,3 +230,4 @@ The server handles SIGINT and SIGTERM signals for graceful shutdown. During shut
 1. The readiness probe returns 503
 2. In-flight requests are given time to complete (configurable via `shutdownTimeout`)
 3. New connections are rejected
+4. Plugin processes (the plugin pool and any preloaded providers) are stopped, after the in-flight requests have finished

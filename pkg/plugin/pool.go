@@ -311,12 +311,19 @@ func NewPool(ctx context.Context, fetcher *Fetcher, registry *provider.Registry,
 // Adopt registers an already-running plugin client into the pool so that its
 // lifecycle (idle eviction, shutdown) is managed by the pool. This is used
 // for official providers pre-loaded at startup.
+//
+// The pool owns the client from the moment it is handed over. If the pool is
+// already closed it cannot manage the client, and nothing else holds a
+// reference to stop it, so the client is killed rather than left running.
 func (p *Pool) Adopt(name string, client *Client, dep solution.PluginDependency, registeredProviders []string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.closed {
+		p.mu.Unlock()
+		// Kill can block while the process exits, so it runs outside the lock.
+		client.Kill()
 		return
 	}
+	defer p.mu.Unlock()
 	ready := make(chan struct{})
 	close(ready)
 	p.entries[name] = &poolEntry{

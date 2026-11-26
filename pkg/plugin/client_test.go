@@ -79,7 +79,7 @@ func TestBuildPluginClient_UsesSanitizedCmdAndDebugLogger(t *testing.T) {
 	providerPlugin := &MockProviderPlugin{}
 	captured := pluginConfig{}
 
-	typed, client, err := buildPluginClient(
+	typed, client, _, err := buildPluginClient(
 		"ignored-plugin-path",
 		[]ClientOption{WithSanitizedEnv(), WithDebugLogging()},
 		func(_ string, cfg pluginConfig) (any, *hplugin.Client, error) {
@@ -111,7 +111,7 @@ func TestBuildPluginClient_DefaultCmdAndNilLoggerWhenNoFlags(t *testing.T) {
 	providerPlugin := &MockProviderPlugin{}
 	captured := pluginConfig{}
 
-	typed, client, err := buildPluginClient(
+	typed, client, _, err := buildPluginClient(
 		"ignored-plugin-path",
 		nil,
 		func(_ string, cfg pluginConfig) (any, *hplugin.Client, error) {
@@ -140,7 +140,7 @@ func TestBuildPluginClient_DefaultCmdAndNilLoggerWhenNoFlags(t *testing.T) {
 }
 
 func TestBuildPluginClient_ConnectError(t *testing.T) {
-	_, _, err := buildPluginClient(
+	typed, client, socketDir, err := buildPluginClient(
 		"ignored-plugin-path",
 		nil,
 		func(_ string, _ pluginConfig) (any, *hplugin.Client, error) {
@@ -158,6 +158,9 @@ func TestBuildPluginClient_ConnectError(t *testing.T) {
 		},
 	)
 	require.Error(t, err)
+	assert.Nil(t, typed)
+	assert.Nil(t, client)
+	assert.Empty(t, socketDir)
 }
 
 func TestConnectPlugin_MissingBinaryReturnsWrappedError(t *testing.T) {

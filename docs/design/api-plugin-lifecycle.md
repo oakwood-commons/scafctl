@@ -117,11 +117,17 @@ The pool accepts three options, which can be tuned via server options:
 
 ## Shutdown
 
-`pool.Shutdown()` is called from `Server.Shutdown()`:
+`pool.Shutdown()` is called from `Server.Shutdown()`, and `Server.Start()` releases
+the pool and any preloaded clients on every exit path, once in-flight requests
+have drained (a signal, a cancelled server context, a failure to listen, invalid
+TLS configuration):
 
 1. Stops the eviction goroutine.
 2. Marks the pool as closed (rejects new `Ensure` calls with `ErrPoolClosed`).
 3. Kills all managed plugin processes.
+
+A client handed to a pool that is already closed (`Adopt`) is killed rather than
+dropped, because nothing else holds a reference that could stop it.
 
 ---
 
