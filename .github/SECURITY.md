@@ -10,7 +10,7 @@
 
 **Do NOT open a public GitHub issue for security vulnerabilities.**
 
-Please report security vulnerabilities via [GitHub Security Advisories](https://github.com/oakwood-commons/scafctl/security/advisories/new).
+Please report security vulnerabilities via [GitHub Security Advisories](https://github.com/oakwood-commons/scafctl/security/advisories/new) or by email to [security@oakwood-commons.org](mailto:security@oakwood-commons.org).
 
 Include:
 
