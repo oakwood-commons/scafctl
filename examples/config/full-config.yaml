@@ -403,9 +403,14 @@ plugins:
 
     # Trusted certificate identity patterns (glob).
     # Matched against the certificate subject/identity (URI SAN).
+    # Supports optional {name} (artifact short name) and {kind} (solution,
+    # provider, auth-handler) placeholders for 1-to-1 repository binding when
+    # artifacts are signed by repository-local workflows.
     # Required when mode is "warn" or "enforce".
     # trustedIdentities:
     #   - "https://github.com/oakwood-commons/*"
+    #   - "https://github.com/my-org/scafctl-plugin-{name}/.github/workflows/*"
+    #   - "https://github.com/my-org/scafctl-{kind}-{name}/.github/workflows/*"
 
   # Cooldown between failed auto-fetch retries.
   # Prevents repeated timeout penalties during network outages.

@@ -194,7 +194,7 @@ func runServe(ctx context.Context, opts *Options) error {
 		buildServerPluginFetcherOverrides(catalogNames, perCatalog, pluginCache, cfg.APIServer.Plugins.DisableDiskCache),
 	); fetchErr == nil {
 		pluginFetcher = fetcher
-	} else if errors.As(fetchErr, new(*catalog.CatalogBuildError)) {
+	} else if errors.As(fetchErr, new(*catalog.CatalogBuildError)) || errors.Is(fetchErr, prepare.ErrSignaturePolicy) {
 		return fmt.Errorf("building plugin fetcher: %w", fetchErr)
 	} else {
 		lgr.V(1).Info("plugin fetcher not available; official providers will not be pre-loaded", "error", fetchErr)

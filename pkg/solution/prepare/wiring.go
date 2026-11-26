@@ -112,6 +112,8 @@ func OptionsFromContext(ctx context.Context, w CLIWiring) ([]Option, error) {
 	}
 	if fetcher, err := BuildPluginFetcherWithConfig(ctx, fetcherOverrides); err == nil {
 		opts = append(opts, WithPluginFetcher(fetcher))
+	} else {
+		opts = append(opts, WithPluginFetcherError(err))
 	}
 
 	// The adjacent solution.lock of a local or auto-discovered solution is read

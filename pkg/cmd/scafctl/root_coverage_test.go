@@ -5,12 +5,15 @@ package scafctl
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -683,4 +686,67 @@ func TestRoot_Cleanup_AfterExecute(t *testing.T) {
 	// cleanup runs via defer after Execute returns the error — must not panic
 	// and must be safe to call again (idempotent via sync.Once).
 	cleanup()
+}
+
+// TestRoot_InvalidSignatureConfig_BlocksPluginAndLockOps_AllowsRepair verifies
+// that an invalid enforce signature policy in config.yaml cannot silently fall
+// back to unverified plugin acquisition or lock creation while config-repair
+// commands remain runnable.
+func TestRoot_InvalidSignatureConfig_BlocksPluginAndLockOps_AllowsRepair(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "xdg-config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "xdg-data"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmpDir, "xdg-cache"))
+
+	cfgPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("plugins:\n  signatures:\n    mode: enforce\n"), 0o600))
+
+	solPath := filepath.Join(tmpDir, "solution.yaml")
+	solYAML := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: sig-gate-test\n  version: 0.1.0\nbundle:\n  plugins:\n    - name: custom-provider\n      kind: provider\n      version: ^1.0.0\nspec:\n  resolvers:\n    out:\n      resolve:\n        with:\n          - provider: custom-provider\n"
+	require.NoError(t, os.WriteFile(solPath, []byte(solYAML), 0o600))
+
+	lockPath := filepath.Join(tmpDir, "solution.lock")
+	require.NoError(t, os.WriteFile(lockPath, []byte("version: 1\n"), 0o600))
+
+	execWithInvalidCfg := func(args ...string) (string, error) {
+		ioStreams, _, errOut := terminal.NewTestIOStreams()
+		cmd, cleanup := Root(&RootOptions{
+			IOStreams:  ioStreams,
+			ConfigPath: cfgPath,
+		})
+		defer cleanup()
+		cmd.SetArgs(args)
+		err := cmd.Execute()
+		return errOut.String(), err
+	}
+
+	// Plugin acquisition commands fail closed with the signature/config load error.
+	errOut, err := execWithInvalidCfg("plugins", "install", "custom-provider@1.0.0")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, prepare.ErrSignaturePolicy)
+	assert.Contains(t, err.Error(), "configuration failed to load")
+	assert.Contains(t, errOut, "Warning: failed to load config")
+
+	// Runtime solution execution requiring plugins also fails closed.
+	_, err = execWithInvalidCfg("run", "solution", "-f", solPath)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, prepare.ErrSignaturePolicy)
+	assert.Contains(t, err.Error(), "configuration failed to load")
+
+	// Lock/vendor update fails closed instead of writing an unverified lockfile.
+	_, err = execWithInvalidCfg("vendor", "update", "-f", solPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plugin signature policy: configuration failed to load")
+
+	// Config diagnostic and repair commands remain runnable so the operator can inspect and fix config.yaml.
+	_, err = execWithInvalidCfg("config", "validate")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "signatures")
+
+	_, err = execWithInvalidCfg("config", "unset", "plugins.signatures.mode")
+	require.NoError(t, err)
+
+	// After repairing config.yaml via unset, config validate succeeds cleanly.
+	_, err = execWithInvalidCfg("config", "validate")
+	require.NoError(t, err)
 }

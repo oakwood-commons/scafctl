@@ -14,8 +14,9 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/oakwood-commons/scafctl/pkg/plugin/identity"
 	"github.com/sigstore/cosign/v2/cmd/cosign/cli/fulcio"
-	"github.com/sigstore/cosign/v2/cmd/cosign/cli/options"
+	cosignoptions "github.com/sigstore/cosign/v2/cmd/cosign/cli/options"
 	"github.com/sigstore/cosign/v2/cmd/cosign/cli/rekor"
 	"github.com/sigstore/cosign/v2/pkg/cosign"
 	"github.com/sigstore/rekor/pkg/generated/client"
@@ -40,7 +41,7 @@ func NewSignatureVerifier() SignatureVerifier {
 // pools. Repeated calls are a no-op thanks to sync.Once.
 func (v *cosignVerifier) initClients() error {
 	v.initOnce.Do(func() {
-		v.rekorClient, v.initErr = rekor.NewClient(options.DefaultRekorURL)
+		v.rekorClient, v.initErr = rekor.NewClient(cosignoptions.DefaultRekorURL)
 		if v.initErr != nil {
 			v.initErr = fmt.Errorf("creating rekor client: %w", v.initErr)
 			return
@@ -68,13 +69,24 @@ func (v *cosignVerifier) VerifySignature(ctx context.Context, imageRef string, p
 		return nil, fmt.Errorf("parsing image reference %q: %w", imageRef, err)
 	}
 
+	// Defense-in-depth: fail closed if a caller forgot to expand placeholders
+	// via SignaturePolicy.ForArtifact or supplied a malformed pattern.
+	for _, id := range policy.TrustedIdentities {
+		if identity.HasPlaceholders(id) {
+			return nil, fmt.Errorf("%w: unexpanded placeholder in trusted identity %q; scope policy with ForArtifact before verification", ErrInvalidIdentityPattern, id)
+		}
+		if err := identity.ValidateTrustedIdentityPattern(id); err != nil {
+			return nil, err
+		}
+	}
+
 	// Build certificate identity matchers from policy.
 	identities := make([]cosign.Identity, 0, len(policy.TrustedIssuers)*len(policy.TrustedIdentities))
 	for _, issuer := range policy.TrustedIssuers {
-		for _, identity := range policy.TrustedIdentities {
+		for _, id := range policy.TrustedIdentities {
 			identities = append(identities, cosign.Identity{
 				IssuerRegExp:  globToRegexp(issuer),
-				SubjectRegExp: globToRegexp(identity),
+				SubjectRegExp: globToRegexp(id),
 			})
 		}
 	}

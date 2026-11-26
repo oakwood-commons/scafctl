@@ -9,6 +9,7 @@ package prepare
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -47,6 +48,7 @@ type prepareConfig struct {
 	showMetrics          bool
 	metricsOut           io.Writer
 	pluginFetcher        *plugin.Fetcher
+	pluginFetcherErr     error
 	lockPlugins          []bundler.LockPlugin
 	pluginCfg            *plugin.ProviderConfig
 	clientOpts           []plugin.ClientOption
@@ -88,6 +90,21 @@ func WithAuthRegistry(r *auth.Registry) Option {
 func WithPluginFetcher(f *plugin.Fetcher) Option {
 	return func(c *prepareConfig) {
 		c.pluginFetcher = f
+		if f != nil {
+			c.pluginFetcherErr = nil
+		}
+	}
+}
+
+// WithPluginFetcherError records the error from constructing a plugin fetcher
+// so solutions that actually require plugin acquisition surface the underlying
+// cause while builtin-only solutions continue to execute without one.
+func WithPluginFetcherError(err error) Option {
+	return func(c *prepareConfig) {
+		c.pluginFetcherErr = err
+		if err != nil {
+			c.pluginFetcher = nil
+		}
 	}
 }
 
@@ -310,6 +327,10 @@ func finishPrepare(
 	var resultRegistry providerLookup = reg
 	if cfg.pluginPool != nil {
 		deps := providerPoolDeps(sol, cfg)
+		if len(deps) > 0 && errors.Is(cfg.pluginFetcherErr, ErrSignaturePolicy) {
+			cleanup()
+			return nil, fmt.Errorf("ensuring provider plugins via pool: %w", cfg.pluginFetcherErr)
+		}
 		release, ensErr := cfg.pluginPool.EnsureAndAcquire(ctx, deps)
 		if ensErr != nil {
 			cleanup()
@@ -325,13 +346,22 @@ func finishPrepare(
 		// the bundle into the shared auth registry, but do NOT kill them per
 		// request -- the long-lived server owns their lifetime, and killing them
 		// would poison the shared auth registry for subsequent requests.
-		if cfg.authRegistry != nil && cfg.pluginFetcher != nil && len(sol.Bundle.Plugins) > 0 {
-			if _, ahErr := registerBundleAuthHandlers(ctx, sol, cfg); ahErr != nil {
+		if cfg.authRegistry != nil && bundleHasAuthHandlers(sol) {
+			if cfg.pluginFetcher == nil {
+				if errors.Is(cfg.pluginFetcherErr, ErrSignaturePolicy) {
+					cleanup()
+					return nil, fmt.Errorf("bundle declares auth handler plugins but no plugin fetcher is available: %w", cfg.pluginFetcherErr)
+				}
+			} else if _, ahErr := registerBundleAuthHandlers(ctx, sol, cfg); ahErr != nil {
 				cleanup()
 				return nil, ahErr
 			}
 		}
 	} else {
+		if len(extractProviders(sol.Bundle.Plugins)) > 0 && errors.Is(cfg.pluginFetcherErr, ErrSignaturePolicy) {
+			cleanup()
+			return nil, fmt.Errorf("%w: %w", errNilPluginFetcher, cfg.pluginFetcherErr)
+		}
 		composite := provider.NewCompositeRegistryFromBase(reg)
 		// Per-call mode: classify, fetch, and register the plugins declared in
 		// bundle.plugins into a versioned composite registry, and build a
@@ -361,6 +391,9 @@ func finishPrepare(
 			}
 			if cfg.pluginFetcher == nil {
 				cleanup()
+				if cfg.pluginFetcherErr != nil {
+					return nil, fmt.Errorf("bundle declares auth handler plugins but no plugin fetcher is available: %w", cfg.pluginFetcherErr)
+				}
 				return nil, fmt.Errorf("bundle declares auth handler plugins but no plugin fetcher is available")
 			}
 			authClients, authRegErr := registerBundleAuthHandlers(ctx, sol, cfg)
@@ -767,6 +800,9 @@ func autoResolveOfficialProviders(
 	}
 
 	if cfg.pluginFetcher == nil {
+		if errors.Is(cfg.pluginFetcherErr, ErrSignaturePolicy) {
+			return nil, cfg.pluginFetcherErr
+		}
 		if lgr != nil {
 			lgr.V(1).Info("official providers need auto-resolution but no plugin fetcher available")
 		}
@@ -962,6 +998,9 @@ func autoResolveOfficialAuthHandlers(
 	}
 
 	if cfg.pluginFetcher == nil {
+		if errors.Is(cfg.pluginFetcherErr, ErrSignaturePolicy) {
+			return nil, cfg.pluginFetcherErr
+		}
 		if lgr != nil {
 			lgr.V(1).Info("official auth handlers need auto-resolution but no plugin fetcher available")
 		}
@@ -1131,19 +1170,34 @@ func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOve
 	return plugin.NewFetcher(cfg), nil
 }
 
+// ErrSignaturePolicy indicates that the plugin signature verification policy
+// could not be resolved or validated.
+var ErrSignaturePolicy = errors.New("plugin signature policy")
+
 // ResolveSignaturePolicy resolves and validates the effective plugin signature
 // policy in priority order: explicit override, context policy (embedder), then
-// application config.
+// application config. When falling back to application config, any saved
+// configuration load error on ctx fails closed so invalid signature settings
+// cannot disable verification, and the raw signature config is validated
+// before disabled modes ("off" or empty) are converted to a nil policy.
 func ResolveSignaturePolicy(ctx context.Context, appCfg *config.Config, override *plugin.SignaturePolicy, lgr logr.Logger) (*plugin.SignaturePolicy, error) {
 	sigPolicy := override
 	if sigPolicy == nil {
 		sigPolicy = plugin.SignaturePolicyFromContext(ctx)
 	}
 	if sigPolicy == nil {
+		if loadErr := config.LoadErrorFromContext(ctx); loadErr != nil {
+			return nil, fmt.Errorf("%w: configuration failed to load: %w", ErrSignaturePolicy, loadErr)
+		}
+		if appCfg != nil {
+			if err := appCfg.Plugins.Signatures.Validate(); err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrSignaturePolicy, err)
+			}
+		}
 		sigPolicy = signaturePolicyFromConfig(appCfg, lgr)
 	}
 	if err := sigPolicy.Validate(); err != nil {
-		return nil, fmt.Errorf("plugin signature policy: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrSignaturePolicy, err)
 	}
 	return sigPolicy, nil
 }
@@ -1182,6 +1236,9 @@ func ResolveOfficialProviders(ctx context.Context, sol *solution.Solution, reg *
 	lgr := logger.FromContext(ctx)
 	fetcher, err := BuildPluginFetcher(ctx)
 	if err != nil {
+		if errors.Is(err, ErrSignaturePolicy) {
+			return nil, err
+		}
 		if lgr != nil {
 			lgr.V(1).Info("plugin fetcher not available for official provider auto-resolution", "error", err)
 		}
@@ -1255,6 +1312,9 @@ func ResolveOfficialAuthHandlers(
 	lgr := logger.FromContext(ctx)
 	fetcher, err := BuildPluginFetcher(ctx)
 	if err != nil {
+		if errors.Is(err, ErrSignaturePolicy) {
+			return nil, err
+		}
 		if lgr != nil {
 			lgr.V(1).Info("plugin fetcher not available for official auth handler auto-resolution", "error", err)
 		}

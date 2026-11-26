@@ -9,8 +9,11 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/plugin/identity"
 )
 
 // SignatureMode controls how signature verification failures are handled.
@@ -54,8 +57,10 @@ type SignaturePolicy struct {
 	TrustedIssuers []string `json:"trustedIssuers,omitempty" yaml:"trustedIssuers,omitempty" doc:"Trusted OIDC certificate issuers" maxItems:"20"`
 
 	// TrustedIdentities are glob patterns matching the certificate
-	// subject/identity (e.g., "https://github.com/oakwood-commons/*").
-	TrustedIdentities []string `json:"trustedIdentities,omitempty" yaml:"trustedIdentities,omitempty" doc:"Trusted signing identity patterns (glob)" maxItems:"50"`
+	// subject/identity (e.g., "https://github.com/oakwood-commons/*" or
+	// "https://github.com/my-org/scafctl-plugin-{name}/.github/workflows/*").
+	// Supports optional {name} and {kind} placeholders expanded via ForArtifact.
+	TrustedIdentities []string `json:"trustedIdentities,omitempty" yaml:"trustedIdentities,omitempty" doc:"Trusted signing identity patterns (glob, supports {name} and {kind} placeholders)" maxItems:"50"`
 }
 
 // IsEnabled reports whether signature verification is active (mode != off).
@@ -64,11 +69,26 @@ func (p *SignaturePolicy) IsEnabled() bool {
 	return p != nil && p.Mode != SignatureModeOff && p.Mode != ""
 }
 
+// HasPlaceholders reports whether any TrustedIdentities entry contains a
+// supported artifact placeholder ({name} or {kind}).
+func (p *SignaturePolicy) HasPlaceholders() bool {
+	if p == nil {
+		return false
+	}
+	for _, pat := range p.TrustedIdentities {
+		if identity.HasPlaceholders(pat) {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate checks the policy for configuration errors. It returns an error
-// when the mode requires verification but no trusted issuer/identity pairs
-// are configured.
+// when the mode is unrecognized, when verification is enabled without trusted
+// issuer/identity pairs, or when any configured trusted issuer or identity
+// pattern is malformed (even when mode is off).
 func (p *SignaturePolicy) Validate() error {
-	if p == nil || !p.IsEnabled() {
+	if p == nil {
 		return nil
 	}
 	// Reject unknown modes early so callers don't silently fall through to
@@ -76,13 +96,63 @@ func (p *SignaturePolicy) Validate() error {
 	if _, err := ParseSignatureMode(string(p.Mode)); err != nil {
 		return err
 	}
-	if len(p.TrustedIssuers) == 0 || len(p.TrustedIdentities) == 0 {
+	if p.IsEnabled() && (len(p.TrustedIssuers) == 0 || len(p.TrustedIdentities) == 0) {
 		return fmt.Errorf(
 			"signature mode %q requires at least one trustedIssuers and one trustedIdentities entry",
 			p.Mode,
 		)
 	}
+	for i, issuer := range p.TrustedIssuers {
+		if strings.TrimSpace(issuer) == "" {
+			return fmt.Errorf("trustedIssuers[%d]: must not be empty", i)
+		}
+	}
+	for i, pat := range p.TrustedIdentities {
+		if err := identity.ValidateTrustedIdentityPattern(pat); err != nil {
+			return fmt.Errorf("trustedIdentities[%d]: %w", i, err)
+		}
+	}
 	return nil
+}
+
+// ForArtifact returns a SignaturePolicy scoped to the given artifact kind and
+// short name by expanding any {name} and {kind} placeholders in TrustedIdentities.
+//
+// When p is nil or disabled, ForArtifact returns (p, nil). Static policies
+// without placeholders validate their TrustedIdentities patterns and return p
+// unchanged without allocating. When placeholders are present, kind must satisfy
+// catalog.ArtifactKind.IsValid and name must satisfy catalog.IsValidName so
+// untrusted artifact coordinates cannot inject glob, path, or regex tokens.
+func (p *SignaturePolicy) ForArtifact(kind catalog.ArtifactKind, name string) (*SignaturePolicy, error) {
+	if p == nil || !p.IsEnabled() {
+		return p, nil
+	}
+	for i, pat := range p.TrustedIdentities {
+		if err := identity.ValidateTrustedIdentityPattern(pat); err != nil {
+			return nil, fmt.Errorf("trustedIdentities[%d]: %w", i, err)
+		}
+	}
+	if !p.HasPlaceholders() {
+		return p, nil
+	}
+	if !kind.IsValid() {
+		return nil, fmt.Errorf("%w: unsupported artifact kind %q (must be solution, provider, or auth-handler)", ErrInvalidArtifactIdentity, kind)
+	}
+	if !catalog.IsValidName(name) {
+		return nil, fmt.Errorf("%w: invalid artifact name %q", ErrInvalidArtifactIdentity, name)
+	}
+	expanded := make([]string, len(p.TrustedIdentities))
+	kindStr := kind.String()
+	for i, pat := range p.TrustedIdentities {
+		out, err := identity.ExpandTrustedIdentityPattern(pat, name, kindStr)
+		if err != nil {
+			return nil, fmt.Errorf("trustedIdentities[%d]: %w", i, err)
+		}
+		expanded[i] = out
+	}
+	cp := *p
+	cp.TrustedIdentities = expanded
+	return &cp, nil
 }
 
 // HandleVerificationError applies the policy's mode to a signature
@@ -181,6 +251,14 @@ var ErrSignatureInvalid = errors.New("cosign signature verification failed")
 // ErrSignatureUnverifiable indicates that a plugin has no registry image whose
 // signature could be checked, such as a locally built plugin.
 var ErrSignatureUnverifiable = errors.New("plugin has no registry image to verify a signature against")
+
+// ErrInvalidIdentityPattern indicates that a SignaturePolicy.TrustedIdentities
+// entry is malformed or contains an unexpanded or unsupported placeholder.
+var ErrInvalidIdentityPattern = identity.ErrInvalidIdentityPattern
+
+// ErrInvalidArtifactIdentity indicates that an artifact kind or name fails the
+// safe-identifier rules required when expanding TrustedIdentities placeholders.
+var ErrInvalidArtifactIdentity = errors.New("invalid artifact identity for signature verification")
 
 // fulcioOIDCIssuerOIDs are the ASN.1 OIDs for the Fulcio OIDC issuer
 // certificate extension. v1 is 1.3.6.1.4.1.57264.1.1; v2 is

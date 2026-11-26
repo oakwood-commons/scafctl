@@ -69,7 +69,7 @@ The system uses **GitHub Actions OIDC tokens** rather than long-lived keys:
 1. **GitHub Actions generates an OIDC token** when a release workflow runs on a tagged commit
 2. **Fulcio** (Sigstore CA) issues a **short-lived signing certificate** containing:
    - **Issuer**: `https://token.actions.githubusercontent.com`
-   - **Identity**: The full workflow URI (e.g., `https://github.com/oakwood-commons/scafctl-plugin-auth-entra/.github/workflows/sign-plugin.yml@refs/tags/v1.2.0`)
+   - **Identity (URI SAN)**: The signing workflow's `job_workflow_ref` URI (for example, `https://github.com/my-org/scafctl-plugin-github/.github/workflows/release.yml@refs/tags/v1.2.0` for a repository-local workflow, or `https://github.com/oakwood-commons/scafctl/.github/workflows/sign-plugin.yml@refs/tags/sign-plugin/v1` when delegated to the reusable `sign-plugin.yml` workflow)
 3. **Cosign signs the OCI image** using the ephemeral certificate
 4. **The signature and certificate are recorded in Rekor** (public transparency log)
 5. **No private keys are managed** -- the OIDC token is the only credential
@@ -171,6 +171,51 @@ plugins:
     trustedIdentities:
       - "https://github.com/oakwood-commons/*"
 ~~~
+
+### Per-Artifact Identity Placeholders (`{name}` and `{kind}`)
+
+An organization-wide wildcard such as `https://github.com/my-org/*` proves that an artifact was signed somewhere inside `my-org`, but allows any workflow in that organization with signing permissions to sign an artifact claiming another artifact's name. Organizations using deterministic 1-to-1 repository naming conventions can scope `trustedIdentities` per artifact with template placeholders:
+
+| Placeholder | Expanded Value | Validation |
+|-------------|----------------|------------|
+| `{name}` | Artifact short name being verified (e.g., `agentic-code`, `github`, `entra`) | Must satisfy `catalog.IsValidName` (lowercase alphanumeric + single hyphens, starting with a letter; blocks `/`, `*`, `.`, `..`, and regex/brace metacharacters) |
+| `{kind}` | Artifact kind (`solution`, `provider`, `auth-handler`) | Must satisfy `catalog.ArtifactKind.IsValid` |
+
+Example configuration binding each artifact to its matching source repository alongside the official reusable workflow:
+
+~~~yaml
+# ~/.config/scafctl/config.yaml
+plugins:
+  signatures:
+    mode: "enforce"
+    trustedIssuers:
+      - "https://token.actions.githubusercontent.com"
+    trustedIdentities:
+      - "https://github.com/my-org/sln-{name}/.github/workflows/*"
+      - "https://github.com/my-org/scafctl-plugin-{name}/.github/workflows/*"
+      - "https://github.com/my-org/scafctl-plugin-auth-{name}/.github/workflows/*"
+      - "https://github.com/oakwood-commons/scafctl/.github/workflows/sign-plugin.yml@refs/tags/sign-plugin/v*"
+~~~
+
+Template rules:
+
+- **Static compatibility**: Entries without `{name}` or `{kind}` behave as ordinary `*` globs with zero overhead.
+- **Single-pass expansion**: `{name}` and `{kind}` are expanded in one pass per artifact (`SignaturePolicy.ForArtifact`) and never re-evaluated.
+- **Fail-closed syntax check**: Empty patterns, whitespace, control characters, unbalanced or nested braces (`{name`, `{{name}}`, `{}`), and unknown placeholders (`{repo}`, `{Name}`) are rejected during configuration and policy validation, even when `mode` is `"off"`.
+
+### Reusable Workflows vs. Repository-Local Workflows
+
+Cosign's certificate subject check matches the X.509 **URI Subject Alternative Name (SAN)** issued by Fulcio. For GitHub Actions OIDC tokens, Fulcio populates both the URI SAN and the `BuildSignerURI` extension (`1.3.6.1.4.1.57264.1.9`) from GitHub's `job_workflow_ref` claim:
+
+| Signing Setup | Fulcio URI SAN / `BuildSignerURI` (`job_workflow_ref`) | Fulcio `SourceRepositoryURI` (`repository`) | Works with `{name}` / `{kind}`? |
+|---------------|--------------------------------------------------------|---------------------------------------------|---------------------------------|
+| **Repository-local workflow** (`cosign sign` runs inside `<org>/scafctl-plugin-<name>/.github/workflows/release.yml`) | `https://github.com/<org>/scafctl-plugin-<name>/.github/workflows/release.yml@refs/tags/v1.2.0` | `https://github.com/<org>/scafctl-plugin-<name>` | **Yes** -- URI SAN embeds the artifact repository name, enforcing 1-to-1 repository-to-artifact isolation |
+| **Shared reusable workflow** (`uses: oakwood-commons/scafctl/.github/workflows/sign-plugin.yml@sign-plugin/v1`) | `https://github.com/oakwood-commons/scafctl/.github/workflows/sign-plugin.yml@refs/tags/sign-plugin/v1` | `https://github.com/<org>/<caller-repo>` | **No** -- URI SAN identifies the called reusable workflow, not the calling repository |
+
+Operational implications:
+
+- To enforce **strict per-repository isolation** with `{name}` or `{kind}`, run `cosign sign` directly in each repository's own release workflow (and omit shared reusable-workflow wildcards for that organization).
+- Artifacts signed via `sign-plugin.yml` must be matched by a static reusable-workflow entry such as `https://github.com/oakwood-commons/scafctl/.github/workflows/sign-plugin.yml@refs/tags/sign-plugin/v*`. Note that trusting a shared reusable workflow trusts any repository able to invoke that workflow and push to your configured catalog.
 
 ### Verification Modes
 

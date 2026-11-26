@@ -176,6 +176,9 @@ func autoResolveOfficialVersioned(
 		for i, p := range missing {
 			names[i] = p.Name
 		}
+		if cfg.pluginFetcherErr != nil {
+			return nil, nil, fmt.Errorf("official providers %v need auto-resolution but no plugin fetcher is available: %w", names, cfg.pluginFetcherErr)
+		}
 		return nil, nil, fmt.Errorf("official providers %v need auto-resolution but no plugin fetcher is available", names)
 	}
 

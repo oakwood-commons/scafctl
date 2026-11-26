@@ -46,9 +46,57 @@ func TestCosignVerifier_EmptyIdentities(t *testing.T) {
 		Mode: SignatureModeEnforce,
 		// No issuers or identities — the cross product is empty.
 	}
-	_, err := v.VerifySignature(context.Background(), "ghcr.io/org/plugin@sha256:abc123", policy)
+	_, err := v.VerifySignature(context.Background(), "ghcr.io/org/plugin@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", policy)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no trusted issuer/identity pairs")
+}
+
+func TestCosignVerifier_UnexpandedOrInvalidIdentityFailsClosed(t *testing.T) {
+	t.Parallel()
+	const ref = "ghcr.io/org/providers/github@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+	tests := []struct {
+		name       string
+		identities []string
+		wantText   string
+	}{
+		{
+			name:       "unexpanded {name} placeholder",
+			identities: []string{"https://github.com/my-org/scafctl-plugin-{name}/.github/workflows/*"},
+			wantText:   "unexpanded placeholder",
+		},
+		{
+			name:       "unexpanded {kind} placeholder",
+			identities: []string{"https://github.com/my-org/{kind}/.github/workflows/*"},
+			wantText:   "unexpanded placeholder",
+		},
+		{
+			name:       "unknown placeholder {repo}",
+			identities: []string{"https://github.com/my-org/{repo}/.github/workflows/*"},
+			wantText:   "unknown placeholder {repo}",
+		},
+		{
+			name:       "unclosed brace",
+			identities: []string{"https://github.com/my-org/{name/*"},
+			wantText:   "unclosed '{'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			v := &cosignVerifier{}
+			policy := &SignaturePolicy{
+				Mode:              SignatureModeEnforce,
+				TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+				TrustedIdentities: tt.identities,
+			}
+			res, err := v.VerifySignature(context.Background(), ref, policy)
+			assert.Nil(t, res)
+			require.ErrorIs(t, err, ErrInvalidIdentityPattern)
+			assert.Contains(t, err.Error(), tt.wantText)
+		})
+	}
 }
 
 func BenchmarkCosignVerifier_DisabledPolicy(b *testing.B) {

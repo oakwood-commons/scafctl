@@ -326,3 +326,30 @@ auth:
 	assert.NotContains(t, got.Error, "plaintext-not-secretref", "validation error output must never echo plaintext credential values")
 	assert.NotContains(t, stdout, "plaintext-not-secretref")
 }
+
+func TestValidateOptions_Run_InvalidPluginSignatures_JSON(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	invalidSigCfg := `
+plugins:
+  signatures:
+    mode: "off"
+    trustedIdentities:
+      - "https://github.com/my-org/{repo}/*"
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(invalidSigCfg), 0o600))
+
+	stdout, _, err := runValidate(t, configPath, "json")
+	require.Error(t, err)
+
+	var ec *exitcode.ExitError
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, exitcode.ConfigError, ec.Code)
+
+	var got ValidateResult
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got))
+	assert.False(t, got.Valid)
+	assert.Contains(t, got.Error, "plugins: signatures: trustedIdentities[0]")
+	assert.Contains(t, got.Error, "unknown placeholder {repo}")
+}

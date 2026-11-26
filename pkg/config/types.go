@@ -1062,6 +1062,15 @@ type PluginsConfig struct {
 	GRPCMaxMessageSize int `json:"grpcMaxMessageSize,omitempty" yaml:"grpcMaxMessageSize,omitempty" mapstructure:"grpcMaxMessageSize" doc:"Maximum gRPC message size in bytes for plugin communication" minimum:"1048576" example:"67108864"`
 }
 
+// Plugin signature configuration limits matching struct validation tags.
+const (
+	// MaxTrustedIssuers is the maximum number of plugins.signatures.trustedIssuers entries allowed in config.
+	MaxTrustedIssuers = 20
+
+	// MaxTrustedIdentities is the maximum number of plugins.signatures.trustedIdentities entries allowed in config.
+	MaxTrustedIdentities = 50
+)
+
 // PluginSignaturesConfig holds Sigstore/cosign verification settings for plugins.
 type PluginSignaturesConfig struct {
 	// Mode controls signature verification behavior:
@@ -1075,8 +1084,10 @@ type PluginSignaturesConfig struct {
 	TrustedIssuers []string `json:"trustedIssuers,omitempty" yaml:"trustedIssuers,omitempty" mapstructure:"trustedIssuers" doc:"Trusted OIDC certificate issuers" maxItems:"20"`
 
 	// TrustedIdentities are glob patterns matching certificate subject/identity
-	// fields (e.g., "https://github.com/oakwood-commons/*").
-	TrustedIdentities []string `json:"trustedIdentities,omitempty" yaml:"trustedIdentities,omitempty" mapstructure:"trustedIdentities" doc:"Trusted signing identity patterns (glob)" maxItems:"50"`
+	// fields (e.g., "https://github.com/oakwood-commons/*" or
+	// "https://github.com/my-org/scafctl-plugin-{name}/.github/workflows/*").
+	// Supports optional {name} and {kind} placeholders expanded per artifact.
+	TrustedIdentities []string `json:"trustedIdentities,omitempty" yaml:"trustedIdentities,omitempty" mapstructure:"trustedIdentities" doc:"Trusted signing identity patterns (glob, supports {name} and {kind} placeholders)" maxItems:"50"`
 }
 
 // DiscoveryConfig holds auto-discovery preferences.

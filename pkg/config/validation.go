@@ -15,6 +15,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/plugin/identity"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 )
@@ -128,6 +129,58 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("auth: %w", err)
 	}
 
+	// Validate plugins config
+	if err := c.Plugins.Validate(); err != nil {
+		return fmt.Errorf("plugins: %w", err)
+	}
+
+	return nil
+}
+
+// Validate validates the plugin management configuration.
+func (p *PluginsConfig) Validate() error {
+	if p == nil {
+		return nil
+	}
+	if err := p.Signatures.Validate(); err != nil {
+		return fmt.Errorf("signatures: %w", err)
+	}
+	return nil
+}
+
+// Validate validates the plugin signature verification configuration.
+// Bounds and trusted-identity pattern syntax are checked even when mode is
+// "off" so configuration typos fail fast on config load or validation.
+func (s *PluginSignaturesConfig) Validate() error {
+	if s == nil {
+		return nil
+	}
+	switch s.Mode {
+	case "", "off", "warn", "enforce":
+	default:
+		return fmt.Errorf("mode: unknown signature mode %q: must be off, warn, or enforce", s.Mode)
+	}
+	if len(s.TrustedIssuers) > MaxTrustedIssuers {
+		return fmt.Errorf("trustedIssuers: %d entries exceed the maximum of %d", len(s.TrustedIssuers), MaxTrustedIssuers)
+	}
+	if len(s.TrustedIdentities) > MaxTrustedIdentities {
+		return fmt.Errorf("trustedIdentities: %d entries exceed the maximum of %d", len(s.TrustedIdentities), MaxTrustedIdentities)
+	}
+	if s.Mode == "warn" || s.Mode == "enforce" {
+		if len(s.TrustedIssuers) == 0 || len(s.TrustedIdentities) == 0 {
+			return fmt.Errorf("mode %q requires at least one trustedIssuers and one trustedIdentities entry", s.Mode)
+		}
+	}
+	for i, issuer := range s.TrustedIssuers {
+		if strings.TrimSpace(issuer) == "" {
+			return fmt.Errorf("trustedIssuers[%d]: must not be empty", i)
+		}
+	}
+	for i, pat := range s.TrustedIdentities {
+		if err := identity.ValidateTrustedIdentityPattern(pat); err != nil {
+			return fmt.Errorf("trustedIdentities[%d]: %w", i, err)
+		}
+	}
 	return nil
 }
 
