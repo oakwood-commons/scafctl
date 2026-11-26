@@ -427,7 +427,7 @@ plugins:
 # Catalogs - Registered solution catalogs
 # =============================================================================
 # Catalogs are sources for solutions, resolvers, and actions.
-# Add catalogs here or use: scafctl config add-catalog
+# Add catalogs here or use: scafctl catalog remote add
 #
 # Default catalog location (XDG data directory):
 #   Linux:   ~/.local/share/scafctl/catalog/

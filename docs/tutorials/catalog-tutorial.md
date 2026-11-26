@@ -139,12 +139,12 @@ Once a solution is in the catalog, you can run it by name instead of providing a
 {{< tabs "catalog-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting -o yaml
+scafctl run resolver -s greeting -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting -o yaml
+scafctl run resolver -s greeting -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -163,12 +163,12 @@ No file path needed -- scafctl looked up `greeting` in the catalog and found the
 {{< tabs "catalog-tutorial-cmd-4" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting -o yaml -r name=Alice
+scafctl run resolver -s greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting -o yaml -r name=Alice
+scafctl run resolver -s greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -187,12 +187,12 @@ When you have multiple versions, you can pin to a specific one:
 {{< tabs "catalog-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting@1.0.0 -o yaml -r name=Bob
+scafctl run resolver -s greeting@1.0.0 -o yaml -r name=Bob
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting@1.0.0 -o yaml -r name=Bob
+scafctl run resolver -s greeting@1.0.0 -o yaml -r name=Bob
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -211,12 +211,12 @@ Use `-e` to extract just the value you care about:
 {{< tabs "catalog-tutorial-cmd-6" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting -o yaml -e '_.message' -r name=Carol
+scafctl run resolver -s greeting -o yaml -e '_.message' -r name=Carol
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting -o yaml -e '_.message' -r name=Carol
+scafctl run resolver -s greeting -o yaml -e '_.message' -r name=Carol
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -229,7 +229,7 @@ Hello, Carol!
 
 ### What You Learned
 
-- `scafctl run resolver -f NAME` runs a solution from the catalog by name
+- `scafctl run resolver -s NAME` runs a solution from the catalog by name
 - Without a version, it picks the highest semantic version available
 - Use `NAME@VERSION` to pin a specific version
 - Parameters work the same way as with file-based solutions (`-r key=value`)
@@ -517,12 +517,12 @@ Expected output:
 {{< tabs "catalog-tutorial-cmd-13" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting -o yaml -r name=Alice
+scafctl run resolver -s greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting -o yaml -r name=Alice
+scafctl run resolver -s greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -542,12 +542,12 @@ Without a version, scafctl runs the **highest semantic version** -- in this case
 {{< tabs "catalog-tutorial-cmd-14" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting@1.0.0 -o yaml -r name=Alice
+scafctl run resolver -s greeting@1.0.0 -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting@1.0.0 -o yaml -r name=Alice
+scafctl run resolver -s greeting@1.0.0 -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -916,7 +916,7 @@ cp deploy-v1.tar /Volumes/USB/
 
 # Transfer USB to the air-gapped machine, then:
 scafctl catalog load --input /Volumes/USB/deploy-v1.tar
-scafctl run resolver -f deploy -o yaml -r env=prod
+scafctl run resolver -s deploy -o yaml -r env=prod
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -928,7 +928,7 @@ Copy-Item deploy-v1.tar /Volumes/USB/
 
 # Transfer USB to the air-gapped machine, then:
 scafctl catalog load --input /Volumes/USB/deploy-v1.tar
-scafctl run resolver -f deploy -o yaml -r env=prod
+scafctl run resolver -s deploy -o yaml -r env=prod
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1144,12 +1144,12 @@ The artifact is now in your local catalog. You can run it with:
 {{< tabs "catalog-tutorial-cmd-36" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f greeting -o yaml -r name=Alice
+scafctl run resolver -s greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f greeting -o yaml -r name=Alice
+scafctl run resolver -s greeting -o yaml -r name=Alice
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1159,17 +1159,17 @@ scafctl run resolver -f greeting -o yaml -r name=Alice
 {{< tabs "catalog-tutorial-cmd-37" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl catalog pull ghcr.io/myorg/scafctl/solutions/greeting@1.0.0 --as my-greeting
+scafctl catalog pull ghcr.io/myorg/scafctl/solutions/greeting@1.0.0 --as my-greeting@1.0.0
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl catalog pull ghcr.io/myorg/scafctl/solutions/greeting@1.0.0 --as my-greeting
+scafctl catalog pull ghcr.io/myorg/scafctl/solutions/greeting@1.0.0 --as my-greeting@1.0.0
 ```
 {{% /tab %}}
 {{< /tabs >}}
 
-This stores the artifact locally under the name `my-greeting`.
+This stores the artifact locally under `my-greeting@1.0.0` (`--as` requires an explicit `name@version`).
 
 ### Step 6: Delete from a Remote Registry
 
@@ -1197,13 +1197,13 @@ scafctl catalog delete ghcr.io/myorg/scafctl/solutions/greeting@1.0.0
 {{% tab "Bash" %}}
 ```bash
 # Enable debug logging to see which auth config is being used
-scafctl catalog push ghcr.io/myorg/solutions/greeting@1.0.0 -d
+scafctl catalog push ghcr.io/myorg/solutions/greeting@1.0.0 -D
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # Enable debug logging to see which auth config is being used
-scafctl catalog push ghcr.io/myorg/solutions/greeting@1.0.0 -d
+scafctl catalog push ghcr.io/myorg/solutions/greeting@1.0.0 -D
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1248,7 +1248,7 @@ scafctl works with any OCI-compliant registry:
 
 ### What You Learned
 
-- `scafctl catalog push REGISTRY/solutions/NAME@VERSION` pushes to a remote registry (use `scafctl catalog push solution NAME@VERSION --catalog REGISTRY` for short names)
+- `scafctl catalog push REGISTRY/solutions/NAME@VERSION` pushes to a remote registry (or `scafctl catalog push NAME@VERSION -c REGISTRY` / `scafctl catalog push solution NAME@VERSION -c REGISTRY` for short names)
 - `scafctl catalog pull REGISTRY/solutions/NAME@VERSION` pulls to your local catalog
 - `--as` lets you rename artifacts during push or pull
 - `--force` overwrites existing artifacts
@@ -1450,12 +1450,12 @@ Expected output:
 {{< tabs "catalog-tutorial-cmd-43" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=dev
+scafctl run resolver -s deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=dev
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=dev
+scafctl run resolver -s deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=dev
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1490,12 +1490,12 @@ spec:
 {{< tabs "catalog-tutorial-cmd-44" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=prod
+scafctl run resolver -s deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=prod
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=prod
+scafctl run resolver -s deploy-app -o yaml -e '_.["rendered-deployment"]' -r environment=prod
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1671,13 +1671,13 @@ Notice that scafctl **recursively discovered** the child sub-solution (`sub/chil
 {{% tab "Bash" %}}
 ```bash
 scafctl package solution -f nested-demo/parent.yaml
-scafctl run resolver -f nested-demo -o json
+scafctl run resolver -s nested-demo -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 scafctl package solution -f nested-demo/parent.yaml
-scafctl run resolver -f nested-demo -o json
+scafctl run resolver -s nested-demo -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -2012,6 +2012,7 @@ The AI can inspect catalog artifacts, look up solution versions, and help you ma
 
 ## Next Steps
 
+- [Authoring & Publishing Catalog Solutions](publishing-solutions-tutorial.md) -- Design, test, sign, and publish reusable catalog solutions end to end
 - [Go Templates Tutorial](go-templates-tutorial.md) -- Generate structured text with Go templates
 - [Snapshots Tutorial](snapshots-tutorial.md) -- Capture and compare execution snapshots
 - [Functional Testing Tutorial](functional-testing.md) -- Write and run automated tests

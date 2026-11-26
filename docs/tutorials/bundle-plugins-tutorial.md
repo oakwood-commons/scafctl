@@ -95,7 +95,7 @@ built-in provider and whose `kind` is `provider`.
 To see a detailed explanation with examples:
 
 ~~~bash
-scafctl lint rules --explain builtin-in-bundle-plugins
+scafctl lint rule builtin-in-bundle-plugins
 ~~~
 
 Or via the MCP server:

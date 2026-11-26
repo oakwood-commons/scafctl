@@ -88,7 +88,7 @@ The data is available under `_`, just like in solution resolvers.
 
 ### Using Data Files
 
-For larger datasets, use `--data-file`:
+For larger datasets, use `-f` / `--file`:
 
 {{< tabs "eval-tutorial-cmd-4" >}}
 {{% tab "Bash" %}}

@@ -45,6 +45,7 @@ scafctl run resolver -f hello.yaml -o yaml
 
 - **[Getting Started](tutorials/getting-started/)**: Install `scafctl` and run your first solution
 - **[Tutorials](tutorials/)**: Step-by-step guides for resolvers, actions, CEL, catalogs, MCP, and more
+- **[Authoring & Publishing Catalog Solutions](tutorials/publishing-solutions-tutorial/)**: Design, test, sign, and publish reusable solutions
 - **[MCP Server](tutorials/mcp-server-tutorial/)**: Expose live schemas and dry-run validation to AI coding agents
 - **[State Tutorial](tutorials/state-tutorial/)**: Persist resolver values across executions
 - **[Design](design/)**: Architecture, design docs, and contributor guides

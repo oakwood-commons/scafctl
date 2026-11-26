@@ -116,6 +116,7 @@ scafctl explain provider http
 ### Go Deeper
 - [CEL Expressions](docs/tutorials/cel-tutorial/): Dynamic evaluation
 - [Catalog](docs/tutorials/catalog-tutorial/): Share solutions via OCI
+- [Publishing Catalog Solutions](docs/tutorials/publishing-solutions-tutorial/): Design, sign, and publish reusable solutions
 - [MCP Server](docs/tutorials/mcp-server-tutorial/): Connect AI coding agents (`scafctl mcp serve`)
 - [Provider Reference](docs/tutorials/provider-reference/): All 22 providers
 
