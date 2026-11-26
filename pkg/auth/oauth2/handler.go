@@ -332,11 +332,30 @@ func (h *Handler) RegistryUsername() string {
 // tokenExchange, or the resolved robot username when FlowPAT is active and
 // Username is set). Implements catalog.ContextualRegistryUsernameProvider.
 func (h *Handler) RegistryUsernameForContext(ctx context.Context) string {
+	return h.serviceUsernameForContext(ctx, h.cfg.RegistryUsername)
+}
+
+// GitUsername returns the configured Git HTTPS username convention for the
+// default profile context. Prefer GitUsernameForContext when a profile-bearing
+// request context is available.
+func (h *Handler) GitUsername() string {
+	return h.GitUsernameForContext(context.Background())
+}
+
+// GitUsernameForContext returns the Git HTTPS username for the active profile
+// in ctx (the derived username from tokenExchange, the resolved static/robot
+// username when FlowPAT is active and Username is set, or the configured
+// GitUsername).
+func (h *Handler) GitUsernameForContext(ctx context.Context) string {
+	return h.serviceUsernameForContext(ctx, h.cfg.GitUsername)
+}
+
+func (h *Handler) serviceUsernameForContext(ctx context.Context, fallbackUsername string) string {
 	ctx = h.resolveContextProfile(ctx)
 	profile := auth.ProfileFromContext(ctx)
 
 	if state, err := h.getSessionState(ctx); err != nil || state == sessionStateLoggedOut {
-		return h.cfg.RegistryUsername
+		return fallbackUsername
 	}
 
 	h.mu.RLock()
@@ -374,7 +393,7 @@ func (h *Handler) RegistryUsernameForContext(ctx context.Context) string {
 	if h.cfg.TokenExchange != nil && flow != auth.FlowPAT && derivedUser != "" {
 		return derivedUser
 	}
-	return h.cfg.RegistryUsername
+	return fallbackUsername
 }
 
 // ActiveFlow returns the authentication flow currently in use, implementing
@@ -2695,13 +2714,17 @@ func (h *Handler) setDerivedUsername(ctx context.Context, username string) {
 }
 
 func (h *Handler) patFingerprint() string {
-	return auth.FingerprintHash(strings.Join([]string{
+	parts := []string{
 		string(h.cfg.Token),
 		h.cfg.Username,
 		h.cfg.Registry,
 		h.cfg.RegistryUsername,
 		h.cfg.VerifyURL,
-	}, "|"))
+	}
+	if h.cfg.GitHost != "" || h.cfg.GitUsername != "" {
+		parts = append(parts, h.cfg.GitHost, h.cfg.GitUsername)
+	}
+	return auth.FingerprintHash(strings.Join(parts, "|"))
 }
 
 func (h *Handler) storePATSessionSecrets(ctx context.Context, patToken, username string, claims *auth.Claims, scopes []string) error {
@@ -3187,7 +3210,14 @@ func (h *Handler) executeTokenExchange(ctx context.Context, primaryToken string)
 		method = http.MethodPost
 	}
 
+	excHostname := h.cfg.Registry
+	if excHostname == "" {
+		excHostname = h.cfg.GitHost
+	}
 	regUsername := h.cfg.RegistryUsername
+	if regUsername == "" {
+		regUsername = h.cfg.GitUsername
+	}
 
 	var bodyReader io.Reader
 	if exc.RequestBody != "" {
@@ -3195,7 +3225,7 @@ func (h *Handler) executeTokenExchange(ctx context.Context, primaryToken string)
 			Name:    "exchange-request-body",
 			Content: string(exc.RequestBody),
 			Data: map[string]string{
-				"Hostname": h.cfg.Registry,
+				"Hostname": excHostname,
 				"Username": regUsername,
 			},
 		})
@@ -3343,7 +3373,7 @@ func (h *Handler) derivedFingerprint(ctx context.Context, flow auth.Flow) string
 	if method == "" {
 		method = http.MethodPost
 	}
-	return auth.FingerprintHash(strings.Join([]string{
+	parts := []string{
 		base,
 		exc.URL,
 		method,
@@ -3352,7 +3382,11 @@ func (h *Handler) derivedFingerprint(ctx context.Context, flow auth.Flow) string
 		exc.UsernameJSONPath,
 		h.cfg.Registry,
 		h.cfg.RegistryUsername,
-	}, "|"))
+	}
+	if h.cfg.GitHost != "" || h.cfg.GitUsername != "" {
+		parts = append(parts, h.cfg.GitHost, h.cfg.GitUsername)
+	}
+	return auth.FingerprintHash(strings.Join(parts, "|"))
 }
 
 func (h *Handler) memCacheKey(ctx context.Context, flow auth.Flow, scope string) string {

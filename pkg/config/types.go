@@ -640,6 +640,9 @@ type GlobalAuthConfig struct {
 	// CustomOAuth2 contains user-defined OAuth2 auth handlers.
 	CustomOAuth2 []CustomOAuth2Config `json:"customOAuth2,omitempty" yaml:"customOAuth2,omitempty" mapstructure:"customOAuth2" doc:"User-defined OAuth2 auth handlers for any OAuth2 service" maxItems:"20"`
 
+	// Git contains Git HTTPS credential helper routing configuration.
+	Git *GitAuthConfig `json:"git,omitempty" yaml:"git,omitempty" mapstructure:"git" doc:"Git HTTPS credential helper configuration"`
+
 	// Handlers holds per-handler configuration namespaces keyed by handler name
 	// (e.g. "openshift"). The host consumes the reserved "hostname" block for
 	// alias/endpoint resolution; every other key is delivered opaquely to the
@@ -1255,6 +1258,44 @@ type APITracingConfig struct {
 	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable OpenTelemetry tracing"`
 }
 
+// Git credential helper configuration limits matching struct validation tags.
+const (
+	// MaxGitCredentialRules is the maximum number of auth.git.rules entries allowed in config.
+	MaxGitCredentialRules = 100
+
+	// MaxGitRuleHostLength is the maximum length of a Git host selector.
+	MaxGitRuleHostLength = 253
+
+	// MaxGitRulePathPrefixLength is the maximum length of a Git repository path prefix.
+	MaxGitRulePathPrefixLength = 512
+
+	// MaxGitRuleScopeLength is the maximum length of a Git rule OAuth scope override.
+	MaxGitRuleScopeLength = 1024
+
+	// MaxGitRuleUsernameLength is the maximum length of a Git HTTP Basic username override.
+	MaxGitRuleUsernameLength = 256
+)
+
+// GitAuthConfig holds Git HTTPS credential helper configuration under auth.git.
+type GitAuthConfig struct {
+	// AllowInsecureHTTP permits serving credentials over plain http:// to non-loopback hosts.
+	// Disabled by default so bearer tokens are never sent in cleartext over the network.
+	AllowInsecureHTTP bool `json:"allowInsecureHttp,omitempty" yaml:"allowInsecureHttp,omitempty" mapstructure:"allowInsecureHttp" doc:"Allow serving Git credentials over plain http:// to non-loopback hosts (default: false)"`
+
+	// Rules defines ordered host and path routing rules evaluated before built-in host inference.
+	Rules []GitCredentialRule `json:"rules,omitempty" yaml:"rules,omitempty" mapstructure:"rules" doc:"Ordered host and path routing rules for git-credential" maxItems:"100"`
+}
+
+// GitCredentialRule maps a Git host (and optional repository path prefix) to an auth handler and profile.
+type GitCredentialRule struct {
+	Host       string `json:"host" yaml:"host" mapstructure:"host" doc:"Target Git host (case-insensitive exact match, optional host:port)" maxLength:"253" example:"github.com" pattern:"^[a-zA-Z0-9._:\\[\\]-]+$" patternDescription:"hostname or host:port without scheme or path"`
+	PathPrefix string `json:"pathPrefix,omitempty" yaml:"pathPrefix,omitempty" mapstructure:"pathPrefix" doc:"Optional repository path prefix matched on '/' segment boundaries (e.g. work-org or work-org/team)" maxLength:"512" example:"work-org"`
+	Handler    string `json:"handler" yaml:"handler" mapstructure:"handler" doc:"Auth handler name used to acquire tokens for matching remotes" maxLength:"64" example:"github" pattern:"^[a-zA-Z0-9][a-zA-Z0-9._-]*$" patternDescription:"ASCII alphanumeric characters, dots, hyphens, or underscores, starting with an alphanumeric character"`
+	Profile    string `json:"profile,omitempty" yaml:"profile,omitempty" mapstructure:"profile" doc:"Optional auth profile override for matching remotes" maxLength:"64" example:"work" pattern:"^[a-zA-Z0-9][a-zA-Z0-9_-]*$" patternDescription:"ASCII alphanumeric characters, hyphens, or underscores, starting with an alphanumeric character"`
+	Scope      string `json:"scope,omitempty" yaml:"scope" mapstructure:"scope" doc:"Optional OAuth scope override for token acquisition" maxLength:"1024" example:"499b84ac-1321-427f-aa17-267ca6975798/.default"`
+	Username   string `json:"username,omitempty" yaml:"username,omitempty" mapstructure:"username" doc:"Optional Git HTTP Basic username override" maxLength:"256" example:"x-access-token"`
+}
+
 // Custom OAuth2 configuration limits matching struct validation tags.
 const (
 	// MaxCustomOAuth2Handlers is the maximum number of custom OAuth2 handler entries allowed in config.
@@ -1349,6 +1390,10 @@ type CustomOAuth2Config struct {
 	// Registry association (optional, only for OCI registry auth)
 	Registry         string `json:"registry,omitempty" yaml:"registry,omitempty" mapstructure:"registry" doc:"OCI registry host for auto-detection (optional, registry-only)" maxLength:"253" example:"quay.io"`
 	RegistryUsername string `json:"registryUsername,omitempty" yaml:"registryUsername,omitempty" mapstructure:"registryUsername" doc:"Username for registry auth (optional, default: oauth2accesstoken)" maxLength:"256"`
+
+	// Git HTTPS association (optional, for git-credential auto-detection)
+	GitHost     string `json:"gitHost,omitempty" yaml:"gitHost,omitempty" mapstructure:"gitHost" doc:"Git HTTPS host for auto-detection by git-credential (optional)" maxLength:"253" example:"gitlab.example.com"`
+	GitUsername string `json:"gitUsername,omitempty" yaml:"gitUsername,omitempty" mapstructure:"gitUsername" doc:"Username for Git HTTPS auth (optional, default: oauth2)" maxLength:"256" example:"oauth2"`
 
 	// Token exchange (optional secondary credential derivation)
 	TokenExchange *TokenExchangeConfig `json:"tokenExchange,omitempty" yaml:"tokenExchange,omitempty" mapstructure:"tokenExchange" doc:"Optional secondary API call to derive a service-specific credential from the OAuth2 token"`

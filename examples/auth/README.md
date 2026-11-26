@@ -397,6 +397,8 @@ and Dynamic Client Registration examples.
 - [Custom OAuth2 handler examples](custom-oauth2-config.md) -- Quay.io, GitLab, Harbor, workload identity, and CLI setup
 - [Custom OAuth2 `--from-file` template](custom-oauth2-handler.yaml) -- standalone handler definition for `scafctl auth oauth2 add --from-file`
 - [Auth Tutorial](../../docs/tutorials/auth-tutorial.md) -- full walkthrough
+- [Git HTTPS Credential Helper](git-credential-setup.md) -- authenticate `git clone`/`fetch`/`push` over HTTPS with multi-org profile routing
+- [Docker Credential Helper](credential-helper-setup.md) -- authenticate Docker and Podman against OCI registries
 - [kubectl Exec Credential](kubectl-exec-credential.md) -- use scafctl as a Kubernetes credential plugin
 - [Kubernetes login / logout](kube-login.md) -- automate kubeconfig setup with `scafctl kube login`
 - [Third-party handler config](third-party-handler-config.yaml) -- pin a catalog auth handler and declare its trust domains

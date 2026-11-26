@@ -64,6 +64,11 @@
         "layout": "table"
       },
       {
+        "title": "Git HTTPS",
+        "fields": ["gitHost", "gitUsername"],
+        "layout": "table"
+      },
+      {
         "title": "Advanced",
         "fields": ["identityFields", "tokenExchange", "dynamicClientRegistration"],
         "layout": "table"
@@ -214,6 +219,18 @@
         "type": "string",
         "title": "Registry Username",
         "description": "OCI registry username convention"
+      },
+      "gitHost": {
+        "type": "string",
+        "title": "Git Host",
+        "description": "Associated Git HTTPS host for git-credential routing",
+        "maxLength": 253
+      },
+      "gitUsername": {
+        "type": "string",
+        "title": "Git Username",
+        "description": "Git HTTPS Basic authentication username convention",
+        "maxLength": 256
       },
       "tokenExchange": {
         "type": "object",

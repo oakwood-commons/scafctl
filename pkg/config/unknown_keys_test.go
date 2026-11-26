@@ -59,6 +59,19 @@ func TestGetKnownConfigKeys(t *testing.T) {
 
 	// Check nested catalog httpclient keys
 	assert.True(t, keys["catalogs.*.httpclient.timeout"], "catalogs.*.httpclient.timeout should be known")
+
+	// Check git credential helper routing keys and custom OAuth2 git fields
+	assert.True(t, keys["auth.git"], "auth.git should be known")
+	assert.True(t, keys["auth.git.allowinsecurehttp"], "auth.git.allowinsecurehttp should be known")
+	assert.True(t, keys["auth.git.rules"], "auth.git.rules should be known")
+	assert.True(t, keys["auth.git.rules.*.host"], "auth.git.rules.*.host should be known")
+	assert.True(t, keys["auth.git.rules.*.pathprefix"], "auth.git.rules.*.pathprefix should be known")
+	assert.True(t, keys["auth.git.rules.*.handler"], "auth.git.rules.*.handler should be known")
+	assert.True(t, keys["auth.git.rules.*.profile"], "auth.git.rules.*.profile should be known")
+	assert.True(t, keys["auth.git.rules.*.scope"], "auth.git.rules.*.scope should be known")
+	assert.True(t, keys["auth.git.rules.*.username"], "auth.git.rules.*.username should be known")
+	assert.True(t, keys["auth.customoauth2.*.githost"], "auth.customoauth2.*.githost should be known")
+	assert.True(t, keys["auth.customoauth2.*.gitusername"], "auth.customoauth2.*.gitusername should be known")
 }
 
 func TestIsKnownKey(t *testing.T) {

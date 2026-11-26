@@ -15091,6 +15091,7 @@ func TestIntegration_UnknownSubcommand_ErrorsNonZero(t *testing.T) {
 		{"inspect", "bogus-xyz"},
 		{"package", "bogus-xyz"},
 		{"credential-helper", "bogus-xyz"},
+		{"git-credential", "bogus-xyz"},
 		{"diff", "bogus-xyz"},
 		{"extract", "bogus-xyz"},
 		{"render", "bogus-xyz"},

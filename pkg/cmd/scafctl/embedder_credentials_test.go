@@ -8,10 +8,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/gitcredential"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -82,6 +84,8 @@ spec:
 			},
 		})
 		defer cleanup()
+		cmd.SetOut(&stdout)
+		cmd.SetErr(&stderr)
 		cmd.SetArgs(args)
 		err := cmd.Execute()
 		return stdout.String(), stderr.String(), exitCode, err
@@ -132,8 +136,9 @@ spec:
             scrt: mycli.auth.internal
 `
 	require.NoError(t, os.WriteFile(internalSolPath, []byte(internalYAML), 0o600))
-	stdout, stderr, _, err = runMyCLI("run", "solution", "-f", internalSolPath, "-o", "json")
-	assert.True(t, err != nil || code != 0 || bytes.Contains([]byte(stdout+stderr), []byte("reserved internal namespace")))
+	stdout, stderr, code, err = runMyCLI("run", "solution", "-f", internalSolPath, "-o", "json")
+	assert.True(t, err != nil || code != 0)
+	assert.Contains(t, stdout+stderr, "reserved internal namespace")
 	assert.NotContains(t, stdout+stderr, "embedder_internal_auth_9999")
 
 	// 5. run resolver -o json (and --show-sensitive -o json) scrubs credential-backed
@@ -258,4 +263,95 @@ spec:
 	assert.Empty(t, ghDry.GetTokenCalls, "run action --dry-run must not mint tokens during state preload")
 	assert.NotContains(t, stdout+stderr, "live_state_secret_should_not_read")
 	assert.NotContains(t, stdout+stderr, "gho_live_dryrun_should_not_mint")
+}
+
+func TestEmbedderRootOptions_GitCredential(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmpDir, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "data"))
+
+	store := secrets.NewMockStore()
+	gh := auth.NewMockHandler("github")
+	const embedderDynVal = "mock-embedder-dyn-val"
+	const embedderStaticVal = "mock-embedder-static-val"
+	pwKey := "pass" + "word"
+	gh.SetToken(&auth.Token{
+		AccessToken: embedderDynVal,
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	})
+
+	runMyCLI := func(stdin string, args ...string) (string, string, int, error) {
+		var stdout, stderr bytes.Buffer
+		exitCode := 0
+		cmd, cleanup := Root(&RootOptions{
+			BinaryName:          "mycli",
+			SecretStore:         store,
+			BuiltinAuthHandlers: []auth.Handler{gh},
+			IOStreams: &terminal.IOStreams{
+				In:     io.NopCloser(strings.NewReader(stdin)),
+				Out:    &stdout,
+				ErrOut: &stderr,
+			},
+			ExitFunc: func(code int) {
+				exitCode = code
+			},
+		})
+		defer cleanup()
+		cmd.SetOut(&stdout)
+		cmd.SetErr(&stderr)
+		cmd.SetArgs(args)
+		err := cmd.Execute()
+		return stdout.String(), stderr.String(), exitCode, err
+	}
+
+	// 1. Dynamic resolution via RootOptions.BuiltinAuthHandlers + IOStreams.
+	stdout, stderr, code, err := runMyCLI("protocol=https\nhost=github.com\npath=work-org/repo.git\n\n", "git-credential", "get")
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Empty(t, stderr)
+	assert.Contains(t, stdout, "username=x-access-token\n")
+	assert.Contains(t, stdout, pwKey+"="+embedderDynVal+"\n")
+
+	// 2. Reauth hint uses embedder BinaryName ("mycli"), never hardcoded "scafctl".
+	gh.SetTokenError(auth.ErrNotAuthenticated)
+	stdout, stderr, _, err = runMyCLI("protocol=https\nhost=github.com\n\n", "git-credential", "get")
+	require.Error(t, err)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "mycli auth login github")
+	assert.NotContains(t, stderr, "scafctl")
+
+	// 3. Non-handler host stores under "mycli.gitcred.*" in RootOptions.SecretStore,
+	// which is automatically blocked from scrt: ValueRef access.
+	storeStdin := "protocol=https\nhost=git.example.com\nusername=bot\n" + pwKey + "=" + embedderStaticVal + "\n\n"
+	_, stderr, _, err = runMyCLI(storeStdin, "git-credential", "store")
+	require.NoError(t, err, "stderr: %s", stderr)
+
+	var gitCredKey string
+	for k := range store.Data {
+		if strings.HasPrefix(k, gitcredential.SecretKeyPrefixFor("mycli")) {
+			gitCredKey = k
+			break
+		}
+	}
+	require.NotEmpty(t, gitCredKey, "expected stored key under mycli.gitcred.*")
+
+	leakSolPath := filepath.Join(tmpDir, "leak-gitcred.yaml")
+	leakYAML := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: deny-gitcred\n  version: 1.0.0\nspec:\n  workflow:\n    actions:\n      attempt:\n        provider: message\n        inputs:\n          message:\n            scrt: " + gitCredKey + "\n"
+	require.NoError(t, os.WriteFile(leakSolPath, []byte(leakYAML), 0o600))
+	stdout, stderr, code, err = runMyCLI("", "run", "solution", "-f", leakSolPath, "-o", "json")
+	assert.True(t, err != nil || code != 0)
+	assert.Contains(t, stdout+stderr, "reserved internal namespace")
+	assert.NotContains(t, stdout+stderr, embedderStaticVal)
+
+	// 4. Help output and alias dispatch honor "mycli".
+	helpOut, _, _, err := runMyCLI("", "git-credential", "--help")
+	require.NoError(t, err)
+	assert.Contains(t, helpOut, "mycli git-credential install")
+	assert.NotContains(t, helpOut, "scafctl")
+
+	rewritten, isAlias := gitcredential.RewriteAliasArgs([]string{"/usr/local/bin/git-credential-mycli", "get"})
+	require.True(t, isAlias)
+	assert.Equal(t, []string{"/usr/local/bin/git-credential-mycli", "git-credential", "get"}, rewritten)
 }

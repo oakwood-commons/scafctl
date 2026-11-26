@@ -58,6 +58,7 @@ type SanitizedAuth struct {
 	GitHub                     *SanitizedGitHubAuth            `json:"github,omitempty" yaml:"github,omitempty" doc:"GitHub auth configuration (redacted)"`
 	GCP                        *SanitizedGCPAuth               `json:"gcp,omitempty" yaml:"gcp,omitempty" doc:"GCP auth configuration (redacted)"`
 	CustomOAuth2               []SanitizedCustomOAuth2         `json:"customOAuth2,omitempty" yaml:"customOAuth2,omitempty" doc:"User-defined OAuth2 auth handlers (secrets redacted)" maxItems:"20"`
+	Git                        *GitAuthConfig                  `json:"git,omitempty" yaml:"git,omitempty" doc:"Git HTTPS credential helper configuration"`
 	Handlers                   map[string]SanitizedAuthHandler `json:"handlers,omitempty" yaml:"handlers,omitempty" doc:"Per-handler configuration; opaque plugin settings dropped"`
 	TrustedVerificationDomains []string                        `json:"trustedVerificationDomains,omitempty" yaml:"trustedVerificationDomains,omitempty" doc:"Additional trusted domains for device code verification URIs" maxItems:"50"`
 }
@@ -115,6 +116,8 @@ type SanitizedCustomOAuth2 struct {
 	IdentityFields            *IdentityFieldMapping               `json:"identityFields,omitempty" yaml:"identityFields,omitempty" doc:"Field mapping from verify response to identity claims"`
 	Registry                  string                              `json:"registry,omitempty" yaml:"registry,omitempty" doc:"OCI registry host" maxLength:"253"`
 	RegistryUsername          string                              `json:"registryUsername,omitempty" yaml:"registryUsername,omitempty" doc:"Registry username" maxLength:"256"`
+	GitHost                   string                              `json:"gitHost,omitempty" yaml:"gitHost,omitempty" doc:"Git HTTPS host" maxLength:"253"`
+	GitUsername               string                              `json:"gitUsername,omitempty" yaml:"gitUsername,omitempty" doc:"Git HTTPS username" maxLength:"256"`
 	TokenExchange             *SanitizedTokenExchange             `json:"tokenExchange,omitempty" yaml:"tokenExchange,omitempty" doc:"Token exchange configuration (request body redacted)"`
 	DynamicClientRegistration *SanitizedDynamicClientRegistration `json:"dynamicClientRegistration,omitempty" yaml:"dynamicClientRegistration,omitempty" doc:"RFC 7591 Dynamic Client Registration configuration (initial access token redacted)"`
 }
@@ -310,6 +313,12 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 			s.Auth.CustomOAuth2 = append(s.Auth.CustomOAuth2, SanitizeCustomOAuth2(oc))
 		}
 	}
+	if cfg.Auth.Git != nil {
+		s.Auth.Git = &GitAuthConfig{
+			AllowInsecureHTTP: cfg.Auth.Git.AllowInsecureHTTP,
+			Rules:             slices.Clone(cfg.Auth.Git.Rules),
+		}
+	}
 	if len(cfg.Auth.Handlers) > 0 {
 		s.Auth.Handlers = make(map[string]SanitizedAuthHandler, len(cfg.Auth.Handlers))
 		for name, h := range cfg.Auth.Handlers {
@@ -347,6 +356,8 @@ func SanitizeCustomOAuth2(oc CustomOAuth2Config) SanitizedCustomOAuth2 {
 		IdentityFields:            oc.IdentityFields,
 		Registry:                  oc.Registry,
 		RegistryUsername:          oc.RegistryUsername,
+		GitHost:                   oc.GitHost,
+		GitUsername:               oc.GitUsername,
 	}
 	if oc.ClientSecret != "" {
 		out.ClientSecret = RedactedValue
