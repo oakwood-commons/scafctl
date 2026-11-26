@@ -60,6 +60,7 @@ scafctl get examples -o json
 | Directory | Description |
 |-----------|-------------|
 | [actions/](actions/) | Workflow automation with actions |
+| [auth/](auth/) | Authentication, Git HTTPS credential helper, OCI credential helper, and Kubernetes login examples |
 | [calls/](calls/) | Reusable, argument-driven provider calls (spec.calls) |
 | [exec/](exec/) | Exec provider shell execution patterns |
 | [providers/](providers/) | Provider-specific solution examples (http, exec, hcl, github, identity, message, metadata) |

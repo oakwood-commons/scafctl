@@ -330,6 +330,26 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
+			// Seed GitHub default login scopes from embedded defaults when neither --scope
+			// nor an effective config defaultScopes entry is present. Fresh environments
+			// without a materialized config.yaml otherwise omit scopes during login, leaving
+			// minted tokens unable to authorize private git clone or git push.
+			if handlerName == "github" && !cmd.Flags().Changed("scope") && len(scopes) == 0 {
+				cfg := config.FromContext(ctx)
+				supportsLoginScopes := len(caps) == 0 || auth.HasCapability(caps, auth.CapScopesOnLogin)
+				var hasConfiguredScopes bool
+				if cfg != nil && cfg.Auth.GitHub != nil {
+					if resolved := auth.ResolveGitHubConfig(cfg.Auth.GitHub, effectiveProfile); resolved != nil && len(resolved.DefaultScopes) > 0 {
+						hasConfiguredScopes = true
+					}
+				}
+				if supportsLoginScopes && !hasConfiguredScopes {
+					if ghDefaults := config.EmbeddedGitHubDefaults(); ghDefaults != nil && len(ghDefaults.DefaultScopes) > 0 {
+						scopes = append([]string(nil), ghDefaults.DefaultScopes...)
+					}
+				}
+			}
+
 			// Parse flow
 			flow, err := parseFlow(flowStr, handlerName)
 			if err != nil {

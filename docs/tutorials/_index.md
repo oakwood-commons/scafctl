@@ -57,6 +57,7 @@ Step-by-step guides for learning scafctl features.
 - [Auth Handler Migration Guide](auth-migration-guide.md) -- Migrate from built-in auth handlers to plugin-based ones
 - [GCP Custom OAuth Client Setup](gcp-custom-oauth-tutorial.md) -- Configure a custom OAuth client for GCP authentication
 - [Docker Credential Helper Tutorial](credential-helper-tutorial.md) -- Use scafctl as a Docker/Podman credential helper
+- [Git HTTPS Credential Helper Tutorial](git-credential-tutorial.md) -- Authenticate git clone, fetch, and push over HTTPS with scafctl
 
 ## Reference
 

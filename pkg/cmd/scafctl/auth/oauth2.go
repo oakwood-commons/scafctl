@@ -61,6 +61,8 @@ var oauth2ListColumnHints = map[string]tui.ColumnHint{
 	"verifyURL":                 {Hidden: true},
 	"identityFields":            {Hidden: true},
 	"registryUsername":          {Hidden: true},
+	"gitHost":                   {Hidden: true},
+	"gitUsername":               {Hidden: true},
 	"tokenExchange":             {Hidden: true},
 	"dynamicClientRegistration": {Hidden: true},
 }
@@ -157,6 +159,8 @@ type OAuth2AddOptions struct {
 	VerifyURL                 string
 	Registry                  string
 	RegistryUsername          string
+	GitHost                   string
+	GitUsername               string
 	Force                     bool
 }
 
@@ -252,6 +256,8 @@ func commandOAuth2Add(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ 
 	cmd.Flags().StringVar(&opts.VerifyURL, "verify-url", "", "Optional token verification endpoint URL")
 	cmd.Flags().StringVar(&opts.Registry, "registry", "", "Optional OCI registry host for automatic credential bridging")
 	cmd.Flags().StringVar(&opts.RegistryUsername, "registry-username", "", "Optional OCI registry username convention")
+	cmd.Flags().StringVar(&opts.GitHost, "git-host", "", "Optional Git HTTPS host for automatic git-credential routing")
+	cmd.Flags().StringVar(&opts.GitUsername, "git-username", "", "Optional Git HTTPS username convention")
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "Overwrite an existing custom OAuth2 handler with the same name")
 
 	return cmd
@@ -450,6 +456,12 @@ func applyOAuth2AddFlagOverrides(entry *appconfig.CustomOAuth2Config, opts *OAut
 	}
 	if isSet("registry-username", opts.RegistryUsername != "") {
 		entry.RegistryUsername = opts.RegistryUsername
+	}
+	if isSet("git-host", opts.GitHost != "") {
+		entry.GitHost = opts.GitHost
+	}
+	if isSet("git-username", opts.GitUsername != "") {
+		entry.GitUsername = opts.GitUsername
 	}
 }
 

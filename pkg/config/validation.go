@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -189,6 +190,253 @@ func (a *GlobalAuthConfig) Validate() error {
 	if err := ValidateBrowser(a.Browser); err != nil {
 		return fmt.Errorf("browser: %w", err)
 	}
+	if a.Git != nil {
+		if err := a.Git.Validate(); err != nil {
+			return fmt.Errorf("git: %w", err)
+		}
+	}
+	for i := range a.CustomOAuth2 {
+		if err := a.CustomOAuth2[i].ValidateGitFields(); err != nil {
+			return fmt.Errorf("customOAuth2[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// Validate validates Git HTTPS credential helper configuration.
+func (g *GitAuthConfig) Validate() error {
+	if g == nil {
+		return nil
+	}
+	if len(g.Rules) > MaxGitCredentialRules {
+		return fmt.Errorf("rules: %d entries exceed the maximum of %d", len(g.Rules), MaxGitCredentialRules)
+	}
+	for i := range g.Rules {
+		if err := g.Rules[i].Validate(); err != nil {
+			return fmt.Errorf("rules[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// Validate validates a single GitCredentialRule entry.
+func (r *GitCredentialRule) Validate() error {
+	if r == nil {
+		return nil
+	}
+	if strings.TrimSpace(r.Host) == "" {
+		return errors.New("host: must not be empty")
+	}
+	if err := ValidateGitHost(r.Host); err != nil {
+		return fmt.Errorf("host: %w", err)
+	}
+	if err := ValidateGitPathPrefix(r.PathPrefix); err != nil {
+		return fmt.Errorf("pathPrefix: %w", err)
+	}
+	if err := validateGitRuleHandlerName(r.Handler); err != nil {
+		return fmt.Errorf("handler: %w", err)
+	}
+	if err := validateGitRuleProfileName(r.Profile); err != nil {
+		return fmt.Errorf("profile: %w", err)
+	}
+	if err := validateGitAttrString(r.Scope, MaxGitRuleScopeLength); err != nil {
+		return fmt.Errorf("scope: %w", err)
+	}
+	if err := validateGitAttrString(r.Username, MaxGitRuleUsernameLength); err != nil {
+		return fmt.Errorf("username: %w", err)
+	}
+	return nil
+}
+
+// ValidateGitFields validates optional Git HTTPS fields on a CustomOAuth2Config.
+func (oc *CustomOAuth2Config) ValidateGitFields() error {
+	if oc == nil {
+		return nil
+	}
+	if oc.GitHost != "" {
+		if strings.TrimSpace(oc.GitHost) == "" {
+			return errors.New("gitHost: must not be whitespace-only")
+		}
+		if err := ValidateGitHost(oc.GitHost); err != nil {
+			return fmt.Errorf("gitHost: %w", err)
+		}
+	}
+	if oc.GitUsername != "" {
+		if err := validateGitAttrString(oc.GitUsername, MaxGitRuleUsernameLength); err != nil {
+			return fmt.Errorf("gitUsername: %w", err)
+		}
+	}
+	return nil
+}
+
+// ValidateGitHost validates a bare Git host or host:port selector (no scheme, path, or userinfo).
+func ValidateGitHost(raw string) error {
+	if len(raw) > MaxGitRuleHostLength {
+		return fmt.Errorf("exceeds maximum length of %d characters", MaxGitRuleHostLength)
+	}
+	if !utf8.ValidString(raw) {
+		return errors.New("contains invalid UTF-8")
+	}
+	if raw != strings.TrimSpace(raw) {
+		return errors.New("must not have leading or trailing whitespace")
+	}
+	if raw == "" {
+		return errors.New("must not be empty")
+	}
+	for _, r := range raw {
+		if r < 0x20 || r == 0x7f || unicode.IsControl(r) || unicode.IsSpace(r) {
+			return errors.New("must not contain whitespace or control characters")
+		}
+	}
+	if strings.Contains(raw, "://") {
+		return fmt.Errorf("must be a bare host without scheme (got %q)", raw)
+	}
+	if strings.ContainsAny(raw, "/?#@\\") {
+		return fmt.Errorf("must not contain path, query, fragment, or userinfo characters (got %q)", raw)
+	}
+
+	hostPart := raw
+	if strings.HasPrefix(raw, "[") {
+		h, portStr, err := net.SplitHostPort(raw)
+		if err != nil {
+			if !strings.HasSuffix(raw, "]") {
+				return fmt.Errorf("invalid bracketed host %q: %w", raw, err)
+			}
+			h = strings.TrimSuffix(strings.TrimPrefix(raw, "["), "]")
+		} else if err := validatePortNumber(portStr); err != nil {
+			return err
+		}
+		if net.ParseIP(h) == nil {
+			return fmt.Errorf("invalid IPv6 literal %q", h)
+		}
+		return nil
+	}
+
+	if strings.Count(raw, ":") == 1 {
+		h, portStr, err := net.SplitHostPort(raw)
+		if err != nil || h == "" {
+			return fmt.Errorf("invalid host:port %q", raw)
+		}
+		if err := validatePortNumber(portStr); err != nil {
+			return err
+		}
+		hostPart = h
+	} else if strings.Count(raw, ":") > 1 {
+		return fmt.Errorf("IPv6 host %q must be enclosed in brackets", raw)
+	}
+
+	for i := range len(hostPart) {
+		c := hostPart[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_' {
+			continue
+		}
+		return fmt.Errorf("invalid character %q in host %q", c, raw)
+	}
+	return nil
+}
+
+func validatePortNumber(portStr string) error {
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("port %q must be between 1 and 65535", portStr)
+	}
+	return nil
+}
+
+// ValidateGitPathPrefix validates an optional repository path prefix.
+func ValidateGitPathPrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	if len(prefix) > MaxGitRulePathPrefixLength {
+		return fmt.Errorf("exceeds maximum length of %d characters", MaxGitRulePathPrefixLength)
+	}
+	if !utf8.ValidString(prefix) {
+		return errors.New("contains invalid UTF-8")
+	}
+	for _, r := range prefix {
+		if r < 0x20 || r == 0x7f || unicode.IsControl(r) {
+			return errors.New("must not contain control characters")
+		}
+	}
+	if strings.Contains(prefix, "://") || strings.ContainsAny(prefix, "?#\\") {
+		return fmt.Errorf("must be a repository path prefix without scheme, query, fragment, or backslashes (got %q)", prefix)
+	}
+	trimmed := strings.Trim(prefix, "/")
+	if trimmed == "" {
+		return errors.New("must contain at least one path segment")
+	}
+	for _, seg := range strings.Split(trimmed, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return fmt.Errorf("contains empty or traversal path segment in %q", prefix)
+		}
+	}
+	return nil
+}
+
+func validateGitRuleHandlerName(name string) error {
+	if name == "" {
+		return errors.New("must not be empty")
+	}
+	if len(name) > MaxCustomOAuth2NameLength {
+		return fmt.Errorf("exceeds maximum length of %d characters", MaxCustomOAuth2NameLength)
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("must not contain '..' (got %q)", name)
+	}
+	first := name[0]
+	if (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') && (first < '0' || first > '9') {
+		return fmt.Errorf("must start with an ASCII letter or digit (got %q)", name)
+	}
+	for i := 1; i < len(name); i++ {
+		c := name[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			continue
+		}
+		return fmt.Errorf("contains invalid character %q (allowed: a-z, A-Z, 0-9, -, _, .)", c)
+	}
+	return nil
+}
+
+func validateGitRuleProfileName(profile string) error {
+	if profile == "" {
+		return nil
+	}
+	if len(profile) > 64 {
+		return fmt.Errorf("exceeds maximum length of 64 characters")
+	}
+	if strings.EqualFold(profile, "default") || strings.EqualFold(profile, "built-in") {
+		return nil
+	}
+	first := profile[0]
+	if (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') && (first < '0' || first > '9') {
+		return fmt.Errorf("must start with an ASCII letter or digit (got %q)", profile)
+	}
+	for i := 1; i < len(profile); i++ {
+		c := profile[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+			continue
+		}
+		return fmt.Errorf("contains invalid character %q (allowed: a-z, A-Z, 0-9, -, _)", c)
+	}
+	return nil
+}
+
+func validateGitAttrString(val string, maxLen int) error {
+	if val == "" {
+		return nil
+	}
+	if len(val) > maxLen {
+		return fmt.Errorf("exceeds maximum length of %d characters", maxLen)
+	}
+	if !utf8.ValidString(val) {
+		return errors.New("contains invalid UTF-8")
+	}
+	for _, r := range val {
+		if r < 0x20 || r == 0x7f || unicode.IsControl(r) {
+			return errors.New("must not contain control characters")
+		}
+	}
 	return nil
 }
 
@@ -311,6 +559,9 @@ func (oc *CustomOAuth2Config) ValidateCredentials(binaryNames ...string) error {
 	default:
 		return fmt.Errorf("unknown workloadIdentityGrantType %q (valid: %s, %s)",
 			oc.WorkloadIdentityGrantType, WorkloadIdentityGrantClientCredentials, WorkloadIdentityGrantTokenExchange)
+	}
+	if err := oc.ValidateGitFields(); err != nil {
+		return err
 	}
 	return nil
 }

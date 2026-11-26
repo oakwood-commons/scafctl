@@ -340,6 +340,7 @@ func (m *Manager) setDefaults() {
 		"httpClient.trustProxyResolution",
 		"httpClient.trustedProxy",
 		"auth.browser",
+		"auth.git.allowInsecureHttp",
 		"discovery.actionFiles",
 	} {
 		// Errors only when called with no key, which cannot happen here.
@@ -1155,6 +1156,12 @@ func (m *Manager) Set(key string, value any) {
 			case nil:
 				m.config.Auth.Browser = ""
 			}
+		case "auth.git.allowInsecureHttp", "auth.git.allowinsecurehttp":
+			if m.config.Auth.Git == nil {
+				m.config.Auth.Git = &GitAuthConfig{}
+			}
+			b := boolPtrFromValue(value)
+			m.config.Auth.Git.AllowInsecureHTTP = b != nil && *b
 		}
 	}
 }

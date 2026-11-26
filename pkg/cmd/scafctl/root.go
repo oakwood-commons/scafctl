@@ -30,6 +30,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
 	extractcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/extract"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
+	gitcredcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/gitcredential"
 	inspectcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/inspect"
 	kubecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/kube"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
@@ -52,6 +53,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/credentialhelper"
 	"github.com/oakwood-commons/scafctl/pkg/credentials"
+	"github.com/oakwood-commons/scafctl/pkg/gitcredential"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/kube"
 	"github.com/oakwood-commons/scafctl/pkg/kube/clusterconfig"
@@ -1002,6 +1004,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	cCmd.AddCommand(withGroup(groupConfig, kubecmd.CommandKube(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, cachecmd.CommandCache(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, credhelpercmd.CommandCredentialHelper(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, gitcredcmd.CommandGitCredential(cliParams, ioStreams, binaryName)))
 
 	// Plugin Commands
 	cCmd.AddCommand(withGroup(groupPlugin, pluginscmd.CommandPlugins(cliParams, ioStreams, binaryName)))
@@ -1045,6 +1048,8 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	// the program name, so pass rewritten[1:].
 	if rewritten, isAlias := credentialhelper.RewriteAliasArgs(os.Args); isAlias {
 		cCmd.SetArgs(rewritten[1:])
+	} else if rewrittenGit, isGitAlias := gitcredential.RewriteAliasArgs(os.Args); isGitAlias {
+		cCmd.SetArgs(rewrittenGit[1:])
 	}
 
 	return cCmd, cleanup
