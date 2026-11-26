@@ -51,7 +51,11 @@ import (
 // third-party URL.
 func loopbackHTTPClientConfig() config.HTTPClientConfig {
 	allow := true
-	return config.HTTPClientConfig{AllowPrivateIPs: &allow}
+	noCache := false
+	return config.HTTPClientConfig{
+		AllowPrivateIPs: &allow,
+		EnableCache:     &noCache,
+	}
 }
 
 // setupTestServer creates a test HTTP server with all endpoints registered.
