@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160" role="img" aria-label="scafctl Configuration Flow symbol">
+  <title>scafctl</title>
+  <g fill="none" stroke="#00E9F2" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M80 60V86 M31 105V94Q31 86 39 86H121Q129 86 129 94V105 M80 86V105"/>
+    <path d="M64 12H89L103 26V53Q103 60 96 60H64Q57 60 57 53V19Q57 12 64 12Z"/>
+    <path d="M89 12V23Q89 26 92 26H103"/>
+    <rect x="10" y="105" width="42" height="43" rx="7.5"/>
+    <rect x="59" y="105" width="42" height="43" rx="7.5"/>
+    <rect x="108" y="105" width="42" height="43" rx="7.5"/>
+  </g>
+  <g fill="none" stroke="#00E9F2" stroke-width="4.0" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="31" cy="120" rx="10.2" ry="3.8"/>
+    <path d="M20.8 120V134.3 C20.8 139.4 41.2 139.4 41.2 134.3V120"/>
+    <path d="M20.8 127 C24.8 131.5 37.2 131.5 41.2 127"/>
+  </g>
+  <path d="M69 117.5L77.5 126.5L69 135.5 M81 117.5L89.5 126.5L81 135.5" fill="none" stroke="#00E9F2" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M121 116.5 Q121 114.5 123.2 115.8 L139 124.6 Q141.3 126.5 139 128.4 L123.2 137.2 Q121 138.5 121 136.5Z" fill="#00E9F2"/>
+</svg>

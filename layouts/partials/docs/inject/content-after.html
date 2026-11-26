@@ -1,0 +1,22 @@
+{{- $page := . -}}
+{{- with $page.File -}}
+  {{- with $page.Store.Get "bpWalkthrough" -}}
+    {{- $state := . -}}
+    {{- if or $state.prev $state.next -}}
+    <nav class="bp-step-nav" aria-label="Walkthrough step navigation">
+      {{- with $state.prev -}}
+      <a class="bp-step-card bp-step-card--prev" href="{{ .RelPermalink }}">
+        <span class="bp-step-card__eyebrow"><span aria-hidden="true">&lt;-</span> PREVIOUS &middot; STEP {{ printf "%02d" $state.prevStep }}</span>
+        <span class="bp-step-card__title">{{ partial "docs/title" . }}</span>
+      </a>
+      {{- end -}}
+      {{- with $state.next -}}
+      <a class="bp-step-card bp-step-card--next" href="{{ .RelPermalink }}">
+        <span class="bp-step-card__eyebrow">NEXT &middot; STEP {{ printf "%02d" $state.nextStep }} <span aria-hidden="true">-&gt;</span></span>
+        <span class="bp-step-card__title">{{ partial "docs/title" . }}</span>
+      </a>
+      {{- end -}}
+    </nav>
+    {{- end -}}
+  {{- end -}}
+{{- end -}}

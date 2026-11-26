@@ -5,9 +5,12 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - "examples/**"
       - "home/**"
       - "assets/**"
       - "layouts/**"
+      - "static/**"
+      - "pkg/authpage/assets/favicon.png"
       - "site/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
