@@ -45,9 +45,10 @@ type CatalogOption interface {
 }
 
 // NoCacheOption makes catalog loads bypass the local cache of remote
-// artifacts (see catalog.WithNoCache): remote refs are always pulled from
-// their registry and the pulled artifact is not cached. Local builds are
-// unaffected. It is accepted by NewCatalogLoader and NewRouter.
+// artifacts (see catalog.WithNoCache) -- remote refs are always pulled from
+// their registry and the pulled artifact is not cached -- and makes app-config
+// URL loads on a Router bypass HTTP response caching. Local builds and local
+// files are unaffected. It is accepted by NewCatalogLoader and NewRouter.
 type NoCacheOption struct{}
 
 var (

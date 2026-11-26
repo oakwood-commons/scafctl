@@ -5,11 +5,14 @@ package httpprovider
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
@@ -29,6 +32,7 @@ func BenchmarkSerializeBody(b *testing.B) {
 
 func BenchmarkHTTPProvider_Execute_DryRun(b *testing.B) {
 	p := NewHTTPProvider()
+	b.Cleanup(func() { _ = p.Close() })
 
 	ctx := provider.WithDryRun(context.Background(), true)
 	inputs := map[string]any{
@@ -51,7 +55,13 @@ func BenchmarkHTTPProvider_Execute_GET(b *testing.B) {
 	b.Cleanup(srv.Close)
 
 	p := NewHTTPProvider()
-	ctx := context.Background()
+	b.Cleanup(func() { _ = p.Close() })
+
+	ctx := config.WithConfig(context.Background(), &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+		},
+	})
 	inputs := map[string]any{
 		"url":    srv.URL + "/api/data",
 		"method": "GET",
@@ -60,7 +70,55 @@ func BenchmarkHTTPProvider_Execute_GET(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = p.Execute(ctx, inputs)
+		if _, err := p.Execute(ctx, inputs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkHTTPProvider_Execute_ConnectionReuse(b *testing.B) {
+	var newConns atomic.Int64
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	srv.Start()
+	b.Cleanup(srv.Close)
+
+	p := NewHTTPProvider()
+	b.Cleanup(func() { _ = p.Close() })
+
+	ctx := config.WithConfig(context.Background(), &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+		},
+	})
+	inputs := map[string]any{
+		"url":    srv.URL + "/api/data",
+		"method": "GET",
+	}
+
+	// Warm the pooled client and TCP connection before measuring steady-state reuse.
+	if _, err := p.Execute(ctx, inputs); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := p.Execute(ctx, inputs); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+
+	if got := newConns.Load(); got != 1 {
+		b.Fatalf("expected 1 TCP connection across warm-up and benchmark loop, got %d", got)
 	}
 }
 

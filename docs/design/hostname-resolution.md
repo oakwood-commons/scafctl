@@ -132,9 +132,10 @@ the thin production entry point: it pulls the handler's `HostnameConfig` from
 Sentinel errors (`errors.go`): `ErrSelectorNotFound`, `ErrResolverLoop`,
 `ErrTransformShape`, `ErrNoCredentials`.
 
-- **Fetch** (`fetch.go`) -- validates the URL scheme, builds an `httpc` client
-  from the app HTTP config, GETs with `Accept: application/json`, static
-  headers, and an optional `Bearer` token, and reads a size-limited body.
+- **Fetch** (`fetch.go`) -- validates the URL scheme, uses `httpc.FetchClient(ctx)`
+  (shared non-caching client honoring the app HTTP config and reusing keep-alive
+  connections across inventory fetches), GETs with `Accept: application/json`,
+  static headers, and an optional `Bearer` token, and reads a size-limited body.
 - **Transform** (`transform.go`) -- JSON-unmarshals the body, evaluates the CEL
   transform (`celexp.EvaluateExpression`) with the body bound to `_`, then
   round-trips the result through JSON into `[]Entry`, validating that each entry

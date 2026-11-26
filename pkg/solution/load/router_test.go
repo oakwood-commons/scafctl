@@ -5,9 +5,13 @@ package load
 
 import (
 	"context"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -16,6 +20,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
@@ -441,8 +446,10 @@ func TestNewRouterFromContext(t *testing.T) {
 	t.Run("URLs honor the app config HTTP policy", func(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, http.StatusOK, validSolutionYAML)
+		disableCache := false
 		ctx := config.WithConfig(t.Context(), &config.Config{
 			HTTPClient: config.HTTPClientConfig{
+				EnableCache:         &disableCache,
 				AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
 			},
 		})
@@ -451,6 +458,101 @@ func TestNewRouterFromContext(t *testing.T) {
 			Load(ctx, source.Classification{Kind: source.KindURL, Ref: srv.URL + "/solution.yaml"})
 		require.NoError(t, err)
 		assert.Equal(t, "test-solution", got.Solution.Metadata.Name)
+	})
+
+	t.Run("URLs reuse pooled client and TCP connection across routers", func(t *testing.T) {
+		t.Parallel()
+		var newConns atomic.Int32
+		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(validSolutionYAML))
+		}))
+		srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+			if state == http.StateNew {
+				newConns.Add(1)
+			}
+		}
+		srv.Start()
+		t.Cleanup(srv.Close)
+
+		disableCache := false
+		ctx := config.WithConfig(t.Context(), &config.Config{
+			HTTPClient: config.HTTPClientConfig{
+				EnableCache:         &disableCache,
+				AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+			},
+		})
+
+		r1 := NewRouterFromContext(ctx, logr.Discard())
+		r2 := NewRouterFromContext(ctx, logr.Discard())
+		require.NotNil(t, r1.url)
+		require.NotNil(t, r2.url)
+		assert.Same(t, r1.url.client, r2.url.client, "routers sharing one app config must share one HTTP client")
+
+		for range 3 {
+			got, err := NewRouterFromContext(ctx, logr.Discard()).
+				Load(ctx, source.Classification{Kind: source.KindURL, Ref: srv.URL + "/solution.yaml"})
+			require.NoError(t, err)
+			assert.Equal(t, "test-solution", got.Solution.Metadata.Name)
+		}
+		assert.Equal(t, int32(1), newConns.Load(), "repeated router loads must reuse a single TCP connection")
+	})
+
+	t.Run("WithNoCache bypasses HTTP response cache on URL loads", func(t *testing.T) {
+		t.Parallel()
+		var hits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			n := hits.Add(1)
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: sol-" + strconv.Itoa(int(n)) + "\n  version: 1.0.0\nspec:\n  resolvers: {}\n"))
+		}))
+		t.Cleanup(srv.Close)
+
+		enableCache := true
+		ctx := config.WithConfig(t.Context(), &config.Config{
+			HTTPClient: config.HTTPClientConfig{
+				EnableCache:         &enableCache,
+				CacheType:           "memory",
+				CacheDir:            t.TempDir(),
+				AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+			},
+		})
+
+		ref := source.Classification{Kind: source.KindURL, Ref: srv.URL + "/solution.yaml"}
+
+		first, err := NewRouterFromContext(ctx, logr.Discard()).Load(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, "sol-1", first.Solution.Metadata.Name)
+
+		cached, err := NewRouterFromContext(ctx, logr.Discard()).Load(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, "sol-1", cached.Solution.Metadata.Name, "default app client honors response cache")
+
+		fresh, err := NewRouterFromContext(ctx, logr.Discard(), WithNoCache()).Load(ctx, ref)
+		require.NoError(t, err)
+		assert.Equal(t, "sol-2", fresh.Solution.Metadata.Name, "WithNoCache must bypass HTTP response cache")
+	})
+
+	t.Run("explicit WithURL overrides context URL client", func(t *testing.T) {
+		t.Parallel()
+		custom := newTestClient(t, false)
+		t.Cleanup(func() { _ = custom.Close() })
+		r := NewRouterFromContext(t.Context(), logr.Discard(), WithURL(custom))
+		require.NotNil(t, r.url)
+		assert.Same(t, custom, r.url.client)
+
+		// Option order is last-wins in both directions, and WithNoCache works regardless of order.
+		disableCache := false
+		appCfg := &config.Config{HTTPClient: config.HTTPClientConfig{EnableCache: &disableCache}}
+		rAppWins := NewRouter("scafctl", WithURL(custom), withAppConfigURL(appCfg))
+		assert.Same(t, httpc.AppClientFromConfig(appCfg), rAppWins.url.client)
+
+		rNoCacheFirst := NewRouter("scafctl", WithNoCache(), withAppConfigURL(appCfg))
+		assert.Same(t, httpc.FetchClientFromConfig(appCfg), rNoCacheFirst.url.client)
+
+		rNilWins := NewRouter("scafctl", withAppConfigURL(appCfg), WithURL(nil))
+		assert.Same(t, httpc.FetchClientFromConfig(nil), rNilWins.url.client)
 	})
 
 	t.Run("catalog references are enabled", func(t *testing.T) {
@@ -515,6 +617,8 @@ func TestNewRouterFromContext(t *testing.T) {
 
 func BenchmarkNewRouterFromContext(b *testing.B) {
 	ctx := b.Context()
+	b.ReportAllocs()
+	b.ResetTimer()
 	for b.Loop() {
 		_ = NewRouterFromContext(ctx, logr.Discard())
 	}

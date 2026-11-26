@@ -51,17 +51,19 @@ type routerOptionFunc func(*routerConfig)
 func (f routerOptionFunc) applyRouter(c *routerConfig) { f(c) }
 
 type routerConfig struct {
-	lenient      bool
-	noCache      bool
-	noLocal      bool
-	fileOpts     []FileOption
-	discoverOpts []DiscoverOption
-	stdin        io.Reader
-	urlEnabled   bool
-	urlClient    *httpc.Client
-	urlOpts      []URLOption
-	aliases      CatalogAliases
-	fetcher      SolutionFetcher
+	lenient       bool
+	noCache       bool
+	noLocal       bool
+	fileOpts      []FileOption
+	discoverOpts  []DiscoverOption
+	stdin         io.Reader
+	urlEnabled    bool
+	urlClient     *httpc.Client
+	urlFromAppCfg bool
+	urlAppCfg     *config.Config
+	urlOpts       []URLOption
+	aliases       CatalogAliases
+	fetcher       SolutionFetcher
 }
 
 // WithFileOptions passes options to the Router's FileLoader, which also
@@ -87,7 +89,22 @@ func WithURL(client *httpc.Client, opts ...URLOption) RouterOption {
 	return routerOptionFunc(func(c *routerConfig) {
 		c.urlEnabled = true
 		c.urlClient = client
+		c.urlFromAppCfg = false
+		c.urlAppCfg = nil
 		c.urlOpts = append(c.urlOpts, opts...)
+	})
+}
+
+// withAppConfigURL enables URL loading backed by the shared httpc client pool
+// for cfg, deferring client lookup until NewRouter has applied every option so
+// an explicit WithURL override allocates no unused client and WithNoCache
+// selects the non-caching client shape.
+func withAppConfigURL(cfg *config.Config) RouterOption {
+	return routerOptionFunc(func(c *routerConfig) {
+		c.urlEnabled = true
+		c.urlClient = nil
+		c.urlFromAppCfg = true
+		c.urlAppCfg = cfg
 	})
 }
 
@@ -115,7 +132,7 @@ func WithoutLocal() RouterOption {
 // auto-discovery folder names; empty uses settings.CliBinaryName.
 //
 // WithLenient applies to every loader (file, discovery, stdin, URL, catalog).
-// WithNoCache applies to catalog references.
+// WithNoCache applies to app-config URL loads and catalog references.
 func NewRouter(binaryName string, opts ...RouterOption) *Router {
 	cfg := &routerConfig{}
 	for _, opt := range opts {
@@ -145,7 +162,15 @@ func NewRouter(binaryName string, opts ...RouterOption) *Router {
 		r.stdin = NewStdinLoader(cfg.stdin, stdinOpts...)
 	}
 	if cfg.urlEnabled {
-		r.url = NewURLLoader(cfg.urlClient, urlOpts...)
+		client := cfg.urlClient
+		if client == nil && cfg.urlFromAppCfg {
+			if cfg.noCache {
+				client = httpc.FetchClientFromConfig(cfg.urlAppCfg)
+			} else {
+				client = httpc.AppClientFromConfig(cfg.urlAppCfg)
+			}
+		}
+		r.url = NewURLLoader(client, urlOpts...)
 	}
 	if cfg.fetcher != nil {
 		r.catalog = NewCatalogLoader(cfg.aliases, cfg.fetcher, catalogOpts...)
@@ -154,7 +179,7 @@ func NewRouter(binaryName string, opts ...RouterOption) *Router {
 }
 
 // NewRouterFromContext builds a Router wired from ctx: auto-discovery uses the
-// binary name and custom action file names in settings.Run, URLs use a client that enforces the app
+// binary name and custom action file names in settings.Run, URLs use a shared client that enforces the app
 // config's HTTP policy, and catalog references use the catalog index plus the
 // local and configured remote catalogs, building unconfigured remotes on
 // demand (see WithOnDemandRemotes). The catalog is only opened if a catalog
@@ -167,13 +192,8 @@ func NewRouter(binaryName string, opts ...RouterOption) *Router {
 // opts are applied after the context defaults, so callers can extend or
 // override them.
 func NewRouterFromContext(ctx context.Context, lgr logr.Logger, opts ...RouterOption) *Router {
-	var httpCfg *config.HTTPClientConfig
-	if cfg := config.FromContext(ctx); cfg != nil {
-		httpCfg = &cfg.HTTPClient
-	}
-
 	defaults := []RouterOption{
-		WithURL(httpc.NewClientFromAppConfig(httpCfg, logr.Discard())),
+		withAppConfigURL(config.FromContext(ctx)),
 		WithCatalog(catalogindex.FromContext(ctx), SolutionFetcherFromContext(ctx, lgr, WithOnDemandRemotes())),
 	}
 	if s, ok := settings.FromContext(ctx); ok && len(s.ActionDiscoveryFileNames) > 0 {

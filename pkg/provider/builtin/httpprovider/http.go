@@ -10,7 +10,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -19,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	hostnameresolver "github.com/oakwood-commons/scafctl/pkg/auth/hostname"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -179,10 +182,60 @@ func hasContentType(headers map[string]any) bool {
 	return false
 }
 
+// DefaultProviderClientPoolCap bounds how many distinct (config, timeout,
+// retry) HTTP clients an HTTPProvider retains before evicting an entry.
+const DefaultProviderClientPoolCap = 8
+
+// onUnauthorizedKey stores a per-execution 401 refresh callback on the request
+// context so pooled httpc.Client instances remain stateless across callers.
+type onUnauthorizedKey struct{}
+
+type onUnauthorizedFunc func(context.Context) (string, error)
+
+func withOnUnauthorized(ctx context.Context, fn onUnauthorizedFunc) context.Context {
+	return context.WithValue(ctx, onUnauthorizedKey{}, fn)
+}
+
+func dispatchOnUnauthorized(reqCtx context.Context) (string, error) {
+	fn, _ := reqCtx.Value(onUnauthorizedKey{}).(onUnauthorizedFunc)
+	if fn == nil {
+		return "", nil
+	}
+	return fn(reqCtx)
+}
+
+// retryConfigKey returns a deterministic cache-key fragment for retryCfg.
+func retryConfigKey(cfg *retryConfig) string {
+	if cfg == nil {
+		return "noretry"
+	}
+	var b strings.Builder
+	b.Grow(64)
+	b.WriteString(strconv.Itoa(cfg.MaxAttempts))
+	b.WriteByte('|')
+	b.WriteString(cfg.Backoff)
+	b.WriteByte('|')
+	b.WriteString(cfg.InitialWait.String())
+	b.WriteByte('|')
+	b.WriteString(cfg.MaxWait.String())
+	b.WriteByte('|')
+	for i, code := range cfg.RetryOn {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.Itoa(code))
+	}
+	return b.String()
+}
+
 // HTTPProvider implements the Provider interface for making HTTP requests.
 type HTTPProvider struct {
-	descriptor *provider.Descriptor
+	descriptor  *provider.Descriptor
+	clientsOnce sync.Once
+	clients     *httpc.ClientPool
 }
+
+var _ io.Closer = (*HTTPProvider)(nil)
 
 // NewHTTPProvider creates a new HTTP provider instance.
 func NewHTTPProvider() *HTTPProvider {
@@ -573,6 +626,28 @@ func (p *HTTPProvider) Descriptor() *provider.Descriptor {
 	return p.descriptor
 }
 
+func (p *HTTPProvider) pool() *httpc.ClientPool {
+	p.clientsOnce.Do(func() {
+		p.clients = httpc.NewClientPool(DefaultProviderClientPoolCap)
+	})
+	return p.clients
+}
+
+// Close releases idle connections held by pooled HTTP clients on p.
+func (p *HTTPProvider) Close() error {
+	if p == nil {
+		return nil
+	}
+	return p.pool().Close()
+}
+
+func (p *HTTPProvider) clientFor(ctx context.Context, timeoutDuration time.Duration, retryCfg *retryConfig) *httpc.Client {
+	key := httpc.ConfigKey(config.FromContext(ctx)) + "|" + timeoutDuration.String() + "|" + retryConfigKey(retryCfg)
+	return p.pool().GetOrBuild(key, func() *httpc.Client {
+		return newHTTPClient(buildHTTPClientConfig(ctx, timeoutDuration, retryCfg))
+	})
+}
+
 // Execute performs the HTTP request.
 func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
@@ -643,7 +718,7 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		headers["Content-Type"] = "application/json"
 	}
 
-	// Build httpc client with timeout and user-supplied retry configuration.
+	// Resolve authentication onto the execution context and obtain a pooled client.
 	authProvider, _ := inputs[fieldAuthProvider].(string)
 	scope, _ := inputs[fieldScope].(string)
 	hostname, _ := inputs[fieldHostname].(string)
@@ -651,15 +726,25 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		return nil, fmt.Errorf("%s: hostname requires authProvider to be set", ProviderName)
 	}
 	retryCfg := parseRetryConfig(inputs)
-	httpcCfg := buildHTTPClientConfig(ctx, timeoutDuration, retryCfg)
 
+	var onUnauth onUnauthorizedFunc
 	if authProvider != "" {
-		token, err := getToken(ctx, authProvider, scope, urlStr, hostname, timeoutDuration, httpcCfg)
+		token, refreshFn, err := getToken(ctx, authProvider, scope, urlStr, hostname, timeoutDuration)
 		if err != nil {
 			return nil, err
 		}
 		setAuthorizationHeader(headers, formatAuthHeader(token))
+		if refreshFn != nil {
+			onUnauth = func(unauthCtx context.Context) (string, error) {
+				refreshed, refreshErr := refreshFn(unauthCtx)
+				if refreshErr == nil && refreshed != "" {
+					setAuthorizationHeader(headers, refreshed)
+				}
+				return refreshed, refreshErr
+			}
+		}
 	}
+	ctx = withOnUnauthorized(ctx, onUnauth)
 
 	// Parse pagination configuration
 	pagCfg, err := parsePaginationConfig(inputs)
@@ -681,12 +766,7 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		return nil, fmt.Errorf("%s: %w", ProviderName, err)
 	}
 
-	httpClient := newHTTPClient(httpcCfg)
-	// Each client owns its transport, and therefore its own idle connection
-	// pool. Without this the pool survives for the life of the process and every
-	// execution adds another one. Close reclaims only idle connections, so
-	// in-flight requests and already-read bodies are unaffected.
-	defer func() { _ = httpClient.Close() }()
+	httpClient := p.clientFor(ctx, timeoutDuration, retryCfg)
 
 	autoParseJSON, _ := inputs["autoParseJson"].(bool)
 
@@ -736,23 +816,23 @@ func resolveAuthProviderContext(ctx context.Context, authProvider string) (conte
 	return ctx, handlerName, nil
 }
 
-func handlerToken(ctx context.Context, authProvider, scope, requestURL, explicitHostname string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
+func handlerToken(ctx context.Context, authProvider, scope, requestURL, explicitHostname string, timeoutDuration time.Duration) (*auth.Token, onUnauthorizedFunc, error) {
 	if auth.RegistryFromContext(ctx) == nil {
-		return nil, fmt.Errorf("%s: no auth registry in context for provider %q", ProviderName, authProvider)
+		return nil, nil, fmt.Errorf("%s: no auth registry in context for provider %q", ProviderName, authProvider)
 	}
 	authCtx, handlerName, err := resolveAuthProviderContext(ctx, authProvider)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	handler, err := auth.GetHandler(authCtx, authProvider)
 	if err != nil {
-		return nil, fmt.Errorf("%s: auth provider %q not found: %w", ProviderName, authProvider, err)
+		return nil, nil, fmt.Errorf("%s: auth provider %q not found: %w", ProviderName, authProvider, err)
 	}
 
 	caps := handler.Capabilities()
 	requiresScope := auth.HasCapability(caps, auth.CapScopesOnTokenRequest)
 	if scope == "" && requiresScope {
-		return nil, fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
+		return nil, nil, fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
 	}
 	if scope != "" && !requiresScope {
 		scope = ""
@@ -763,18 +843,18 @@ func handlerToken(ctx context.Context, authProvider, scope, requestURL, explicit
 		if explicitHostname != "" {
 			resolved, resolveErr := hostnameresolver.Resolve(authCtx, handlerName, explicitHostname)
 			if resolveErr != nil {
-				return nil, fmt.Errorf("%s: failed to resolve hostname %q for authProvider %q: %w", ProviderName, explicitHostname, authProvider, resolveErr)
+				return nil, nil, fmt.Errorf("%s: failed to resolve hostname %q for authProvider %q: %w", ProviderName, explicitHostname, authProvider, resolveErr)
 			}
 			tokenHostname = resolved
 		} else {
 			origin, originErr := deriveOriginHostname(requestURL)
 			if originErr != nil {
-				return nil, fmt.Errorf("%s: failed to derive token hostname for authProvider %q: %w", ProviderName, authProvider, originErr)
+				return nil, nil, fmt.Errorf("%s: failed to derive token hostname for authProvider %q: %w", ProviderName, authProvider, originErr)
 			}
 			tokenHostname = origin
 		}
 	} else if explicitHostname != "" {
-		return nil, fmt.Errorf("%s: hostname input is not supported by authProvider %q (handler does not advertise token_hostname capability)", ProviderName, authProvider)
+		return nil, nil, fmt.Errorf("%s: hostname input is not supported by authProvider %q (handler does not advertise token_hostname capability)", ProviderName, authProvider)
 	}
 
 	tokenOpts := auth.TokenOptions{
@@ -786,14 +866,15 @@ func handlerToken(ctx context.Context, authProvider, scope, requestURL, explicit
 
 	token, err := handler.GetToken(authCtx, tokenOpts)
 	if err != nil {
-		return nil, fmt.Errorf("%s: failed to get auth token for %q: %w", ProviderName, authProvider, err)
+		return nil, nil, fmt.Errorf("%s: failed to get auth token for %q: %w", ProviderName, authProvider, err)
 	}
 	if token == nil || token.AccessToken == "" {
-		return nil, fmt.Errorf("%s: auth handler %q returned empty token", ProviderName, authProvider)
+		return nil, nil, fmt.Errorf("%s: auth handler %q returned empty token", ProviderName, authProvider)
 	}
 
-	// Only wire 401 refresh when the token came from a refreshable source.
-	httpcCfg.OnUnauthorized = func(unauthCtx context.Context) (string, error) {
+	// Return a request-scoped 401 refresh callback so the caller attaches it to
+	// the request context rather than mutating the pooled client configuration.
+	onUnauth := func(unauthCtx context.Context) (string, error) {
 		refreshCtx, _, profileErr := resolveAuthProviderContext(unauthCtx, authProvider)
 		if profileErr != nil {
 			return "", profileErr
@@ -810,7 +891,7 @@ func handlerToken(ctx context.Context, authProvider, scope, requestURL, explicit
 		return formatAuthHeader(t), nil
 	}
 
-	return token, nil
+	return token, onUnauth, nil
 }
 
 // formatAuthHeader formats an auth.Token for the HTTP Authorization header,
@@ -873,6 +954,7 @@ func buildHTTPClientConfig(ctx context.Context, timeout time.Duration, retryCfg 
 		EnableCache:          false,
 		EnableCompression:    true,
 		EnableCircuitBreaker: false,
+		OnUnauthorized:       dispatchOnUnauthorized,
 		// Which destination addresses a solution-authored request may reach.
 		// Enforced at dial time against the resolved address, so it covers
 		// hostnames pointing at internal infrastructure and redirects into it.
@@ -1029,25 +1111,25 @@ func extractHeaderToken(ctx context.Context, authProvider string) (bool, string)
 	return true, token
 }
 
-func getToken(ctx context.Context, authProvider, scope, requestURL, explicitHostname string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
+func getToken(ctx context.Context, authProvider, scope, requestURL, explicitHostname string, timeoutDuration time.Duration) (*auth.Token, onUnauthorizedFunc, error) {
 	authCtx, handlerName, err := resolveAuthProviderContext(ctx, authProvider)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// First, check if the token is provided in the request headers (e.g., via middleware)
 	// using the bare handler name, since HTTP header names cannot contain "@".
 	if ok, token := extractHeaderToken(authCtx, handlerName); ok {
 		if token == "" {
-			return nil, fmt.Errorf("%s: authProvider %q token is empty in request headers", ProviderName, authProvider)
+			return nil, nil, fmt.Errorf("%s: authProvider %q token is empty in request headers", ProviderName, authProvider)
 		}
 		if explicitHostname != "" {
-			return nil, fmt.Errorf("%s: hostname input is not supported when authProvider %q uses request-header token pass-through", ProviderName, authProvider)
+			return nil, nil, fmt.Errorf("%s: hostname input is not supported when authProvider %q uses request-header token pass-through", ProviderName, authProvider)
 		}
-		return &auth.Token{AccessToken: token, TokenType: "Bearer"}, nil
+		return &auth.Token{AccessToken: token, TokenType: "Bearer"}, nil, nil
 	}
 	// If not in headers, obtain the token from the auth provider.
-	return handlerToken(authCtx, authProvider, scope, requestURL, explicitHostname, timeoutDuration, httpcCfg)
+	return handlerToken(authCtx, authProvider, scope, requestURL, explicitHostname, timeoutDuration)
 }
 
 func getAssertion(ctx context.Context, authProvider string) string {

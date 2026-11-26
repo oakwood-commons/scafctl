@@ -12,7 +12,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	hostnameresolver "github.com/oakwood-commons/scafctl/pkg/auth/hostname"
 	"github.com/oakwood-commons/scafctl/pkg/config"
-	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,11 +76,11 @@ func TestGetToken_HeaderTokenPresent(t *testing.T) {
 	t.Parallel()
 	tokens := map[string]string{"Entra": "header-bearer-token"}
 	ctx := middleware.WithContextTokens(context.Background(), tokens)
-	cfg := &httpc.ClientConfig{}
 
-	token, err := getToken(ctx, "entra", "scope", "https://api.example.com/v1", "", 30*time.Second, cfg)
+	token, onUnauth, err := getToken(ctx, "entra", "scope", "https://api.example.com/v1", "", 30*time.Second)
 
 	require.NoError(t, err)
+	assert.Nil(t, onUnauth, "caller-supplied header tokens cannot be refreshed on 401")
 	assert.Equal(t, "header-bearer-token", token.AccessToken)
 	assert.Equal(t, "Bearer", token.TokenType)
 }
@@ -90,16 +89,15 @@ func TestGetToken_HeaderTokenRejectsExplicitHostname(t *testing.T) {
 	t.Parallel()
 	tokens := map[string]string{"Openshift": "header-bearer-token"}
 	ctx := middleware.WithContextTokens(context.Background(), tokens)
-	cfg := &httpc.ClientConfig{}
 
-	_, err := getToken(ctx, "openshift", "", "https://127.0.0.1:16443/api/v1", "cluster-a", 30*time.Second, cfg)
+	_, _, err := getToken(ctx, "openshift", "", "https://127.0.0.1:16443/api/v1", "cluster-a", 30*time.Second)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "request-header token pass-through")
 
 	// Qualified selector ("openshift@work") also matches bare "Openshift" header token
 	// and enforces explicit-hostname rejection.
-	_, err = getToken(ctx, "openshift@work", "", "https://127.0.0.1:16443/api/v1", "cluster-a", 30*time.Second, cfg)
+	_, _, err = getToken(ctx, "openshift@work", "", "https://127.0.0.1:16443/api/v1", "cluster-a", 30*time.Second)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "request-header token pass-through")
 }
@@ -108,18 +106,18 @@ func TestGetToken_QualifiedSelectorUsesBareHeaderTokenAndValidatesSelectorFirst(
 	t.Parallel()
 	tokens := map[string]string{"Github": "caller-gh-token"}
 	ctx := middleware.WithContextTokens(context.Background(), tokens)
-	cfg := &httpc.ClientConfig{}
 
 	// Qualified selectors succeed without an auth registry when caller token exists.
 	for _, selector := range []string{"github@work", "github@built-in"} {
-		tok, err := getToken(ctx, selector, "", "https://api.github.com/user", "", 30*time.Second, cfg)
+		tok, onUnauth, err := getToken(ctx, selector, "", "https://api.github.com/user", "", 30*time.Second)
 		require.NoError(t, err)
+		assert.Nil(t, onUnauth)
 		assert.Equal(t, "caller-gh-token", tok.AccessToken)
 		assert.Equal(t, "Bearer", tok.TokenType)
 	}
 
 	// Invalid profile selector fails before caller token lookup.
-	_, err := getToken(ctx, "github@bad/profile", "", "https://api.github.com/user", "", 30*time.Second, cfg)
+	_, _, err := getToken(ctx, "github@bad/profile", "", "https://api.github.com/user", "", 30*time.Second)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid profile")
 }
@@ -128,9 +126,8 @@ func TestGetToken_HeaderTokenEmpty_Error(t *testing.T) {
 	t.Parallel()
 	tokens := map[string]string{"Entra": ""}
 	ctx := middleware.WithContextTokens(context.Background(), tokens)
-	cfg := &httpc.ClientConfig{}
 
-	_, err := getToken(ctx, "entra", "scope", "https://api.example.com/v1", "", 30*time.Second, cfg)
+	_, _, err := getToken(ctx, "entra", "scope", "https://api.example.com/v1", "", 30*time.Second)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "token is empty in request headers")
@@ -139,7 +136,7 @@ func TestGetToken_HeaderTokenEmpty_Error(t *testing.T) {
 
 func TestGetToken_FallsBackToHandlerToken(t *testing.T) {
 	t.Parallel()
-	// No header tokens — should fall through to handlerToken which needs an auth registry.
+	// No header tokens -- should fall through to handlerToken which needs an auth registry.
 	mockHandler := auth.NewMockHandler("entra")
 	mockHandler.GetTokenResult = &auth.Token{
 		AccessToken: "handler-token",
@@ -148,11 +145,11 @@ func TestGetToken_FallsBackToHandlerToken(t *testing.T) {
 	reg := auth.NewRegistry()
 	require.NoError(t, reg.Register(mockHandler))
 	ctx := auth.WithRegistry(context.Background(), reg)
-	cfg := &httpc.ClientConfig{}
 
-	token, err := getToken(ctx, "entra", "", "https://api.example.com/v1", "", 30*time.Second, cfg)
+	token, onUnauth, err := getToken(ctx, "entra", "", "https://api.example.com/v1", "", 30*time.Second)
 
 	require.NoError(t, err)
+	require.NotNil(t, onUnauth)
 	assert.Equal(t, "handler-token", token.AccessToken)
 	assert.Equal(t, "Bearer", token.TokenType)
 	require.Len(t, mockHandler.GetTokenCalls, 1)
@@ -163,9 +160,8 @@ func TestGetToken_FallsBackToHandlerToken_NoRegistry_Error(t *testing.T) {
 	t.Parallel()
 	// No header tokens and no auth registry in context.
 	ctx := context.Background()
-	cfg := &httpc.ClientConfig{}
 
-	_, err := getToken(ctx, "entra", "scope", "https://api.example.com/v1", "", 30*time.Second, cfg)
+	_, _, err := getToken(ctx, "entra", "scope", "https://api.example.com/v1", "", 30*time.Second)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no auth registry in context")
@@ -173,7 +169,7 @@ func TestGetToken_FallsBackToHandlerToken_NoRegistry_Error(t *testing.T) {
 
 func TestGetToken_HeaderTakesPrecedenceOverHandler(t *testing.T) {
 	t.Parallel()
-	// Both header token and auth handler are available — header should win.
+	// Both header token and auth handler are available -- header should win.
 	tokens := map[string]string{"Entra": "from-header"}
 	ctx := middleware.WithContextTokens(context.Background(), tokens)
 
@@ -182,11 +178,11 @@ func TestGetToken_HeaderTakesPrecedenceOverHandler(t *testing.T) {
 	reg := auth.NewRegistry()
 	require.NoError(t, reg.Register(mockHandler))
 	ctx = auth.WithRegistry(ctx, reg)
-	cfg := &httpc.ClientConfig{}
 
-	token, err := getToken(ctx, "entra", "scope", "https://api.example.com/v1", "", 30*time.Second, cfg)
+	token, onUnauth, err := getToken(ctx, "entra", "scope", "https://api.example.com/v1", "", 30*time.Second)
 
 	require.NoError(t, err)
+	assert.Nil(t, onUnauth)
 	assert.Equal(t, "from-header", token.AccessToken)
 	// Handler should never have been called.
 	assert.Empty(t, mockHandler.GetTokenCalls)
@@ -204,23 +200,32 @@ func TestHandlerToken_CapTokenHostname_DerivesOriginAndPreservesOnRefresh(t *tes
 	reg := auth.NewRegistry()
 	require.NoError(t, reg.Register(mockHandler))
 	ctx := auth.WithRegistry(context.Background(), reg)
-	cfg := &httpc.ClientConfig{}
 
-	token, err := handlerToken(ctx, "openshift", "", "HTTPS://user:pass@API.Cluster-A.Example.COM:6443/apis/apps/v1?watch=true#frag", "", 30*time.Second, cfg)
+	token, onUnauth, err := handlerToken(ctx, "openshift", "", "HTTPS://user:pass@API.Cluster-A.Example.COM:6443/apis/apps/v1?watch=true#frag", "", 30*time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, "cluster-a-token", token.AccessToken)
 	require.Len(t, mockHandler.GetTokenCalls, 1)
 	assert.Equal(t, "https://api.cluster-a.example.com:6443", mockHandler.GetTokenCalls[0].Hostname)
 
-	// Trigger OnUnauthorized and confirm ForceRefresh keeps the same Hostname.
-	require.NotNil(t, cfg.OnUnauthorized)
+	// Trigger dispatchOnUnauthorized via request context and confirm ForceRefresh keeps the same Hostname.
+	require.NotNil(t, onUnauth)
 	mockHandler.SetToken(&auth.Token{AccessToken: "refreshed-cluster-a-token", TokenType: "Bearer"})
-	refreshedHeader, err := cfg.OnUnauthorized(ctx)
+	reqCtx := withOnUnauthorized(ctx, onUnauth)
+	refreshedHeader, err := dispatchOnUnauthorized(reqCtx)
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer refreshed-cluster-a-token", refreshedHeader)
 	require.Len(t, mockHandler.GetTokenCalls, 2)
 	assert.True(t, mockHandler.GetTokenCalls[1].ForceRefresh)
 	assert.Equal(t, "https://api.cluster-a.example.com:6443", mockHandler.GetTokenCalls[1].Hostname)
+
+	// Absent or cleared callback passes 401 through without calling the handler.
+	emptyHeader, err := dispatchOnUnauthorized(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, emptyHeader)
+	clearedHeader, err := dispatchOnUnauthorized(withOnUnauthorized(reqCtx, nil))
+	require.NoError(t, err)
+	assert.Empty(t, clearedHeader)
+	require.Len(t, mockHandler.GetTokenCalls, 2)
 }
 
 func TestHandlerToken_CapTokenHostname_ExplicitAliasResolution(t *testing.T) {
@@ -249,16 +254,15 @@ func TestHandlerToken_CapTokenHostname_ExplicitAliasResolution(t *testing.T) {
 		},
 	}
 	ctx := auth.WithRegistry(config.WithConfig(context.Background(), appCfg), reg)
-	cfg := &httpc.ClientConfig{}
 
-	token, err := handlerToken(ctx, "openshift", "", "https://127.0.0.1:16443/api/v1/pods", "cluster-a", 30*time.Second, cfg)
+	token, _, err := handlerToken(ctx, "openshift", "", "https://127.0.0.1:16443/api/v1/pods", "cluster-a", 30*time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, "alias-token", token.AccessToken)
 	require.Len(t, mockHandler.GetTokenCalls, 1)
 	assert.Equal(t, "https://api.cluster-a.example.com:6443", mockHandler.GetTokenCalls[0].Hostname)
 
 	// Unknown alias selector fails closed with ErrSelectorNotFound.
-	_, err = handlerToken(ctx, "openshift", "", "https://127.0.0.1:16443/api/v1/pods", "unknown-cluster", 30*time.Second, cfg)
+	_, _, err = handlerToken(ctx, "openshift", "", "https://127.0.0.1:16443/api/v1/pods", "unknown-cluster", 30*time.Second)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, hostnameresolver.ErrSelectorNotFound)
 }
@@ -272,9 +276,8 @@ func TestHandlerToken_CapTokenHostname_InvalidURL(t *testing.T) {
 	reg := auth.NewRegistry()
 	require.NoError(t, reg.Register(mockHandler))
 	ctx := auth.WithRegistry(context.Background(), reg)
-	cfg := &httpc.ClientConfig{}
 
-	_, err := handlerToken(ctx, "openshift", "", "/relative-only", "", 30*time.Second, cfg)
+	_, _, err := handlerToken(ctx, "openshift", "", "/relative-only", "", 30*time.Second)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must include scheme and host")
 	assert.Empty(t, mockHandler.GetTokenCalls)
@@ -289,9 +292,8 @@ func TestHandlerToken_WithoutCapTokenHostname_RejectsExplicitHostname(t *testing
 	reg := auth.NewRegistry()
 	require.NoError(t, reg.Register(mockHandler))
 	ctx := auth.WithRegistry(context.Background(), reg)
-	cfg := &httpc.ClientConfig{}
 
-	_, err := handlerToken(ctx, "github", "", "https://127.0.0.1:8443/api/v3/user", "github.example.com", 30*time.Second, cfg)
+	_, _, err := handlerToken(ctx, "github", "", "https://127.0.0.1:8443/api/v3/user", "github.example.com", 30*time.Second)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `http: hostname input is not supported by authProvider "github" (handler does not advertise token_hostname capability)`)
 	assert.Empty(t, mockHandler.GetTokenCalls)

@@ -8,17 +8,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 	"github.com/stretchr/testify/assert"
@@ -2252,4 +2256,361 @@ func TestHTTPProvider_Execute_RedirectStripsCrossOriginAuthAndPreservesOriginalH
 		require.NoError(t, hook(redirectReq, []*http.Request{origReq}))
 		assert.Equal(t, "Bearer same-origin-secret", redirectReq.Header.Get("Authorization"))
 	})
+}
+
+func TestHTTPProvider_Execute_ReusesConnectionAndClosesPool(t *testing.T) {
+	t.Parallel()
+
+	var newConns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	for range 5 {
+		out, err := p.Execute(ctx, map[string]any{
+			"url":    srv.URL + "/items",
+			"method": "GET",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, out.Data.(map[string]any)["statusCode"])
+	}
+
+	assert.Equal(t, int32(1), newConns.Load(), "repeated Execute calls with identical config must reuse one TCP connection")
+	assert.Equal(t, 1, p.pool().Len())
+
+	require.NoError(t, p.Close())
+	assert.Zero(t, p.pool().Len())
+
+	// Zero-value and nil providers close safely and remain usable.
+	var nilProvider *HTTPProvider
+	require.NoError(t, nilProvider.Close())
+
+	var zeroProvider HTTPProvider
+	require.NoError(t, zeroProvider.Close())
+	out, err := zeroProvider.Execute(ctx, map[string]any{
+		"url":    srv.URL + "/items",
+		"method": "GET",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, out.Data.(map[string]any)["statusCode"])
+	require.NoError(t, zeroProvider.Close())
+}
+
+// multiTenantRefreshHandler issues stale initial tokens and fresh ForceRefresh
+// tokens per profile so concurrent callers sharing one pooled client prove
+// zero cross-tenant credential or context bleed.
+type multiTenantRefreshHandler struct {
+	*auth.MockHandler
+	mu      sync.Mutex
+	records []string
+}
+
+func newMultiTenantRefreshHandler() *multiTenantRefreshHandler {
+	base := auth.NewMockHandler("entra")
+	base.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
+	return &multiTenantRefreshHandler{MockHandler: base}
+}
+
+func (h *multiTenantRefreshHandler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	profile := auth.ProfileFromContext(ctx)
+	prefix := "stale-"
+	if opts.ForceRefresh {
+		prefix = "fresh-"
+	}
+	h.mu.Lock()
+	h.records = append(h.records, prefix+profile+"|"+opts.Scope)
+	h.mu.Unlock()
+	return &auth.Token{
+		AccessToken: prefix + profile,
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}, nil
+}
+
+func TestHTTPProvider_Execute_MultiTenant401RefreshIsolation(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenant := r.URL.Query().Get("tenant")
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "Bearer stale-"+tenant {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"expired"}`))
+			return
+		}
+		if authHeader == "Bearer fresh-"+tenant {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok-" + tenant))
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("wrong-token:" + authHeader))
+	}))
+	defer srv.Close()
+
+	handler := newMultiTenantRefreshHandler()
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(handler))
+	baseCtx := testContextWithCLIAuth(t, reg)
+
+	p := NewHTTPProvider()
+	defer func() { _ = p.Close() }()
+
+	const tenants = 16
+	var wg sync.WaitGroup
+	wg.Add(tenants)
+	for i := range tenants {
+		tenant := "tenant-" + strconv.Itoa(i)
+		go func() {
+			defer wg.Done()
+			out, err := p.Execute(baseCtx, map[string]any{
+				"url":          srv.URL + "/data?tenant=" + tenant,
+				"method":       "GET",
+				"authProvider": "entra@" + tenant,
+				"scope":        "api://" + tenant + "/.default",
+			})
+			if !assert.NoError(t, err) {
+				return
+			}
+			data := out.Data.(map[string]any)
+			assert.Equal(t, http.StatusOK, data["statusCode"])
+			assert.Equal(t, "ok-"+tenant, data["body"])
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, 1, p.pool().Len(), "all tenants shared a single pooled client")
+}
+
+func TestHTTPProvider_Execute_CancelledPriorContextDoesNotBreakPooled401Refresh(t *testing.T) {
+	t.Parallel()
+
+	var callNum atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := callNum.Add(1)
+		if n == 2 && r.Header.Get("Authorization") == "Bearer stale-req2" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(r.Header.Get("Authorization")))
+	}))
+	defer srv.Close()
+
+	handler := newMultiTenantRefreshHandler()
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(handler))
+	baseCtx := testContextWithCLIAuth(t, reg)
+
+	p := NewHTTPProvider()
+	defer func() { _ = p.Close() }()
+
+	// Request 1 populates the pooled client, then cancels its context.
+	ctx1, cancel1 := context.WithCancel(baseCtx)
+	out1, err := p.Execute(ctx1, map[string]any{
+		"url":          srv.URL + "/step1",
+		"method":       "GET",
+		"authProvider": "entra@req1",
+		"scope":        "api://scope/.default",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, out1.Data.(map[string]any)["statusCode"])
+	cancel1()
+
+	// Request 2 reuses the same pooled client, receives 401, and must refresh
+	// with ctx2 rather than failing with ctx1's cancellation error.
+	out2, err := p.Execute(baseCtx, map[string]any{
+		"url":          srv.URL + "/step2",
+		"method":       "GET",
+		"authProvider": "entra@req2",
+		"scope":        "api://scope/.default",
+	})
+	require.NoError(t, err)
+	data2 := out2.Data.(map[string]any)
+	assert.Equal(t, http.StatusOK, data2["statusCode"])
+	assert.Equal(t, "Bearer fresh-req2", data2["body"])
+}
+
+func TestHTTPProvider_Execute_UnauthenticatedAndHeaderToken401PassThroughOnPooledClient(t *testing.T) {
+	t.Parallel()
+
+	var unauthHits atomic.Int32
+	var headerHits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/authed":
+			w.WriteHeader(http.StatusOK)
+		case "/unauthed":
+			unauthHits.Add(1)
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/header":
+			headerHits.Add(1)
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer srv.Close()
+
+	handler := newMultiTenantRefreshHandler()
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(handler))
+	baseCtx := testContextWithCLIAuth(t, reg)
+
+	p := NewHTTPProvider()
+	defer func() { _ = p.Close() }()
+
+	// Seed the pooled client with an authProvider execution.
+	_, err := p.Execute(baseCtx, map[string]any{
+		"url":          srv.URL + "/authed",
+		"method":       "GET",
+		"authProvider": "entra@seed",
+		"scope":        "api://seed/.default",
+	})
+	require.NoError(t, err)
+
+	// Unauthenticated 401 must NOT invoke any refresh callback or retry.
+	outUnauth, err := p.Execute(baseCtx, map[string]any{
+		"url":    srv.URL + "/unauthed",
+		"method": "GET",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusUnauthorized, outUnauth.Data.(map[string]any)["statusCode"])
+	assert.Equal(t, int32(1), unauthHits.Load())
+
+	// Request-header pass-through token 401 must NOT invoke handler refresh either.
+	headerCtx := middleware.WithContextTokens(baseCtx, map[string]string{"Entra": "caller-token"})
+	outHeader, err := p.Execute(headerCtx, map[string]any{
+		"url":          srv.URL + "/header",
+		"method":       "GET",
+		"authProvider": "entra",
+		"scope":        "api://seed/.default",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusUnauthorized, outHeader.Data.(map[string]any)["statusCode"])
+	assert.Equal(t, int32(1), headerHits.Load())
+
+	handler.mu.Lock()
+	totalHandlerCalls := len(handler.records)
+	handler.mu.Unlock()
+	assert.Equal(t, 1, totalHandlerCalls, "handler must only have been called for the initial seeded request")
+}
+
+func TestHTTPProvider_Execute_SSRFCrossPolicyIsolation(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("loopback-ok"))
+	}))
+	defer srv.Close()
+
+	p := NewHTTPProvider()
+	defer func() { _ = p.Close() }()
+
+	// Permissive policy opens an idle keep-alive connection to loopback.
+	permissiveCtx := testContext(t)
+	out, err := p.Execute(permissiveCtx, map[string]any{
+		"url":    srv.URL,
+		"method": "GET",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, out.Data.(map[string]any)["statusCode"])
+
+	// Default restrictive policy on the SAME provider instance must NOT inherit
+	// the permissive client or its open loopback connection.
+	_, err = p.Execute(context.Background(), map[string]any{
+		"url":    srv.URL,
+		"method": "GET",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, httpc.ErrBlockedByPolicy)
+}
+
+func TestHTTPProvider_ClientPool_KeyedOnTimeoutAndRetry(t *testing.T) {
+	t.Parallel()
+
+	p := NewHTTPProvider()
+	defer func() { _ = p.Close() }()
+
+	ctx := testContext(t)
+	r1 := &retryConfig{MaxAttempts: 3, Backoff: "exponential", InitialWait: time.Second, MaxWait: 5 * time.Second, RetryOn: []int{500, 503}}
+	r2 := &retryConfig{MaxAttempts: 3, Backoff: "linear", InitialWait: time.Second, MaxWait: 5 * time.Second, RetryOn: []int{500, 503}}
+
+	cBase := p.clientFor(ctx, 30*time.Second, nil)
+	cSame := p.clientFor(ctx, 30*time.Second, nil)
+	cDiffTimeout := p.clientFor(ctx, 10*time.Second, nil)
+	cRetry1 := p.clientFor(ctx, 30*time.Second, r1)
+	cRetry2 := p.clientFor(ctx, 30*time.Second, r2)
+
+	assert.Same(t, cBase, cSame)
+	assert.NotSame(t, cBase, cDiffTimeout)
+	assert.NotSame(t, cBase, cRetry1)
+	assert.NotSame(t, cRetry1, cRetry2)
+
+	// Exceeding DefaultProviderClientPoolCap keeps the pool bounded.
+	for i := range DefaultProviderClientPoolCap * 2 {
+		_ = p.clientFor(ctx, time.Duration(i+1)*time.Second, nil)
+	}
+	assert.LessOrEqual(t, p.pool().Len(), DefaultProviderClientPoolCap)
+}
+
+func TestHTTPProvider_Execute_PaginatedReusesRefreshedTokenAcrossPages(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fresh-pag" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("cursor") == "p2" {
+			_, _ = w.Write([]byte(`{"items":["b"],"next":null}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"items":["a"],"next":"p2"}`))
+	}))
+	defer srv.Close()
+
+	handler := newMultiTenantRefreshHandler()
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(handler))
+	ctx := testContextWithCLIAuth(t, reg)
+
+	p := NewHTTPProvider()
+	defer func() { _ = p.Close() }()
+
+	out, err := p.Execute(ctx, map[string]any{
+		"url":          srv.URL + "/items",
+		"method":       "GET",
+		"authProvider": "entra@pag",
+		"scope":        "api://pag/.default",
+		"pagination": map[string]any{
+			"strategy":       "cursor",
+			"maxPages":       5,
+			"nextTokenPath":  "body.next",
+			"nextTokenParam": "cursor",
+			"collectPath":    "body.items",
+			"stopWhen":       "body.next == null",
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, `["a","b"]`, out.Data.(map[string]any)["body"])
+
+	handler.mu.Lock()
+	calls := len(handler.records)
+	handler.mu.Unlock()
+	assert.Equal(t, 2, calls, "page 2 must reuse the refreshed token from page 1 without triggering a second ForceRefresh")
 }

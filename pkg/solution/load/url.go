@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -38,11 +37,11 @@ type URLOption interface {
 
 // NewURLLoader returns a URLLoader using client for requests. The client's
 // destination-address (SSRF) policy applies to every fetch. When client is
-// nil, the secure-default client is used (private, loopback, and link-local
-// addresses denied; proxy routing disabled).
+// nil, the shared secure-default non-caching client is used (private,
+// loopback, and link-local addresses denied; proxy routing disabled).
 func NewURLLoader(client *httpc.Client, opts ...URLOption) *URLLoader {
 	if client == nil {
-		client = httpc.NewClientFromAppConfig(nil, logr.Discard())
+		client = httpc.FetchClientFromConfig(nil)
 	}
 	l := &URLLoader{client: client}
 	for _, opt := range opts {

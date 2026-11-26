@@ -9,13 +9,16 @@ package api
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -47,6 +50,13 @@ type Server struct {
 	api               huma.API
 	httpSrv           *http.Server
 	isShuttingDown    int32
+	lifecycleMu       sync.Mutex
+	shutdownStarted   bool
+	shutdownInitiated chan struct{}
+	shutdownComplete  chan struct{}
+	drainWaiters      int
+	drainCancel       context.CancelCauseFunc
+	shutdownErr       error
 	startTime         time.Time
 	logger            logr.Logger
 	providerReg       *provider.Registry
@@ -272,6 +282,8 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		version:           version,
 		ctx:               ctx,
 		cancel:            cancel,
+		shutdownInitiated: make(chan struct{}),
+		shutdownComplete:  make(chan struct{}),
 		startTime:         time.Now(),
 
 		catalogIndex:   sc.catalogIndex,
@@ -402,6 +414,16 @@ func (s *Server) HandlerCtx() *HandlerContext {
 	return hctx
 }
 
+func (s *Server) ensureLifecycleLocked() (initiated, done chan struct{}) {
+	if s.shutdownInitiated == nil {
+		s.shutdownInitiated = make(chan struct{})
+	}
+	if s.shutdownComplete == nil {
+		s.shutdownComplete = make(chan struct{})
+	}
+	return s.shutdownInitiated, s.shutdownComplete
+}
+
 // Start starts the HTTP server and blocks until shutdown.
 func (s *Server) Start() error {
 	// Cancel the server context when Start returns so background goroutines
@@ -411,9 +433,8 @@ func (s *Server) Start() error {
 
 	apiCfg := s.cfg.APIServer
 
-	addr := s.buildHTTPServer()
-
 	// TLS configuration
+	var tlsCfg *tls.Config
 	if apiCfg.TLS.Enabled {
 		if apiCfg.TLS.Cert == "" || apiCfg.TLS.Key == "" {
 			return fmt.Errorf("TLS enabled but cert or key path is empty")
@@ -422,31 +443,73 @@ func (s *Server) Start() error {
 		if err != nil {
 			return fmt.Errorf("loading TLS certificate: %w", err)
 		}
-		s.httpSrv.TLSConfig = &tls.Config{
+		tlsCfg = &tls.Config{
 			Certificates: []tls.Certificate{cert},
 			MinVersion:   tls.VersionTLS12,
 		}
 	}
 
+	s.lifecycleMu.Lock()
+	initiated, done := s.ensureLifecycleLocked()
+	if s.shutdownStarted {
+		s.lifecycleMu.Unlock()
+		<-done
+		return s.readShutdownErr()
+	}
+	addr := s.buildHTTPServerLocked()
+	if tlsCfg != nil {
+		s.httpSrv.TLSConfig = tlsCfg
+	}
+	httpSrv := s.httpSrv
+	s.lifecycleMu.Unlock()
+
+	// Registered after defer s.cancel() so LIFO stops and joins the watcher
+	// goroutine before s.cancel() fires on non-Shutdown errors (e.g. bind failure).
+	stopWatch := make(chan struct{})
+	watchExited := make(chan struct{})
+	defer func() {
+		close(stopWatch)
+		<-watchExited
+	}()
+
 	// Graceful shutdown goroutine
 	shutdownDone := make(chan error, 1)
 	go func() {
+		defer close(watchExited)
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(sigCh)
 
 		select {
 		case sig := <-sigCh:
 			s.logger.Info("received signal, starting graceful shutdown", "signal", sig.String())
 		case <-s.ctx.Done():
+			select {
+			case <-initiated:
+				<-done
+				shutdownDone <- s.readShutdownErr()
+				return
+			default:
+			}
 			s.logger.Info("context cancelled, starting graceful shutdown")
+		case <-initiated:
+			<-done
+			shutdownDone <- s.readShutdownErr()
+			return
+		case <-stopWatch:
+			return
 		}
-
-		atomic.StoreInt32(&s.isShuttingDown, 1)
 
 		timeout := parseTimeoutOrDefault(apiCfg.ShutdownTimeout, settings.DefaultAPIShutdownTimeout)
 		shutCtx, shutCancel := context.WithTimeout(context.Background(), timeout)
 		defer shutCancel()
-		shutdownDone <- s.httpSrv.Shutdown(shutCtx)
+		shutErr := s.Shutdown(shutCtx)
+		<-done
+		if shutErr != nil {
+			shutdownDone <- shutErr
+			return
+		}
+		shutdownDone <- s.readShutdownErr()
 	}()
 
 	s.logger.Info("starting API server", "addr", addr, "tls", apiCfg.TLS.Enabled, "version", s.version)
@@ -454,37 +517,158 @@ func (s *Server) Start() error {
 	var err error
 	if apiCfg.TLS.Enabled {
 		// TLSConfig already set, pass empty cert/key paths
-		err = s.httpSrv.ListenAndServeTLS("", "")
+		err = httpSrv.ListenAndServeTLS("", "")
 	} else {
-		err = s.httpSrv.ListenAndServe()
+		err = httpSrv.ListenAndServe()
 	}
 
 	if err == http.ErrServerClosed {
-		// Wait for shutdown to complete
+		// Wait for shutdown and provider/plugin teardown to complete.
 		return <-shutdownDone
 	}
 	return err
 }
 
-// Shutdown gracefully shuts down the server and kills plugin clients.
+func (s *Server) readShutdownErr() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.shutdownErr
+}
+
+// Shutdown gracefully drains in-flight HTTP requests, cancels the server
+// context, stops plugin processes, and closes any registered providers
+// implementing io.Closer. Concurrent callers wait on shared completion while
+// respecting each caller's own context deadline or cancellation; HTTP draining
+// continues as long as at least one Shutdown caller's context remains active.
 func (s *Server) Shutdown(ctx context.Context) error {
-	atomic.StoreInt32(&s.isShuttingDown, 1)
-	s.cancel()
-
-	// Shut down plugin pool (kills all managed plugin processes)
-	if s.pluginPool != nil {
-		s.pluginPool.Shutdown()
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
-	// Kill pre-loaded plugin clients not managed by the pool
-	for _, c := range s.pluginClients {
-		c.Kill()
+	s.lifecycleMu.Lock()
+	initiated, done := s.ensureLifecycleLocked()
+	select {
+	case <-done:
+		err := s.shutdownErr
+		s.lifecycleMu.Unlock()
+		return err
+	default:
 	}
 
-	if s.httpSrv != nil {
-		return s.httpSrv.Shutdown(ctx)
+	s.drainWaiters++
+	first := !s.shutdownStarted
+	var (
+		httpSrv  *http.Server
+		drainCtx context.Context
+	)
+	if first {
+		s.shutdownStarted = true
+		atomic.StoreInt32(&s.isShuttingDown, 1)
+		httpSrv = s.httpSrv
+		drainCtx, s.drainCancel = context.WithCancelCause(context.Background())
+		close(initiated)
 	}
-	return nil
+	s.lifecycleMu.Unlock()
+
+	if first {
+		go func() {
+			var err error
+			// Drain in-flight HTTP requests BEFORE cancelling s.ctx because
+			// buildHTTPServer wires s.ctx as httpSrv.BaseContext.
+			if httpSrv != nil {
+				err = httpSrv.Shutdown(drainCtx)
+				if errors.Is(err, context.Canceled) {
+					if cause := context.Cause(drainCtx); cause != nil {
+						err = cause
+					}
+				}
+			}
+			s.cancel()
+
+			// Shut down plugin pool (kills all managed plugin processes)
+			if s.pluginPool != nil {
+				s.pluginPool.Shutdown()
+			}
+
+			// Kill pre-loaded plugin clients not managed by the pool
+			for _, c := range s.pluginClients {
+				c.Kill()
+			}
+
+			s.closeProviders()
+
+			s.lifecycleMu.Lock()
+			s.shutdownErr = err
+			if s.drainCancel != nil {
+				s.drainCancel(nil)
+			}
+			close(done)
+			s.lifecycleMu.Unlock()
+		}()
+	}
+
+	select {
+	case <-done:
+		s.lifecycleMu.Lock()
+		s.drainWaiters--
+		err := s.shutdownErr
+		s.lifecycleMu.Unlock()
+		return err
+	case <-ctx.Done():
+		cause := ctx.Err()
+		s.lifecycleMu.Lock()
+		s.drainWaiters--
+		if s.drainWaiters == 0 && s.drainCancel != nil {
+			s.drainCancel(cause)
+		}
+		s.lifecycleMu.Unlock()
+		return cause
+	}
+}
+
+func sameProviderInstance(a, b provider.Provider) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	ta := reflect.TypeOf(a)
+	if ta != reflect.TypeOf(b) || !ta.Comparable() {
+		return false
+	}
+	return a == b
+}
+
+// closeProviders closes every registered provider that implements io.Closer,
+// deduplicating identical provider instances shared across providerReg and
+// compositeReg while still closing distinct instances registered under the
+// same name.
+func (s *Server) closeProviders() {
+	var closed []provider.Provider
+	closeOnce := func(p provider.Provider) {
+		closer, ok := p.(io.Closer)
+		if !ok {
+			return
+		}
+		for _, seen := range closed {
+			if sameProviderInstance(seen, p) {
+				return
+			}
+		}
+		closed = append(closed, p)
+		_ = closer.Close()
+	}
+
+	if s.providerReg != nil {
+		for _, p := range s.providerReg.ListProviders() {
+			closeOnce(p)
+		}
+	}
+	if s.compositeReg != nil {
+		for _, name := range s.compositeReg.ListBase() {
+			if p, ok := s.compositeReg.GetBase(name); ok {
+				closeOnce(p)
+			}
+		}
+	}
 }
 
 // buildHTTPServer constructs s.httpSrv from configuration and returns the
@@ -492,6 +676,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // server's resource limits and exposure warning can be exercised in tests
 // without starting a listener.
 func (s *Server) buildHTTPServer() string {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.buildHTTPServerLocked()
+}
+
+func (s *Server) buildHTTPServerLocked() string {
 	apiCfg := s.cfg.APIServer
 
 	host := apiCfg.Host

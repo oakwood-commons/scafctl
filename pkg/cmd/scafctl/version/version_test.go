@@ -7,10 +7,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -235,4 +239,66 @@ func TestCommandVersion_UsesPath(t *testing.T) {
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := CommandVersion(&settings.Run{}, ioStreams, "mycli", nil)
 	assert.Contains(t, cmd.Short, "mycli")
+}
+
+func TestGetLatestVersionFromURL(t *testing.T) {
+	t.Parallel()
+
+	allowLoopbackCtx := func() context.Context {
+		return config.WithConfig(context.Background(), &config.Config{
+			HTTPClient: config.HTTPClientConfig{
+				AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+			},
+		})
+	}
+
+	t.Run("strips v prefix on 200 release response", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "application/vnd.github+json", r.Header.Get("Accept"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"tag_name":"v1.5.0"}`))
+		}))
+		defer srv.Close()
+
+		got, err := getLatestVersionFromURL(allowLoopbackCtx(), srv.URL)
+		require.NoError(t, err)
+		assert.Equal(t, "1.5.0", got)
+	})
+
+	t.Run("enforces context IPPolicy and blocks loopback by default", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"tag_name":"v1.5.0"}`))
+		}))
+		defer srv.Close()
+
+		_, err := getLatestVersionFromURL(context.Background(), srv.URL)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, httpc.ErrBlockedByPolicy)
+	})
+
+	t.Run("returns error on non-200 status", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		defer srv.Close()
+
+		_, err := getLatestVersionFromURL(allowLoopbackCtx(), srv.URL)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "status 403")
+	})
+
+	t.Run("returns error on malformed JSON", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{not-json`))
+		}))
+		defer srv.Close()
+
+		_, err := getLatestVersionFromURL(allowLoopbackCtx(), srv.URL)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "decoding response")
+	})
 }

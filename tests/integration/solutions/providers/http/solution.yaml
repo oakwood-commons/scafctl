@@ -162,6 +162,18 @@ spec:
                 interval: 1s
                 maxAttempts: 3
 
+    chainedFollowup:
+      description: Sequential GET after getUsers exercising pooled connection reuse within a run
+      dependsOn: [getUsers]
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/users'"
+              method: GET
+              autoParseJson: true
+
     mockBaseUrl:
       description: Base URL of mock server from env
       resolve:
@@ -342,3 +354,12 @@ spec:
         assertions:
           - expression: __output.pollEndpoint.statusCode == 200
             message: "Poll should succeed with 200"
+
+      connection-reuse-chained:
+        description: Verify sequential HTTP resolvers reuse the pooled provider client cleanly
+        extends: [_base]
+        tags: [pool]
+        assertions:
+          - expression: __output.chainedFollowup.statusCode == 200
+          - expression: size(__output.chainedFollowup.body.users) == 2
+          - expression: __output.chainedFollowup.body.users[1].name == "bob"

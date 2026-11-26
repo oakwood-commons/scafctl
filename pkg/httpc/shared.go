@@ -6,150 +6,233 @@ package httpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"sync"
 	"sync/atomic"
 
+	"github.com/go-logr/logr"
+
 	"github.com/oakwood-commons/scafctl/pkg/config"
-	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 )
 
 // unkeyableSeq makes each un-marshalable configuration produce a distinct cache
 // key, so such a caller never shares a client with anyone else. See
-// httpConfigKey.
+// HTTPConfigKey.
 var unkeyableSeq atomic.Uint64
 
-// maxCachedClients bounds how many distinct configurations shared clients are
-// held for. Application configuration is loaded once per process, so in
-// practice there are one or two. The bound only guards against an embedder that
-// swaps configuration repeatedly; past it, an existing entry is evicted (and
-// closed) to store the new client, rather than the map growing without limit
-// -- see sharedClient for the eviction tradeoff.
-const maxCachedClients = 8
+// DefaultClientPoolCap bounds how many distinct configurations a ClientPool
+// retains by default. Application configuration is loaded once per process, so
+// in practice there are one or two entries; past the bound an existing entry is
+// evicted (and closed) to store the new client rather than growing without
+// limit.
+const DefaultClientPoolCap = 16
 
 // Client shapes. Each shape is built differently, so a configuration key alone
 // is not enough to decide two callers can share -- the shape forms part of the
 // key.
 const (
 	shapeFetch = "fetch"
+	shapeApp   = "app"
 )
 
-var (
-	sharedClientsMu sync.Mutex
-	sharedClients   = make(map[string]*Client, 2)
-)
+var defaultPool = NewClientPool(DefaultClientPoolCap)
 
-// sharedClient returns the client stored under key, calling build on first use.
+// ClientPool is a bounded, concurrency-safe cache of *Client instances keyed
+// on configuration.
+//
+// Pooling *Client instances directly -- rather than sharing a raw
+// *http.Transport across per-call NewClient constructions -- is required
+// because upstream clones *http.Transport on every NewClient call so each
+// client owns an isolated idle-connection pool enforced by its dial-time
+// IPPolicy.
+type ClientPool struct {
+	mu       sync.Mutex
+	clients  map[string]*Client
+	capacity int
+}
+
+// NewClientPool returns a ClientPool bounded to capacity entries. A zero or
+// negative capacity defaults to DefaultClientPoolCap.
+func NewClientPool(capacity int) *ClientPool {
+	if capacity <= 0 {
+		capacity = DefaultClientPoolCap
+	}
+	return &ClientPool{
+		clients:  make(map[string]*Client, 2),
+		capacity: capacity,
+	}
+}
+
+// GetOrBuild returns the client stored under key, calling build on first use.
 //
 // Clients are reused because each one owns its own connection pool. Building a
-// new client per call discards the open connection and pays a fresh TLS
-// handshake every time, which measured roughly 5x the cost of reusing one, and
-// leaks the abandoned pool for the life of the process since nothing closes it.
+// new client per call discards open connections, pays a fresh TCP/TLS
+// handshake every time, and abandons an idle pool unless closed.
 //
-// Reuse is keyed on the configuration, so a client is only ever handed to a
-// caller governed by the same rules that were in force when its connections
-// were opened. A connection cannot be inherited by a request that should have
-// been refused. Callers with different configurations share nothing.
-func sharedClient(key string, build func() *Client) *Client {
-	sharedClientsMu.Lock()
-	defer sharedClientsMu.Unlock()
+// Reuse must be keyed on every configuration input that governs dial policy,
+// proxy selection, caching, timeouts, and retries so a client is only handed
+// to callers governed by identical rules.
+//
+// At capacity, an existing entry is evicted and closed rather than returning an
+// unowned client:
+//
+//   - Close is a cleanup hint, not a lifecycle terminator: upstream reaps
+//     currently-idle connections without marking the client unusable, so a
+//     borrower whose request races an eviction dials fresh and completes
+//     normally.
+//   - Any idle pool opened by such a post-eviction request self-reaps after
+//     IdleConnTimeout (90s) on the cloned DefaultTransport.
+func (p *ClientPool) GetOrBuild(key string, build func() *Client) *Client {
+	var evicted *Client
+	defer func() {
+		if evicted != nil {
+			_ = evicted.Close()
+		}
+	}()
 
-	if client, ok := sharedClients[key]; ok {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.capacity <= 0 {
+		p.capacity = DefaultClientPoolCap
+	}
+	if p.clients == nil {
+		p.clients = make(map[string]*Client, 2)
+	}
+
+	if client, ok := p.clients[key]; ok {
 		return client
 	}
 
 	client := build()
+	if client == nil {
+		return nil
+	}
 
-	// At the bound, evict an existing entry rather than handing back a client
-	// nobody owns. FetchClient's contract forbids callers from closing the
-	// result, so an uncached client would abandon its transport and idle pool
-	// on every call -- the exact leak this cache exists to prevent.
-	//
-	// A borrower holds no lease, so an evicted (and Closed) client can still
-	// sit in a caller's hands -- a FetchClient(ctx).Get(...) pair can even
-	// straddle the eviction. That race is bounded and deliberately NOT fixed
-	// with an acquire/release API:
-	//
-	//   - Close is a cleanup hint, not a lifecycle terminator: upstream it
-	//     only reaps currently-idle connections. It does not mark the client
-	//     unusable, and a dial of a new connection proceeds unaffected, so
-	//     the borrower's post-eviction request completes normally.
-	//   - The worst the race can leave behind is one extra idle pool: the
-	//     borrower's post-Close request dials fresh, and those connections
-	//     then idle on a client nobody will close again. Every pooled
-	//     transport here is a DefaultTransport clone, so IdleConnTimeout
-	//     (90s) is preserved: that pool self-reaps, after which the transport
-	//     holds no resources and is garbage-collectible.
-	//   - The bound is reached only by an embedder rotating through more than
-	//     maxCachedClients distinct policies (a CLI process holds one or
-	//     two), so the lingering cost is a handful of sockets for at most 90
-	//     seconds, in a process already swapping policies frequently.
-	//
-	// Closing at map removal still earns its keep in the common case -- idle
-	// sockets reaped immediately instead of 90 seconds later. A lease API
-	// would close the race window entirely but would change FetchClient's
-	// exported shape for every caller; against a self-reaping 90-second pool,
-	// the documented tradeoff wins. (General client-pooling work is tracked
-	// in #847.)
-	//
-	// Go map iteration order is unspecified, which is an acceptable victim
-	// choice here -- every entry is equivalent, and the bound is reached only
-	// by a process rotating through more distinct policies than it keeps
-	// clients.
-	if len(sharedClients) >= maxCachedClients {
-		for k, victim := range sharedClients {
-			delete(sharedClients, k)
-			_ = victim.Close()
+	if len(p.clients) >= p.capacity {
+		for k, victim := range p.clients {
+			delete(p.clients, k)
+			evicted = victim
 			break
 		}
 	}
-	sharedClients[key] = client
+	p.clients[key] = client
 
 	return client
 }
 
-// FetchClient returns the shared client for retrieving a URL under the
-// destination-address policy carried on ctx.
-//
-// The returned client is shared. Do NOT call Close on it: that would shut down
-// connections still in use by other callers. Its idle connections normally
-// persist for the life of the process, the usual lifetime for a shared HTTP
-// client; eviction past the cache bound is the one exception (see
-// sharedClient), where the entry is closed so its idle pool is reaped early.
-func FetchClient(ctx context.Context) *Client {
-	cfg := config.FromContext(ctx)
-	key := shapeFetch + "|" + configKey(cfg)
+// Close closes every pooled client and clears the pool. The pool remains safe
+// for subsequent GetOrBuild calls, which populate fresh clients on demand.
+func (p *ClientPool) Close() error {
+	if p == nil {
+		return nil
+	}
 
-	return sharedClient(key, func() *Client {
-		return NewClient(&ClientConfig{
-			Timeout:           settings.DefaultHTTPTimeout,
-			RetryMax:          settings.DefaultHTTPRetryMax,
-			RetryWaitMin:      settings.DefaultHTTPRetryWaitMinimum,
-			RetryWaitMax:      settings.DefaultHTTPRetryWaitMaximum,
-			EnableCache:       false,
-			EnableCompression: true,
-			// A nil policy denies private, loopback, and link-local
-			// addresses, so a missing or unusable configuration fails closed.
-			IPPolicy: PolicyFromContext(ctx),
-			// Proxy routing bypasses the dial-time check above (the proxy is
-			// what actually gets dialed), so it stays disabled here too
-			// unless httpClient.trustedProxy explicitly opts in.
-			Transport: ProxyAwareTransport(TrustedProxyFromContext(ctx)),
-		})
+	p.mu.Lock()
+	entries := p.clients
+	p.clients = make(map[string]*Client)
+	p.mu.Unlock()
+
+	var errs []error
+	for _, client := range entries {
+		if client == nil {
+			continue
+		}
+		if err := client.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Len returns the number of clients currently held in the pool.
+func (p *ClientPool) Len() int {
+	if p == nil {
+		return 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.clients)
+}
+
+// FetchClient returns the shared non-caching client for retrieving a URL under
+// the application HTTP client configuration carried on ctx.
+//
+// All settings from cfg.HTTPClient (timeouts, retries, circuit breaker,
+// compression, max response body size, dial-time IPPolicy, and trusted-proxy
+// transport) are honored while EnableCache is forced false so callers never
+// serve stale or header-insensitive cached responses.
+//
+// The returned client is shared. Do NOT call Close on it.
+func FetchClient(ctx context.Context) *Client {
+	return FetchClientFromConfig(config.FromContext(ctx))
+}
+
+// FetchClientFromConfig returns the shared non-caching client for cfg (nil uses
+// secure defaults). All cfg.HTTPClient settings are applied while EnableCache
+// is forced false.
+//
+// The returned client is shared. Do NOT call Close on it.
+func FetchClientFromConfig(cfg *config.Config) *Client {
+	key := shapeFetch + "|" + ConfigKey(cfg)
+
+	return defaultPool.GetOrBuild(key, func() *Client {
+		var httpCfg *config.HTTPClientConfig
+		if cfg != nil {
+			httpCfg = &cfg.HTTPClient
+		}
+		clientCfg := httpClientConfigFromAppConfig(httpCfg, logr.Discard())
+		clientCfg.EnableCache = false
+		return NewClient(clientCfg)
 	})
 }
 
-// configKey returns a stable identifier for the HTTP client configuration on
-// cfg, or a distinct value when there is none.
-func configKey(cfg *config.Config) string {
-	if cfg == nil {
-		// Matches PolicyFromContext's fail-closed default for a missing config.
-		return "nocfg"
-	}
-	return httpConfigKey(&cfg.HTTPClient)
+// AppClient returns the shared client honoring the full application HTTP
+// client configuration carried on ctx, including response caching.
+//
+// The returned client is shared. Do NOT call Close on it.
+func AppClient(ctx context.Context) *Client {
+	return AppClientFromConfig(config.FromContext(ctx))
 }
 
-// httpConfigKey returns a stable identifier for an HTTP client configuration.
+// AppClientFromConfig returns the shared client honoring cfg.HTTPClient (nil
+// uses secure defaults), including EnableCache.
+//
+// The returned client is shared. Do NOT call Close on it.
+func AppClientFromConfig(cfg *config.Config) *Client {
+	key := shapeApp + "|" + ConfigKey(cfg)
+
+	return defaultPool.GetOrBuild(key, func() *Client {
+		var httpCfg *config.HTTPClientConfig
+		if cfg != nil {
+			httpCfg = &cfg.HTTPClient
+		}
+		return NewClient(httpClientConfigFromAppConfig(httpCfg, logr.Discard()))
+	})
+}
+
+// ConfigKey returns a stable identifier for the HTTP client configuration on
+// cfg, prefixed with the active application name so embedders (for example
+// "mycli") never collide on default cache paths or cache key prefixes.
+func ConfigKey(cfg *config.Config) string {
+	return configKeyForApp(paths.AppName(), paths.HTTPCacheDir(), cfg)
+}
+
+func configKeyForApp(appName, defaultCacheDir string, cfg *config.Config) string {
+	prefix := appName + "|"
+	if cfg == nil {
+		// Matches PolicyFromContext's fail-closed default for a missing config.
+		return prefix + defaultCacheDir + "|nocfg"
+	}
+	if cfg.HTTPClient.CacheDir == "" {
+		return prefix + defaultCacheDir + "|" + HTTPConfigKey(&cfg.HTTPClient)
+	}
+	return prefix + HTTPConfigKey(&cfg.HTTPClient)
+}
+
+// HTTPConfigKey returns a stable identifier for an HTTP client configuration.
 //
 // It serializes the whole struct rather than naming individual fields so that
 // adding a setting cannot silently produce a key collision, which would hand a
@@ -167,7 +250,7 @@ func configKey(cfg *config.Config) string {
 // Slice order is preserved deliberately: two allowlists differing only in order
 // describe the same policy, but treating them as distinct costs at most one
 // extra cached client, whereas normalizing on every call costs every call.
-func httpConfigKey(cfg *config.HTTPClientConfig) string {
+func HTTPConfigKey(cfg *config.HTTPClientConfig) string {
 	if cfg == nil {
 		return "nilhttp"
 	}

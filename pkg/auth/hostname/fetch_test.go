@@ -5,8 +5,10 @@ package hostname
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -140,4 +142,61 @@ func TestDefaultFetch_AllowsBearerOverLoopbackHTTP(t *testing.T) {
 
 	_, err := defaultFetch(ctxAllowingLoopback(), config.HostnameResolverSource{URL: srv.URL}, "secret")
 	require.NoError(t, err)
+}
+
+func TestDefaultFetch_ReusesConnection(t *testing.T) {
+	t.Parallel()
+
+	var newConns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok": true}`))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	ctx := ctxAllowingLoopback()
+	src := config.HostnameResolverSource{URL: srv.URL}
+	for range 3 {
+		body, err := defaultFetch(ctx, src, "")
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"ok": true}`, string(body))
+	}
+	assert.Equal(t, int32(1), newConns.Load(), "repeated inventory fetches must reuse one connection")
+}
+
+func TestDefaultFetch_DoesNotCacheAcrossBearerTokens(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"auth":"` + r.Header.Get("Authorization") + `"}`))
+	}))
+	defer srv.Close()
+
+	enableCache := true
+	ctx := config.WithConfig(context.Background(), &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			EnableCache:         &enableCache,
+			CacheType:           "memory",
+			CacheDir:            t.TempDir(),
+			AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+		},
+	})
+	src := config.HostnameResolverSource{URL: srv.URL}
+
+	bodyA, err := defaultFetch(ctx, src, "token-a")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"auth":"Bearer token-a"}`, string(bodyA))
+
+	bodyB, err := defaultFetch(ctx, src, "token-b")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"auth":"Bearer token-b"}`, string(bodyB),
+		"inventory fetch must bypass HTTP response caching so Authorization headers are never ignored")
 }
