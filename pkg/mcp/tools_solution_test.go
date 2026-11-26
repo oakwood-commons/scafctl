@@ -1606,6 +1606,88 @@ spec:
 		require.True(t, ok, "command should be a string")
 		assert.NotContains(t, cmd, "--show-execution", "show_execution=false should not add --show-execution flag")
 	})
+
+	t.Run("returns catalogCommand, explicitActions, fallback defaults, and embedder binary name", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "solution.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: demo-catalog-app
+  version: 1.0.0
+spec:
+  resolvers:
+    appName:
+      type: string
+      example: billing
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: appName
+    region:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+          - provider: static
+            inputs:
+              value: us-west-2
+  workflow:
+    actions:
+      deploy:
+        description: Default deploy action
+        provider: message
+        inputs:
+          message: "deploying"
+      teardown:
+        description: Opt-in teardown action
+        explicit: true
+        alias: td
+        provider: message
+        inputs:
+          message: "tearing down"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o600))
+
+		srv, err := NewServer(WithServerName("mycli"), WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_run_command"
+		request.Params.Arguments = map[string]any{
+			"path":        solFile,
+			"on_conflict": "overwrite",
+		}
+
+		result, err := srv.handleGetRunCommand(context.Background(), request)
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+
+		cmd := parsed["command"].(string)
+		assert.Contains(t, cmd, "mycli run solution")
+		assert.Contains(t, cmd, "-r appName=billing")
+		assert.NotContains(t, cmd, "-r region=")
+		assert.Contains(t, cmd, "--on-conflict overwrite")
+
+		assert.Equal(t, "mycli run solution demo-catalog-app -r appName=billing --on-conflict overwrite", parsed["catalogCommand"])
+
+		explicitActions, ok := parsed["explicitActions"].([]any)
+		require.True(t, ok)
+		require.Len(t, explicitActions, 1)
+		ea := explicitActions[0].(map[string]any)
+		assert.Equal(t, "teardown", ea["name"])
+		assert.Equal(t, "td", ea["alias"])
+		assert.Contains(t, ea["command"].(string), "mycli run solution")
+		assert.Contains(t, ea["command"].(string), "--action teardown")
+		assert.Contains(t, ea["command"].(string), "--on-conflict overwrite")
+	})
 }
 
 func TestHandleRunSolutionTests(t *testing.T) {

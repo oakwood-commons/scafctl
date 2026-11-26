@@ -165,7 +165,8 @@ There is no MCP library in `go.mod` today. We would add one:
 | `list_solutions` | `scafctl get solution` | List available solutions from local catalog |
 | `inspect_solution` | `scafctl inspect solution <name>` | Get solution metadata, resolvers, actions |
 | `get_solution_usage` | `scafctl inspect solution --usage` | User-facing usage view: synopsis, parameters (defaults + allowed values), per-action commands |
-| `run_solution` | `scafctl run solution` | Execute a solution with parameters |
+| `run_solution` | `scafctl run solution` | Execute a solution with parameters and optional selective `actions` |
+| `package_solution` | `scafctl package solution` | Verify bundle discovery (`dry_run: true` default) or package a solution into the local catalog |
 | `run_resolver` | `scafctl run resolver` | Run resolvers only (no actions) |
 | `lint_solution` | `scafctl lint` | Validate a solution file |
 | `render_solution` | `scafctl render solution` | Render without executing |

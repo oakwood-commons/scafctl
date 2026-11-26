@@ -47,7 +47,8 @@ func (r *VerifyResult) Passed() bool {
 //   - Plugin entries are recorded
 //
 // When bundleData is empty the function checks whether a bundle would be needed
-// and returns warnings if local files or catalog dependencies are detected.
+// and returns warnings if local files, catalog dependencies, or bundle.include
+// patterns are detected.
 func VerifyBundle(ctx context.Context, sol *solution.Solution, bundleData []byte, lgr logr.Logger) (*VerifyResult, error) {
 	result := &VerifyResult{}
 
@@ -60,6 +61,9 @@ func VerifyBundle(ctx context.Context, sol *solution.Solution, bundleData []byte
 
 // verifyNoBundleCase handles verification when no bundle data is present.
 func verifyNoBundleCase(sol *solution.Solution, result *VerifyResult, _ logr.Logger) (*VerifyResult, error) {
+	if sol == nil {
+		return result, nil
+	}
 	// Analyze the solution SPEC directly rather than DiscoverFiles(sol, "."):
 	// discovery stats files against the current working directory, so a
 	// bundle-less solution run from an unrelated CWD (e.g. `package solution -f
@@ -74,6 +78,7 @@ func verifyNoBundleCase(sol *solution.Solution, result *VerifyResult, _ logr.Log
 	if len(catalogRefs) > 0 {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("solution references %d catalog dependencies but has no vendored copies", len(catalogRefs)))
 	}
+	verifyGlobCoverage(sol, &BundleManifest{}, result)
 	return result, nil
 }
 
@@ -103,6 +108,11 @@ func verifyWithBundle(_ context.Context, sol *solution.Solution, bundleData []by
 	} else {
 		verifyStaticPaths(discovery, tmpDir, result)
 		verifyGlobCoverage(sol, manifest, result)
+		for _, ui := range discovery.UnmatchedIncludes {
+			if ui.SolutionPath != "" {
+				result.Warnings = append(result.Warnings, ui.String())
+			}
+		}
 		verifyVendoredDeps(discovery, bundledFiles, result)
 
 		// Verify nested sub-solution bundles: check that all files

@@ -41,6 +41,9 @@ func TestHandleCreateSolutionPrompt(t *testing.T) {
 		assert.Contains(t, text, "get_solution_schema")
 		assert.Contains(t, text, "run resolver", "prompt must mention 'run resolver' for solutions without a workflow")
 		assert.Contains(t, text, "run solution", "prompt must mention 'run solution' for solutions with a workflow")
+		assert.Contains(t, text, "explicit: true")
+		assert.Contains(t, text, "dependency-failed")
+		assert.Contains(t, text, "package_solution")
 	})
 
 	t.Run("with minimal arguments", func(t *testing.T) {
@@ -166,6 +169,37 @@ func TestHandleAddActionPrompt(t *testing.T) {
 		assert.Contains(t, text, "explain_kind")
 		assert.Contains(t, text, "forEach")
 		assert.Contains(t, text, "retry")
+		assert.Contains(t, text, "explicit: true")
+		assert.Contains(t, text, "dependency-failed")
+		assert.Contains(t, text, "package_solution")
+	})
+
+	t.Run("embedder binary name substitution", func(t *testing.T) {
+		embedSrv, err := NewServer(WithServerName("mycli"), WithServerVersion("test"))
+		require.NoError(t, err)
+
+		createReq := mcp.GetPromptRequest{}
+		createReq.Params.Name = "create_solution"
+		createReq.Params.Arguments = map[string]string{
+			"name":        "demo-app",
+			"description": "Demo app",
+		}
+		createRes, err := embedSrv.handleCreateSolutionPrompt(context.Background(), createReq)
+		require.NoError(t, err)
+		createText := createRes.Messages[0].Content.(mcp.TextContent).Text
+		assert.Contains(t, createText, "mycli run solution demo-app")
+
+		addReq := mcp.GetPromptRequest{}
+		addReq.Params.Name = "add_action"
+		addReq.Params.Arguments = map[string]string{
+			"provider":    "exec",
+			"description": "run unit tests",
+		}
+		addRes, err := embedSrv.handleAddActionPrompt(context.Background(), addReq)
+		require.NoError(t, err)
+		addText := addRes.Messages[0].Content.(mcp.TextContent).Text
+		assert.Contains(t, addText, "mycli")
+		assert.NotContains(t, addText, "scafctl run")
 	})
 
 	t.Run("with provider only", func(t *testing.T) {

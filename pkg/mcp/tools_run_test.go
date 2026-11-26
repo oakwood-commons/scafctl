@@ -105,7 +105,7 @@ spec:
               expression: "'hello'"
 `
 	solFile := filepath.Join(tmpDir, "solution.yaml")
-	require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+	require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o600))
 
 	srv, err := NewServer(WithServerVersion("test"))
 	require.NoError(t, err)
@@ -160,7 +160,7 @@ spec:
           content: "hello from MCP"
 `
 	solFile := filepath.Join(tmpDir, "solution.yaml")
-	require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+	require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o600))
 
 	srv, err := NewServer(WithServerVersion("test"))
 	require.NoError(t, err)
@@ -220,4 +220,197 @@ func TestBuildRunResult(t *testing.T) {
 	actions := result["actions"].([]map[string]any)
 	assert.Len(t, actions, 1)
 	assert.Equal(t, "step-1", actions[0]["name"])
+}
+
+func TestHandleRunSolution_SelectiveActions(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	xdg.Reload()
+	t.Cleanup(func() { xdg.Reload() })
+
+	outputDir := filepath.Join(tmpDir, "out")
+	solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: selective-test
+  version: 1.0.0
+state:
+  load:
+    provider: file
+    inputs:
+      operation: read
+      path:
+        rslvr: stateOnlyBroken
+spec:
+  resolvers:
+    targetMsg:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "targeted-ok"
+    inferredMsg:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "inferred-ok"
+    unusedBroken:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: missingRequiredParam
+    stateOnlyBroken:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: missingStateParam
+  workflow:
+    actions:
+      defaultAction:
+        provider: file
+        inputs:
+          operation: write
+          path: default.txt
+          content:
+            rslvr: unusedBroken
+      prepStep:
+        explicit: true
+        provider: file
+        inputs:
+          operation: write
+          path: prep.txt
+          content: "prep-done"
+      inferredBuild:
+        explicit: true
+        provider: message
+        inputs:
+          message:
+            rslvr: inferredMsg
+      optInDeploy:
+        explicit: true
+        alias: d
+        dependsOn: [prepStep]
+        provider: file
+        inputs:
+          operation: write
+          path: deploy.txt
+          content:
+            expr: '__actions.inferredBuild.results.message + ":" + _.targetMsg'
+    finally:
+      alwaysCleanup:
+        provider: file
+        inputs:
+          operation: write
+          path: cleanup.txt
+          content: "cleaned"
+`
+	solFile := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o600))
+
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	t.Run("executes targeted alias, transitive dep, and finally while scoping resolvers", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_solution"
+		request.Params.Arguments = map[string]any{
+			"path":       solFile,
+			"actions":    []any{"d"},
+			"output_dir": outputDir,
+		}
+
+		result, err := srv.handleRunSolution(context.Background(), request)
+		require.NoError(t, err)
+		require.False(t, result.IsError, "expected success, got: %+v", result.Content)
+
+		var body map[string]any
+		require.NoError(t, json.Unmarshal([]byte(result.Content[0].(mcp.TextContent).Text), &body))
+		assert.Equal(t, "succeeded", body["status"])
+
+		assert.FileExists(t, filepath.Join(outputDir, "prep.txt"))
+		assert.FileExists(t, filepath.Join(outputDir, "deploy.txt"))
+		assert.FileExists(t, filepath.Join(outputDir, "cleanup.txt"))
+		assert.NoFileExists(t, filepath.Join(outputDir, "default.txt"))
+	})
+
+	t.Run("unknown action fails fast before resolver execution", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_solution"
+		request.Params.Arguments = map[string]any{
+			"path":    solFile,
+			"actions": []string{"nonexistent"},
+		}
+
+		result, err := srv.handleRunSolution(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "nonexistent")
+		assert.NotContains(t, text, "missingRequiredParam")
+	})
+
+	t.Run("invalid actions parameter shapes rejected", func(t *testing.T) {
+		cases := []struct {
+			name string
+			val  any
+		}{
+			{"not an array", "deploy"},
+			{"empty untyped array", []any{}},
+			{"empty typed string slice", []string{}},
+			{"non-string element", []any{42}},
+			{"empty string element", []any{"   "}},
+			{"empty string in typed slice", []string{""}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				request := mcp.CallToolRequest{}
+				request.Params.Name = "run_solution"
+				request.Params.Arguments = map[string]any{
+					"path":    solFile,
+					"actions": tc.val,
+				}
+				result, err := srv.handleRunSolution(context.Background(), request)
+				require.NoError(t, err)
+				assert.True(t, result.IsError)
+				assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "actions")
+			})
+		}
+	})
+
+	t.Run("actions rejected on resolver-only solution", func(t *testing.T) {
+		resOnlyFile := filepath.Join(tmpDir, "resolver-only.yaml")
+		resOnlyYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolver-only
+spec:
+  resolvers:
+    x:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "ok"
+`
+		require.NoError(t, os.WriteFile(resOnlyFile, []byte(resOnlyYAML), 0o600))
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_solution"
+		request.Params.Arguments = map[string]any{
+			"path":    resOnlyFile,
+			"actions": []any{"deploy"},
+		}
+		result, err := srv.handleRunSolution(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+		assert.Contains(t, result.Content[0].(mcp.TextContent).Text, "no workflow")
+	})
 }

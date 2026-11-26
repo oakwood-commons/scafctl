@@ -840,6 +840,17 @@ var KnownRules = map[string]RuleMeta{
 			"resolvers:\n  apiToken:\n    sensitive: true\n    resolve:\n      with:\n        - provider: static\n          inputs:\n            value:\n              scrt: api-token",
 		},
 	},
+	"no-default-action": {
+		Rule:        "no-default-action",
+		Severity:    string(SeverityWarning),
+		Category:    "workflow",
+		Description: "Every action in spec.workflow.actions sets 'explicit: true' in a bundled or non-task solution, leaving no default workflow action.",
+		Why:         "Running 'run solution <name>' (or 'run solution -f ./solution.yaml') without '--action' excludes 'explicit: true' actions unless a non-explicit action depends on them. When every action is explicit, a bare 'run solution' executes zero actions, surprising consumers who expect a default workflow.",
+		Fix:         "Omit 'explicit: true' (or set 'explicit: false') on at least one primary workflow action so bare 'run solution' executes the default workflow, or name repo task-runner files 'actions.yaml' when all tasks are meant to be invoked selectively.",
+		Examples: []string{
+			"# Problem: bare 'run solution' runs zero actions\nspec:\n  workflow:\n    actions:\n      deploy:\n        explicit: true\n        provider: exec\n        inputs:\n          command: ./deploy.sh\n\n# Fix: keep the primary action default and mark only auxiliary tasks explicit\nspec:\n  workflow:\n    actions:\n      deploy:\n        provider: exec\n        inputs:\n          command: ./deploy.sh\n      teardown:\n        explicit: true\n        provider: exec\n        inputs:\n          command: ./teardown.sh",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

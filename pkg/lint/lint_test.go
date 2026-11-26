@@ -4464,3 +4464,129 @@ spec:
 		assert.NotEqual(t, filepath.Join(filepath.Dir(solPath), "tests/svc.yaml"), emptyFindings[0].SourceFile)
 	})
 }
+
+func TestLintWorkflow_NoDefaultAction(t *testing.T) {
+	t.Parallel()
+	reg := provider.NewRegistry()
+
+	tests := []struct {
+		name       string
+		filePath   string
+		bundle     solution.Bundle
+		actions    map[string]*action.Action
+		expectRule bool
+	}{
+		{
+			name:     "flagged on solution.yaml when all actions are explicit",
+			filePath: "solution.yaml",
+			actions: map[string]*action.Action{
+				"deploy":   {Name: "deploy", Description: "Deploy", Explicit: true},
+				"teardown": {Name: "teardown", Description: "Teardown", Explicit: true},
+			},
+			expectRule: true,
+		},
+		{
+			name:     "flagged when bundle is non-empty even with empty filePath",
+			filePath: "",
+			bundle:   solution.Bundle{Include: []string{"templates/**"}},
+			actions: map[string]*action.Action{
+				"deploy": {Name: "deploy", Description: "Deploy", Explicit: true},
+			},
+			expectRule: true,
+		},
+		{
+			name:     "flagged on bundled actions.yaml when bundle is non-empty",
+			filePath: "actions.yaml",
+			bundle:   solution.Bundle{Include: []string{"scripts/**"}},
+			actions: map[string]*action.Action{
+				"build": {Name: "build", Description: "Build", Explicit: true},
+			},
+			expectRule: true,
+		},
+		{
+			name:     "flagged when bundle.plugins is declared and all actions are explicit",
+			filePath: "actions.yaml",
+			bundle: solution.Bundle{
+				Plugins: []solution.PluginDependency{{Name: "exec", Kind: solution.PluginKindProvider, Version: "latest"}},
+			},
+			actions: map[string]*action.Action{
+				"build": {Name: "build", Description: "Build", Explicit: true},
+			},
+			expectRule: true,
+		},
+		{
+			name:     "not flagged on actions.yaml task runner without bundle",
+			filePath: "actions.yaml",
+			actions: map[string]*action.Action{
+				"build": {Name: "build", Description: "Build", Explicit: true},
+				"test":  {Name: "test", Description: "Test", Explicit: true},
+			},
+			expectRule: false,
+		},
+		{
+			name:     "not flagged on nested path/actions.yml task runner without bundle",
+			filePath: "/repo/actions.yml",
+			actions: map[string]*action.Action{
+				"lint": {Name: "lint", Description: "Lint", Explicit: true},
+			},
+			expectRule: false,
+		},
+		{
+			name:     "not flagged on taskfile.yaml without bundle",
+			filePath: "taskfile.yaml",
+			actions: map[string]*action.Action{
+				"check": {Name: "check", Description: "Check", Explicit: true},
+			},
+			expectRule: false,
+		},
+		{
+			name:     "not flagged when filePath is empty and bundle is empty",
+			filePath: "",
+			actions: map[string]*action.Action{
+				"deploy": {Name: "deploy", Description: "Deploy", Explicit: true},
+			},
+			expectRule: false,
+		},
+		{
+			name:     "not flagged when filePath is stdin and bundle is empty",
+			filePath: "-",
+			actions: map[string]*action.Action{
+				"deploy": {Name: "deploy", Description: "Deploy", Explicit: true},
+			},
+			expectRule: false,
+		},
+		{
+			name:     "not flagged when at least one action is default",
+			filePath: "solution.yaml",
+			bundle:   solution.Bundle{Include: []string{"templates/**"}},
+			actions: map[string]*action.Action{
+				"deploy":   {Name: "deploy", Description: "Deploy", Explicit: false},
+				"teardown": {Name: "teardown", Description: "Teardown", Explicit: true},
+			},
+			expectRule: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sol := &solution.Solution{
+				Bundle: tt.bundle,
+				Spec: solution.Spec{
+					Workflow: &action.Workflow{
+						Actions: tt.actions,
+					},
+				},
+			}
+			res := Solution(sol, tt.filePath, reg)
+			findings := filterFindingsByRule(res, "no-default-action")
+			if tt.expectRule {
+				require.Len(t, findings, 1)
+				assert.Equal(t, SeverityWarning, findings[0].Severity)
+				assert.Equal(t, "workflow.actions", findings[0].Location)
+			} else {
+				assert.Empty(t, findings)
+			}
+		})
+	}
+}

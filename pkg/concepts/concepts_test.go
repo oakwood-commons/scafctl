@@ -137,3 +137,31 @@ func TestContextConcepts_PointToLiveTools(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, aw.Explanation, "get_provider_schema")
 }
+
+func TestCatalogBundleActionWorkflowConcepts_Idioms(t *testing.T) {
+	t.Parallel()
+
+	cat, ok := Get("catalog")
+	require.True(t, ok)
+	assert.NotContains(t, cat.Explanation, "catalog install")
+	assert.Contains(t, cat.Explanation, "package solution")
+	assert.Contains(t, cat.Explanation, "catalog push")
+	assert.Contains(t, cat.Explanation, "catalog pull")
+	assert.Contains(t, cat.Explanation, "oci://ghcr.io/oakwood-commons")
+	assert.Contains(t, cat.Explanation, "run solution <name>")
+
+	bndl, ok := Get("bundle")
+	require.True(t, ok)
+	assert.Contains(t, bndl.Explanation, "path escapes bundle root")
+	assert.Contains(t, bndl.Explanation, "package_solution")
+
+	act, ok := Get("action")
+	require.True(t, ok)
+	assert.Contains(t, act.Explanation, "explicit: true")
+	assert.Contains(t, act.Explanation, "dependency-failed")
+
+	wf, ok := Get("workflow")
+	require.True(t, ok)
+	assert.Contains(t, wf.Explanation, "explicit: true")
+	assert.Contains(t, wf.Explanation, "dependency-failed")
+}

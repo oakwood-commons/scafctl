@@ -8,11 +8,21 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 )
+
+// ExplicitActionInfo describes an opt-in workflow action (explicit: true) and
+// the CLI command to execute it selectively.
+type ExplicitActionInfo struct {
+	Name        string `json:"name" yaml:"name" doc:"Action name" maxLength:"150" example:"deploy" pattern:"^[a-zA-Z_][a-zA-Z0-9_-]*$" patternDescription:"Must start with letter/underscore, followed by alphanumerics, underscores, or hyphens"`
+	Alias       string `json:"alias,omitempty" yaml:"alias,omitempty" doc:"Short alias accepted in place of the action name" maxLength:"100" example:"d" pattern:"^[a-zA-Z_][a-zA-Z0-9_-]*$" patternDescription:"Must start with letter/underscore, followed by alphanumerics, underscores, or hyphens"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable description of what the action does" maxLength:"512" example:"Deploy the application" pattern:"^[\\s\\S]*$" patternDescription:"Free-form action description"`
+	Command     string `json:"command" yaml:"command" doc:"CLI command to run this opt-in action" maxLength:"2048" example:"scafctl run solution -f ./my-solution.yaml --action deploy" pattern:"^\\S.*$" patternDescription:"Non-empty CLI invocation command"`
+}
 
 // RunCommandInfo holds the structured result of analyzing a solution to
 // determine how to run it. This is the domain representation used by
@@ -30,11 +40,19 @@ type RunCommandInfo struct {
 	// that targets the correct solution rather than relying on cwd auto-discovery.
 	BaseCommand string `json:"baseCommand" yaml:"baseCommand" doc:"Subcommand plus the solution source (-f/name), without example params" maxLength:"1152" example:"scafctl run solution -f ./my-solution.yaml"`
 
+	// CatalogCommand is the CLI command to run the solution by catalog name
+	// once packaged or pulled into a catalog.
+	CatalogCommand string `json:"catalogCommand,omitempty" yaml:"catalogCommand,omitempty" doc:"CLI command to run the solution by catalog name once packaged or pulled" maxLength:"2048" example:"scafctl run solution my-solution -r name=hello" pattern:"^\\S.*$" patternDescription:"Non-empty CLI invocation command"`
+
 	// Explanation describes why this command variant was chosen.
 	Explanation string `json:"explanation" yaml:"explanation" doc:"Why this command variant was chosen" maxLength:"512" example:"Solution has a workflow with actions"`
 
-	// Parameters lists the parameter-type resolvers that need values.
-	Parameters []ParamInfo `json:"parameters" yaml:"parameters" doc:"Parameter-type resolvers requiring values" maxItems:"100"`
+	// Parameters lists the parameter-type resolvers accepted by the solution.
+	Parameters []ParamInfo `json:"parameters" yaml:"parameters" doc:"Parameter-type resolvers accepted by the solution" maxItems:"100"`
+
+	// ExplicitActions lists opt-in workflow actions (explicit: true) and their
+	// selective CLI commands.
+	ExplicitActions []ExplicitActionInfo `json:"explicitActions,omitempty" yaml:"explicitActions,omitempty" doc:"Opt-in workflow actions (explicit: true) with selective --action commands" maxItems:"200"`
 
 	// HasWorkflow indicates whether the solution has a workflow.
 	HasWorkflow bool `json:"hasWorkflow" yaml:"hasWorkflow" doc:"Whether the solution has a workflow"`
@@ -93,7 +111,8 @@ type ParamInfo struct {
 	Example     any    `json:"example,omitempty" yaml:"example,omitempty" doc:"Example value"`
 
 	// Default is the literal default value declared on the parameter provider
-	// (its "default" input), when present.
+	// (its "default" input) or the first reachable unconditional fallback step
+	// when that step carries a static literal, if present.
 	Default any `json:"default,omitempty" yaml:"default,omitempty" doc:"Default value when the parameter is not supplied"`
 
 	// Required is true when the parameter has no default value and must be
@@ -144,12 +163,22 @@ func BuildRunCommand(sol *solution.Solution, path, binaryName string, opts ...Ru
 
 		for _, name := range names {
 			rslvr := sol.Spec.Resolvers[name]
-			if rslvr.Resolve == nil || len(rslvr.Resolve.With) == 0 {
+			if rslvr == nil || rslvr.Resolve == nil {
 				continue
 			}
-			if rslvr.Resolve.With[0].Provider == "parameter" {
-				inputs := rslvr.Resolve.With[0].Inputs
-				def := parameterDefault(inputs)
+			steps := trimLeadingDisabledSteps(rslvr.Resolve.With)
+			if len(steps) == 0 {
+				continue
+			}
+			if steps[0].Provider == "parameter" {
+				firstStep := steps[0]
+				if parameterStepIsAllMode(firstStep) {
+					continue
+				}
+				inputs := firstStep.Inputs
+				hasInputDefault := (inputs != nil && inputs["default"] != nil) || parameterStepIsMapMode(firstStep)
+				hasFallback := hasGuaranteedFallback(steps)
+				def := resolverDefaultValue(steps)
 				cliKey := parameterCLIKey(inputs, name)
 				parameters = append(parameters, ParamInfo{
 					Name:         cliKey,
@@ -158,7 +187,7 @@ func BuildRunCommand(sol *solution.Solution, path, binaryName string, opts ...Ru
 					Description:  rslvr.Description,
 					Example:      rslvr.Example,
 					Default:      def,
-					Required:     def == nil,
+					Required:     !hasInputDefault && !hasFallback,
 				})
 			}
 		}
@@ -176,30 +205,66 @@ func BuildRunCommand(sol *solution.Solution, path, binaryName string, opts ...Ru
 		baseCommand = command + " " + sourceArg + selectorFlags
 	}
 	actionSource := buildActionSourceFlags(sourceVal, selectorFlags)
-	fullCommand := baseCommand
+
+	var paramFlags strings.Builder
 	for _, p := range parameters {
+		if !p.Required {
+			continue
+		}
 		exampleVal := "<value>"
 		if p.Example != nil {
 			exampleVal = fmt.Sprintf("%v", p.Example)
 		}
 		if hasWorkflow {
 			// run solution uses -r flags
-			fullCommand += fmt.Sprintf(" -r %s=%s", p.Name, exampleVal)
+			fmt.Fprintf(&paramFlags, " -r %s=%s", p.Name, exampleVal)
 		} else {
 			// run resolver uses positional key=value
-			fullCommand += fmt.Sprintf(" %s=%s", p.Name, exampleVal)
+			fmt.Fprintf(&paramFlags, " %s=%s", p.Name, exampleVal)
+		}
+	}
+	requiredFlags := paramFlags.String()
+	fullCommand := baseCommand + requiredFlags
+
+	var catalogCommand string
+	if hasWorkflow && catalog.IsValidName(sol.Metadata.Name) && !AllActionsExplicit(sol.Spec.Workflow) {
+		catalogCommand = command + " " + sol.Metadata.Name + requiredFlags
+	}
+
+	var explicitActions []ExplicitActionInfo
+	if hasWorkflow && sol.Spec.Workflow != nil && len(sol.Spec.Workflow.Actions) > 0 {
+		explicitNames := make([]string, 0)
+		for name, act := range sol.Spec.Workflow.Actions {
+			if act != nil && act.Explicit {
+				explicitNames = append(explicitNames, name)
+			}
+		}
+		sort.Strings(explicitNames)
+		if len(explicitNames) > 0 {
+			explicitActions = make([]ExplicitActionInfo, 0, len(explicitNames))
+			for _, name := range explicitNames {
+				act := sol.Spec.Workflow.Actions[name]
+				explicitActions = append(explicitActions, ExplicitActionInfo{
+					Name:        name,
+					Alias:       act.Alias,
+					Description: act.Description,
+					Command:     baseCommand + " --action " + shellQuote(name) + requiredFlags,
+				})
+			}
 		}
 	}
 
 	return &RunCommandInfo{
-		Command:      fullCommand,
-		Subcommand:   command,
-		BaseCommand:  baseCommand,
-		Explanation:  explanation,
-		Parameters:   parameters,
-		HasWorkflow:  hasWorkflow,
-		HasResolvers: hasResolvers,
-		actionSource: actionSource,
+		Command:         fullCommand,
+		Subcommand:      command,
+		BaseCommand:     baseCommand,
+		CatalogCommand:  catalogCommand,
+		Explanation:     explanation,
+		Parameters:      parameters,
+		ExplicitActions: explicitActions,
+		HasWorkflow:     hasWorkflow,
+		HasResolvers:    hasResolvers,
+		actionSource:    actionSource,
 	}, nil
 }
 
@@ -317,18 +382,156 @@ func resolveSolutionSource(sol *solution.Solution, rawPath string) (string, bool
 	return filePath, true
 }
 
-// parameterDefault extracts the literal "default" input from a parameter
-// provider's inputs, if declared. Returns nil when there is no default or when
-// the default is not a literal (e.g. an expression/template resolved at runtime).
-func parameterDefault(inputs map[string]*resolver.ValueRef) any {
-	if inputs == nil {
+// isLiteralValueRef reports whether ref holds a plain static literal rather
+// than a dynamic expression, template, resolver, or credential reference.
+func isLiteralValueRef(ref *resolver.ValueRef) bool {
+	return ref != nil &&
+		ref.Expr == nil && ref.Tmpl == nil && ref.Resolver == nil &&
+		ref.Secret == nil && ref.Token == nil && ref.Literal != nil
+}
+
+// stepAllowsGuaranteedFallthrough reports whether a resolve source continues to
+// the next fallback source when it is skipped or fails. Statically disabled
+// sources (when: false) skip directly to the next source regardless of error
+// policy; otherwise errors continue by default unless onError is "fail" or
+// continueOnError is set to a non-"true" expression (continueOnError wins when
+// both are set).
+func stepAllowsGuaranteedFallthrough(step resolver.ProviderSource) bool {
+	if isStaticallyDisabledStep(step) {
+		return true
+	}
+	if step.ContinueOnError != nil && step.ContinueOnError.Expr != nil {
+		return strings.TrimSpace(string(*step.ContinueOnError.Expr)) == "true"
+	}
+	return step.OnError != resolver.ErrorBehaviorFail
+}
+
+// resolverDefaultValue extracts the literal default value for a parameter
+// resolver: stopping at steps[0]'s declared "default" input when present
+// (returning nil when dynamic), or stopping at the first reachable
+// unconditional fallback step (returning its literal when static/defaulted, or
+// nil when dynamic or when an earlier source blocks fallthrough on error).
+func resolverDefaultValue(steps []resolver.ProviderSource) any {
+	steps = trimLeadingDisabledSteps(steps)
+	if len(steps) == 0 {
 		return nil
 	}
-	ref, ok := inputs["default"]
-	if !ok || ref == nil {
+	if steps[0].Inputs != nil {
+		if defRef, ok := steps[0].Inputs["default"]; ok && defRef != nil {
+			if isLiteralValueRef(defRef) {
+				return defRef.Literal
+			}
+			return nil
+		}
+	}
+	if parameterStepIsMapMode(steps[0]) || !stepAllowsGuaranteedFallthrough(steps[0]) {
 		return nil
 	}
-	return ref.Literal
+	for _, step := range steps[1:] {
+		if !isUnconditionalStep(step) {
+			if !stepAllowsGuaranteedFallthrough(step) {
+				return nil
+			}
+			continue
+		}
+		switch step.Provider {
+		case "static":
+			if step.Inputs != nil {
+				if valRef, ok := step.Inputs["value"]; ok && isLiteralValueRef(valRef) {
+					return valRef.Literal
+				}
+			}
+			return nil
+		case "parameter":
+			if step.Inputs != nil {
+				if defRef, ok := step.Inputs["default"]; ok && defRef != nil {
+					if isLiteralValueRef(defRef) {
+						return defRef.Literal
+					}
+					return nil
+				}
+			}
+			if parameterStepIsMapMode(step) || !stepAllowsGuaranteedFallthrough(step) {
+				return nil
+			}
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+func isUnconditionalStep(step resolver.ProviderSource) bool {
+	return step.When == nil || step.When.Expr == nil || strings.TrimSpace(string(*step.When.Expr)) == "true"
+}
+
+func isStaticallyDisabledStep(step resolver.ProviderSource) bool {
+	return step.When != nil && step.When.Expr != nil && strings.TrimSpace(string(*step.When.Expr)) == "false"
+}
+
+func trimLeadingDisabledSteps(steps []resolver.ProviderSource) []resolver.ProviderSource {
+	for len(steps) > 0 && isStaticallyDisabledStep(steps[0]) {
+		steps = steps[1:]
+	}
+	return steps
+}
+
+// parameterStepIsAllMode reports whether a parameter step sets "all: true",
+// which captures every CLI parameter as a map rather than reading a named key.
+func parameterStepIsAllMode(step resolver.ProviderSource) bool {
+	if step.Inputs == nil {
+		return false
+	}
+	if allRef, ok := step.Inputs["all"]; ok && allRef != nil {
+		if b, isBool := allRef.Literal.(bool); isBool && b {
+			return true
+		}
+	}
+	return false
+}
+
+// parameterStepIsMapMode reports whether a parameter step reads a map instead
+// of a required scalar ("all: true" or "keys" + "as: map"), which never fails
+// when keys are omitted on the CLI.
+func parameterStepIsMapMode(step resolver.ProviderSource) bool {
+	if parameterStepIsAllMode(step) {
+		return true
+	}
+	if step.Inputs == nil {
+		return false
+	}
+	if asRef, ok := step.Inputs["as"]; ok && asRef != nil {
+		if s, isStr := asRef.Literal.(string); isStr && s == "map" {
+			if _, hasKeys := step.Inputs["keys"]; hasKeys {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasGuaranteedFallback reports whether steps[1:] contain a reachable
+// unconditional fallback step (respecting continueOnError / onError policies on
+// steps[0] and every preceding step) whose provider is either non-parameter or
+// a parameter step with a default/map-mode configuration.
+func hasGuaranteedFallback(steps []resolver.ProviderSource) bool {
+	if len(steps) < 2 || !stepAllowsGuaranteedFallthrough(steps[0]) {
+		return false
+	}
+	for _, step := range steps[1:] {
+		if isUnconditionalStep(step) {
+			if step.Provider != "parameter" {
+				return true
+			}
+			if (step.Inputs != nil && step.Inputs["default"] != nil) || parameterStepIsMapMode(step) {
+				return true
+			}
+		}
+		if !stepAllowsGuaranteedFallthrough(step) {
+			return false
+		}
+	}
+	return false
 }
 
 // parameterCLIKey returns the CLI flag name a user passes to supply this

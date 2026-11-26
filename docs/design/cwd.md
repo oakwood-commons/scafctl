@@ -109,6 +109,8 @@ This anchoring is **independent of `cwd`**. Even when `cwd` is not supplied, sol
 | `get_run_command` | `tools_solution.go` |
 | `preview_action` | `tools_action.go` |
 | `dryrun_solution` | `tools_dryrun.go` |
+| `run_solution` | `tools_run.go` |
+| `package_solution` | `tools_package.go` |
 | `show_snapshot` | `tools_snapshot.go` |
 | `diff_snapshots` | `tools_snapshot.go` |
 | `generate_test_scaffold` | `tools_testing.go` |

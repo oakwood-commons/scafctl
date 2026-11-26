@@ -111,13 +111,15 @@ Plus all sprig v3 functions (https://masterminds.github.io/sprig/).`,
 		Summary:  "A workflow step that performs a side effect using a provider (e.g., create file, deploy resource).",
 		Explanation: `Actions are defined under spec.workflow.actions and execute after all resolvers complete. Each action specifies a provider and inputs, and can optionally declare dependencies on other actions via 'dependsOn'.
 
-Actions support: conditional execution (when), retry policies, forEach iteration, timeouts, result schemas, and aliases. The workflow engine executes actions as a DAG, running independent actions in parallel.
+Actions support: conditional execution (when), opt-in execution (explicit: true), error continuation (continueOnError), retry policies, forEach iteration, timeouts, result schemas, and aliases. The workflow engine executes actions as a DAG, running independent actions in parallel.
 
-Actions can declare an 'alias' field for shorter expression references. For example, alias: config allows using config.results.endpoint instead of the verbose __actions.fetchConfiguration.results.endpoint.
+- **Default vs opt-in (explicit: true)** -- Actions run by default (explicit: false) on a bare 'run solution' invocation. Setting 'explicit: true' makes an action opt-in: it is excluded from bare runs unless targeted selectively via '--action <name>', 'run action <name>', or the MCP 'run_solution' tool's 'actions' parameter, or pulled in via 'dependsOn' by a selected action.
+- **Error continuation (continueOnError)** -- When an action sets 'continueOnError: true' (or a truthy CEL condition over __error) and fails, independent DAG branches continue executing, while any downstream action that declares 'dependsOn' on the failed action is skipped with status/reason 'dependency-failed'.
+- **Aliases** -- Actions can declare an 'alias' field for shorter CLI selection and expression references (for example, 'alias: config' allows 'config.results.endpoint' instead of '__actions.fetchConfiguration.results.endpoint').
 
 Cleanup actions go under spec.workflow.finally and always execute (even if earlier actions fail).`,
 		Examples: []string{
-			"spec:\n  workflow:\n    actions:\n      create-config:\n        provider: file\n        inputs:\n          path: output/config.yaml\n          content:\n            tmpl: |\n              region: {{ .region }}",
+			"spec:\n  workflow:\n    actions:\n      create-config:\n        provider: file\n        inputs:\n          path: output/config.yaml\n          content:\n            tmpl: |\n              region: {{ .region }}\n      teardown:\n        explicit: true\n        provider: exec\n        inputs:\n          command: ./scripts/cleanup.sh",
 		},
 		SeeAlso: []string{"provider", "depends-on", "workflow"},
 	},
@@ -126,11 +128,15 @@ Cleanup actions go under spec.workflow.finally and always execute (even if earli
 		Title:    "Workflow",
 		Category: "actions",
 		Summary:  "The action execution engine that runs actions as a DAG after resolver resolution.",
-		Explanation: `The workflow section (spec.workflow) defines actions that execute after all resolvers have been resolved. Actions form a DAG based on their dependsOn declarations and are executed with maximum parallelism.
+		Explanation: `The workflow section (spec.workflow) defines actions that execute after resolvers have been resolved. Actions form a DAG based on their dependsOn declarations and are executed with maximum parallelism.
 
 Key sections:
-- **actions** — The main action definitions, executed as a DAG.
-- **finally** — Cleanup actions that always run, even after failures.
+- **actions** -- The main action definitions, executed as a DAG. Bare 'run solution' runs all non-explicit actions (plus any 'explicit: true' dependencies they require). Passing '--action <name>' (or MCP 'run_solution' 'actions') narrows execution to the named actions, their transitive 'dependsOn' closure, and the resolvers they reference.
+- **finally** -- Cleanup actions that always run after main actions complete, even when main actions fail.
+
+Failure propagation:
+- By default, a failed action aborts unstarted branches before running 'finally'.
+- When a failed action has 'continueOnError: true', independent branches continue running, while downstream actions that depend on the failed action via 'dependsOn' are skipped ('dependency-failed').
 
 The workflow engine provides special variables: __actions (results of completed actions), __error (failure info), __item/__index (forEach iteration).`,
 		SeeAlso: []string{"action", "depends-on", "dag"},
@@ -304,9 +310,11 @@ Compose files are merged in order — later files override earlier ones for conf
 		Summary:  "Package a solution and its file dependencies for catalog publishing.",
 		Explanation: `Bundling creates a self-contained archive of a solution and all files it needs. The bundle.include field specifies which files to include (supports globs).
 
-scafctl automatically discovers file dependencies through static analysis of provider inputs (e.g., file paths in the file provider, template references). Use 'bundle.include' to explicitly add files that can't be detected statically.
+scafctl automatically discovers file dependencies through static analysis of provider inputs (e.g., file paths in the file provider, local sub-solution paths in the solution provider). Use 'bundle.include' to explicitly add files that cannot be detected statically (such as templates or dynamic paths).
 
-The lint rule 'unbundled-test-file' warns when test files aren't covered by bundle.include patterns.`,
+**Bundle root boundary** -- All bundled files must reside inside the bundle root directory (the solution file's directory by default, or '--base-dir' / 'base_dir' when overridden). Parent-relative paths ('../...') or symlinks resolving outside the bundle root are rejected during discovery with 'path escapes bundle root' (or 'symlink escapes bundle root').
+
+**Verification** -- Call the 'package_solution' MCP tool (defaults to 'dry_run: true') or run 'scafctl package solution --dry-run' to verify static file discovery, 'bundle.include' glob matches, and bundle root boundaries before publishing. The lint rule 'unbundled-test-file' also warns when test files are not covered by bundle.include patterns.`,
 		Examples: []string{
 			"bundle:\n  include:\n    - templates/**\n    - configs/*.yaml\n    - tests/**",
 		},
@@ -331,15 +339,15 @@ Circular dependencies are detected at lint time (workflow-validation rule) and r
 		Name:     "catalog",
 		Title:    "Solution Catalog",
 		Category: "catalog",
-		Summary:  "A registry for publishing, discovering, and consuming reusable solutions.",
-		Explanation: `The catalog is a centralized registry of solutions that can be searched, installed, and referenced. Solutions are published as bundles with metadata (name, version, description, tags).
+		Summary:  "An OCI-backed local and remote registry system for packaging, publishing, discovering, and running reusable solutions and plugins.",
+		Explanation: `Catalogs store versioned solution and plugin artifacts (name@version) locally and in remote OCI registries. scafctl includes a built-in 'official' remote catalog at 'oci://ghcr.io/oakwood-commons' alongside your local catalog and any custom registries configured in config.yaml.
 
 Key operations:
-- **catalog search** — find solutions by name, tag, or description.
-- **catalog install** — install a solution locally.
-- **solution provider** — reference a catalog solution as a nested dependency (source: 'solution-name@version').
-
-The catalog supports versioning, visibility controls (public/private), and beta flags.`,
+- **package solution** ('scafctl package solution' / MCP 'package_solution') -- compose, bundle, verify, and store a solution into the local catalog (use '--dry-run' or 'dry_run: true' to preview without storing).
+- **catalog push / catalog pull** ('scafctl catalog push', 'scafctl catalog pull') -- push locally built artifacts to a remote OCI registry or pull remote artifacts into the local catalog.
+- **catalog list / catalog search / catalog inspect** -- list local catalog entries, search configured catalogs, and inspect artifact metadata.
+- **run solution <name>** ('scafctl run solution <name>' or '<name>@<version>') -- execute a solution directly by catalog name without '-f'.
+- **solution provider** -- reference a catalog solution as a nested dependency (source: 'solution-name@version').`,
 		SeeAlso: []string{"bundle", "compose"},
 	},
 	// --- State ---

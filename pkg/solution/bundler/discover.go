@@ -59,12 +59,36 @@ type CatalogRefEntry struct {
 	VendorPath string
 }
 
+// UnmatchedInclude records a bundle.include glob pattern that matched zero
+// non-ignored bundled files during discovery.
+type UnmatchedInclude struct {
+	// Pattern is the bundle.include glob pattern as declared in the solution.
+	Pattern string
+	// SolutionPath is the sub-solution's path relative to the parent bundle root
+	// (empty for the root solution).
+	SolutionPath string
+}
+
+// String formats a human-readable warning message for the unmatched pattern.
+func (u UnmatchedInclude) String() string {
+	if u.SolutionPath == "" {
+		return fmt.Sprintf("pattern %q matches no bundled files", u.Pattern)
+	}
+	return fmt.Sprintf("pattern %q (in %s) matches no bundled files", u.Pattern, u.SolutionPath)
+}
+
 // DiscoveryResult contains all files and dependencies discovered during analysis.
 type DiscoveryResult struct {
 	// LocalFiles are local file paths relative to the bundle root.
 	LocalFiles []FileEntry
 	// CatalogRefs are catalog references to vendor.
 	CatalogRefs []CatalogRefEntry
+	// UnmatchedIncludes lists bundle.include glob patterns (across the root and
+	// recursively discovered local sub-solutions) that matched zero files.
+	UnmatchedIncludes []UnmatchedInclude
+	// DynamicPaths lists dynamic file path warnings detected across the root and
+	// recursively discovered local sub-solutions.
+	DynamicPaths []DynamicPathWarning
 }
 
 // DiscoverOption configures DiscoverFiles behavior.
@@ -111,7 +135,7 @@ func WithWalkDirFunc(fn func(string, filepath.WalkFunc) error) DiscoverOption {
 //
 // Returns deduplicated lists of local files and catalog references.
 func DiscoverFiles(sol *solution.Solution, bundleRoot string, opts ...DiscoverOption) (*DiscoveryResult, error) {
-	return discoverFilesRecursive(sol, bundleRoot, bundleRoot, nil, opts...)
+	return discoverFilesRecursive(sol, bundleRoot, bundleRoot, "", nil, opts...)
 }
 
 // LocalFileDependencies returns the paths, relative to the directory of
@@ -136,8 +160,9 @@ func LocalFileDependencies(sol *solution.Solution, solutionPath string) []string
 // discoverFilesRecursive is the internal recursive implementation of DiscoverFiles.
 // parentBundleRoot is the top-level bundle root used for path normalization.
 // currentRoot is the directory containing the current solution being analyzed.
+// solRelPath is the sub-solution's path relative to parentBundleRoot (empty for root).
 // visitedPaths tracks already-visited solution files to detect circular references.
-func discoverFilesRecursive(sol *solution.Solution, parentBundleRoot, currentRoot string, visitedPaths map[string]bool, opts ...DiscoverOption) (*DiscoveryResult, error) {
+func discoverFilesRecursive(sol *solution.Solution, parentBundleRoot, currentRoot, solRelPath string, visitedPaths map[string]bool, opts ...DiscoverOption) (*DiscoveryResult, error) {
 	if sol == nil {
 		return nil, fmt.Errorf("solution is nil")
 	}
@@ -158,6 +183,13 @@ func discoverFilesRecursive(sol *solution.Solution, parentBundleRoot, currentRoo
 
 	result := &DiscoveryResult{}
 	seen := make(map[string]bool)
+
+	for _, dw := range DetectDynamicPaths(sol) {
+		if solRelPath != "" {
+			dw.Location = solRelPath + ":" + dw.Location
+		}
+		result.DynamicPaths = append(result.DynamicPaths, dw)
+	}
 
 	// Phase 1: Static analysis of provider inputs
 	staticFiles, catalogRefs := analyzeProviderInputs(sol)
@@ -217,7 +249,11 @@ func discoverFilesRecursive(sol *solution.Solution, parentBundleRoot, currentRoo
 		}
 
 		subRoot := filepath.Dir(absSubPath)
-		subResult, err := discoverFilesRecursive(&subSol, parentBundleRoot, subRoot, visitedPaths, opts...)
+		subRelPath := filepath.ToSlash(filepath.Clean(subPath))
+		if relSub, relErr := filepath.Rel(parentBundleRoot, absSubPath); relErr == nil {
+			subRelPath = filepath.ToSlash(filepath.Clean(relSub))
+		}
+		subResult, err := discoverFilesRecursive(&subSol, parentBundleRoot, subRoot, subRelPath, visitedPaths, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("recursive discovery of sub-solution %s: %w", subPath, err)
 		}
@@ -235,6 +271,8 @@ func discoverFilesRecursive(sol *solution.Solution, parentBundleRoot, currentRoo
 				result.CatalogRefs = append(result.CatalogRefs, ref)
 			}
 		}
+		result.UnmatchedIncludes = append(result.UnmatchedIncludes, subResult.UnmatchedIncludes...)
+		result.DynamicPaths = append(result.DynamicPaths, subResult.DynamicPaths...)
 	}
 
 	// Phase 2: Expand explicit bundle.include globs
@@ -242,20 +280,41 @@ func discoverFilesRecursive(sol *solution.Solution, parentBundleRoot, currentRoo
 		// For sub-solutions, expand globs relative to their own directory
 		// but normalize results relative to the parent bundle root.
 		expandRoot := currentRoot
-		expanded, err := expandGlobs(expandRoot, sol.Bundle.Include, cfg)
-		if err != nil {
-			return nil, fmt.Errorf("bundle.include expansion: %w", err)
-		}
-		for _, relPath := range expanded {
-			normalizedPath := relPath
-			if currentRoot != parentBundleRoot {
-				relFromParent, relErr := filepath.Rel(parentBundleRoot, filepath.Join(currentRoot, relPath))
-				if relErr == nil {
-					normalizedPath = relFromParent
+		for _, rawPattern := range sol.Bundle.Include {
+			cleanPattern := filepath.Clean(rawPattern)
+			isGlob := strings.ContainsAny(cleanPattern, "*?[{")
+			var expanded []string
+			if isGlob {
+				var err error
+				expanded, err = expandSingleGlob(expandRoot, cleanPattern, cfg)
+				if err != nil {
+					return nil, fmt.Errorf("bundle.include expansion: %w", fmt.Errorf("failed to expand glob %q: %w", cleanPattern, err))
+				}
+			} else {
+				expanded = []string{cleanPattern}
+			}
+
+			matchedAny := false
+			for _, relPath := range expanded {
+				normalizedPath := relPath
+				if currentRoot != parentBundleRoot {
+					relFromParent, relErr := filepath.Rel(parentBundleRoot, filepath.Join(currentRoot, relPath))
+					if relErr == nil {
+						normalizedPath = relFromParent
+					}
+				}
+				if err := addFileEntry(result, seen, cfg, parentBundleRoot, normalizedPath, ExplicitInclude); err != nil {
+					return nil, fmt.Errorf("bundle.include: %w", err)
+				}
+				if seen[filepath.ToSlash(filepath.Clean(normalizedPath))] {
+					matchedAny = true
 				}
 			}
-			if err := addFileEntry(result, seen, cfg, parentBundleRoot, normalizedPath, ExplicitInclude); err != nil {
-				return nil, fmt.Errorf("bundle.include: %w", err)
+			if isGlob && !matchedAny {
+				result.UnmatchedIncludes = append(result.UnmatchedIncludes, UnmatchedInclude{
+					Pattern:      rawPattern,
+					SolutionPath: solRelPath,
+				})
 			}
 		}
 	}
@@ -605,31 +664,6 @@ func isCatalogRef(source string) bool {
 		}
 	}
 	return false
-}
-
-// expandGlobs expands glob patterns against the bundle root directory.
-func expandGlobs(bundleRoot string, patterns []string, cfg *discoverConfig) ([]string, error) {
-	var result []string
-
-	for _, pattern := range patterns {
-		// Normalize the pattern
-		pattern = filepath.Clean(pattern)
-
-		if strings.ContainsAny(pattern, "*?[{") {
-			// Glob pattern — expand it
-			matches, err := expandSingleGlob(bundleRoot, pattern, cfg)
-			if err != nil {
-				return nil, fmt.Errorf("failed to expand glob %q: %w", pattern, err)
-			}
-			// Warn-level: no matches is not an error but we log it
-			result = append(result, matches...)
-		} else {
-			// Explicit file path
-			result = append(result, pattern)
-		}
-	}
-
-	return result, nil
 }
 
 // expandSingleGlob expands a single glob pattern against the bundle root.

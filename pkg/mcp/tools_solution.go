@@ -225,7 +225,7 @@ func (s *Server) registerSolutionTools() {
 
 	// get_run_command
 	getRunCommandTool := mcp.NewTool("get_run_command",
-		mcp.WithDescription("Get the exact CLI command to run a solution. Analyzes the solution to determine whether to use 'run solution' or 'run resolver', identifies required parameter-type resolvers, and returns the complete command with correct flags. Eliminates guesswork about which command form to use."),
+		mcp.WithDescription("Get the exact CLI command to run a solution. Analyzes the solution to determine whether to use 'run solution' or 'run resolver', identifies required parameter-type resolvers, and returns the complete command alongside catalogCommand (for published catalog execution) and explicitActions (selective '--action <name>' commands for opt-in actions). Eliminates guesswork about which command form to use."),
 		mcp.WithTitleAnnotation("Get Run Command"),
 		mcp.WithToolIcons(toolIcons["action"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -1350,6 +1350,7 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 
 	// Append conflict strategy flags to the command if requested.
 	// These flags only apply to 'run solution', not 'run resolver'.
+	var extraFlags string
 	onConflict := request.GetString("on_conflict", "")
 	backup := request.GetBool("backup", false)
 	if onConflict != "" {
@@ -1360,7 +1361,7 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 			), nil
 		}
 		if cmdInfo.HasWorkflow {
-			cmdInfo.Command += " --on-conflict " + onConflict
+			extraFlags += " --on-conflict " + onConflict
 		} else {
 			// The --on-conflict flag is not supported by 'run resolver'.
 			// Return a structured error so the caller knows the flag was ignored.
@@ -1373,7 +1374,7 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 	}
 	if backup {
 		if cmdInfo.HasWorkflow {
-			cmdInfo.Command += " --backup"
+			extraFlags += " --backup"
 		} else {
 			return newStructuredError(ErrCodeInvalidInput,
 				fmt.Sprintf("--backup is not supported by %q; it only applies to 'run solution' (solutions with a workflow)", cmdInfo.Subcommand),
@@ -1383,21 +1384,37 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 		}
 	}
 	if request.GetBool("show_execution", false) {
-		cmdInfo.Command += " --show-execution"
+		extraFlags += " --show-execution"
+	}
+	if extraFlags != "" {
+		cmdInfo.Command += extraFlags
+		if cmdInfo.CatalogCommand != "" {
+			cmdInfo.CatalogCommand += extraFlags
+		}
+		for i := range cmdInfo.ExplicitActions {
+			cmdInfo.ExplicitActions[i].Command += extraFlags
+		}
 	}
 
 	// Build result with content annotations.
 	// The command is primarily for the assistant, the explanation is for both.
 	assistantPriority := 1.0
 	userPriority := 0.8
-	result, err := mcp.NewToolResultJSON(map[string]any{
+	resp := map[string]any{
 		"command":      cmdInfo.Command,
 		"subcommand":   cmdInfo.Subcommand,
 		"explanation":  cmdInfo.Explanation,
 		"parameters":   cmdInfo.Parameters,
 		"hasWorkflow":  cmdInfo.HasWorkflow,
 		"hasResolvers": cmdInfo.HasResolvers,
-	})
+	}
+	if cmdInfo.CatalogCommand != "" {
+		resp["catalogCommand"] = cmdInfo.CatalogCommand
+	}
+	if len(cmdInfo.ExplicitActions) > 0 {
+		resp["explicitActions"] = cmdInfo.ExplicitActions
+	}
+	result, err := mcp.NewToolResultJSON(resp)
 	if err != nil {
 		return nil, err
 	}

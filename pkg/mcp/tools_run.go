@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/action"
@@ -43,6 +44,10 @@ func (s *Server) registerRunTools() {
 		),
 		mcp.WithObject("params",
 			mcp.Description("Input parameters as key-value pairs for parameter-type resolvers. Use 'inspect_solution' to see which parameters are available."),
+		),
+		mcp.WithArray("actions",
+			mcp.Description("Optional list of workflow action names (or aliases) to execute selectively, along with their transitive dependsOn dependencies and finally actions. Equivalent to repeating '--action <name>' on the CLI. When omitted, all default (non-explicit) workflow actions run."),
+			mcp.WithStringItems(),
 		),
 		mcp.WithString("output_dir",
 			mcp.Description("Target directory for file output. Actions resolve relative paths against this directory instead of CWD. Created automatically if it does not exist."),
@@ -113,6 +118,12 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 		}
 	}
 
+	// Parse optional target actions.
+	targetActions, actionArgErr := parseActionTargets(args)
+	if actionArgErr != nil {
+		return actionArgErr, nil
+	}
+
 	// Attach a fresh run-scoped redaction tracker so secrets resolved during the
 	// resolver phase remain tracked across the action phase and response formatting
 	// without leaking across unrelated MCP tool calls.
@@ -177,6 +188,29 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 		), nil
 	}
 
+	// Filter target workflow actions before resolver execution so unknown action
+	// names fail fast and resolver execution is scoped to the selected actions.
+	var filteredWorkflow *action.Workflow
+	if len(targetActions) > 0 {
+		if !sol.Spec.HasWorkflow() {
+			return newStructuredError(ErrCodeInvalidInput,
+				fmt.Sprintf("solution %q has no workflow defined; 'actions' cannot be used on a resolver-only solution", sol.Metadata.Name),
+				WithField("actions"),
+				WithSuggestion("Omit 'actions' to execute resolvers only, or add a spec.workflow section."),
+				WithRelatedTools("inspect_solution", "preview_resolvers"),
+			), nil
+		}
+		var filterErr error
+		filteredWorkflow, filterErr = action.FilterWorkflowActions(sol.Spec.Workflow, targetActions)
+		if filterErr != nil {
+			return newStructuredError(ErrCodeInvalidInput, filterErr.Error(),
+				WithField("actions"),
+				WithSuggestion("Use 'inspect_solution' or 'get_solution_usage' to see available workflow action names and aliases."),
+				WithRelatedTools("inspect_solution", "get_solution_usage"),
+			), nil
+		}
+	}
+
 	// Progress reporting.
 	progress := newProgressReporter(s, request)
 	totalSteps := float64(2)
@@ -194,6 +228,14 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 		progress.report(ctx, 1, "Executing resolvers")
 
 		cfg := execute.ResolverExecutionConfigFromContext(ctx)
+		if len(targetActions) > 0 {
+			var lookup resolver.DescriptorLookup
+			if reg != nil {
+				lookup = reg.DescriptorLookup()
+			}
+			skipOpt := execute.WithSkipValidationDeps(cfg.SkipValidation || cfg.SkipTransform)
+			cfg.Resolvers = execute.ResolversForWorkflow(sol, filteredWorkflow, nil, lookup, skipOpt)
+		}
 		result, resolverErr := execute.Resolvers(ctx, sol, params, reg, cfg)
 		if resolverErr != nil {
 			return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("resolver execution failed: %v", resolverErr),
@@ -226,6 +268,7 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 	if outputDir != "" {
 		actionCfg.OutputDir = outputDir
 	}
+	actionCfg.TargetActions = targetActions
 	actionCfg.Cwd = originalCwd
 	actionCfg.ResolverContext = resolverExecCtx
 
@@ -289,4 +332,72 @@ func buildRunResult(sol *solution.Solution, resolverData map[string]any, result 
 	}
 
 	return response
+}
+
+// parseActionTargets extracts and validates the optional "actions" string-array
+// argument from a run_solution request.
+func parseActionTargets(args map[string]any) ([]string, *mcp.CallToolResult) {
+	raw, ok := args["actions"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+
+	switch v := raw.(type) {
+	case []string:
+		if len(v) == 0 {
+			return nil, newStructuredError(ErrCodeInvalidInput,
+				"'actions' must contain at least one action name when provided",
+				WithField("actions"),
+				WithSuggestion("Provide one or more action names, e.g. [\"build\"], or omit 'actions' to run default workflow actions"),
+			)
+		}
+		out := make([]string, 0, len(v))
+		for i, item := range v {
+			trimmed := strings.TrimSpace(item)
+			if trimmed == "" {
+				return nil, newStructuredError(ErrCodeInvalidInput,
+					fmt.Sprintf("'actions[%d]' must be a non-empty action name", i),
+					WithField("actions"),
+					WithSuggestion("Provide non-empty action names, e.g. [\"build\", \"test\"]"),
+				)
+			}
+			out = append(out, trimmed)
+		}
+		return out, nil
+	case []any:
+		if len(v) == 0 {
+			return nil, newStructuredError(ErrCodeInvalidInput,
+				"'actions' must contain at least one action name when provided",
+				WithField("actions"),
+				WithSuggestion("Provide one or more action names, e.g. [\"build\"], or omit 'actions' to run default workflow actions"),
+			)
+		}
+		out := make([]string, 0, len(v))
+		for i, item := range v {
+			s, isStr := item.(string)
+			if !isStr {
+				return nil, newStructuredError(ErrCodeInvalidInput,
+					fmt.Sprintf("'actions[%d]' must be a string", i),
+					WithField("actions"),
+					WithSuggestion("Provide actions as a JSON array of strings, e.g. [\"build\", \"test\"]"),
+				)
+			}
+			trimmed := strings.TrimSpace(s)
+			if trimmed == "" {
+				return nil, newStructuredError(ErrCodeInvalidInput,
+					fmt.Sprintf("'actions[%d]' must be a non-empty action name", i),
+					WithField("actions"),
+					WithSuggestion("Provide non-empty action names, e.g. [\"build\", \"test\"]"),
+				)
+			}
+			out = append(out, trimmed)
+		}
+		return out, nil
+	default:
+		return nil, newStructuredError(ErrCodeInvalidInput,
+			"'actions' must be an array of action name strings",
+			WithField("actions"),
+			WithSuggestion("Provide actions as a JSON array of strings, e.g. [\"build\", \"test\"]"),
+		)
+	}
 }

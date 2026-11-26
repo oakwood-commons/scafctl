@@ -28,6 +28,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	resolverRefs "github.com/oakwood-commons/scafctl/pkg/resolver/refs"
 	"github.com/oakwood-commons/scafctl/pkg/schema"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
@@ -1252,6 +1253,30 @@ func lintWorkflow(sol *solution.Solution, result *Result, registry providerLooku
 			"finally section exists but no regular actions defined",
 			"Consider whether finally actions are needed without regular actions",
 			"unused-finally")
+	}
+
+	hasNonNilAction := false
+	allExplicit := true
+	for _, act := range workflow.Actions {
+		if act == nil {
+			continue
+		}
+		hasNonNilAction = true
+		if !act.Explicit {
+			allExplicit = false
+			break
+		}
+	}
+	if hasNonNilAction && allExplicit {
+		filePath := result.File
+		base := strings.ToLower(filepath.Base(filePath))
+		isTaskActionFile := settings.IsActionFile(base) || settings.IsTaskFile(base)
+		if !sol.Bundle.IsEmpty() || (filePath != "" && filePath != "-" && !isTaskActionFile) {
+			result.addFinding(SeverityWarning, "workflow", "workflow.actions",
+				"every action in workflow.actions sets explicit: true; a bare 'run solution' invocation will execute zero actions",
+				"Omit explicit: true on at least one default workflow action, or name repo task-runner files actions.yaml",
+				"no-default-action")
+		}
 	}
 
 	actionNames := make(map[string]bool)
