@@ -6,6 +6,7 @@ package gitcredential
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -20,6 +21,30 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+func explicitConfigPathFromCmd(cmd *cobra.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	if f := cmd.Flag("config"); f != nil {
+		if val := strings.TrimSpace(f.Value.String()); val != "" {
+			return val
+		}
+	}
+	if root := cmd.Root(); root != nil {
+		if f := root.PersistentFlags().Lookup("config"); f != nil {
+			if val := strings.TrimSpace(f.Value.String()); val != "" {
+				return val
+			}
+		}
+		if f := root.Flag("config"); f != nil {
+			if val := strings.TrimSpace(f.Value.String()); val != "" {
+				return val
+			}
+		}
+	}
+	return ""
+}
 
 func shouldUseKvxRenderer(outputOpts *kvx.OutputOptions) bool {
 	if outputOpts == nil {
@@ -104,6 +129,7 @@ func commandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, binN
 
 			res, err := gitcredential.Install(ctx, gitcredential.InstallOptions{
 				BinaryName:   binName,
+				ConfigPath:   explicitConfigPathFromCmd(cmd),
 				Hosts:        hosts,
 				Local:        local,
 				File:         file,

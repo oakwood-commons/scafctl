@@ -21,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -190,6 +191,29 @@ func TestCommandGitCredential_InstallAndUninstallStructuredOutput(t *testing.T) 
 	require.NoError(t, json.Unmarshal([]byte(stdout), &insRes))
 	assert.Equal(t, "file", insRes.Scope)
 	assert.Equal(t, []string{"https://github.com"}, insRes.ConfiguredURLs)
+	assert.NotContains(t, insRes.HelperCommand, "--config")
+
+	// When --config is set on the root command, install preserves --config "<abs-path>" in HelperCommand.
+	customAppCfgPath := filepath.Join(tmpDir, "work-config.yaml")
+	var cfgOutBuf, cfgErrBuf bytes.Buffer
+	cfgStreams := &terminal.IOStreams{
+		In:     io.NopCloser(strings.NewReader("")),
+		Out:    &cfgOutBuf,
+		ErrOut: &cfgErrBuf,
+	}
+	cfgCliParams := settings.NewCliParams()
+	cfgCliParams.BinaryName = "scafctl"
+	cfgCtx := settings.IntoContext(context.Background(), cfgCliParams)
+	cfgCtx = writer.WithWriter(cfgCtx, writer.New(cfgStreams, cfgCliParams))
+	rootWithCfg := &cobra.Command{Use: "scafctl"}
+	rootWithCfg.PersistentFlags().String("config", "", "")
+	rootWithCfg.AddCommand(CommandGitCredential(cfgCliParams, cfgStreams, "scafctl"))
+	rootWithCfg.SetContext(cfgCtx)
+	rootWithCfg.SetArgs([]string{"--config", customAppCfgPath, "git-credential", "install", "--file", cfgFile, "--host", "github.com", "-o", "json"})
+	require.NoError(t, rootWithCfg.Execute(), "stderr: %s", cfgErrBuf.String())
+	var insWithCfgRes gitcredential.InstallResult
+	require.NoError(t, json.Unmarshal(cfgOutBuf.Bytes(), &insWithCfgRes))
+	assert.Contains(t, insWithCfgRes.HelperCommand, `--config "`+filepath.ToSlash(customAppCfgPath)+`"`)
 
 	stdout, stderr, err = execGitCredCmd(t, "scafctl", store, reg, nil, "",
 		"uninstall", "--file", cfgFile, "-o", "json",

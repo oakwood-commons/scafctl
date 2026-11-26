@@ -50,6 +50,7 @@ func DefaultGitHosts() []string {
 type InstallOptions struct {
 	BinaryName     string
 	ExecutablePath string
+	ConfigPath     string
 	Hosts          []string
 	Local          bool
 	File           string
@@ -121,6 +122,12 @@ func CredHelperFileName(binaryName, goos string) string {
 // slashes in exePath so Windows Git / MSYS2 subshells never strip backslashes,
 // rejecting characters that trigger double-quoted /bin/sh expansion.
 func BuildHelperCommand(exePath, profile, handler string) (string, error) {
+	return BuildHelperCommandWithConfig(exePath, "", profile, handler)
+}
+
+// BuildHelperCommandWithConfig builds the gitconfig helper command string,
+// preserving an explicit --config path when configPath is non-empty.
+func BuildHelperCommandWithConfig(exePath, configPath, profile, handler string) (string, error) {
 	if strings.TrimSpace(exePath) == "" {
 		return "", fmt.Errorf("executable path must not be empty")
 	}
@@ -129,6 +136,14 @@ func BuildHelperCommand(exePath, profile, handler string) (string, error) {
 	}
 	forwardExe := strings.ReplaceAll(exePath, `\`, `/`)
 	cmd := fmt.Sprintf(`!"%s" %s`, forwardExe, CommandName)
+
+	if cfg := strings.TrimSpace(configPath); cfg != "" {
+		if strings.ContainsAny(cfg, "\"`$\r\n\x00") {
+			return "", fmt.Errorf("%w: config path %q contains characters unsafe for gitconfig", ErrInvalidProtocolInput, configPath)
+		}
+		forwardCfg := strings.ReplaceAll(cfg, `\`, `/`)
+		cmd += fmt.Sprintf(` --config "%s"`, forwardCfg)
+	}
 
 	if p := strings.TrimSpace(profile); p != "" {
 		norm := auth.NormalizeProfileName(p)
@@ -199,7 +214,12 @@ func Install(ctx context.Context, opts InstallOptions) (*InstallResult, error) {
 		}
 	}
 
-	helperCmd, err := BuildHelperCommand(exePath, opts.Profile, opts.Handler)
+	resolvedConfigPath, err := resolveExplicitConfigPath(opts.ConfigPath, opts.WorkingDir)
+	if err != nil {
+		return nil, err
+	}
+
+	helperCmd, err := BuildHelperCommandWithConfig(exePath, resolvedConfigPath, opts.Profile, opts.Handler)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +306,7 @@ func Install(ctx context.Context, opts InstallOptions) (*InstallResult, error) {
 		if err := os.MkdirAll(filepath.Dir(resolvedShimPath), 0o750); err != nil {
 			return nil, fmt.Errorf("create bin directory %s: %w", filepath.Dir(resolvedShimPath), err)
 		}
-		method, shimErr := installShimOrSymlink(exePath, resolvedShimPath, binName, goos, opts.Force)
+		method, shimErr := installShimOrSymlink(exePath, resolvedConfigPath, resolvedShimPath, binName, goos, opts.Force)
 		if shimErr != nil {
 			return nil, shimErr
 		}
@@ -1091,16 +1111,34 @@ func runGit(ctx context.Context, workingDir string, args ...string) ([]byte, int
 // --- Shim & Symlink Management ---
 
 func shimContent(target, binName, goos string) (string, error) {
+	return shimContentWithConfig(target, "", binName, goos)
+}
+
+func shimContentWithConfig(target, configPath, binName, goos string) (string, error) {
 	if strings.ContainsAny(target, "\"\r\n\x00") {
 		return "", fmt.Errorf("%w: target executable path %q contains unsafe characters for shim", ErrInvalidProtocolInput, target)
+	}
+	cfg := strings.TrimSpace(configPath)
+	if strings.ContainsAny(cfg, "\"\r\n\x00") {
+		return "", fmt.Errorf("%w: config path %q contains unsafe characters for shim", ErrInvalidProtocolInput, configPath)
 	}
 	sig := ShimSignatureFor(binName)
 	if goos == "windows" {
 		escapedTarget := strings.ReplaceAll(target, "%", "%%")
-		return "@echo off\r\nREM " + sig + "\r\n\"" + escapedTarget + "\" " + CommandName + " %*\r\n", nil
+		cfgArg := ""
+		if cfg != "" {
+			escapedCfg := strings.ReplaceAll(strings.ReplaceAll(cfg, `\`, `/`), "%", "%%")
+			cfgArg = ` --config "` + escapedCfg + `"`
+		}
+		return "@echo off\r\nREM " + sig + "\r\n\"" + escapedTarget + "\" " + CommandName + cfgArg + " %*\r\n", nil
 	}
 	singleQuoted := "'" + strings.ReplaceAll(target, "'", "'\\''") + "'"
-	return "#!/bin/sh\n# " + sig + "\nexec " + singleQuoted + " " + CommandName + " \"$@\"\n", nil
+	cfgArg := ""
+	if cfg != "" {
+		singleQuotedCfg := "'" + strings.ReplaceAll(cfg, "'", "'\\''") + "'"
+		cfgArg = " --config " + singleQuotedCfg
+	}
+	return "#!/bin/sh\n# " + sig + "\nexec " + singleQuoted + " " + CommandName + cfgArg + " \"$@\"\n", nil
 }
 
 // IsManagedShimFile reports whether path is a regular file starting with a
@@ -1221,7 +1259,7 @@ func prevalidateShimRemoval(shimPath, binName string) error {
 	return nil
 }
 
-func installShimOrSymlink(targetExe, shimPath, binName, goos string, force bool) (string, error) {
+func installShimOrSymlink(targetExe, configPath, shimPath, binName, goos string, force bool) (string, error) {
 	if _, err := os.Lstat(shimPath); err == nil {
 		if err := prevalidateShimTarget(shimPath, binName, force); err != nil {
 			return "", err
@@ -1229,13 +1267,13 @@ func installShimOrSymlink(targetExe, shimPath, binName, goos string, force bool)
 	}
 
 	dir := filepath.Dir(shimPath)
-	if goos != "windows" {
+	if goos != "windows" && strings.TrimSpace(configPath) == "" {
 		if err := atomicWriteSymlink(targetExe, dir, shimPath); err == nil {
 			return ShimMethodSymlink, nil
 		}
 	}
 
-	content, err := shimContent(targetExe, binName, goos)
+	content, err := shimContentWithConfig(targetExe, configPath, binName, goos)
 	if err != nil {
 		return "", err
 	}
@@ -1396,6 +1434,27 @@ func resolveBinaryName(binaryName string) string {
 		return settings.CliBinaryName
 	}
 	return s
+}
+
+func resolveExplicitConfigPath(rawPath, workingDir string) (string, error) {
+	trimmed := strings.TrimSpace(rawPath)
+	if trimmed == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(trimmed, "\"`$\r\n\x00") {
+		return "", fmt.Errorf("%w: config path %q contains characters unsafe for gitconfig", ErrInvalidProtocolInput, rawPath)
+	}
+	if len(trimmed) >= 3 && trimmed[1] == ':' && (trimmed[2] == '\\' || trimmed[2] == '/') {
+		return trimmed, nil
+	}
+	cleaned := filepath.Clean(expandHome(trimmed))
+	if !filepath.IsAbs(cleaned) && workingDir != "" {
+		cleaned = filepath.Join(workingDir, cleaned)
+	}
+	if abs, err := filepath.Abs(cleaned); err == nil {
+		cleaned = abs
+	}
+	return filepath.Clean(cleaned), nil
 }
 
 func expandHome(path string) string {

@@ -418,5 +418,41 @@ func TestResolveGitConfigTarget_GlobalEnvAndXDG(t *testing.T) {
 		_, err = BuildHelperCommand(badExe, "", "")
 		require.Error(t, err, "expected error for exePath=%q", badExe)
 	}
+	for _, badCfg := range []string{`bad"quote.yaml`, "/tmp/$HOME/work.yaml", "/tmp/`id`/work.yaml"} {
+		_, err = BuildHelperCommandWithConfig("/usr/local/bin/scafctl", badCfg, "", "")
+		require.ErrorIs(t, err, ErrInvalidProtocolInput, "expected error for configPath=%q", badCfg)
+	}
+
+	withCfgCmd, err := BuildHelperCommandWithConfig(`C:\Tools\scafctl.exe`, `C:\Users\alice\work.yaml`, "work", "github")
+	require.NoError(t, err)
+	assert.Equal(t, `!"C:/Tools/scafctl.exe" git-credential --config "C:/Users/alice/work.yaml" --profile work --handler github`, withCfgCmd)
+	assert.True(t, IsManagedHelperValue(withCfgCmd, "scafctl"))
+
+	// Install with relative ConfigPath resolves against WorkingDir and writes forwarding shim when --shim is enabled.
+	gitCfgPath := filepath.Join(tmpHome, "with-config.gitconfig")
+	binDir := filepath.Join(tmpHome, "shim-bin")
+	fakeExe := filepath.Join(tmpHome, "scafctl")
+	require.NoError(t, os.WriteFile(fakeExe, []byte("#!/bin/sh\n"), 0o600))
+
+	insWithCfg, err := Install(ctx, InstallOptions{
+		BinaryName:     "scafctl",
+		ExecutablePath: fakeExe,
+		ConfigPath:     "configs/work.yaml",
+		WorkingDir:     tmpHome,
+		File:           gitCfgPath,
+		Hosts:          []string{"github.com"},
+		Profile:        "work",
+		Shim:           true,
+		BinDir:         binDir,
+		GOOS:           "linux",
+	})
+	require.NoError(t, err)
+	expectedAbsCfg := filepath.ToSlash(filepath.Join(tmpHome, "configs", "work.yaml"))
+	assert.Contains(t, insWithCfg.HelperCommand, `--config "`+expectedAbsCfg+`" --profile work`)
+	assert.Equal(t, ShimMethodShim, insWithCfg.ShimMethod)
+	shimBytes, err := os.ReadFile(insWithCfg.ShimPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(shimBytes), "--config '"+filepath.Join(tmpHome, "configs", "work.yaml")+"'")
+
 	assert.Equal(t, filepath.Join(tmpHome, "bin"), expandHome("~/bin"))
 }
