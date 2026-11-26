@@ -59,22 +59,9 @@ spec:
 ```
 
 Run it:
-{{< tabs "actions-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f hello-actions.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f hello-actions.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -119,22 +106,9 @@ This creates a linear chain: `build → test → deploy`
 
 Run it:
 
-{{< tabs "actions-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f build-pipeline.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f build-pipeline.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -195,22 +169,9 @@ This creates a diamond pattern:
 
 Run it:
 
-{{< tabs "actions-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f parallel.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f parallel.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Output (build and test may appear in either order since they run in parallel):
 
@@ -282,22 +243,9 @@ spec:
 
 ### Run with Default (staging)
 
-{{< tabs "actions-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f conditional-demo.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f conditional-demo.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -311,22 +259,9 @@ The `prod-deploy` action is skipped because the condition `_.environment == 'pro
 
 ### Run with Production
 
-{{< tabs "actions-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f conditional-demo.yaml -r environment=prod
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f conditional-demo.yaml -r environment=prod
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -403,22 +338,9 @@ spec:
             expr: "'echo Verifying ' + string(size(_.targets)) + ' deployments...'"
 ```
 
-{{< tabs "actions-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f foreach-demo.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f foreach-demo.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -489,22 +411,9 @@ spec:
           command: "echo 'Doing main work...'"
 ```
 
-{{< tabs "actions-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f error-handling-demo.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f error-handling-demo.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -538,9 +447,8 @@ some failures" without parsing the JSON envelope. Pass `--detailed-exit-code`
 The flag is off by default, so existing scripts that gate on `$?` are
 unaffected. It is available on both `run solution` and `run action`:
 
-{{< tabs "actions-tutorial-detailed-exit" >}}
-{{% tab "Bash" %}}
-
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run solution -f error-handling-demo.yaml --detailed-exit-code
 case $? in
@@ -549,10 +457,8 @@ case $? in
   *)  echo "run failed" ;;
 esac
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 scafctl run solution -f error-handling-demo.yaml --detailed-exit-code
 switch ($LASTEXITCODE) {
@@ -561,9 +467,8 @@ switch ($LASTEXITCODE) {
   default { "run failed" }
 }
 ```
-
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 Structured output is unaffected: the full action envelope (with
 `status: partial-success` and per-action detail) is still written to stdout
@@ -600,7 +505,7 @@ Control CI formatting explicitly with `--ci-output`, `action.ciOutput` in
 | `github-actions` | Always emits GitHub Actions workflow commands (useful when testing locally) |
 | `none` | Suppresses CI workflow commands even when `GITHUB_ACTIONS=true` |
 
-~~~bash
+~~~shell
 # Preview GitHub Actions groups and annotations locally
 scafctl run action test --ci-output=github-actions
 
@@ -653,22 +558,9 @@ spec:
             expr: "'echo Hello, ' + __actions['fetch-user'].results.name + '!'"
 ```
 
-{{< tabs "actions-tutorial-cmd-8" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f results-demo.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f results-demo.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -774,10 +666,7 @@ spec:
 
 Use `scafctl run action --list` (or `-l`) to inspect available actions without running resolvers, fetching plugins, or executing commands:
 
-{{< tabs "actions-tutorial-list-1" >}}
-{{% tab "Bash" %}}
-
-~~~bash
+~~~shell
 # List available actions in the discovered actions.yaml or solution.yaml
 scafctl run action --list
 
@@ -790,26 +679,6 @@ scafctl run action -l -w '_.default'
 # Browse actions in the interactive TUI
 scafctl run action -l -i
 ~~~
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-~~~powershell
-# List available actions in the discovered actions.yaml or solution.yaml
-scafctl run action --list
-
-# Output as JSON for scripts or CI
-scafctl run action -l -o json
-
-# Filter to default (non-explicit, un-gated) actions with CEL
-scafctl run action -l -w '_.default'
-
-# Browse actions in the interactive TUI
-scafctl run action -l -i
-~~~
-
-{{% /tab %}}
-{{< /tabs >}}
 
 When **every** regular action in a workflow is marked `explicit: true`, running bare `scafctl run action` with no target names prints the available actions to stderr and exits with code `3` (`InvalidInput`) rather than silently doing nothing.
 
@@ -885,22 +754,9 @@ spec:
 
 Run it:
 
-{{< tabs "actions-tutorial-execution-1" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f execution-aware-demo.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f execution-aware-demo.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Output (staging environment, non-production path):
 
@@ -989,22 +845,9 @@ spec:
           command: "echo 'Retry + timeout succeeded'"
 ```
 
-{{< tabs "actions-tutorial-cmd-9" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f retry-demo.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f retry-demo.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -1126,22 +969,9 @@ Both database actions are eligible to run at the same time (neither depends on t
 
 Run it:
 
-{{< tabs "actions-tutorial-cmd-10" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f exclusive-demo.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f exclusive-demo.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Key Rules
 
@@ -1221,22 +1051,9 @@ spec:
           command: "echo Workflow complete, cleanup finished"
 ```
 
-{{< tabs "actions-tutorial-cmd-11" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f finally-demo.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f finally-demo.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -1345,10 +1162,7 @@ See [Provider Reference](provider-reference.md) for complete provider documentat
 
 Run a solution (resolvers + actions):
 
-{{< tabs "actions-tutorial-cmd-12" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Basic execution
 scafctl run solution -f hello-world.yaml
 
@@ -1382,47 +1196,6 @@ scafctl run action --list -f conditional-demo.yaml
 # Force all resolvers to execute even when scoping to specific actions
 scafctl run action setup --resolve-all -f conditional-demo.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Basic execution
-scafctl run solution -f hello-world.yaml
-
-# Run with progress output
-scafctl run solution -f hello-world.yaml --progress
-
-# JSON output (for scripts/pipelines)
-scafctl run solution -f hello-world.yaml -o json
-
-# Override resolver values
-scafctl run solution -f conditional-demo.yaml -r environment=prod
-
-# Limit parallel actions
-scafctl run solution -f foreach-demo.yaml --max-action-concurrency=2
-
-# Dry-run (show plan without executing)
-scafctl run solution -f hello-world.yaml --dry-run
-
-# Run resolvers only (skip actions, for debugging)
-scafctl run resolver -f conditional-demo.yaml -r environment=staging
-
-# Run specific resolvers for inspection
-scafctl run resolver config -f conditional-demo.yaml -r environment=staging
-
-# Run specific action(s); executes only the resolvers those actions need
-scafctl run action setup -f conditional-demo.yaml
-
-# List available actions without executing resolvers or actions
-scafctl run action --list -f conditional-demo.yaml
-
-# Force all resolvers to execute even when scoping to specific actions
-scafctl run action setup --resolve-all -f conditional-demo.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 When you select specific actions with `scafctl run action <name...>` or `scafctl run solution -a <name>` (`--action`), scafctl automatically scopes the resolver phase to only the resolvers referenced by the selected actions, their transitive `dependsOn` actions, `finally` actions, and active state configuration (including transitive resolver and cross-resolver validation dependencies). Unrelated slow, failing, or side-effecting resolvers do not execute. Pass `--resolve-all` to execute every resolver in the solution regardless of action selection. To run an action from a catalog or remote solution, pass `-s/--solution <name[@version]>` to `run action` (e.g. `scafctl run action setup -s conditional-demo env=prod`) or `-a/--action` to `run solution` (e.g. `scafctl run solution conditional-demo -a setup env=prod`).
 
@@ -1430,10 +1203,7 @@ When you select specific actions with `scafctl run action <name...>` or `scafctl
 
 Generate an executor-ready artifact:
 
-{{< tabs "actions-tutorial-cmd-13" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Render to JSON (default)
 scafctl render solution -f hello-world.yaml
 
@@ -1443,52 +1213,18 @@ scafctl render solution -f hello-world.yaml -o yaml
 # Write to file
 scafctl render solution -f hello-world.yaml -o json > graph.json
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Render to JSON (default)
-scafctl render solution -f hello-world.yaml
-
-# Render to YAML
-scafctl render solution -f hello-world.yaml -o yaml
-
-# Write to file
-scafctl render solution -f hello-world.yaml -o json > graph.json
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Working Directory Override
 
 Use `--cwd` (`-C`) to run solutions from a different directory. All file paths in actions (reads, writes, exec commands) resolve against the specified directory:
 
-{{< tabs "actions-tutorial-cmd-14" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Run a solution in a different project directory
 scafctl --cwd /path/to/project run solution -f solution.yaml
 
 # Combine with --output-dir: resolvers read from --cwd, actions write to --output-dir
 scafctl -C /path/to/project run solution -f solution.yaml --output-dir /tmp/output
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Run a solution in a different project directory
-scafctl --cwd /path/to/project run solution -f solution.yaml
-
-# Combine with --output-dir: resolvers read from --cwd, actions write to --output-dir
-scafctl -C /path/to/project run solution -f solution.yaml --output-dir /tmp/output
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 The rendered output includes:
 

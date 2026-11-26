@@ -475,10 +475,7 @@ func (m *MockSecretStore) Delete(key string) error {
 
 See `tests/integration/cli_test.go`. Auth-specific tests use the CLI:
 
-{{< tabs "auth-handler-development-cmd-1" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Login
 scafctl auth login --handler my-idp --flow device_code
 
@@ -491,26 +488,6 @@ scafctl auth token --handler my-idp
 # Logout
 scafctl auth logout --handler my-idp
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Login
-scafctl auth login --handler my-idp --flow device_code
-
-# Check status
-scafctl auth status --handler my-idp -o json
-
-# Get token
-scafctl auth token --handler my-idp
-
-# Logout
-scafctl auth logout --handler my-idp
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ## Best Practices
 
@@ -805,9 +782,8 @@ func main() {
 
 ### Build and Install
 
-{{< tabs "auth-handler-development-cmd-2" >}}
-{{% tab "Bash" %}}
-
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 go build -o scafctl-auth-okta .
 
@@ -815,10 +791,8 @@ go build -o scafctl-auth-okta .
 mkdir -p "$(scafctl paths cache)/plugins"
 cp scafctl-auth-okta "$(scafctl paths cache)/plugins/"
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 go build -o scafctl-auth-okta .
 
@@ -827,9 +801,8 @@ $pluginDir = "$(scafctl paths cache)/plugins"
 New-Item -ItemType Directory -Force -Path $pluginDir
 Copy-Item scafctl-auth-okta $pluginDir
 ```
-
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Use in Solutions
 

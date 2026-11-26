@@ -16,7 +16,7 @@ This tutorial walks you through starting scafctl's REST API server and interacti
 
 ### Start the Server
 
-```bash
+```shell
 scafctl serve
 ```
 
@@ -42,7 +42,7 @@ curl http://localhost:8080/health/ready
 
 ### Custom Port and Host
 
-```bash
+```shell
 # Start on a custom port
 scafctl serve --port 9090
 
@@ -52,7 +52,7 @@ scafctl serve --host 127.0.0.1 --port 3000
 
 ### TLS
 
-```bash
+```shell
 scafctl serve --enable-tls --tls-cert cert.pem --tls-key key.pem
 ```
 

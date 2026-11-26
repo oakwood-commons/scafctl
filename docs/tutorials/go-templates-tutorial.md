@@ -34,9 +34,10 @@ This tutorial walks you through using Go templates in scafctl to generate struct
 17. [DNS-Safe Strings with slugify / toDnsString](#dns-safe-strings-with-slugify--todnsstring)
 18. [Filtering Lists with where / selectField](#filtering-lists-with-where--selectfield)
 19. [Inline CEL with cel](#inline-cel-with-cel)
-20. [Debugging Template Type Errors](#debugging-template-type-errors)
-21. [Author-Defined Functions](#author-defined-functions)
-22. [Discovering Available Functions](#discovering-available-functions)
+20. [Host Paths and Nil-Safe Length (hostConfigDir / len)](#host-paths-and-nil-safe-length-hostconfigdir--len)
+21. [Debugging Template Type Errors](#debugging-template-type-errors)
+22. [Author-Defined Functions](#author-defined-functions)
+23. [Discovering Available Functions](#discovering-available-functions)
 
 ---
 
@@ -96,18 +97,9 @@ spec:
 
 ### Step 2: Run It
 
-{{< tabs "go-templates-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-basics.yaml -e _.greeting -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-basics.yaml -e _.greeting -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -202,18 +194,9 @@ The `environment` resolver tries the `parameter` provider first (looking for a `
 
 Run without passing any parameters — the environment defaults to `development`:
 
-{{< tabs "go-templates-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-conditionals.yaml -e _.deployment_config -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-conditionals.yaml -e _.deployment_config -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 > [!NOTE]
 > **Tip:** The `-e _.deployment_config` flag filters the output to just the `deployment_config` resolver, and `-o yaml` renders it cleanly.
@@ -237,18 +220,9 @@ Since `"development"` doesn't match `"production"` or `"staging"`, the `{{ else 
 
 Pass `-r env=staging` to override the environment:
 
-{{< tabs "go-templates-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-conditionals.yaml -r env=staging -e _.deployment_config -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-conditionals.yaml -r env=staging -e _.deployment_config -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -267,18 +241,9 @@ The `{{ else if eq .environment "staging" }}` branch is now active.
 
 ### Step 4: Switch to Production
 
-{{< tabs "go-templates-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-conditionals.yaml -r env=production -e _.deployment_config -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-conditionals.yaml -r env=production -e _.deployment_config -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -359,18 +324,9 @@ spec:
 
 ### Step 2: Run It
 
-{{< tabs "go-templates-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-loops.yaml -e _.service_report -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-loops.yaml -e _.service_report -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -474,18 +430,9 @@ spec:
 
 ### Step 2: Run It
 
-{{< tabs "go-templates-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-maps.yaml -e _.feature_summary -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-maps.yaml -e _.feature_summary -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -576,33 +523,15 @@ spec:
 
 First, check the untrimmed version:
 
-{{< tabs "go-templates-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-whitespace.yaml -e _.without_trim -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-whitespace.yaml -e _.without_trim -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Then compare with the trimmed version:
 
-{{< tabs "go-templates-tutorial-cmd-8" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-whitespace.yaml -e _.with_trim -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-whitespace.yaml -e _.with_trim -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Compare the Outputs
 
@@ -787,33 +716,15 @@ spec:
 
 ### Step 3: Run It
 
-{{< tabs "go-templates-tutorial-cmd-9" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f template-from-file.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f template-from-file.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 4: Verify the Output
 
-{{< tabs "go-templates-tutorial-cmd-10" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 cat /tmp/scafctl-demo/config.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-cat /tmp/scafctl-demo/config.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 You should see:
 
@@ -911,18 +822,9 @@ spec:
 
 First, comment out or remove the `strict_mode` resolver (it will cause a failure, which we'll explore in the next step). Then run:
 
-{{< tabs "go-templates-tutorial-cmd-11" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-missing-keys.yaml -e _.silent_mode -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-missing-keys.yaml -e _.silent_mode -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -936,18 +838,9 @@ The template rendered successfully, but the missing `owner` key silently became 
 
 Now add back the `strict_mode` resolver and run:
 
-{{< tabs "go-templates-tutorial-cmd-12" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 This time the command **fails** with an error telling you exactly which key is missing. Instead of silently producing broken output, `missingKey: "error"` catches the problem immediately.
 
@@ -969,18 +862,9 @@ Add the `owner` field to the `app` resolver's value:
 
 Re-run and both resolvers now succeed:
 
-{{< tabs "go-templates-tutorial-cmd-13" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-missing-keys.yaml -e _.strict_mode -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ```yaml
 App: my-app, Owner: platform-team
@@ -1053,18 +937,9 @@ spec:
 
 ### Step 2: Run It
 
-{{< tabs "go-templates-tutorial-cmd-14" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-extra-data.yaml -e _.release_notes -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-extra-data.yaml -e _.release_notes -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -1139,18 +1014,9 @@ spec:
 
 ### Step 2: Run It
 
-{{< tabs "go-templates-tutorial-cmd-15" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-delimiters.yaml -e _.helm_values -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-delimiters.yaml -e _.helm_values -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -1229,18 +1095,9 @@ spec:
 
 ### Step 2: Run It
 
-{{< tabs "go-templates-tutorial-cmd-16" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f template-tmpl-field.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f template-tmpl-field.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Observe the Output
 
@@ -1338,48 +1195,21 @@ spec:
 
 ### Step 2: Run It
 
-{{< tabs "go-templates-tutorial-cmd-17" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f template-foreach.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f template-foreach.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Verify the Output
 
-{{< tabs "go-templates-tutorial-cmd-18" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 ls /tmp/scafctl-demo/services/
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-ls /tmp/scafctl-demo/services/
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 You'll see three files: `api.yaml`, `worker.yaml`, `gateway.yaml`. Each contains its own config:
 
-{{< tabs "go-templates-tutorial-cmd-19" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 cat /tmp/scafctl-demo/services/api.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-cat /tmp/scafctl-demo/services/api.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ```yaml
 # Auto-generated service config
@@ -1494,18 +1324,9 @@ spec:
 
 ### Step 3: Run It
 
-{{< tabs "go-templates-tutorial-cmd-20" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f solution.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Result:
 - `templates/k8s/deployment.yaml.tpl` → `output/k8s/deployment.yaml` (rendered, `.tpl` stripped)
@@ -1518,10 +1339,10 @@ Result:
 - `outputPath` is a Go template for transforming output paths (variables: `__filePath`, `__fileName`, `__fileStem`, `__fileExtension`, `__fileDir`; resolver values are also available, e.g. `{{ .environment }}`)
 - Use `expr: '_.resolver.entries'` to feed directory provider results into render-tree
 - Each entry may carry an optional `data` map, shallow-merged over the shared `data` (per-entry values win), so you can render one template per item with its own variables and output path in a single resolver
-- Mix rendered and verbatim files with `rawGlobs` (doublestar patterns copied byte-for-byte) or a per-entry `raw` bool -- handy for fixtures or GitHub Actions `${{ ... }}` files; see the [Template Directory Rendering]({{< relref "template-directory-rendering" >}}) tutorial
+- Mix rendered and verbatim files with `rawGlobs` (doublestar patterns copied byte-for-byte) or a per-entry `raw` bool -- handy for fixtures or GitHub Actions `${{ ... }}` files; see the [Template Directory Rendering](template-directory-rendering.md) tutorial
 
 For a complete walkthrough with advanced patterns, see the
-[Template Directory Rendering]({{< relref "template-directory-rendering" >}}) tutorial.
+[Template Directory Rendering](template-directory-rendering.md) tutorial.
 
 ---
 
@@ -1652,33 +1473,15 @@ spec:
 
 ### Step 2: Run It
 
-{{< tabs "go-templates-tutorial-cmd-21" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f template-readme-generator.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f template-readme-generator.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: View the Result
 
-{{< tabs "go-templates-tutorial-cmd-22" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 cat /tmp/scafctl-demo/README.md
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-cat /tmp/scafctl-demo/README.md
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -1777,18 +1580,9 @@ spec:
 
 ### Step 2: Run It
 
-{{< tabs "go-templates-tutorial-cmd-23" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-sprig.yaml -e _.greeting -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-sprig.yaml -e _.greeting -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -1800,35 +1594,17 @@ The `upper` function uppercases the string, and `trunc 5` truncates it to 5 char
 
 Try the other resolvers:
 
-{{< tabs "go-templates-tutorial-cmd-24" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-sprig.yaml -e _.config -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-sprig.yaml -e _.config -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ```
 port=8080, tls=true, debug=false
 ```
 
-{{< tabs "go-templates-tutorial-cmd-25" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-sprig.yaml -e _.formatted -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-sprig.yaml -e _.formatted -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ```
 MyAppService
@@ -1893,18 +1669,9 @@ spec:
 
 ### Step 2: Run It
 
-{{< tabs "go-templates-tutorial-cmd-26" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-tohcl.yaml -e _.hclOutput -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-tohcl.yaml -e _.hclOutput -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -2051,18 +1818,9 @@ spec:
 
 ### Step 2: Run It
 
-{{< tabs "go-templates-tutorial-cmd-27" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f template-yaml.yaml -e _.yamlOutput -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f template-yaml.yaml -e _.yamlOutput -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Check the Output
 
@@ -2123,20 +1881,10 @@ spec:
               name: slugify-demo
 ```
 
-{{< tabs "go-templates-tutorial-cmd-28" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f slugify-demo.yaml -e _.dnsLabel
 # Output: my-cool-project-v2
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f slugify-demo.yaml -e _.dnsLabel
-# Output: my-cool-project-v2
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Key behaviors
 
@@ -2431,6 +2179,43 @@ runnable example lives in `examples/resolvers/author-functions.yaml`.
 
 ---
 
+## Host Paths and Nil-Safe Length (hostConfigDir / len)
+
+scafctl includes two custom template helpers for portable host paths and safe collection checks:
+
+- **`hostConfigDir`** -- Returns the host's resolved XDG configuration directory while honoring embedder branding (`paths.SetAppName`), matching `host.configDir()` / `hostConfigDir()` in CEL expressions. Use it to build `config.d` drop-in paths without hardcoding `~/.config/scafctl`.
+- **Nil-safe `len`** -- Overrides Go's built-in `len` so `nil` values (as well as nil pointers, slices, maps, and channels) return `0` instead of panicking at template evaluation time.
+
+```yaml
+spec:
+  resolvers:
+    dropInPath:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                tmpl: "{{ hostConfigDir }}/config.d/clusters.yaml"
+
+    itemSummary:
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: safe-len-demo
+              template: |
+                {{- $items := index . "optionalItems" -}}
+                {{- if eq (len $items) 0 -}}
+                No optional items configured
+                {{- else -}}
+                Configured {{ len $items }} item(s)
+                {{- end -}}
+```
+
+---
+
 ## Discovering Available Functions
 
 scafctl provides tools to explore all available Go template functions — both Sprig and custom.
@@ -2439,78 +2224,33 @@ scafctl provides tools to explore all available Go template functions — both S
 
 List all available functions:
 
-{{< tabs "go-templates-tutorial-cmd-29" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get template functions
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get template functions
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Filter to custom functions only:
 
-{{< tabs "go-templates-tutorial-cmd-30" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get template functions --custom
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get template functions --custom
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Filter to Sprig functions only:
 
-{{< tabs "go-templates-tutorial-cmd-31" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get template functions --sprig
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get template functions --sprig
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Get details for a specific function:
 
-{{< tabs "go-templates-tutorial-cmd-32" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get template functions toHcl
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get template functions toHcl
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output as JSON:
 
-{{< tabs "go-templates-tutorial-cmd-33" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get template functions -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get template functions -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Using the MCP Server
 
@@ -2683,20 +2423,10 @@ goTemplate:
 
 You can inspect cache statistics anytime:
 
-{{< tabs "go-templates-tutorial-cmd-34" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # View cache stats via the CLI
 scafctl get config -e 'cfg.goTemplate'
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# View cache stats via the CLI
-scafctl get config -e 'cfg.goTemplate'
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Programmatically (for provider or plugin developers):
 

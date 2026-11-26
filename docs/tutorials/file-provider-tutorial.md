@@ -54,18 +54,9 @@ spec:
 
 Run it:
 
-{{< tabs "file-provider-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f read-file.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f read-file.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -181,18 +172,9 @@ spec:
 
 Run it:
 
-{{< tabs "file-provider-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f write-file.yaml --output-dir /tmp/demo
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f write-file.yaml --output-dir /tmp/demo
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The output includes a `status` field showing what happened:
 
@@ -517,9 +499,7 @@ Two CLI flags control conflict behavior across an entire solution run:
 
 Sets the default conflict strategy for all file provider actions:
 
-{{< tabs "file-provider-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Error if any generated file already exists
 scafctl run solution -f solution.yaml --output-dir ./out --on-conflict error
 
@@ -529,20 +509,6 @@ scafctl run solution -f solution.yaml --output-dir ./out --on-conflict overwrite
 # Skip all existing files (one-time scaffolding)
 scafctl run solution -f solution.yaml --output-dir ./out --on-conflict skip
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Error if any generated file already exists
-scafctl run solution -f solution.yaml --output-dir ./out --on-conflict error
-
-# Force overwrite everything
-scafctl run solution -f solution.yaml --output-dir ./out --on-conflict overwrite
-
-# Skip all existing files (one-time scaffolding)
-scafctl run solution -f solution.yaml --output-dir ./out --on-conflict skip
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The `--on-conflict` flag is the **lowest-priority** override. Provider-level and entry-level `onConflict` settings always take precedence.
 
@@ -550,33 +516,15 @@ The `--on-conflict` flag is the **lowest-priority** override. Provider-level and
 
 Creates `.bak` backups for all mutating file operations:
 
-{{< tabs "file-provider-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f solution.yaml --output-dir ./out --backup
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f solution.yaml --output-dir ./out --backup
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Both flags work with `run solution` and `run provider`:
 
-{{< tabs "file-provider-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider file operation=write path=config.yaml content="new" --on-conflict overwrite --backup
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider file operation=write path=config.yaml content="new" --on-conflict overwrite --backup
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -584,18 +532,9 @@ scafctl run provider file operation=write path=config.yaml content="new" --on-co
 
 Use `--dry-run` to see what would happen without writing any files:
 
-{{< tabs "file-provider-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f solution.yaml --output-dir ./out --dry-run -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f solution.yaml --output-dir ./out --dry-run -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Dry-run output includes planned statuses:
 
@@ -647,18 +586,9 @@ workflow:
 
 Or via CLI flags:
 
-{{< tabs "file-provider-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f solution.yaml --output-dir ./generated --on-conflict overwrite --backup
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f solution.yaml --output-dir ./generated --on-conflict overwrite --backup
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### One-Time Scaffolding (Never Overwrite)
 
@@ -714,18 +644,9 @@ workflow:
 
 Fail the entire solution if any output file would be overwritten:
 
-{{< tabs "file-provider-tutorial-cmd-8" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f solution.yaml --output-dir ./out --on-conflict error
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f solution.yaml --output-dir ./out --on-conflict error
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 For `write-tree`, the `error` strategy collects all conflicts and reports them in a single error. Use `failFast: true` to stop at the first conflict:
 

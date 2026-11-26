@@ -13,11 +13,11 @@ weight: 16
 > `immutable-without-save` and `immutable-no-state-read` proposed below were never
 > implemented; the actual rule is `immutable-requires-state`. See
 > [parameter-replay-design.md](parameter-replay-design.md) for the final design
-> and [state.md](state.md) for the current behavior. This document is retained
+> and [_index.md](_index.md) for the current behavior. This document is retained
 > for historical context only.
 
 This document is the implementation plan for the "Immutable Resolvers" future
-enhancement described in the [state design doc](state.md#immutable-resolvers-future-enhancement).
+enhancement described in the [state design doc](_index.md#immutable-resolvers-future-enhancement).
 
 ---
 

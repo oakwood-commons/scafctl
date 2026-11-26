@@ -36,22 +36,9 @@ scafctl libraries (solution, provider, CEL, catalog, auth)
 
 Run the `--info` flag to confirm the server is built and can list its tools:
 
-{{< tabs "mcp-server-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl mcp serve --info
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl mcp serve --info
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 You should see JSON output listing all available tools:
 
@@ -97,22 +84,9 @@ If this works, the MCP server is ready.
 
 You can start the server interactively for testing:
 
-{{< tabs "mcp-server-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl mcp serve
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl mcp serve
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 The server listens on stdin/stdout for JSON-RPC 2.0 messages. Press `Ctrl+C` to stop. Normally, your AI client starts and stops the server automatically.
 
@@ -742,58 +716,87 @@ To run opt-in (`explicit: true`) workflow actions directly through MCP, pass the
 
 ## 7. Available Tools Reference
 
+All 77 registered MCP tools across solution authoring, catalog discovery, provider inspection, expression evaluation, state management, auth, plugins, and REST API introspection (`auth_*` and `list_auth_handlers` are exposed when auth handlers are registered; `get_command_help` is exposed when started with CLI root command introspection):
+
 | Tool | Description |
 |------|-------------|
-| `auth_status` | Check auth handler status (configured, token validity, expiry). Auth handlers manage authentication identity — they are not solution providers |
-| `catalog_list` | List catalog entries filtered by kind (`solution`, `provider`, `auth-handler`) and name |
-| `diff_solution` | Compare two solution files structurally — shows added, removed, and changed resolvers, actions, metadata, and tests |
-| `evaluate_cel` | Evaluate a CEL expression with inline data, variables, or file-based context |
-| `evaluate_go_template` | Evaluate a Go template against provided data, returning rendered output and referenced fields |
-| `explain_error` | Explain a scafctl error message — root cause, resolution steps, related tools, and example fixes |
-| `explain_kind` | Explain any registered kind (solution, resolver, action, etc.) — shows all fields, types, descriptions, and validation tags |
-| `explain_lint_rule` | Get a detailed explanation of a lint rule — description, severity, category, why it matters, how to fix it, and examples |
-| `get_example` | Read the contents of a scafctl example file. Use `list_examples` first to find available examples |
-| `get_provider_schema` | Get comprehensive provider info: input schema (with per-property required), output schemas, examples, CLI usage. Works for builtin and official plugin providers -- plugin schemas are auto-fetched on first request and cached locally for offline access (response includes `"source": "cached"` when served from cache) |
-| `get_provider_output_shape` | Get the output schema for a provider. Optionally filter by capability (`from`, `transform`, `action`). Falls back to cached descriptor when the plugin binary is unavailable |
-| `get_solution_schema` | Get the full JSON Schema for the solution YAML file format. Optionally drill into a specific field (e.g., `metadata`, `spec`) |
-| `get_run_command` | Get the exact CLI command to run a solution (determines `run solution` vs `run resolver`, omits optional fallback-defaulted parameters from `-r` flags, and includes `catalogCommand` and `explicitActions` when applicable) |
-| `explain_concepts` | Look up and explain scafctl concepts (resolvers, providers, testing, CEL, etc.). Use without arguments to list all, or provide a name/query/category |
-| `inspect_solution` | Full solution metadata — resolvers, actions, tags, links, maintainers, and file dependencies |
-| `lint_solution` | Validate a solution YAML file and return structured findings |
-| `list_cel_functions` | List CEL functions — custom scafctl functions, built-in, or by name. Use `category` to filter (e.g., `strings`, `collections`, `encoding`) |
-| `list_go_template_functions` | List Go template extension functions — Sprig, custom, or by name |
-| `list_examples` | List available scafctl example files with category filtering (solutions, resolvers, actions, providers, etc.) |
-| `list_providers` | List all providers with capability and category filtering |
-| `list_solutions` | List solutions from the local catalog with name filtering |
-| `preview_action` | Preview what each action in a workflow would do WITHOUT executing — shows materialized inputs, deferred values, phases, dependencies, and cross-section references (`crossSectionRefs`) for finally actions reading main-section results |
-| `preview_resolvers` | Execute a solution's resolver chain and return each resolver's resolved value, output schema, and source positions. Use `resolver` param to focus on a single resolver and its dependencies. Validation failures are non-fatal by default: resolved values are returned alongside a `diagnostics` list and `valid: false`. Set `strict: true` to report an error result on validation failure (values are still included) |
-| `render_solution` | Render action, resolver, or action-deps graphs as structured JSON |
-| `run_solution_tests` | Execute functional tests defined in a solution and return structured results. Use `verbose=true` for full assertion details |
-| `scaffold_solution` | Generate a complete skeleton solution YAML from parameters — name, description, features, and providers |
-| `validate_expression` | Syntax-check a CEL expression or Go template without executing it — returns validity, errors, and referenced fields |
-| `catalog_inspect` | Get detailed metadata for a specific catalog artifact — version, kind, digest, created timestamp, and dependency list |
-| `extract_resolver_refs` | Find all resolver cross-references (`_.resolverName`) in a solution — shows which resolvers reference which others |
-| `find_resolver_references` | Find a resolver's definition and every reference to it in a solution (dependsOn, rslvr, CEL, template) with source locations — use before editing to see impact |
-| `rename_resolver` | Rename a resolver and every reference to it, returning the rewritten solution content (comments/formatting preserved). Refuses if the new name is invalid, collides, or a reference cannot be located |
-| `find_action_references` | Find a workflow action's definition and every reference to it in a solution (dependsOn, CEL `__actions.name`, template `.__actions.name`) with source locations — use before editing to see impact |
-| `rename_action` | Rename a workflow action and every reference to it, returning the rewritten solution content (comments/formatting preserved; the action's `alias` is unchanged). Refuses if the new name is invalid, collides, or a reference cannot be located |
-| `find_call_references` | Find a reusable call's definition and every `call:` reference to it (in resolver with/transform/validate steps and workflow actions) with source locations. Calls are referenced only structurally, never from CEL/templates |
-| `rename_call` | Rename a reusable call (spec.calls) and every `call:` reference to it, returning the rewritten solution content (comments/formatting preserved). Refuses if the new name is invalid, collides, or a reference cannot be located |
-| `find_function_references` | Find an author-defined function's definition and every `{{ name ... }}` invocation across templates (including other function bodies). Built-in/extension functions sharing the name are not reported |
-| `rename_function` | Rename an author-defined function (spec.functions) and every `{{ name ... }}` invocation of it, returning the rewritten solution content (comments/formatting preserved; built-ins are untouched). Refuses if the new name is invalid, collides, or an invocation cannot be located |
-| `generate_test_scaffold` | Generate functional test case scaffolding for a solution — creates test YAML with assertions, tags, auto-populated file dependencies, and sandbox guidance |
-| `list_tests` | List functional tests defined in a solution's `spec.testing.cases` — shows test names, descriptions, assertions, and tags |
-| `show_snapshot` | Display the contents of a resolver execution snapshot file — resolver values, timing, status, and errors |
-| `diff_snapshots` | Compare two resolver snapshots and return structured diffs — added, removed, modified, and unchanged resolvers |
-| `list_auth_handlers` | List all registered authentication handlers with their configuration status and token expiry |
 | `auth_list_tokens` | List all cached access tokens across registered auth handlers -- shows metadata (handler, scope, flow, expiry) without revealing token values |
 | `auth_purge_expired` | Remove expired access tokens from the cache across all (or a specific) auth handler. Keeps valid tokens and refresh tokens |
-| `get_config_paths` | List all XDG-compliant paths used by scafctl -- config, data, cache, state, secrets, plugins, provider-schemas, and runtime directories |
-| `validate_expressions` | Batch-validate multiple CEL expressions or Go templates — returns validity, errors, and referenced fields for each |
-| `get_version` | Return scafctl version, commit SHA, and build timestamp |
+| `auth_set_profile` | Set the active authentication profile for the current MCP session so subsequent tool calls resolve credentials under that profile |
+| `auth_status` | Check auth handler status (configured, token validity, expiry). Auth handlers manage authentication identity -- they are not solution providers |
+| `build_plugin` | Deprecated alias for `package_plugin` -- packages a multi-platform plugin artifact into the local catalog as an OCI image index |
+| `catalog_inspect` | Get detailed metadata for a specific catalog artifact -- version, kind, digest, created timestamp, and dependency list |
+| `catalog_list` | List local catalog entries filtered by kind (`solution`, `provider`, `auth-handler`) and name |
+| `catalog_list_platforms` | List available OS/architecture platforms for a multi-platform plugin OCI image index in the local catalog |
+| `catalog_list_plugins` | List provider and auth-handler plugin artifacts across local and remote OCI catalogs, with optional name and semver filtering |
+| `catalog_list_registered` | List all configured catalogs with their type, registry URL, supported artifact kinds, and default status |
+| `catalog_list_solutions` | List solutions across default, named, or local catalogs with rich metadata (description, category, tags, parameters, providers, maintainers) |
+| `catalog_search` | Search solutions across default, named, or all registered catalogs by free-text query, category, provider, and tags |
+| `diff_snapshots` | Compare two resolver snapshots and return structured diffs -- added, removed, modified, and unchanged resolvers |
+| `diff_solution` | Compare two solution files structurally -- shows added, removed, and changed resolvers, actions, metadata, and tests |
 | `dry_run_solution` | Dry-run a solution without executing action providers. Resolvers run normally; each action gets a provider-generated WhatIf description of what it would do |
-| `run_solution` | Execute a solution end-to-end with optional `params`, `actions` (selective execution of named or `explicit: true` actions and their dependencies), `output_dir`, `on_conflict`, and `backup` |
+| `evaluate_cel` | Evaluate a CEL expression with inline data, variables, or file-based context |
+| `evaluate_go_template` | Evaluate a Go template against provided data, returning rendered output and referenced fields |
+| `explain_concepts` | Look up and explain scafctl concepts (resolvers, providers, testing, CEL, context variables, etc.). Use without arguments to list all, or provide a name/query/category |
+| `explain_error` | Explain a scafctl error message -- root cause, resolution steps, related tools, and example fixes |
+| `explain_kind` | Explain any registered kind (`solution`, `resolver`, `action`, `workflow`, `spec`, `provider`, `schema`, `retry`, `function`) -- shows all fields, types, descriptions, and validation tags |
+| `explain_lint_rule` | Get a detailed explanation of a lint rule -- description, severity, category, why it matters, how to fix it, and examples |
+| `extract_resolver_refs` | Find all resolver cross-references (`_.resolverName`) in a CEL expression or Go template |
+| `find_action_references` | Find a workflow action's definition and every reference to it in a solution (`dependsOn`, CEL `__actions.name`, template `.__actions.name`) with source locations |
+| `find_call_references` | Find a reusable call's definition and every `call:` reference to it (in resolver `with`/`transform`/`validate` steps and workflow actions) with source locations |
+| `find_function_references` | Find an author-defined function's definition and every `{{ name ... }}` invocation across templates (including other function bodies). Built-in/extension functions sharing the name are not reported |
+| `find_resolver_references` | Find a resolver's definition and every reference to it in a solution (`dependsOn`, `rslvr`, CEL, template) with source locations -- use before editing to see impact |
+| `generate_test_scaffold` | Generate functional test case scaffolding for a solution -- creates test YAML with assertions, tags, auto-populated file dependencies, and sandbox guidance |
+| `get_command_help` | Get structured CLI help: omit `command` to list all commands, or pass a command path (e.g., `"run solution"`) for usage, flags, examples, and subcommands |
+| `get_config` | Return the effective scafctl configuration (catalogs, settings, logging, HTTP client, CEL, build, and telemetry settings) |
+| `get_config_paths` | List all XDG-compliant paths used by scafctl -- config, data, cache, state, secrets, plugins, provider-schemas, and runtime directories |
+| `get_example` | Read the contents of a scafctl example file. Use `list_examples` first to find available examples |
+| `get_openapi_spec` | Generate and return the complete OpenAPI specification for the scafctl REST API without starting the server |
+| `get_plugin_cache_path` | Return the filesystem path to the local plugin binary cache directory |
+| `get_provider_output_shape` | Get the output schema for a provider. Optionally filter by capability (`from`, `transform`, `validation`, `authentication`, `action`). Falls back to cached descriptor when the plugin binary is unavailable |
+| `get_provider_schema` | Get comprehensive provider info: input schema (with per-property required), output schemas, per-operation metadata, examples, CLI usage. Auto-fetches and caches official plugin schemas |
+| `get_run_command` | Get the exact CLI command to run a solution (determines `run solution` vs `run resolver`, omits optional fallback-defaulted parameters from `-r` flags, and includes `catalogCommand` and `explicitActions` when applicable) |
+| `get_signature_policy` | Return the effective plugin signature verification policy (`off`, `warn`, `enforce`), trusted OIDC issuers/identities, and cosign availability |
+| `get_solution_schema` | Get the full JSON Schema for the solution YAML file format. Optionally drill into a specific field (e.g., `metadata`, `spec`) |
+| `get_solution_usage` | Get the user-facing usage synopsis for a solution: parameters (types, defaults, allowed values) and runnable actions with exact invocation commands |
+| `get_version` | Return scafctl version, commit SHA, and build timestamp |
+| `inspect_solution` | Full solution metadata -- resolvers, actions, tags, links, maintainers, and file dependencies |
+| `lint_solution` | Validate a solution YAML file and return structured findings |
+| `list_api_endpoints` | List all available REST API endpoints with their HTTP method, path, summary, and tags |
+| `list_auth_handlers` | List all registered authentication handlers with their supported flows and capabilities |
+| `list_cel_functions` | List CEL functions -- custom scafctl functions, built-in, or by name. Use `category` to filter (e.g., `strings`, `collections`, `encoding`) |
+| `list_context_variables` | List special context variables injected into CEL and Go-template evaluation (`_`, `__self`, `__item`, `__plan`, `__execution`, `__actions`, `__cwd`, `__params`, `__error`, `__file*`) by phase |
+| `list_examples` | List available scafctl example files with category filtering (`solutions`, `resolvers`, `actions`, `providers`, etc.) |
+| `list_go_template_functions` | List Go template extension functions -- Sprig, custom, or by name |
+| `list_lint_rules` | List all lint rules with severity, category, fixability, and short descriptions (filterable by `severity` and `category`) |
+| `list_official_providers` | List official first-party providers distributed as auto-fetched external plugins with their catalog references and default versions |
+| `list_plugins` | List cached plugin binaries in the local plugin cache (latest per platform by default, or all versions with `all_versions: true`) |
+| `list_providers` | List all providers with capability and category filtering |
+| `list_solutions` | List solutions discovered in the workspace and local catalog with name filtering |
+| `list_tests` | List functional tests defined in a solution's `spec.testing.cases` -- shows test names, descriptions, assertions, and tags |
+| `package_plugin` | Package cross-compiled multi-platform plugin binaries (`os/arch` map) into the local catalog as an OCI image index |
 | `package_solution` | Verify bundle file discovery, `bundle.include` globs, and bundle root boundaries (`dry_run: true` by default), or package and store a solution artifact into the local catalog (`dry_run: false`) |
+| `preview_action` | Preview what each action in a workflow would do WITHOUT executing -- shows materialized inputs, deferred values, phases, dependencies, and cross-section references (`crossSectionRefs`) |
+| `preview_resolvers` | Execute a solution's resolver chain and return each resolver's resolved value, output schema, and source positions. Validation failures are non-fatal by default (`strict: true` returns an error result) |
+| `rename_action` | Rename a workflow action and every reference to it, returning the rewritten solution content (comments/formatting preserved; `alias` unchanged) |
+| `rename_call` | Rename a reusable call (`spec.calls`) and every `call:` reference to it, returning the rewritten solution content (comments/formatting preserved) |
+| `rename_function` | Rename an author-defined function (`spec.functions`) and every `{{ name ... }}` invocation of it, returning the rewritten solution content |
+| `rename_resolver` | Rename a resolver and every reference to it, returning the rewritten solution content (comments/formatting preserved) |
+| `render_effective_solution` | Render the post-compose effective solution document (`all`, `workflow`, or `resolvers`) as deterministic YAML or JSON without executing resolvers |
+| `render_solution` | Render action, resolver, or action-deps graphs as structured JSON |
+| `run_provider` | Execute a single provider directly (or preview with `dry_run: true`) and return structured JSON output |
+| `run_solution` | Execute a solution end-to-end with optional `params`, `actions` (selective execution of named or `explicit: true` actions and their dependencies), `output_dir`, `on_conflict`, and `backup` |
+| `run_solution_tests` | Execute functional tests defined in a solution and return structured results. Use `verbose=true` for full assertion details |
+| `scaffold_solution` | Generate a complete skeleton solution YAML from parameters -- name, description, features, and providers |
+| `show_snapshot` | Display the contents of a resolver execution snapshot file -- resolver values, timing, status, and errors |
+| `state_delete` | Delete a single entry by key from a state file, or clear all entries when `key` is omitted |
+| `state_get` | Retrieve a single entry's value, type, and metadata from a state file by key |
+| `state_list` | List persisted resolver values in a state file (`resolvers` map with value, type, `immutable` flag, and timestamps) |
+| `state_set` | Set or update a mutable entry in a state file with optional type coercion (`string`, `int`, `float`, `bool`) |
+| `state_show` | Show the complete on-disk state document (`schemaVersion`, `metadata`, `command`, `parameters`, `resolvers`, `fingerprints`) |
+| `validate_expression` | Syntax-check a CEL expression or Go template without executing it -- returns validity, errors, and referenced fields |
+| `validate_expressions` | Batch-validate multiple CEL expressions or Go templates -- returns validity, errors, and referenced fields for each |
+| `validate_schema` | Validate arbitrary JSON or YAML data against a JSON Schema and return any path-annotated conformance violations |
 
 ## 8. Available Resources
 
@@ -854,104 +857,48 @@ The prompts instruct the AI to:
 
 Print the full tool list and verify the server starts correctly:
 
-{{< tabs "mcp-server-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl mcp serve --info
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl mcp serve --info
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Enable File Logging
 
 When the MCP server runs over stdio, application logs go to stderr by default. For persistent logs, use `--log-file`:
 
-{{< tabs "mcp-server-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl mcp serve --log-file /tmp/scafctl-mcp.log
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl mcp serve --log-file /tmp/scafctl-mcp.log
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Then tail the log in another terminal:
 
-{{< tabs "mcp-server-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 tail -f /tmp/scafctl-mcp.log
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-tail -f /tmp/scafctl-mcp.log
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Test with Raw JSON-RPC
 
 You can test the server manually by sending JSON-RPC messages:
 
-{{< tabs "mcp-server-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
-
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | scafctl mcp serve
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 Write-Output '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | scafctl mcp serve
 ```
-
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Debug Logging
 
 Enable verbose logging to see tool calls and responses:
 
-{{< tabs "mcp-server-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl mcp serve --log-level debug --log-file /tmp/scafctl-mcp-debug.log
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl mcp serve --log-level debug --log-file /tmp/scafctl-mcp-debug.log
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ## 11. Troubleshooting
 
@@ -959,22 +906,9 @@ scafctl mcp serve --log-level debug --log-file /tmp/scafctl-mcp-debug.log
 
 The AI client cannot find the `scafctl` binary. Ensure it's on your `$PATH`:
 
-{{< tabs "mcp-server-tutorial-cmd-8" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 which scafctl
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-which scafctl
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 If using a non-standard install location, use the full path in your MCP configuration:
 
@@ -1007,30 +941,13 @@ Error: solution "my-solution" has no workflow defined; use 'scafctl run resolver
 
 This means the solution contains only resolvers and no `spec.workflow` section. Use `scafctl run resolver` instead:
 
-{{< tabs "mcp-server-tutorial-cmd-9" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # For solutions with ONLY resolvers (no spec.workflow):
 scafctl run resolver -f ./my-solution.yaml -r key=value
 
 # For solutions WITH actions (spec.workflow.actions):
 scafctl run solution -f ./my-solution.yaml -r key=value
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# For solutions with ONLY resolvers (no spec.workflow):
-scafctl run resolver -f ./my-solution.yaml -r key=value
-
-# For solutions WITH actions (spec.workflow.actions):
-scafctl run solution -f ./my-solution.yaml -r key=value
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 The `create_solution` MCP prompt instructs the AI to suggest the correct command based on whether the generated solution includes a workflow.
 
@@ -1038,30 +955,13 @@ The `create_solution` MCP prompt instructs the AI to suggest the correct command
 
 If a tool returns an auth error, set up authentication before starting the server:
 
-{{< tabs "mcp-server-tutorial-cmd-10" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Authenticate first
 scafctl auth login <provider>
 
 # Then start the server (or let the AI client start it)
 scafctl mcp serve
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Authenticate first
-scafctl auth login <provider>
-
-# Then start the server (or let the AI client start it)
-scafctl mcp serve
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 The MCP server inherits the same auth context as the CLI. If `scafctl run solution` works with your credentials, the MCP server will too.
 
@@ -1108,10 +1008,7 @@ If you are behind a corporate proxy, ensure proxy environment variables are avai
 
 The MCP server supports three transport protocols:
 
-{{< tabs "mcp-server-tutorial-cmd-11" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Default: stdio (JSON-RPC 2.0 over stdin/stdout)
 scafctl mcp serve
 
@@ -1121,23 +1018,6 @@ scafctl mcp serve --transport sse --addr :8080
 # HTTP: Streamable HTTP transport
 scafctl mcp serve --transport http --addr :8080
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Default: stdio (JSON-RPC 2.0 over stdin/stdout)
-scafctl mcp serve
-
-# SSE: Server-Sent Events over HTTP
-scafctl mcp serve --transport sse --addr :8080
-
-# HTTP: Streamable HTTP transport
-scafctl mcp serve --transport http --addr :8080
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 SSE and HTTP transports are useful for remote or multi-client scenarios where stdio is not available.
 
@@ -1195,22 +1075,9 @@ The server includes built-in observability via hooks and middleware:
 
 Enable detailed logging with:
 
-{{< tabs "mcp-server-tutorial-cmd-12" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl mcp serve --log-file /tmp/scafctl-mcp.log
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl mcp serve --log-file /tmp/scafctl-mcp.log
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Auto-Completion
 
@@ -1254,7 +1121,7 @@ All tools that accept file paths support an optional `cwd` parameter. This sets 
 }
 ```
 
-This is the MCP equivalent of the CLI `--cwd` (`-C`) flag. It allows AI agents to specify the project context when the MCP server runs from a different directory. See the [cwd design doc]({{< relref "/docs/design/cwd" >}}) for which tools support it and design details.
+This is the MCP equivalent of the CLI `--cwd` (`-C`) flag. It allows AI agents to specify the project context when the MCP server runs from a different directory. See the [cwd design doc](../design/cwd.md) for which tools support it and design details.
 
 ### Sampling and Elicitation
 
@@ -1267,22 +1134,9 @@ The server supports two client interaction capabilities:
 
 For high-throughput scenarios, you can tune the stdio transport:
 
-{{< tabs "mcp-server-tutorial-cmd-13" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl mcp serve --worker-pool-size 4 --queue-size 200
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl mcp serve --worker-pool-size 4 --queue-size 200
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ## 10. Protocol Features
 

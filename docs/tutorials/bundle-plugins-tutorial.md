@@ -24,11 +24,12 @@ These are always available without any plugin declaration:
 | `message` |
 | `parameter` |
 | `solution` |
+| `state` |
 | `static` |
 | `validation` |
 
 **External providers** (e.g., `directory`, `env`, `exec`, `git`, `github`,
-`hcl`, `identity`, `metadata`, `secret`, `sleep`) are distributed as catalog
+`hcl`, `identity`, `kubeconfig`, `metadata`, `secret`, `sleep`) are distributed as catalog
 plugins and must be declared in `bundle.plugins` so scafctl can fetch them at
 runtime. See the [Plugin Auto-Fetching](../plugin-auto-fetch-tutorial/) tutorial
 for details on how plugin resolution works.
@@ -75,7 +76,7 @@ the solution still works -- but the declaration is noise.
 
 scafctl's linter catches this mistake automatically:
 
-~~~bash
+~~~shell
 scafctl lint -f ./solution.yaml
 ~~~
 
@@ -94,7 +95,7 @@ built-in provider and whose `kind` is `provider`.
 
 To see a detailed explanation with examples:
 
-~~~bash
+~~~shell
 scafctl lint rule builtin-in-bundle-plugins
 ~~~
 
@@ -194,7 +195,7 @@ packaging stays reproducible. When a newer compatible plugin release is
 published to a configured catalog, use `scafctl vendor update` to check for and
 apply upgrades without manually editing or deleting `solution.lock`:
 
-~~~bash
+~~~shell
 # Preview available plugin and sub-solution upgrades without modifying files
 scafctl vendor update --dry-run
 
@@ -260,7 +261,7 @@ spec:
 A complete example demonstrating the lint warning is available at
 [examples/plugins/builtin-in-bundle-plugins.yaml](https://github.com/oakwood-commons/scafctl/blob/main/examples/plugins/builtin-in-bundle-plugins.yaml).
 
-~~~bash
+~~~shell
 # See the lint warning
 scafctl lint -f ./examples/plugins/builtin-in-bundle-plugins.yaml
 

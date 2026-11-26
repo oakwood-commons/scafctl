@@ -55,18 +55,9 @@ spec:
 
 Run it:
 
-{{< tabs "getting-started-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f hello.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f hello.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -112,18 +103,9 @@ Because `process` references `__actions['fetch-data']`, scafctl automatically de
 
 Run it:
 
-{{< tabs "getting-started-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f action-deps.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f action-deps.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -201,9 +183,7 @@ See [Provider Reference](provider-reference.md) for full documentation.
 
 ## Common Commands
 
-{{< tabs "getting-started-cmd-4" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Run a solution from file
 scafctl run solution -f solution.yaml
 
@@ -259,66 +239,6 @@ scafctl lint rules
 # Explain a lint rule
 scafctl lint rule <rule-id>
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Run a solution from file
-scafctl run solution -f solution.yaml
-
-# Run a solution from catalog (by name)
-scafctl run solution my-solution
-
-# Build a solution to local catalog
-scafctl package solution -f solution.yaml --version 1.0.0
-
-# List cataloged solutions
-scafctl catalog list
-
-# Dry-run (show what would happen)
-scafctl run solution -f solution.yaml --dry-run
-
-# Render without executing
-scafctl render solution -f solution.yaml
-
-# Show resolver dependency graph
-scafctl run resolver --graph -f solution.yaml
-
-# List available providers (built-in + official)
-scafctl get provider
-
-# Get details about a specific provider
-scafctl get provider http
-
-# Pass parameters
-scafctl run solution -f solution.yaml -r key1=value1 -r key2=value2
-
-# Interactive output exploration
-scafctl run resolver -f solution.yaml -i
-
-# JSON/YAML output
-scafctl render solution -f solution.yaml -o json
-
-# Scaffold a new solution
-scafctl new solution my-app -d "My application scaffold" --output-file my-app.yaml
-
-# Browse and download examples
-scafctl get examples
-scafctl get examples resolvers/hello-world.yaml > hello.yaml
-
-# Evaluate a CEL expression
-scafctl eval cel --expression '"hello".upperAscii()'
-
-# Validate a solution file
-scafctl lint -f solution.yaml
-
-# List lint rules
-scafctl lint rules
-
-# Explain a lint rule
-scafctl lint rule <rule-id>
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## Next Steps
 

@@ -30,26 +30,13 @@ This tutorial covers the `scafctl run provider` command — a tool for executing
 
 The `scafctl run provider` command takes a provider name as its first argument. Provider inputs can be passed as positional `key=value` arguments or via the traditional `--input` flag:
 
-{{< tabs "run-provider-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Positional key=value (recommended)
 scafctl run provider <provider-name> <key>=<value>
 
 # Explicit --input flag
 scafctl run provider <provider-name> --input <key>=<value>
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Positional key=value (recommended)
-scafctl run provider <provider-name> <key>=<value>
-
-# Explicit --input flag
-scafctl run provider <provider-name> --input <key>=<value>
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Both forms can be mixed freely. When the same key appears multiple times, later values override earlier ones.
 
@@ -57,18 +44,9 @@ Both forms can be mixed freely. When the same key appears multiple times, later 
 
 Run the `static` provider to return a simple value:
 
-{{< tabs "run-provider-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider static value=hello
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider static value=hello
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -88,26 +66,13 @@ Inputs can be passed as positional `key=value` arguments or via the `--input` fl
 
 ### Simple Key-Value Pairs
 
-{{< tabs "run-provider-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Positional key=value (recommended)
 scafctl run provider http url=https://httpbin.org/get method=GET
 
 # Explicit --input flag
 scafctl run provider http --input url=https://httpbin.org/get --input method=GET
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Positional key=value (recommended)
-scafctl run provider http url=https://httpbin.org/get method=GET
-
-# Explicit --input flag
-scafctl run provider http --input url=https://httpbin.org/get --input method=GET
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -128,18 +93,18 @@ Output:
 
 Comma-separated values are automatically converted to arrays:
 
-{{< tabs "run-provider-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run provider exec command=echo args=hello,world
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 scafctl run provider exec shell=pwsh command=Write-Output "args=hello,world"
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Values Containing Commas
 
@@ -147,35 +112,26 @@ If a value itself contains commas (not intended as array separators), wrap it in
 quotes inside the flag value. Use single quotes around the entire flag to prevent
 shell interpretation:
 
-{{< tabs "run-provider-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider cel 'expression="[1,2,3].map(x, x * 2)"'
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider cel 'expression="[1,2,3].map(x, x * 2)"'
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Multiple Values for the Same Key
 
 Repeating the same key creates an array:
 
-{{< tabs "run-provider-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run provider exec command=echo args=hello args=world
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 scafctl run provider exec shell=pwsh command=Write-Output "args=hello args=world"
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ---
 
@@ -197,45 +153,45 @@ headers:
 
 ### Run with File Input
 
-{{< tabs "runprov-file-input" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run provider http --input @inputs.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Wrap @file in single quotes to avoid splatting operator
 scafctl run provider http --input '@inputs.yaml'
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Read Inputs from Stdin
 
 Use `@-` to pipe inputs from stdin as YAML or JSON:
 
-{{< tabs "runprov-stdin-input" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 echo '{"url": "https://api.example.com", "method": "GET"}' | scafctl run provider http --input @-
 cat inputs.yaml | scafctl run provider http @-
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 '{"url": "https://api.example.com", "method": "GET"}' | scafctl run provider http --input '@-'
 Get-Content inputs.yaml | scafctl run provider http '@-'
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Pipe Raw Content into a Single Input
 
 Use `key=@-` to read raw stdin into a specific input key, or `key=@file` to read a file's content:
 
-{{< tabs "runprov-raw-stdin" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Pipe raw text into the message input
 echo hello | scafctl run provider message message=@-
@@ -247,8 +203,8 @@ cat body.json | scafctl run provider http url=https://api.example.com body=@-
 scafctl run provider message message=@greeting.txt
 scafctl run provider http url=https://api.example.com body=@request.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Pipe raw text into the message input
 'hello' | scafctl run provider message 'message=@-'
@@ -260,8 +216,8 @@ Get-Content body.json | scafctl run provider http 'url=https://api.example.com' 
 scafctl run provider message 'message=@greeting.txt'
 scafctl run provider http 'url=https://api.example.com' 'body=@request.json'
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 > **Note:** A single trailing newline is trimmed automatically. `key=@-` reads raw text — it does not parse YAML/JSON.
 
@@ -283,18 +239,18 @@ File and inline inputs are merged. When the same key appears in both,
 the values are combined into an array. To override a file value, omit
 that key from the file:
 
-{{< tabs "runprov-mixed-input" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run provider http --input @inputs.yaml timeout=30
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 scafctl run provider http --input '@inputs.yaml' timeout=30
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 This loads all values from `inputs.yaml` and adds `timeout=30`.
 
@@ -306,9 +262,7 @@ When you pass inputs, scafctl validates the input keys against the provider's
 schema. Unknown keys are rejected early with a helpful error message. If the
 key is close to a valid one (a likely typo), a suggestion is included:
 
-{{< tabs "run-provider-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Typo in key name
 scafctl run provider http urll=https://example.com
 # Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, data, headers, hostname, method, operation, pagination, poll, retry, scope, timeout, url)
@@ -317,38 +271,14 @@ scafctl run provider http urll=https://example.com
 scafctl run provider http unknown=value
 # Error: provider "http" does not accept input "unknown" (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, data, headers, hostname, method, operation, pagination, poll, retry, scope, timeout, url)
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Typo in key name
-scafctl run provider http urll=https://example.com
-# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, data, headers, hostname, method, operation, pagination, poll, retry, scope, timeout, url)
-
-# Completely unknown key
-scafctl run provider http unknown=value
-# Error: provider "http" does not accept input "unknown" (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, data, headers, hostname, method, operation, pagination, poll, retry, scope, timeout, url)
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 This validation also applies to resolver and solution parameters:
 
-{{< tabs "run-provider-tutorial-cmd-8" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Typo in parameter name
 scafctl run resolver -f solution.yaml envrionment=prod
 # Error: solution does not accept input "envrionment" — did you mean "environment"? (valid inputs: environment, region)
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Typo in parameter name
-scafctl run resolver -f solution.yaml envrionment=prod
-# Error: solution does not accept input "envrionment" — did you mean "environment"? (valid inputs: environment, region)
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -366,37 +296,18 @@ Providers declare capabilities that define what kind of operation they perform:
 
 By default, `scafctl run provider` uses the provider's first declared capability. Use `--capability` to select a specific one:
 
-{{< tabs "run-provider-tutorial-cmd-9" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Run a provider with a specific capability
 scafctl run provider cel expression="1 + 2" --capability transform
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Run a provider with a specific capability
-scafctl run provider cel expression="1 + 2" --capability transform
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Viewing Available Capabilities
 
 Use `scafctl get provider <name>` to see which capabilities a provider supports:
 
-{{< tabs "run-provider-tutorial-cmd-10" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get provider cel
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get provider cel
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -404,23 +315,14 @@ scafctl get provider cel
 
 Use `--dry-run` to see what would be executed without actually running the provider:
 
-{{< tabs "run-provider-tutorial-cmd-11" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider http url=https://example.com --dry-run
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider http url=https://example.com --dry-run
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The provider will return simulated output without performing any side effects (no HTTP request, no command execution, etc.).
 
 > [!NOTE]
-> **Provider vs solution dry-run**: `run provider --dry-run` invokes the provider's `Execute()` method with a dry-run context flag, so the provider returns mock data. `run solution --dry-run` is different — it uses the WhatIf model where resolvers run normally and actions are never executed. See [Dry-Run & WhatIf design]({{< relref "/docs/design/dryrun-whatif" >}}) for details.
+> **Provider vs solution dry-run**: `run provider --dry-run` invokes the provider's `Execute()` method with a dry-run context flag, so the provider returns mock data. `run solution --dry-run` is different -- it uses the WhatIf model where resolvers run normally and actions are never executed. See [Dry-Run & WhatIf design](../design/dryrun-whatif.md) for details.
 
 ---
 
@@ -428,9 +330,7 @@ The provider will return simulated output without performing any side effects (n
 
 The default output format is JSON. Use `-o` to change it:
 
-{{< tabs "run-provider-tutorial-cmd-12" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # JSON output (default)
 scafctl run provider static value=hello -o json
 
@@ -443,74 +343,39 @@ scafctl run provider static value=hello -o table
 # Quiet mode (exit code only)
 scafctl run provider static value=hello -o quiet
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# JSON output (default)
-scafctl run provider static value=hello -o json
-
-# YAML output
-scafctl run provider static value=hello -o yaml
-
-# Table output
-scafctl run provider static value=hello -o table
-
-# Quiet mode (exit code only)
-scafctl run provider static value=hello -o quiet
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Interactive Mode
 
 Explore complex output in an interactive TUI:
 
-{{< tabs "runprov-interactive" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider http --input url=https://httpbin.org/get -i
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider http --input url=https://httpbin.org/get -i
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### CEL Expressions
 
 Filter or transform output using CEL expressions:
 
-{{< tabs "runprov-cel-expr" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run provider http url=https://httpbin.org/get -e "_.data"
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 scafctl run provider http url=https://httpbin.org/get -e '_.data'
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Execution Metrics
 
 Use `--show-metrics` to display timing information:
 
-{{< tabs "run-provider-tutorial-cmd-13" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider http url=https://httpbin.org/get --show-metrics
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider http url=https://httpbin.org/get --show-metrics
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -518,52 +383,26 @@ scafctl run provider http url=https://httpbin.org/get --show-metrics
 
 Load providers from plugin executables using `--plugin-dir`:
 
-{{< tabs "run-provider-tutorial-cmd-14" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Load plugins from a directory
 scafctl run provider echo message=hello --plugin-dir ./plugins
 
 # Multiple plugin directories
 scafctl run provider my-plugin key=value --plugin-dir ./plugins --plugin-dir /opt/plugins
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Load plugins from a directory
-scafctl run provider Write-Output "message=hello --plugin-dir ./plugins"
-
-# Multiple plugin directories
-scafctl run provider my-plugin key=value --plugin-dir ./plugins --plugin-dir /opt/plugins
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Version Pinning
 
 When multiple versions of a plugin provider are cached locally, you can pin a
 specific version using `name@version` syntax or the `--plugin-version` flag:
 
-{{< tabs "run-provider-tutorial-cmd-14b" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Pin via @version syntax (recommended)
 scafctl run provider exec@0.5.0 command="echo hello"
 
 # Pin via --plugin-version flag
 scafctl run provider exec --plugin-version 0.5.0 command="echo hello"
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Pin via @version syntax (recommended)
-scafctl run provider exec@0.5.0 command="echo hello"
-
-# Pin via --plugin-version flag
-scafctl run provider exec --plugin-version 0.5.0 command="echo hello"
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Without version pinning, the latest cached version is used automatically.
 
@@ -575,18 +414,9 @@ See the [Provider Development Guide](provider-development.md) for creating custo
 
 ### List All Providers
 
-{{< tabs "run-provider-tutorial-cmd-15" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get providers
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get providers
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 This lists all available providers with their source (`builtin` or `official`), category, capabilities, and version. Official providers are auto-fetched from the OCI catalog on first use -- no manual installation required.
 
@@ -594,18 +424,9 @@ This lists all available providers with their source (`builtin` or `official`), 
 
 ### View Provider Details
 
-{{< tabs "run-provider-tutorial-cmd-16" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get provider http
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get provider http
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 This shows the provider's operations (when declared), schema, capabilities, examples, and auto-generated CLI usage examples. If the provider is not found in the built-in registry, scafctl falls back to the official provider registry and displays catalog information (or full schema and operations when the plugin is cached locally).
 
@@ -613,8 +434,8 @@ This shows the provider's operations (when declared), schema, capabilities, exam
 
 Multi-operation providers (such as plugin providers exposing an `operation` input) declare per-operation descriptions, capabilities, write indicators, schemas, and examples. Use `scafctl get provider <name>` to see the full operations table, or pass `--operation <op>` to inspect a single operation in detail:
 
-{{< tabs "run-provider-tutorial-cmd-16b" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # View all operations and schema for a cached plugin provider
 scafctl get provider github
@@ -625,8 +446,8 @@ scafctl get provider github --operation create_issue
 # Filter write operations as JSON using a CEL expression
 scafctl get provider github -o json -e "_.operations.filter(o, o.isWrite)"
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # View all operations and schema for a cached plugin provider
 scafctl get provider github
@@ -637,25 +458,16 @@ scafctl get provider github --operation create_issue
 # Filter write operations as JSON using a CEL expression
 scafctl get provider github -o json -e '_.operations.filter(o, o.isWrite)'
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Dynamic Help for Provider Inputs
 
 When you run `--help` with a specific provider name, the help output automatically includes the provider's input parameters with types, required/optional status, defaults, and descriptions:
 
-{{< tabs "run-provider-tutorial-cmd-17" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider http --help
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider http --help
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 At the end of the standard help text, you'll see a section like:
 
@@ -678,52 +490,23 @@ Provider Inputs (http):
 
 This works for any provider — just include the provider name before `--help`:
 
-{{< tabs "run-provider-tutorial-cmd-18" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider env --help
 scafctl run provider static --help
 scafctl run provider file --help
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider env --help
-scafctl run provider static --help
-scafctl run provider file --help
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Filter by Capability
 
-{{< tabs "run-provider-tutorial-cmd-19" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get providers --capability=validation
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get providers --capability=validation
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Browse Interactively
 
-{{< tabs "run-provider-tutorial-cmd-20" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get providers -i
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get providers -i
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -731,149 +514,64 @@ scafctl get providers -i
 
 ### Read an Environment Variable
 
-{{< tabs "run-provider-tutorial-cmd-21" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider env operation=get name=HOME
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider env operation=get name=HOME
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Execute a Shell Command
 
-{{< tabs "run-provider-tutorial-cmd-22" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider exec command=date
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider exec command=date
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Read a File
 
-{{< tabs "run-provider-tutorial-cmd-23" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider file operation=read path=README.md
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider file operation=read path=README.md
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### List a Directory
 
-{{< tabs "run-provider-tutorial-cmd-24" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider directory operation=list path=./pkg
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider directory operation=list path=./pkg
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Evaluate a CEL Expression
 
-{{< tabs "run-provider-tutorial-cmd-25" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Simple expression (no commas)
 scafctl run provider cel expression="1 + 2"
 
 # Expressions with commas must be quoted to avoid CSV splitting
 scafctl run provider cel 'expression="[1,2,3].map(x, x * 2)"'
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Simple expression (no commas)
-scafctl run provider cel expression="1 + 2"
-
-# Expressions with commas must be quoted to avoid CSV splitting
-scafctl run provider cel 'expression="[1,2,3].map(x, x * 2)"'
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Make an HTTP Request
 
-{{< tabs "run-provider-tutorial-cmd-26" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider http url=https://httpbin.org/get method=GET
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider http url=https://httpbin.org/get method=GET
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Get Git Repository Status
 
-{{< tabs "run-provider-tutorial-cmd-27" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider git operation=status path=.
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider git operation=status path=.
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Render a Go Template
 
-{{< tabs "run-provider-tutorial-cmd-28" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider go-template name=greeting 'template=Hello World'
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider go-template name=greeting 'template=Hello World'
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Redact Sensitive Output
 
 Use `--redact` to mask sensitive values in the output. This example retrieves
 a secret (which must already exist in the scafctl secrets store):
 
-{{< tabs "run-provider-tutorial-cmd-29" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run provider secret operation=get name=my-secret --redact
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run provider secret operation=get name=my-secret --redact
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 

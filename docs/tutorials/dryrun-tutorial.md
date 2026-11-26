@@ -30,52 +30,25 @@ flowchart LR
 
 ### Dry-Run a Full Solution
 
-{{< tabs "dryrun-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f solution.yaml --dry-run
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f solution.yaml --dry-run
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 This resolves all values and shows the action plan without executing any actions.
 
 ### Dry-Run with JSON Output
 
-{{< tabs "dryrun-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f solution.yaml --dry-run -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f solution.yaml --dry-run -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Returns a structured JSON report with resolver values, action plan, phases, and warnings.
 
 ### Dry-Run with Verbose Output
 
-{{< tabs "dryrun-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f solution.yaml --dry-run --verbose
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f solution.yaml --dry-run --verbose
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Adds materialized inputs to each action in the report, showing exactly what values were resolved for each provider.
 
@@ -91,18 +64,9 @@ This solution has four resolvers (`greeting`, `target`, `port`, `endpoint`) and 
 
 ### Step 2: Run Dry-Run
 
-{{< tabs "dryrun-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The output shows:
 - **WhatIf messages** — Each action's provider-generated description of what it would do (e.g., `Would execute command echo Hello via bash`)
@@ -111,18 +75,18 @@ The output shows:
 
 ### Step 3: JSON Output for Automation
 
-{{< tabs "dryrun-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run -o json | jq .
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 scafctl run solution -f examples/dryrun/basic-dryrun.yaml --dry-run -o json | ConvertFrom-Json
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 The JSON report contains:
 
@@ -156,18 +120,9 @@ The JSON report contains:
 
 ### Step 4: Conditional Actions
 
-{{< tabs "dryrun-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f examples/dryrun/conditional-dryrun.yaml --dry-run -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f examples/dryrun/conditional-dryrun.yaml --dry-run -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 This example shows how dry-run reports conditional (`when`) actions and `finally` blocks. The action plan includes the `when` expression so you can see which conditions will be evaluated at runtime.
 
@@ -203,9 +158,7 @@ This example shows how dry-run reports conditional (`when`) actions and `finally
 
 Dry-run shows what *would* happen; snapshots capture what *did* happen. Combine them:
 
-{{< tabs "dryrun-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Preview what will happen
 scafctl run solution -f solution.yaml --dry-run -o json > plan.json
 
@@ -214,26 +167,13 @@ scafctl run resolver -f solution.yaml --snapshot --snapshot-file=actual.json
 
 # Compare plan vs actual if needed
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Preview what will happen
-scafctl run solution -f solution.yaml --dry-run -o json > plan.json
-
-# Execute and capture the result
-scafctl run resolver -f solution.yaml --snapshot --snapshot-file=actual.json
-
-# Compare plan vs actual if needed
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## CI Pipeline Integration
 
 Use dry-run in CI to validate solutions without side effects:
 
-{{< tabs "dryrun-tutorial-cmd-8" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Verify all resolvers resolve successfully
 output=$(scafctl run solution -f solution.yaml --dry-run -o json)
@@ -245,8 +185,8 @@ if [ "$warnings" -gt 0 ]; then
   exit 1
 fi
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Verify all resolvers resolve successfully
 $output = scafctl run solution -f solution.yaml --dry-run -o json
@@ -259,38 +199,25 @@ if ($warnings -gt 0) {
   exit 1
 }
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ## Working Directory Override
 
 Use `--cwd` (`-C`) to run a dry-run against a solution in a different directory:
 
-{{< tabs "dryrun-tutorial-cmd-9" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Dry-run a solution from another directory
 scafctl --cwd /path/to/project dryrun -f solution.yaml
 
 # Short form
 scafctl -C /path/to/project dryrun -f solution.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Dry-run a solution from another directory
-scafctl --cwd /path/to/project dryrun -f solution.yaml
-
-# Short form
-scafctl -C /path/to/project dryrun -f solution.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 All relative paths in the solution (file references, templates, etc.) resolve against the `--cwd` directory.
 
 ## See Also
 
-- [Snapshots Tutorial]({{< relref "snapshots-tutorial" >}}) — Capture and compare runtime execution state
-- [Solution Diff Tutorial]({{< relref "soldiff-tutorial" >}}) — Structural comparison of solution files
+- [Snapshots Tutorial](snapshots-tutorial.md) -- Capture and compare runtime execution state
+- [Solution Diff Tutorial](soldiff-tutorial.md) -- Structural comparison of solution files
 - [examples/dryrun/](https://github.com/oakwood-commons/scafctl/tree/main/examples/dryrun) — Example solution files for dry-run

@@ -72,18 +72,9 @@ spec:
 
 ### Step 2: Run All Resolvers
 
-{{< tabs "run-resolver-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f demo.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f demo.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -97,18 +88,9 @@ region       us-west-2
 
 ### Step 3: Get JSON Output
 
-{{< tabs "run-resolver-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -131,18 +113,9 @@ Pass resolver names as positional arguments to execute only those resolvers (plu
 
 ### Step 1: Run a Single Resolver
 
-{{< tabs "run-resolver-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver environment -f demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver environment -f demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -154,18 +127,9 @@ Output:
 
 ### Step 2: Run Multiple Resolvers
 
-{{< tabs "run-resolver-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver environment region -f demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver environment region -f demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -219,18 +183,9 @@ spec:
 
 Running just `endpoint` automatically includes `base_url` (its dependency):
 
-{{< tabs "run-resolver-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver endpoint -f dep-demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -247,18 +202,9 @@ Note that `base_url` is included (it's a dependency of `endpoint`) but `unrelate
 
 If you request a resolver that doesn't exist, you get a clear error:
 
-{{< tabs "run-resolver-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver nonexistent -f demo.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver nonexistent -f demo.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -272,18 +218,9 @@ Output:
 
 By default, `run resolver` outputs only resolver values. Pass `--show-execution` to add a `__execution` key alongside the resolver values. The `__execution` key is a structured object with named sections, designed to be extensible for future additions.
 
-{{< tabs "run-resolver-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f dep-demo.yaml -o json --show-execution
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f dep-demo.yaml -o json --show-execution
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Current sections:
 
@@ -337,18 +274,9 @@ Example JSON output:
 
 ### Combine with Named Resolvers
 
-{{< tabs "run-resolver-tutorial-cmd-8" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver endpoint -f dep-demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The `__execution` section only includes metadata for the requested resolvers and their dependencies.
 
@@ -420,18 +348,9 @@ spec:
 
 Run it:
 
-{{< tabs "run-resolver-tutorial-plan-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f plan-aware.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f plan-aware.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -496,18 +415,9 @@ spec:
 
 Running the resolver reports a validation failure because the transformed value (`68000`) exceeds the valid port range -- but the value is still shown:
 
-{{< tabs "run-resolver-tutorial-cmd-9" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f phases-demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f phases-demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output (values on stdout, exit `0`):
 
@@ -529,18 +439,9 @@ You can see the resolved value (`68000`) directly, and the diagnostic explains w
 
 To make validation failures exit non-zero, add `--on-validation-error error`:
 
-{{< tabs "run-resolver-tutorial-cmd-9b" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f phases-demo.yaml -o json --on-validation-error error
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f phases-demo.yaml -o json --on-validation-error error
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The values are still printed, the diagnostics still appear on stderr, but the command now exits `2` (validation failed).
 
@@ -548,18 +449,9 @@ The values are still printed, the diagnostics still appear on stderr, but the co
 
 Use `--on-validation-error ignore` to bypass the validation phase entirely (no diagnostics, no validation work):
 
-{{< tabs "run-resolver-tutorial-cmd-10" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver --on-validation-error ignore -f phases-demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver --on-validation-error ignore -f phases-demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -575,18 +467,9 @@ Now you can see the problem: the transform added `8000` to `60000`, producing `6
 
 Use `--skip-transform` to see the raw resolved value before any transformations:
 
-{{< tabs "run-resolver-tutorial-cmd-11" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver --skip-transform -f phases-demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver --skip-transform -f phases-demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -607,18 +490,9 @@ This reveals the provider returned `60000` — confirming the root cause is the 
 
 When your primary intent is to **gate on validation** rather than inspect values, use the dedicated `scafctl validate resolver` command. It behaves like `run resolver` but presets fatal validation: validation failures exit `2` (validation failed). After the resolver phases pass, it additionally runs `lint` as part of the gate -- lint errors (including JSON Schema violations) fail, lint warnings are surfaced, and `--strict` makes lint warnings fatal too. This makes `validate resolver` a first-class gate verb for scripts and CI pipelines.
 
-{{< tabs "run-resolver-tutorial-cmd-validate" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl validate resolver -f phases-demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl validate resolver -f phases-demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The resolved values are still printed and diagnostics still appear on stderr, but the command exits `2` when any resolver fails validation or when lint reports an error (or a warning under `--strict`). Use `run resolver` for day-to-day troubleshooting (exit `0`) and `validate resolver` when a non-zero exit on validation or lint failure is the goal. To validate a whole solution as a gate without focusing on resolvers, use [`scafctl validate solution`](../../design/cli/#validation-gate).
 
@@ -630,18 +504,9 @@ The `--graph` flag renders the resolver dependency graph **without executing any
 
 ### ASCII Graph (default)
 
-{{< tabs "run-resolver-tutorial-cmd-12" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver --graph -f dep-demo.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver --graph -f dep-demo.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -671,52 +536,43 @@ Statistics:
 
 Generate DOT output and pipe it to Graphviz for a visual diagram:
 
-{{< tabs "runres-graph-dot" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run resolver --graph --graph-format=dot -f dep-demo.yaml | dot -Tpng > graph.png
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 scafctl run resolver --graph --graph-format=dot -f dep-demo.yaml | dot -Tpng -o graph.png
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Mermaid Format
 
 Generate a Mermaid diagram for embedding in Markdown or documentation:
 
-{{< tabs "run-resolver-tutorial-cmd-13" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver --graph --graph-format=mermaid -f dep-demo.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver --graph --graph-format=mermaid -f dep-demo.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### JSON Format
 
 Get the graph as structured JSON for programmatic analysis:
 
-{{< tabs "runres-graph-json" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run resolver --graph --graph-format=json -f dep-demo.yaml | jq .
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 scafctl run resolver --graph --graph-format=json -f dep-demo.yaml | ConvertFrom-Json
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 > [!NOTE]
 > **Bash users:** The above command uses [jq](https://jqlang.github.io/jq/), a command-line JSON processor. Install it separately if not already available.
@@ -731,37 +587,18 @@ The JSON output includes:
 
 The graph stats include a **critical path** — the longest chain of dependencies that determines the minimum sequential execution depth. This helps identify bottlenecks:
 
-{{< tabs "run-resolver-tutorial-cmd-14" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver --graph --graph-format=json -f dep-demo.yaml -e '_.stats.criticalPath'
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver --graph --graph-format=json -f dep-demo.yaml -e '_.stats.criticalPath'
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Graph in Execution Metadata
 
 When running resolvers normally, the dependency graph and a provider usage summary are automatically embedded in `__execution`:
 
-{{< tabs "run-resolver-tutorial-cmd-15" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph'
 scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.providerSummary'
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph'
-scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.providerSummary'
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The **providerSummary** shows per-provider statistics: resolver count, total duration, call count, success/failure counts, and average duration.
 
@@ -772,8 +609,8 @@ The `dependencyGraph` in `__execution` includes a `diagrams` field with pre-rend
 > [!WARNING]
 > **Prerequisite:** The DOT diagram commands below require [Graphviz](https://graphviz.org/) to be installed.
 
-{{< tabs "runres-extract-diagrams" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Extract the Mermaid diagram
 scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph.diagrams.mermaid'
@@ -784,8 +621,8 @@ scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution
 # Extract the ASCII diagram
 scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph.diagrams.ascii'
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Extract the Mermaid diagram
 scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph.diagrams.mermaid'
@@ -796,26 +633,26 @@ scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution
 # Extract the ASCII diagram
 scafctl run resolver -f dep-demo.yaml -o json --show-execution -e '_.__execution.dependencyGraph.diagrams.ascii'
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 You can also extract diagrams when running only specific resolvers:
 
-{{< tabs "runres-extract-subset" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Get the Mermaid diagram for just endpoint and unrelated (and their deps)
 scafctl run resolver endpoint unrelated -f dep-demo.yaml -o json --show-execution \
   -e '_.__execution.dependencyGraph.diagrams.mermaid'
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl run resolver endpoint unrelated -f dep-demo.yaml -o json --show-execution `
   -e '_.__execution.dependencyGraph.diagrams.mermaid'
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 This is useful for generating focused dependency visualizations of a resolver subset without rendering the full solution graph.
 
@@ -830,18 +667,9 @@ The `--snapshot` flag executes resolvers and saves the complete execution state 
 
 ### Basic Snapshot
 
-{{< tabs "run-resolver-tutorial-cmd-16" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver --snapshot --snapshot-file=snapshot.json -f demo.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver --snapshot --snapshot-file=snapshot.json -f demo.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 This creates a snapshot file containing:
 - **metadata**: Solution name, version, build version, timestamp, total duration, and execution status
@@ -852,18 +680,9 @@ This creates a snapshot file containing:
 
 Use `--redact` to replace sensitive resolver values with `<redacted>`:
 
-{{< tabs "run-resolver-tutorial-cmd-17" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver --snapshot --snapshot-file=snapshot.json --redact -f demo.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver --snapshot --snapshot-file=snapshot.json --redact -f demo.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Resolvers marked with `sensitive: true` will have their values replaced in the snapshot.
 
@@ -883,9 +702,7 @@ Resolvers marked with `sensitive: true` will have their values replaced in the s
 
 The command supports all standard output formats:
 
-{{< tabs "run-resolver-tutorial-cmd-18" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Table (default) — human-readable bordered table
 scafctl run resolver -f demo.yaml
 
@@ -904,29 +721,6 @@ scafctl run resolver -f demo.yaml -i
 # CEL expression filtering
 scafctl run resolver -f demo.yaml -e '_.environment'
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Table (default) — human-readable bordered table
-scafctl run resolver -f demo.yaml
-
-# JSON — for scripting and piping
-scafctl run resolver -f demo.yaml -o json
-
-# YAML — for configuration contexts
-scafctl run resolver -f demo.yaml -o yaml
-
-# Quiet — suppress output (useful for exit code checks)
-scafctl run resolver -f demo.yaml -o quiet
-
-# Interactive TUI — explore and search results
-scafctl run resolver -f demo.yaml -i
-
-# CEL expression filtering
-scafctl run resolver -f demo.yaml -e '_.environment'
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -934,9 +728,7 @@ scafctl run resolver -f demo.yaml -e '_.environment'
 
 Use the `--cwd` (or `-C`) global flag to run commands as if you were in a different directory. This is useful when scripting or when your solution files live in a different location:
 
-{{< tabs "run-resolver-tutorial-cmd-19" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Run resolvers from a solution in another directory
 scafctl --cwd /path/to/project run resolver -f solution.yaml
 
@@ -946,20 +738,6 @@ scafctl -C /path/to/project run resolver -f solution.yaml
 # Combine with other flags
 scafctl -C /path/to/project run resolver -f solution.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Run resolvers from a solution in another directory
-scafctl --cwd /path/to/project run resolver -f solution.yaml
-
-# Short form (similar to git -C)
-scafctl -C /path/to/project run resolver -f solution.yaml
-
-# Combine with other flags
-scafctl -C /path/to/project run resolver -f solution.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 All relative paths (including `-f`, `--output-dir`, etc.) are resolved against the specified working directory instead of the current directory.
 
@@ -971,48 +749,21 @@ A common debugging workflow is to inspect how resolver dependencies cascade.
 
 ### Step 1: Visualize the Graph
 
-{{< tabs "runres-debug-graph" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver --graph -f dep-demo.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver --graph -f dep-demo.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 2: Run Target Resolver
 
-{{< tabs "run-resolver-tutorial-cmd-20" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver endpoint -f dep-demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Step 3: Inspect a Single Resolver's Value
 
-{{< tabs "run-resolver-tutorial-cmd-21" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver base_url -f dep-demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver base_url -f dep-demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 This lets you progressively narrow down which resolver is producing unexpected output.
 
@@ -1027,8 +778,8 @@ Parameters can be passed in two equivalent ways:
 
 Both forms can be mixed freely.
 
-{{< tabs "runres-params" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Positional key=value syntax (recommended)
 scafctl run resolver -f parameterized.yaml env=staging
@@ -1063,8 +814,8 @@ scafctl run resolver -f parameterized.yaml -r @params.yaml
 # Mix both forms (-r values and positional values are combined)
 scafctl run resolver -f parameterized.yaml -r env=prod region=us-east1
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Positional key=value syntax (recommended)
 scafctl run resolver -f parameterized.yaml env=staging
@@ -1099,26 +850,17 @@ scafctl run resolver -f parameterized.yaml -r '@params.yaml'
 # Mix both forms
 scafctl run resolver -f parameterized.yaml -r env=prod region=us-east1
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Dynamic Help Text
 
 When you specify a solution file with `--help`, the command shows the solution's
 resolver parameters alongside the standard help text:
 
-{{< tabs "run-resolver-tutorial-cmd-22" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f param-demo.yaml --help
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f param-demo.yaml --help
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 This appends a table showing which resolvers accept CLI parameters, their types,
 and descriptions — making it easy to discover what inputs a solution expects
@@ -1158,18 +900,9 @@ spec:
               expression: "'https://config.' + __self + '.example.com'"
 ```
 
-{{< tabs "run-resolver-tutorial-cmd-23" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f param-demo.yaml environment=staging -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f param-demo.yaml environment=staging -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -1209,18 +942,9 @@ spec:
 
 Running without `-r` uses the default:
 
-{{< tabs "run-resolver-tutorial-cmd-23b" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f param-default-demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f param-default-demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -1232,18 +956,9 @@ Output:
 
 Running with `-r` overrides the default:
 
-{{< tabs "run-resolver-tutorial-cmd-23c" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f param-default-demo.yaml environment=staging -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f param-default-demo.yaml environment=staging -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -1265,9 +980,7 @@ Parameter keys are validated against the solution's parameter-type resolver name
 Unknown keys are rejected early with a helpful error message that suggests the
 closest valid key when a typo is detected:
 
-{{< tabs "run-resolver-tutorial-cmd-24" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Typo: "envronment" instead of "environment"
 scafctl run resolver -f param-demo.yaml envronment=staging
 # Error: solution does not accept input "envronment" — did you mean "environment"?
@@ -1276,19 +989,6 @@ scafctl run resolver -f param-demo.yaml envronment=staging
 scafctl run resolver -f param-demo.yaml unknown=value
 # Error: solution does not accept input "unknown" (valid inputs: environment)
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Typo: "envronment" instead of "environment"
-scafctl run resolver -f param-demo.yaml envronment=staging
-# Error: solution does not accept input "envronment" — did you mean "environment"?
-
-# Completely unknown key
-scafctl run resolver -f param-demo.yaml unknown=value
-# Error: solution does not accept input "unknown" (valid inputs: environment)
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Controlling Parameter Types
 
@@ -1373,18 +1073,9 @@ spec:
               default: us-east-1
 ```
 
-{{< tabs "run-resolver-tutorial-cmd-24b" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f param-string-demo.yaml billingId=00042 regions=us-east-1,us-west-2 -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f param-string-demo.yaml billingId=00042 regions=us-east-1,us-west-2 -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output -- inference drops the leading zeros, `type: string` preserves them, and
 `type: csv` splits the list:
@@ -1412,8 +1103,8 @@ Output -- inference drops the leading zeros, `type: string` preserves them, and
 
 Check that all resolvers succeed without running actions:
 
-{{< tabs "run-resolver-tutorial-cmd-25" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Basic validation
 scafctl run resolver -f demo.yaml -o quiet
@@ -1422,8 +1113,8 @@ echo "Exit code: $?"
 # Strict mode: also require official auth handlers to be declared in bundle.plugins
 scafctl run resolver -f demo.yaml -o quiet --strict
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Basic validation
 scafctl run resolver -f demo.yaml -o quiet
@@ -1432,65 +1123,36 @@ Write-Output "Exit code: $LASTEXITCODE"
 # Strict mode: also require official auth handlers to be declared in bundle.plugins
 scafctl run resolver -f demo.yaml -o quiet --strict
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Partial Execution for Debugging
 
 Isolate a failing resolver and its dependencies:
 
-{{< tabs "run-resolver-tutorial-cmd-26" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver endpoint -f dep-demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver endpoint -f dep-demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Inspect Raw Resolved Values
 
 Skip transforms to see what providers actually return:
 
-{{< tabs "run-resolver-tutorial-cmd-27" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver --skip-transform -f dep-demo.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver --skip-transform -f dep-demo.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Preview Execution Plan
 
 Use `--graph` to see the resolver execution plan without running anything:
 
-{{< tabs "run-resolver-tutorial-cmd-28" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver --graph -f dep-demo.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver --graph -f dep-demo.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Comparing Resolver Outputs
 
-{{< tabs "run-resolver-tutorial-cmd-29" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Get current values
 scafctl run resolver -f param-demo.yaml -r environment=production -o json > current.json
 
@@ -1498,33 +1160,12 @@ scafctl run resolver -f param-demo.yaml -r environment=production -o json > curr
 scafctl run resolver -f param-demo.yaml -r environment=staging -o json > staging.json
 diff current.json staging.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Get current values
-scafctl run resolver -f param-demo.yaml -r environment=production -o json > current.json
-
-# Change parameters and compare
-scafctl run resolver -f param-demo.yaml -r environment=staging -o json > staging.json
-diff current.json staging.json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Show Execution Metrics
 
-{{< tabs "run-resolver-tutorial-cmd-30" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f demo.yaml --show-metrics -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f demo.yaml --show-metrics -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Metrics are displayed on stderr after execution completes.
 
@@ -1541,9 +1182,7 @@ Metrics are displayed on stderr after execution completes.
 
 ## Quick Reference
 
-{{< tabs "run-resolver-tutorial-cmd-31" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # All resolvers
 scafctl run resolver -f solution.yaml
 
@@ -1591,58 +1230,6 @@ scafctl run resolver -f solution.yaml -i
 # Aliases: res, resolvers
 scafctl run res -f solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# All resolvers
-scafctl run resolver -f solution.yaml
-
-# Named resolvers (with dependencies)
-scafctl run resolver db config -f solution.yaml
-
-# Named resolvers from a catalog solution (-s/--solution)
-scafctl run resolver db config -s my-app@1.0.0
-
-# Resolvers consumed by a specific action (-a/--action)
-scafctl run resolver -a deploy -f solution.yaml
-
-# JSON output (resolver values only, no execution metadata)
-scafctl run resolver -f solution.yaml -o json
-
-# JSON output with __execution metadata (phases, timing, providers)
-scafctl run resolver -f solution.yaml -o json
-
-# Skip transform and validation phases
-scafctl run resolver --skip-transform -f solution.yaml
-
-# Dependency graph (ASCII)
-scafctl run resolver --graph -f solution.yaml
-
-# Dependency graph (DOT/Mermaid/JSON)
-scafctl run resolver --graph --graph-format=dot -f solution.yaml
-scafctl run resolver --graph --graph-format=mermaid -f solution.yaml
-scafctl run resolver --graph --graph-format=json -f solution.yaml
-
-# Snapshot execution state
-scafctl run resolver --snapshot --snapshot-file=out.json -f solution.yaml
-
-# Snapshot with sensitive value redaction
-scafctl run resolver --snapshot --snapshot-file=out.json --redact -f solution.yaml
-
-# Strict mode (also require official auth handlers to be declared)
-scafctl run resolver -f solution.yaml --strict
-
-# With parameters
-scafctl run resolver -f solution.yaml -r key=value
-
-# Interactive exploration
-scafctl run resolver -f solution.yaml -i
-
-# Aliases: res, resolvers
-scafctl run res -f solution.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## Next Steps
 

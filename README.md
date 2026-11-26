@@ -212,22 +212,22 @@ See the [Provider Reference](docs/tutorials/provider-reference.md) and [Provider
 
 ### Tutorials
 
-- [Getting Started](docs/tutorials/getting-started.md) — First steps with scafctl
-- [Resolvers](docs/tutorials/resolver-tutorial.md) — Gathering and transforming data
-- [Actions](docs/tutorials/actions-tutorial.md) — Executing operations
-- [Authentication](docs/tutorials/auth-tutorial.md) — Entra ID and service principals
-- [Catalog](docs/tutorials/catalog-tutorial.md) — Publishing and sharing solutions
-- [CEL Expressions](docs/tutorials/cel-tutorial.md) — Dynamic evaluation with CEL
-- [Go Templates](docs/tutorials/go-templates-tutorial.md) — Templating with Go templates
-- [Configuration](docs/tutorials/config-tutorial.md) — Managing application settings
-- [Logging](docs/tutorials/logging-tutorial.md) — Controlling log output, formats, and destinations
-- [Caching](docs/tutorials/cache-tutorial.md) — Provider result caching
-- [Directory Provider](docs/tutorials/directory-provider-tutorial.md) — Listing, scanning, and managing directories
-- [Snapshots](docs/tutorials/snapshots-tutorial.md) — Capturing and diffing output
-- [Provider Development](docs/tutorials/provider-development.md) — Building providers (builtin and plugin)
-- [Auth Handler Development](docs/tutorials/auth-handler-development.md) — Building auth handlers (builtin and plugin)
-- [Extension Concepts](docs/tutorials/extension-concepts.md) — Provider vs Auth Handler vs Plugin terminology
-- [Plugin Development](docs/tutorials/plugin-development.md) — Plugin overview and discovery
+- [Getting Started](docs/tutorials/getting-started.md) -- First steps with scafctl
+- [Resolvers](docs/tutorials/resolver-tutorial.md) -- Gathering and transforming data
+- [Actions](docs/tutorials/actions-tutorial.md) -- Executing operations
+- [Authentication](docs/tutorials/auth-tutorial.md) -- Microsoft Entra ID, GitHub, Google Cloud, and OpenShift authentication
+- [Catalog](docs/tutorials/catalog-tutorial.md) -- Publishing and sharing solutions
+- [CEL Expressions](docs/tutorials/cel-tutorial.md) -- Dynamic evaluation with CEL
+- [Go Templates](docs/tutorials/go-templates-tutorial.md) -- Templating with Go templates
+- [Configuration](docs/tutorials/config-tutorial.md) -- Managing application settings
+- [Logging](docs/tutorials/logging-tutorial.md) -- Controlling log output, formats, and destinations
+- [Caching](docs/tutorials/cache-tutorial.md) -- Provider result caching
+- [Directory Provider](docs/tutorials/directory-provider-tutorial.md) -- Listing, scanning, and managing directories
+- [Snapshots](docs/tutorials/snapshots-tutorial.md) -- Capturing and diffing output
+- [Provider Development](docs/tutorials/provider-development.md) -- Building providers (builtin and plugin)
+- [Auth Handler Development](docs/tutorials/auth-handler-development.md) -- Building auth handlers (builtin and plugin)
+- [Extension Concepts](docs/tutorials/extension-concepts.md) -- Provider vs Auth Handler vs Plugin terminology
+- [Plugin Development](docs/tutorials/plugin-development.md) -- Plugin overview and discovery
 - [Language Server (LSP)](docs/tutorials/lsp-tutorial.md) -- Editor integration: diagnostics, hover, completion, code actions
 - [Refactoring](docs/tutorials/refactor-tutorial.md) -- Source-preserving renames of resolvers, actions, calls, and functions
 - [MCP Server](docs/tutorials/mcp-server-tutorial.md) -- Exposing scafctl to AI agents (Copilot, Claude, Cursor)
@@ -248,26 +248,42 @@ Architecture and design decisions are documented in [docs/design/](docs/design/)
 
 ## Authentication
 
-scafctl supports secure authentication for accessing protected APIs. Currently supported:
+scafctl supports pluggable authentication handlers with encrypted token caching. Official handlers:
 
-- **Microsoft Entra ID** (Azure AD) -- Interactive browser (authorization code + PKCE), Device Code, Service Principal, and Workload Identity
+- **Microsoft Entra ID** (`entra`) -- Interactive browser (OAuth 2.0 + PKCE), Device Code, Service Principal, and Workload Identity
+- **GitHub** (`github`) -- Device Code (default, with automatic browser open in interactive sessions), Interactive browser (OAuth 2.0 + PKCE when custom OAuth App `clientSecret` is configured), Personal Access Token (`pat`), and GitHub App (`github-app`)
+- **Google Cloud Platform** (`gcp`) -- Interactive browser (OAuth 2.0 + PKCE), Device Code, Service Principal (service account key), Workload Identity, GCE Metadata Server (`metadata`), and `gcloud` Application Default Credentials (`gcloud-adc`)
+- **OpenShift** (`openshift`) -- Per-cluster browser OAuth web login (`--hostname` / `kube login`) and cluster-scoped token routing
 
 ### Quick Auth Setup
 
 ```bash
-# Interactive: Authenticate with Entra ID (browser OAuth + PKCE, default)
+# Interactive browser OAuth + PKCE (Entra ID and GCP)
 scafctl auth login entra
+scafctl auth login gcp
 
-# Headless / SSH: Authenticate with Entra ID using device code
+# GitHub default login (device code + automatic browser open)
+scafctl auth login github
+
+# GitHub browser redirect (OAuth 2.0 + PKCE; requires auth.github.clientSecret in config)
+scafctl auth login github --client-id <your-oauth-app-client-id>
+
+# OpenShift per-cluster browser web login
+scafctl auth login openshift --hostname https://api.mycluster.example.com:6443
+
+# Headless / SSH: Authenticate using device code (no browser launch)
 scafctl auth login entra --flow device-code
+scafctl auth login github --flow device-code
+scafctl auth login gcp --flow device-code
 
-# CI/CD: Authenticate with service principal
+# CI/CD: Authenticate Entra ID with a service principal
 export AZURE_CLIENT_ID="..."
 export AZURE_TENANT_ID="..."
 export AZURE_CLIENT_SECRET="..."
 scafctl auth login entra --flow service-principal
 
-# Check authentication status
+# List handlers and check authentication status
+scafctl auth handlers
 scafctl auth status
 
 # Use authenticated HTTP requests
@@ -344,7 +360,7 @@ See the [Configuration Tutorial](docs/tutorials/config-tutorial.md).
 
 ## Logging
 
-By default, scafctl produces **no structured log output** — only styled user messages (errors, warnings, success). This keeps the CLI clean for human users and pipe-friendly for scripts.
+By default, scafctl produces **no structured log output** -- only styled user messages (errors, warnings, success). This keeps the CLI clean for human users and pipe-friendly for scripts.
 
 ### Quick Reference
 
@@ -408,8 +424,8 @@ scafctl secrets get scafctl.auth.entra.metadata --all
 scafctl secrets rotate
 
 # Import / export for migration
-scafctl secrets export --file secrets.enc
-scafctl secrets import --file secrets.enc
+scafctl secrets export --output-file secrets.enc --encrypt
+scafctl secrets import secrets.enc
 ```
 
 Use the `secret` provider to access secrets in solutions:
@@ -528,7 +544,7 @@ scafctl lint -f solution.yaml
 # Snapshots
 scafctl render solution -f solution.yaml --snapshot --snapshot-file baseline.json
 scafctl get snapshot baseline.json
-scafctl diff snapshot --from baseline --to current
+scafctl diff snapshot baseline.json current.json
 
 # Resolver dependency graph
 scafctl run resolver -f solution.yaml --graph
@@ -557,9 +573,9 @@ scafctl version
 
 Contributions are welcome! Please see:
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup, coding standards, and contribution workflow
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — Community guidelines
-- [SECURITY.md](.github/SECURITY.md) — Reporting security vulnerabilities
+- [CONTRIBUTING.md](CONTRIBUTING.md) -- Development setup, coding standards, and contribution workflow
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) -- Community guidelines
+- [SECURITY.md](.github/SECURITY.md) -- Reporting security vulnerabilities
 
 Have a question? Start a [GitHub Discussion](https://github.com/oakwood-commons/scafctl/discussions).
 

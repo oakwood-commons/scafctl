@@ -55,8 +55,8 @@ GOOS=windows GOARCH=amd64 go build -o dist/${PLUGIN_NAME}-windows-amd64.exe ./cm
 Use `scafctl package plugin` to package all binaries into a single
 multi-platform artifact:
 
-{{< tabs "multi-platform-plugin-build-cmd-1" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl package plugin \
   --name my-provider \
@@ -68,9 +68,9 @@ scafctl package plugin \
   --platform darwin/arm64=./dist/my-provider-darwin-arm64 \
   --platform windows/amd64=./dist/my-provider-windows-amd64.exe
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl package plugin `
   --name my-provider `
   --kind provider `
@@ -80,9 +80,9 @@ scafctl package plugin `
   --platform darwin/amd64=./dist/my-provider-darwin-amd64 `
   --platform darwin/arm64=./dist/my-provider-darwin-arm64 `
   --platform windows/amd64=./dist/my-provider-windows-amd64.exe
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 This creates an OCI image index in the local catalog with one manifest per
 platform.
@@ -109,18 +109,9 @@ platform.
 
 Push the multi-platform artifact to an OCI registry:
 
-{{< tabs "multi-platform-plugin-build-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl catalog push provider my-provider@1.0.0 --catalog ghcr.io/myorg/scafctl
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl catalog push provider my-provider@1.0.0 --catalog ghcr.io/myorg/scafctl
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The image index and all platform manifests are pushed together.
 
@@ -153,8 +144,8 @@ On `darwin/arm64` (Apple Silicon), scafctl will:
 You don't need to build for all platforms. For example, if your plugin
 only supports Linux:
 
-{{< tabs "multi-platform-plugin-build-cmd-3" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl package plugin \
   --name my-provider \
@@ -163,18 +154,18 @@ scafctl package plugin \
   --platform linux/amd64=./dist/linux-amd64/my-provider \
   --platform linux/arm64=./dist/linux-arm64/my-provider
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl package plugin `
   --name my-provider `
   --kind provider `
   --version 1.0.0 `
   --platform linux/amd64=./dist/linux-amd64/my-provider `
   --platform linux/arm64=./dist/linux-arm64/my-provider
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 If a user on an unsupported platform tries to use this plugin, they'll get a
 clear error:
@@ -187,8 +178,8 @@ Error: platform "darwin/arm64" not found in image index (available: [linux/amd64
 
 The same workflow works for auth handler plugins:
 
-{{< tabs "multi-platform-plugin-build-cmd-4" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl package plugin \
   --name github-auth \
@@ -197,25 +188,25 @@ scafctl package plugin \
   --platform linux/amd64=./dist/github-auth-linux-amd64 \
   --platform darwin/arm64=./dist/github-auth-darwin-arm64
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl package plugin `
   --name github-auth `
   --kind auth-handler `
   --version 2.0.0 `
   --platform linux/amd64=./dist/github-auth-linux-amd64 `
   --platform darwin/arm64=./dist/github-auth-darwin-arm64
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ## Overwriting Existing Versions
 
 Use `--force` to overwrite an existing version:
 
-{{< tabs "multi-platform-plugin-build-cmd-5" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl package plugin \
   --name my-provider \
@@ -224,18 +215,18 @@ scafctl package plugin \
   --platform linux/amd64=./dist/my-provider-linux-amd64 \
   --force
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl package plugin `
   --name my-provider `
   --kind provider `
   --version 1.0.0 `
   --platform linux/amd64=./dist/my-provider-linux-amd64 `
   --force
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ## How It Works Internally
 

@@ -268,7 +268,7 @@ stays in the server.
 
 You normally never run the server directly, but you can confirm it starts:
 
-```bash
+```shell
 scafctl lsp --help
 ```
 
@@ -290,7 +290,7 @@ same:
    list that drifts from CLI discovery, ask the binary which files it
    auto-discovers:
 
-   ~~~bash
+   ~~~shell
    scafctl lsp document-selectors -o json
    ~~~
 

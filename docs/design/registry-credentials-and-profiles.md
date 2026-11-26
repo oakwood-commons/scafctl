@@ -1,3 +1,7 @@
+---
+title: "Registry Credentials & Auth Profiles"
+---
+
 # Registry Credentials and Auth Profiles
 
 ## Status

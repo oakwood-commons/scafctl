@@ -52,18 +52,9 @@ spec:
 
 Run it:
 
-{{< tabs "cel-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f cel-basics.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f cel-basics.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -79,7 +70,7 @@ Output:
 {{% details "▶ Try it" %}}
 The complete example with more expressions is at [cel-basics.yaml](../../examples/resolvers/cel-basics.yaml)
 
-```bash
+```shell
 scafctl run resolver -f examples/resolvers/cel-basics.yaml -o json
 ```
 {{% /details %}}
@@ -134,18 +125,9 @@ spec:
 
 Run it:
 
-{{< tabs "cel-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f cel-refs.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f cel-refs.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -332,7 +314,7 @@ size("hello")                         // 5
 {{% details "▶ Try it" %}}
 All the operators, string, list, and map operations above are runnable in [cel-builtins.yaml](../../examples/resolvers/cel-builtins.yaml)
 
-```bash
+```shell
 scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json
 ```
 {{% /details %}}
@@ -346,7 +328,7 @@ scafctl extends CEL with project-specific functions for arrays, maps, strings, r
 {{% details "▶ Try it" %}}
 All custom extension functions are demonstrated in a single runnable file — [cel-extensions.yaml](../../examples/resolvers/cel-extensions.yaml)
 
-```bash
+```shell
 scafctl run resolver -f examples/resolvers/cel-extensions.yaml -o json
 ```
 {{% /details %}}
@@ -781,12 +763,24 @@ result:
             debug.out("Raw data", _.rawData.filter(x, x.enabled))
 ```
 
+### Host
+
+Resolve the host's XDG configuration directory without hardcoding a branded path (honors `paths.SetAppName` when `scafctl` is embedded in another CLI):
+
+```cel
+// Namespaced CEL form
+host.configDir() + "/config.d/clusters.yaml"
+
+// Portable alias (matches the Go template function name hostConfigDir)
+hostConfigDir() + "/config.d/clusters.yaml"
+```
+
 ### Utility
 
 ```cel
 // Discard a value, return null
 out.nil(someExpression)
-// → null (always)
+// -> null (always)
 ```
 
 ---
@@ -872,7 +866,7 @@ cel.bind(base, _.host + ":" + string(_.port),
 {{% details "▶ Try it" %}}
 Encoders, math, optionals, sets, and bindings are all runnable in [cel-builtins.yaml](../../examples/resolvers/cel-builtins.yaml)
 
-```bash
+```shell
 scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json
 ```
 {{% /details %}}
@@ -884,7 +878,7 @@ scafctl run resolver -f examples/resolvers/cel-builtins.yaml -o json
 {{% details "▶ Try it" %}}
 All the patterns below are combined into one runnable file — [cel-common-patterns.yaml](../../examples/resolvers/cel-common-patterns.yaml)
 
-```bash
+```shell
 scafctl run resolver -f examples/resolvers/cel-common-patterns.yaml -o json
 ```
 {{% /details %}}
@@ -993,7 +987,7 @@ deployments:
 {{% details "▶ Try it" %}}
 For more data transformation patterns (filtering, aggregation, enrichment, serialization), see [cel-transforms.yaml](../../examples/resolvers/cel-transforms.yaml)
 
-```bash
+```shell
 scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o json
 ```
 {{% /details %}}
@@ -1015,6 +1009,8 @@ scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o json
 | `filepath.exists(path)` | Check if path exists |
 | `filepath.join(a, b, ...)` | Join path segments (2-10 args) |
 | `guid.new()` | Generate UUID v4 |
+| `host.configDir()` | Branding-aware host XDG configuration directory |
+| `hostConfigDir()` | Portable alias for `host.configDir()` (matches Go template `hostConfigDir`) |
 | `json.marshal(val)` | Serialize to compact JSON |
 | `json.marshalPretty(val)` | Serialize to pretty JSON |
 | `json.unmarshal(str)` | Parse JSON string |

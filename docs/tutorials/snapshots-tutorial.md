@@ -47,41 +47,41 @@ Snapshots are **flag-triggered** (`--snapshot`), never automatically created. He
 
 Snapshots are created with `scafctl render solution`:
 
-{{< tabs "snapshots-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Render and save snapshot
 scafctl render solution -f my-solution.yaml \
   --snapshot --snapshot-file=snapshot.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 # Render and save snapshot
 scafctl render solution -f my-solution.yaml `
   --snapshot --snapshot-file=snapshot.json
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### From `run resolver`
 
 You can also capture snapshots when running resolvers only (without actions):
 
-{{< tabs "snapshots-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run resolver -f my-solution.yaml \
   --snapshot --snapshot-file=snapshot.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl run resolver -f my-solution.yaml `
   --snapshot --snapshot-file=snapshot.json
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 This is useful when you want to inspect resolver execution without triggering actions.
 
@@ -89,73 +89,55 @@ This is useful when you want to inspect resolver execution without triggering ac
 
 Or capture a snapshot as part of a render:
 
-{{< tabs "snapshots-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl render solution -f my-solution.yaml --snapshot --snapshot-file snapshot.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl render solution -f my-solution.yaml --snapshot --snapshot-file snapshot.json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### With Parameters
 
-{{< tabs "snapshots-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl render solution -f my-solution.yaml \
   -r env=production \
   --snapshot --snapshot-file=prod-snapshot.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl render solution -f my-solution.yaml `
   -r env=production `
   --snapshot --snapshot-file=prod-snapshot.json
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### With Redaction
 
 Redact sensitive values (resolvers marked `sensitive: true`):
 
-{{< tabs "snapshots-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl render solution -f my-solution.yaml \
   --snapshot --snapshot-file=safe-snapshot.json --redact
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl render solution -f my-solution.yaml `
   --snapshot --snapshot-file=safe-snapshot.json --redact
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ## Viewing Snapshots
 
 ### Summary View (Default)
 
-{{< tabs "snapshots-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get snapshot snapshot.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get snapshot snapshot.json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 ```
@@ -178,52 +160,25 @@ Parameters:
 
 ### Resolver Details
 
-{{< tabs "snapshots-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get snapshot snapshot.json --detail
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get snapshot snapshot.json --detail
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Shows each resolver's name, status, value, duration, and provider calls.
 
 ### JSON Output
 
-{{< tabs "snapshots-tutorial-cmd-8" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get snapshot snapshot.json -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get snapshot snapshot.json -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Full snapshot data for programmatic processing.
 
 ### Verbose Mode
 
-{{< tabs "snapshots-tutorial-cmd-9" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get snapshot snapshot.json --verbose
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get snapshot snapshot.json --verbose
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Includes additional details like individual provider call timing.
 
@@ -231,18 +186,9 @@ Includes additional details like individual provider call timing.
 
 ### Basic Diff
 
-{{< tabs "snapshots-tutorial-cmd-10" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl diff snapshot before.json after.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl diff snapshot before.json after.json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 ```
@@ -266,41 +212,30 @@ Added Resolvers:
 
 Filter out non-deterministic fields:
 
-{{< tabs "snapshots-tutorial-cmd-11" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl diff snapshot before.json after.json \
   --ignore-fields duration,providerCalls
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl diff snapshot before.json after.json `
   --ignore-fields duration,providerCalls
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Show Only Changes
 
-{{< tabs "snapshots-tutorial-cmd-12" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl diff snapshot before.json after.json --ignore-unchanged
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl diff snapshot before.json after.json --ignore-unchanged
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Output Formats
 
-{{< tabs "snapshots-tutorial-cmd-13" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Human-readable (default)
 scafctl diff snapshot before.json after.json
 
@@ -310,28 +245,12 @@ scafctl diff snapshot before.json after.json -o json
 # Save diff to file with shell redirection
 scafctl diff snapshot before.json after.json -o json > diff-report.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Human-readable (default)
-scafctl diff snapshot before.json after.json
-
-# JSON for CI pipelines
-scafctl diff snapshot before.json after.json -o json
-
-# Save diff to file with shell redirection
-scafctl diff snapshot before.json after.json -o json > diff-report.json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## Common Workflows
 
 ### Debugging a Failure
 
-{{< tabs "snapshots-tutorial-cmd-14" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # 1. Capture the failing state
 scafctl render solution -f broken-solution.yaml --snapshot --snapshot-file failing.json
 
@@ -344,28 +263,11 @@ scafctl render solution -f fixed-solution.yaml --snapshot --snapshot-file fixed.
 # 4. Verify the fix
 scafctl diff snapshot failing.json fixed.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# 1. Capture the failing state
-scafctl render solution -f broken-solution.yaml --snapshot --snapshot-file failing.json
-
-# 2. Inspect what went wrong
-scafctl get snapshot failing.json --detail --verbose
-
-# 3. Fix the issue and re-capture
-scafctl render solution -f fixed-solution.yaml --snapshot --snapshot-file fixed.json
-
-# 4. Verify the fix
-scafctl diff snapshot failing.json fixed.json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Regression Testing
 
-{{< tabs "snapshots-tutorial-cmd-15" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # 1. Capture baseline
 scafctl render solution -f solution.yaml --snapshot --snapshot-file baseline.json
@@ -387,9 +289,9 @@ if ! scafctl diff snapshot baseline.json current.json \
   exit 1
 fi
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 # 1. Capture baseline
 scafctl render solution -f solution.yaml --snapshot --snapshot-file baseline.json
 
@@ -410,14 +312,14 @@ if ($LASTEXITCODE -ne 0) {
   Write-Output "Snapshot regression detected!"
   exit 1
 }
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Environment Comparison
 
-{{< tabs "snapshots-tutorial-cmd-16" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Capture staging
 scafctl render solution -f solution.yaml -r env=staging \
@@ -430,9 +332,9 @@ scafctl render solution -f solution.yaml -r env=production \
 # Compare configurations
 scafctl diff snapshot staging.json production.json --ignore-unchanged
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 # Capture staging
 scafctl render solution -f solution.yaml -r env=staging `
   --snapshot --snapshot-file=staging.json
@@ -443,26 +345,16 @@ scafctl render solution -f solution.yaml -r env=production `
 
 # Compare configurations
 scafctl diff snapshot staging.json production.json --ignore-unchanged
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Safe Sharing
 
-{{< tabs "snapshots-tutorial-cmd-17" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Redact secrets before sharing
 scafctl render solution -f solution.yaml --snapshot --snapshot-file shareable.json --redact
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Redact secrets before sharing
-scafctl render solution -f solution.yaml --snapshot --snapshot-file shareable.json --redact
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## Examples
 

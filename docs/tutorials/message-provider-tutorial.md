@@ -53,7 +53,7 @@ spec:
 
 ### Step 2: Run It
 
-```bash
+```shell
 scafctl run resolver -f ./message-basics.yaml
 ```
 
@@ -103,7 +103,7 @@ spec:
 
 Run it:
 
-```bash
+```shell
 scafctl run resolver -f ./message-types.yaml
 ```
 
@@ -289,7 +289,7 @@ Output: `✅ Processed 5 items successfully`
 
 The message provider respects the `--quiet` flag. When `--quiet` is passed, all messages are suppressed from terminal output. The rendered message text is still available in the resolver output data, so downstream resolvers can use it.
 
-```bash
+```shell
 # Messages are displayed normally
 scafctl run resolver -f ./message-basics.yaml
 
@@ -366,7 +366,7 @@ The message provider returns its rendered text in the output, making it accessib
 
 With `--dry-run`, the message provider does not write to the terminal. Instead, it returns a description of what would happen:
 
-```bash
+```shell
 scafctl run resolver -f ./solution.yaml --dry-run -o json
 ```
 
@@ -384,7 +384,7 @@ See [examples/solutions/message-demo/solution.yaml](../../examples/solutions/mes
 
 ## CLI Reference
 
-```bash
+```shell
 # Run message provider directly
 scafctl run provider message --input message="Hello" --input type=success
 

@@ -48,9 +48,7 @@ Profiles solve this by namespacing credentials under a profile name. Each profil
 
 Use the `--profile` flag to authenticate under a named profile:
 
-{{< tabs "profiles-login" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Login to GitHub with a "work" profile
 scafctl auth login github --profile work
 
@@ -63,23 +61,6 @@ scafctl auth login entra --profile staging --tenant-id <staging-tenant-guid>
 # Login to GCP with a "deploy" profile
 scafctl auth login gcp --profile deploy --scope https://www.googleapis.com/auth/cloud-platform
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Login to GitHub with a "work" profile
-scafctl auth login github --profile work
-
-# Login to GitHub with a "personal" profile (different scopes)
-scafctl auth login github --profile personal --scope repo --scope read:org
-
-# Login to Entra with a "staging" profile targeting a specific tenant
-scafctl auth login entra --profile staging --tenant-id <staging-tenant-guid>
-
-# Login to GCP with a "deploy" profile
-scafctl auth login gcp --profile deploy --scope https://www.googleapis.com/auth/cloud-platform
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Profile names must be ASCII alphanumeric, hyphens, or underscores, and must start with an alphanumeric character. Named profiles are canonicalized to lowercase (`--profile myWork` and `--profile mywork` resolve to the same `mywork` profile across `config.yaml`, plugin RPCs, and credential storage). Examples: `work`, `personal`, `staging-eu`, `ci_deploy`.
 
@@ -93,26 +74,13 @@ Profile names must be ASCII alphanumeric, hyphens, or underscores, and must star
 
 Check the authentication status for a specific profile:
 
-{{< tabs "profiles-status" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Check status for the "work" profile
 scafctl auth status github --profile work
 
 # Check status for the active profile (or built-in if none configured)
 scafctl auth status github
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Check status for the "work" profile
-scafctl auth status github --profile work
-
-# Check status for the active profile (or built-in if none configured)
-scafctl auth status github
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -120,9 +88,7 @@ scafctl auth status github
 
 The active profile is used by default when no explicit profile is specified. Use `auth switch` to change it:
 
-{{< tabs "profiles-switch" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # List configured profiles for a handler (shows * next to active)
 scafctl auth switch github
 
@@ -132,20 +98,6 @@ scafctl auth switch github work
 # Reset to the built-in (unnamed) profile
 scafctl auth switch github built-in
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# List configured profiles for a handler (shows * next to active)
-scafctl auth switch github
-
-# Set "work" as the active profile for GitHub
-scafctl auth switch github work
-
-# Reset to the built-in (unnamed) profile
-scafctl auth switch github built-in
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The active profile is persisted in your config file (`~/.config/scafctl/config.yaml`).
 
@@ -155,8 +107,8 @@ The active profile is persisted in your config file (`~/.config/scafctl/config.y
 
 Retrieve an access token for a specific profile:
 
-{{< tabs "profiles-token" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Get a token for the "work" profile
 scafctl auth token github --profile work
@@ -168,8 +120,8 @@ scafctl auth token github
 export GITHUB_TOKEN=$(scafctl auth token github --profile work)
 curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Get a token for the "work" profile
 scafctl auth token github --profile work
@@ -181,8 +133,8 @@ scafctl auth token github
 $env:GITHUB_TOKEN = scafctl auth token github --profile work
 Invoke-RestMethod -Uri "https://api.github.com/user" -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ---
 
@@ -227,26 +179,13 @@ When a solution uses `authProvider: github@work`, scafctl authenticates that spe
 
 The `--auth-profile` flag overrides the active profile for all auth operations in a single command:
 
-{{< tabs "profiles-global" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Run a solution using the "work" profile for all auth
 scafctl run solution -f ./my-solution.yaml --auth-profile work
 
 # Check status across all handlers using the "staging" profile
 scafctl --auth-profile staging auth status entra
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Run a solution using the "work" profile for all auth
-scafctl run solution -f ./my-solution.yaml --auth-profile work
-
-# Check status across all handlers using the "staging" profile
-scafctl --auth-profile staging auth status entra
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 > **Note:** The `handler@profile` syntax in solution YAML takes precedence over `--auth-profile`. This lets solutions pin specific operations to specific profiles while allowing a general override.
 
@@ -256,8 +195,8 @@ scafctl --auth-profile staging auth status entra
 
 Set `SCAFCTL_AUTH_PROFILE` to apply a profile across multiple commands without repeating the flag:
 
-{{< tabs "profiles-env" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Set for the current shell session
 export SCAFCTL_AUTH_PROFILE=work
@@ -269,8 +208,8 @@ scafctl run solution -f ./my-solution.yaml  # uses "work" for all auth
 # Override per-command with the flag
 scafctl --auth-profile personal auth token github  # uses "personal" despite env var
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Set for the current shell session
 $env:SCAFCTL_AUTH_PROFILE = "work"
@@ -282,8 +221,8 @@ scafctl run solution -f ./my-solution.yaml  # uses "work" for all auth
 # Override per-command with the flag
 scafctl --auth-profile personal auth token github  # uses "personal" despite env var
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ---
 
@@ -361,26 +300,13 @@ When `activeProfile` is set in `config.yaml`, pass `--profile default` (or `--pr
 
 Remove credentials for a specific profile:
 
-{{< tabs "profiles-logout" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Logout from the "work" profile
 scafctl auth logout github --profile work
 
 # Logout from the default (unnamed) profile
 scafctl auth logout github
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Logout from the "work" profile
-scafctl auth logout github --profile work
-
-# Logout from the default (unnamed) profile
-scafctl auth logout github
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -392,8 +318,8 @@ Each profile can use a different authentication flow. This lets you mix interact
 
 Use device code for your personal account and a PAT for CI/automation:
 
-{{< tabs "profiles-flows-github" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Personal: interactive device code flow (opens browser)
 scafctl auth login github
@@ -407,8 +333,8 @@ GITHUB_TOKEN=$GITHUB_TOKEN scafctl auth login github --profile ci --flow pat
 # Check both profiles -- note the different flows
 scafctl auth status github
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Personal: interactive device code flow (opens browser)
 scafctl auth login github
@@ -424,8 +350,8 @@ scafctl auth login github --profile ci --flow pat
 # Check both profiles -- note the different flows
 scafctl auth status github
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 Example output:
 
@@ -441,8 +367,8 @@ Example output:
 
 Use interactive login for development and a service principal for CI pipelines:
 
-{{< tabs "profiles-flows-entra" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Dev: interactive browser login
 scafctl auth login entra --profile dev
@@ -452,9 +378,9 @@ AZURE_CLIENT_ID=<app-id> AZURE_CLIENT_SECRET=<secret> \
   scafctl auth login entra --profile ci --flow service-principal \
   --tenant-id <tenant-guid>
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 # Dev: interactive browser login
 scafctl auth login entra --profile dev
 
@@ -463,16 +389,16 @@ $env:AZURE_CLIENT_ID = "<app-id>"
 $env:AZURE_CLIENT_SECRET = "<secret>"
 scafctl auth login entra --profile ci --flow service-principal `
   --tenant-id <tenant-guid>
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### GCP: Interactive + Service Account
 
 Use gcloud ADC for development and a service account for deployment:
 
-{{< tabs "profiles-flows-gcp" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Dev: use existing gcloud credentials
 scafctl auth login gcp --flow gcloud-adc
@@ -481,8 +407,8 @@ scafctl auth login gcp --flow gcloud-adc
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa-key.json \
   scafctl auth login gcp --profile deploy --flow service-principal
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Dev: use existing gcloud credentials
 scafctl auth login gcp --flow gcloud-adc
@@ -491,8 +417,8 @@ scafctl auth login gcp --flow gcloud-adc
 $env:GOOGLE_APPLICATION_CREDENTIALS = "C:\path\to\sa-key.json"
 scafctl auth login gcp --profile deploy --flow service-principal
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Using Flow-Specific Profiles in Solutions
 
@@ -536,8 +462,8 @@ spec:
 
 Here's a typical workflow for a developer with separate work and personal GitHub accounts:
 
-{{< tabs "profiles-workflow" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # 1. Login with different flows per profile
 scafctl auth login github                                    # built-in: device code
@@ -559,8 +485,8 @@ scafctl --auth-profile built-in run solution -f ./personal-backup.yaml
 # 6. Solutions can pin specific operations
 # In YAML: authProvider: github@work -> always uses "work" PAT regardless of active profile
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # 1. Login with different flows per profile
 scafctl auth login github                                    # built-in: device code
@@ -583,5 +509,5 @@ scafctl --auth-profile built-in run solution -f ./personal-backup.yaml
 # 6. Solutions can pin specific operations
 # In YAML: authProvider: github@work -> always uses "work" PAT regardless of active profile
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}

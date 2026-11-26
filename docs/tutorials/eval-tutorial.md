@@ -31,58 +31,38 @@ These commands are especially useful when writing or debugging resolver expressi
 
 Evaluate a simple expression:
 
-{{< tabs "eval-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl eval cel --expression "1 + 2"
 # 3
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl eval cel --expression "1 + 2"
-# 3
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 String operations:
 
-{{< tabs "eval-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl eval cel --expression '"hello".upperAscii()'
 # HELLO
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl eval cel --expression '"hello".upperAscii()'
-# HELLO
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Using Inline Data
 
 Pass JSON data to the expression via `--data`:
 
-{{< tabs "eval-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl eval cel --expression '_.name + " is " + string(_.age)' \
   --data '{"name": "Alice", "age": 30}'
 # Alice is 30
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl eval cel --expression '_.name + " is " + string(_.age)' `
   --data '{"name": "Alice", "age": 30}'
 # Alice is 30
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 The data is available under `_`, just like in solution resolvers.
 
@@ -90,8 +70,8 @@ The data is available under `_`, just like in solution resolvers.
 
 For larger datasets, use `-f` / `--file`:
 
-{{< tabs "eval-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Create a data file
 cat > data.json << 'EOF'
@@ -108,8 +88,8 @@ EOF
 scafctl eval cel --expression '_.items.filter(i, i.active).map(i, i.name)' --file data.json
 # [item-a item-c]
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Create a data file
 @'
@@ -126,41 +106,26 @@ scafctl eval cel --expression '_.items.filter(i, i.active).map(i, i.name)' --fil
 scafctl eval cel --expression '_.items.filter(i, i.active).map(i, i.name)' --file data.json
 # [item-a item-c]
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Output Formats
 
 Use `-o` to control output format:
 
-{{< tabs "eval-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # JSON output
 scafctl eval cel --expression '{"greeting": "hello", "count": 42}' -o json
 
 # YAML output
 scafctl eval cel --expression '{"greeting": "hello", "count": 42}' -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# JSON output
-scafctl eval cel --expression '{"greeting": "hello", "count": 42}' -o json
-
-# YAML output
-scafctl eval cel --expression '{"greeting": "hello", "count": 42}' -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Built-in Functions
 
 Test scafctl's custom CEL extension functions:
 
-{{< tabs "eval-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # String functions
 scafctl eval cel --expression '"hello".upperAscii()'
 # HELLO
@@ -171,21 +136,6 @@ scafctl eval cel --expression '"HELLO".lowerAscii()'
 scafctl eval cel --expression '"hello-world".replace("-", " ")'
 # hello world
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# String functions
-scafctl eval cel --expression '"hello".upperAscii()'
-# HELLO
-
-scafctl eval cel --expression '"HELLO".lowerAscii()'
-# hello
-
-scafctl eval cel --expression '"hello-world".replace("-", " ")'
-# hello world
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 > [!NOTE]
 > **Tip:** Use `eval cel` to prototype resolver expressions before adding them to a solution. This is much faster than running the entire solution each time.
@@ -196,29 +146,29 @@ scafctl eval cel --expression '"hello-world".replace("-", " ")'
 
 Render a template with inline data:
 
-{{< tabs "eval-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl eval template --template '{{.name}} has {{.count}} items' \
   --data '{"name": "project", "count": 5}'
 # project has 5 items
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl eval template --template '{{.name}} has {{.count}} items' `
   --data '{"name": "project", "count": 5}'
 # project has 5 items
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Template Files
 
 For multi-line templates, use `--template-file`:
 
-{{< tabs "eval-tutorial-cmd-8" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 cat > greeting.tmpl << 'EOF'
 Hello, {{.name}}!
@@ -230,9 +180,9 @@ EOF
 scafctl eval template --template-file greeting.tmpl \
   --data '{"name": "Alice", "items": ["task-1", "task-2", "task-3"]}'
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 @'
 Hello, {{.name}}!
 You have {{len .items}} items:
@@ -242,47 +192,38 @@ You have {{len .items}} items:
 
 scafctl eval template --template-file greeting.tmpl `
   --data '{"name": "Alice", "items": ["task-1", "task-2", "task-3"]}'
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Data Files
 
 Combine template files with data files:
 
-{{< tabs "eval-tutorial-cmd-9" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl eval template --template-file config.tmpl --file values.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl eval template --template-file config.tmpl --file values.json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Writing Output to File
 
 Save rendered output to a file:
 
-{{< tabs "eval-tutorial-cmd-10" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl eval template --template-file config.tmpl \
   --file values.json \
   -o json > generated-config.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl eval template --template-file config.tmpl `
   --file values.json `
   -o json > generated-config.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 > [!NOTE]
 > **Tip:** Use `eval template` to preview scaffold/render actions before running the full solution workflow.
@@ -298,59 +239,31 @@ While `eval cel` and `eval template` test individual expressions and templates, 
 
 Check a solution file for schema errors and lint violations:
 
-{{< tabs "eval-lint-basic" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl lint -f solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl lint -f solution.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Get structured validation results:
 
-{{< tabs "eval-lint-json" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl lint -f solution.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl lint -f solution.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Filter by Severity
 
 Only show findings at or above a minimum severity level:
 
-{{< tabs "eval-tutorial-cmd-11" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Show only warnings and errors (skip info)
 scafctl lint -f solution.yaml --severity warning
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Show only warnings and errors (skip info)
-scafctl lint -f solution.yaml --severity warning
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Quick Validation in Scripts
 
 Use quiet mode for CI/CD pipelines — returns exit code only (0 = clean, non-zero = errors):
 
-{{< tabs "eval-lint-quiet" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 if scafctl lint -f solution.yaml -o quiet; then
   echo "Valid!"
@@ -359,46 +272,28 @@ else
   exit 1
 fi
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 scafctl lint -f solution.yaml -o quiet
 if ($LASTEXITCODE -eq 0) { Write-Host "Valid!" } else { Write-Host "Validation failed"; exit 1 }
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Exploring Lint Rules
 
 List all available lint rules:
 
-{{< tabs "eval-tutorial-cmd-12" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl lint rules
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl lint rules
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Get a detailed explanation of a specific rule:
 
-{{< tabs "eval-tutorial-cmd-13" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl lint rule <rule-id>
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl lint rule <rule-id>
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 See the [Linting Tutorial](linting-tutorial.md) for a deep dive into lint rules and custom validation workflows.
 
@@ -408,8 +303,8 @@ See the [Linting Tutorial](linting-tutorial.md) for a deep dive into lint rules 
 
 When building a new resolver, iterate quickly with `eval cel`:
 
-{{< tabs "eval-tutorial-cmd-14" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # 1. Start with simple expression
 scafctl eval cel --expression '"Hello, " + _.name' --data '{"name": "World"}'
@@ -420,9 +315,9 @@ scafctl eval cel --expression '_.items.filter(i, i.enabled).map(i, i.name).join(
 
 # 3. Once working, copy to solution YAML
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 # 1. Start with simple expression
 scafctl eval cel --expression '"Hello, " + _.name' --data '{"name": "World"}'
 
@@ -431,52 +326,39 @@ scafctl eval cel --expression '_.items.filter(i, i.enabled).map(i, i.name).join(
   --file real-data.json
 
 # 3. Once working, copy to solution YAML
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Testing Template Rendering
 
 Preview template output before integrating into actions:
 
-{{< tabs "eval-tutorial-cmd-15" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Test with known data
 scafctl eval template --template-file deploy.tmpl --data '{"env": "staging", "replicas": 3}'
 
 # Test with real resolver output (from a snapshot)
 scafctl eval template --template-file deploy.tmpl --file snapshot.json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Test with known data
-scafctl eval template --template-file deploy.tmpl --data '{"env": "staging", "replicas": 3}'
-
-# Test with real resolver output (from a snapshot)
-scafctl eval template --template-file deploy.tmpl --file snapshot.json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Pre-commit Validation
 
 Add to your pre-commit hooks or CI pipeline:
 
-{{< tabs "eval-precommit" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Validate all solution files in a directory
 find . -name 'solution.yaml' -exec scafctl lint -f {} -o quiet \;
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 Get-ChildItem -Recurse -Filter 'solution.yaml' | ForEach-Object { scafctl lint -f $_.FullName -o quiet }
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ## Next Steps
 

@@ -1024,8 +1024,8 @@ The fastest way to scaffold a complete plugin project is with the **plugin-templ
 
 #### Option A: Scaffold with GitHub Repository
 
-{{< tabs "provider-development-cmd-0a" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run solution \
   ghcr.io/oakwood-commons/solutions/plugin-template:1.0.0 \
@@ -1036,9 +1036,9 @@ scafctl run solution \
   -r create_repo=true \
   -r repo_visibility=private
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl run solution `
   ghcr.io/oakwood-commons/solutions/plugin-template:1.0.0 `
   -r name=scafctl-plugin-echo `
@@ -1047,9 +1047,9 @@ scafctl run solution `
   -r capabilities=from `
   -r create_repo=true `
   -r repo_visibility=private
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 This creates the GitHub repository, pushes a GPG-signed initial commit with all scaffolded files, configures branch/tag rulesets, and enables Dependabot.
 
@@ -1058,8 +1058,8 @@ This creates the GitHub repository, pushes a GPG-signed initial commit with all 
 
 #### Option B: Scaffold Locally
 
-{{< tabs "provider-development-cmd-0b" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run solution \
   ghcr.io/oakwood-commons/solutions/plugin-template:1.0.0 \
@@ -1068,18 +1068,18 @@ scafctl run solution \
   -r "description=Echoes input values" \
   -r capabilities=from
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl run solution `
   ghcr.io/oakwood-commons/solutions/plugin-template:1.0.0 `
   -r name=scafctl-plugin-echo `
   -r module=github.com/myorg/scafctl-plugin-echo `
   -r "description=Echoes input values" `
   -r capabilities=from
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 This writes the project files to `scafctl-plugin-echo/` in the current directory.
 
@@ -1087,22 +1087,22 @@ This writes the project files to `scafctl-plugin-echo/` in the current directory
 
 If you prefer to set up the project manually:
 
-{{< tabs "provider-development-cmd-1" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 mkdir my-plugin && cd my-plugin
 go mod init github.com/myorg/my-plugin
 go get github.com/oakwood-commons/scafctl-plugin-sdk
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 mkdir my-plugin; cd my-plugin
 go mod init github.com/myorg/my-plugin
 go get github.com/oakwood-commons/scafctl-plugin-sdk
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 #### 2. Implement the Plugin
 
@@ -1212,8 +1212,8 @@ func main() {
 
 #### 3. Build and Install
 
-{{< tabs "provider-development-cmd-2" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Build
 go build -o scafctl-plugin-mine .
@@ -1222,8 +1222,8 @@ go build -o scafctl-plugin-mine .
 mkdir -p "$(scafctl paths cache)/plugins"
 cp scafctl-plugin-mine "$(scafctl paths cache)/plugins/"
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Build
 go build -o scafctl-plugin-mine .
@@ -1233,8 +1233,8 @@ $pluginDir = "$(scafctl paths cache)/plugins"
 New-Item -ItemType Directory -Force -Path $pluginDir
 Copy-Item scafctl-plugin-mine $pluginDir
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 #### 4. Use in Solutions
 
@@ -1258,18 +1258,9 @@ spec:
 
 **Via Local Installation**:
 
-{{< tabs "provider-development-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f my-solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f my-solution.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Multi-Provider Plugin
 
@@ -1374,9 +1365,7 @@ See the [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) for full 
 
 ### Plugin CLI Commands
 
-{{< tabs "provider-development-cmd-4" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Pre-fetch plugins declared in a solution
 scafctl plugins install -f my-solution.yaml
 
@@ -1386,43 +1375,16 @@ scafctl plugins list
 # Push to a remote registry
 scafctl catalog push provider my-plugin@1.0.0 --catalog ghcr.io/myorg
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Pre-fetch plugins declared in a solution
-scafctl plugins install -f my-solution.yaml
-
-# List cached plugin binaries
-scafctl plugins list
-
-# Push to a remote registry
-scafctl catalog push provider my-plugin@1.0.0 --catalog ghcr.io/myorg
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Plugin Debugging
 
-{{< tabs "provider-development-cmd-5" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Enable debug logging
 scafctl --log-level -1 run solution -f solution.yaml
 
 # Run plugin directly (waits for gRPC connection)
 ./my-plugin
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Enable debug logging
-scafctl --log-level -1 run solution -f solution.yaml
-
-# Run plugin directly (waits for gRPC connection)
-./my-plugin
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 | Issue | Cause | Solution |
 |-------|-------|----------|

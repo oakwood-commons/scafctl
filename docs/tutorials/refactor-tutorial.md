@@ -96,7 +96,7 @@ Would rename resolver "environment" to "env" (5 occurrence(s)):
 
 Drop `--dry-run` to write the change in place:
 
-```bash
+```shell
 scafctl refactor rename resolver environment env -f examples/refactor/solution.yaml
 ```
 
@@ -173,7 +173,7 @@ applies identically to actions.
 definition key. Calls are only referenced structurally through the `call:`
 field, never from CEL or templates, so this is the simplest rename.
 
-```bash
+```shell
 scafctl refactor rename call fetch download --dry-run
 scafctl refactor rename call fetch download
 ```
@@ -189,7 +189,7 @@ name is not touched. See `examples/refactor/call-function-solution.yaml`, where
 templates -- including invocations inside **other function bodies** -- plus the
 definition key.
 
-```bash
+```shell
 scafctl refactor rename function greet salute --dry-run
 scafctl refactor rename function greet salute
 ```

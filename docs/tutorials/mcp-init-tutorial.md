@@ -16,7 +16,7 @@ Pairing both artifacts solves two setup problems at once:
 
 Run `scafctl mcp init` in the root of your repository:
 
-~~~bash
+~~~shell
 scafctl mcp init
 ~~~
 
@@ -38,7 +38,7 @@ Re-running `scafctl mcp init` is safe and idempotent: files whose desired MCP en
 
 ### Configure Specific Harnesses or All Harnesses
 
-~~~bash
+~~~shell
 # Configure VS Code Copilot and Claude Code in the current repository
 scafctl mcp init --target vscode --target claude
 
@@ -50,13 +50,13 @@ scafctl mcp init --target all
 
 Install the MCP server and authoring skill once in your user profile so they are available across every workspace:
 
-~~~bash
+~~~shell
 scafctl mcp init --target cursor --scope user
 ~~~
 
 ### Preview Changes and Create Backups (`--dry-run`, `--backup`)
 
-~~~bash
+~~~shell
 # Preview which files would be created or updated without touching disk
 scafctl mcp init --dry-run
 
@@ -71,7 +71,7 @@ scafctl mcp init --dry-run -o json
 
 If you want to register `scafctl mcp serve` without installing `SKILL.md`:
 
-~~~bash
+~~~shell
 scafctl mcp init --target vscode --no-skill
 ~~~
 
@@ -79,7 +79,7 @@ scafctl mcp init --target vscode --no-skill
 
 For editors outside the built-in target list (such as Windsurf, Zed, Cline, or Claude Desktop), use `--print` to emit the standard `mcpServers` stdio JSON block and `SKILL.md` to stdout, and `--skill-dir` to install `SKILL.md` into any custom Agent Skills directory:
 
-~~~bash
+~~~shell
 # Print standard MCP JSON config + SKILL.md to stdout
 scafctl mcp init --print
 

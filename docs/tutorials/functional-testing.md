@@ -46,33 +46,15 @@ spec:
 
 Run the test:
 
-{{< tabs "functional-testing-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f solution.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 If your solution file is named `solution.yaml` (or any other well-known name like `scafctl.yaml`) in the current directory or `scafctl/`/`.scafctl/` subdirectories, you can omit `-f` entirely:
 
-{{< tabs "functional-testing-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Expected output:
 
@@ -95,22 +77,11 @@ catalog reference, registry reference, or URL instead of a file path.
 `test functional`, `test list`, and `test init` fetch the solution and its
 bundled files into a temporary directory, then remove it when they finish:
 
-{{< tabs "functional-testing-cmd-catalog" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional my-solution@1.0.0
 scafctl test list my-solution@1.0.0
 scafctl test init my-solution@1.0.0
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional my-solution@1.0.0
-scafctl test list my-solution@1.0.0
-scafctl test init my-solution@1.0.0
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Each test specifies a `command` (the scafctl subcommand to run) and one or more
 `assertions` to validate the output. The runner automatically injects
@@ -360,9 +331,7 @@ cases:
 
 Create or update snapshots:
 
-{{< tabs "functional-testing-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Update all snapshots
 scafctl test functional -f solution.yaml --update-snapshots
 
@@ -372,20 +341,6 @@ scafctl test functional -f solution.yaml --update-snapshots --filter "snapshot-*
 # Run normally (compares against existing snapshots)
 scafctl test functional -f solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Update all snapshots
-scafctl test functional -f solution.yaml --update-snapshots
-
-# Update specific snapshots
-scafctl test functional -f solution.yaml --update-snapshots --filter "snapshot-*"
-
-# Run normally (compares against existing snapshots)
-scafctl test functional -f solution.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Snapshots are automatically normalized:
 - JSON map keys are sorted deterministically
@@ -694,33 +649,15 @@ cases:
 
 Default per-test timeout is `30s`. Override globally with `--test-timeout`:
 
-{{< tabs "functional-testing-cmd-4" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f solution.yaml --test-timeout 1m
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f solution.yaml --test-timeout 1m
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Set a global timeout for the entire run with `--timeout`:
 
-{{< tabs "functional-testing-cmd-5" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f solution.yaml --timeout 10m
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f solution.yaml --timeout 10m
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -821,26 +758,13 @@ cases:
 
 Filter by tags:
 
-{{< tabs "functional-testing-cmd-6" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Run only "smoke" tests
 scafctl test functional -f solution.yaml --tag smoke
 
 # Combine with name filter
 scafctl test functional -f solution.yaml --tag render --filter "render-*"
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Run only "smoke" tests
-scafctl test functional -f solution.yaml --tag smoke
-
-# Combine with name filter
-scafctl test functional -f solution.yaml --tag render --filter "render-*"
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 A test matches if it has **any** of the specified tags (OR logic). Tags inherited via
 `extends` are included in the match.
@@ -1091,18 +1015,9 @@ When `testing.config` appears in multiple compose files:
 
 Generate JUnit XML reports for CI systems:
 
-{{< tabs "functional-testing-cmd-7" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f solution.yaml --report-file results.xml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f solution.yaml --report-file results.xml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 JUnit output uses `<failure>` for assertion failures and `<error>` for infrastructure/setup
 issues (e.g., init step failures), making it easy to distinguish test bugs from environment
@@ -1120,18 +1035,9 @@ problems.
 
 Stop on the first failure per solution:
 
-{{< tabs "functional-testing-cmd-8" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f solution.yaml --fail-fast
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f solution.yaml --fail-fast
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Other solutions continue to run. Use this for quick feedback during debugging.
 
@@ -1139,18 +1045,9 @@ Other solutions continue to run. Use this for quick feedback during debugging.
 
 For CI pipelines, use quiet format for exit-code-only behavior:
 
-{{< tabs "functional-testing-cmd-9" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f solution.yaml -o quiet
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f solution.yaml -o quiet
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -1158,9 +1055,7 @@ scafctl test functional -f solution.yaml -o quiet
 
 List available tests without running them:
 
-{{< tabs "functional-testing-cmd-10" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test list -f solution.yaml
 
 # Include builtin tests
@@ -1169,19 +1064,6 @@ scafctl test list -f solution.yaml --include-builtins
 # List from a directory
 scafctl test list --tests-path ./solutions/
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test list -f solution.yaml
-
-# Include builtin tests
-scafctl test list -f solution.yaml --include-builtins
-
-# List from a directory
-scafctl test list --tests-path ./solutions/
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Example output:
 
@@ -1199,8 +1081,8 @@ my-solution          temporarily-disabled    render solution                 Wai
 
 Run specific tests, solutions, or tags:
 
-{{< tabs "functional-testing-cmd-11" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Filter by test name glob
 scafctl test functional -f solution.yaml --filter "render-*"
@@ -1218,9 +1100,9 @@ scafctl test functional --tests-path ./solutions/ --filter "terraform-*/render-*
 scafctl test functional --tests-path ./solutions/ \
   --solution "terraform-*" --tag smoke --filter "render-*"
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 # Filter by test name glob
 scafctl test functional -f solution.yaml --filter "render-*"
 
@@ -1236,9 +1118,9 @@ scafctl test functional --tests-path ./solutions/ --filter "terraform-*/render-*
 # Combine all filters (ANDed: must match all)
 scafctl test functional --tests-path ./solutions/ `
   --solution "terraform-*" --tag smoke --filter "render-*"
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 When `--tag`, `--filter`, and `--solution` are combined, they are **ANDed**: a test must
 match the solution filter AND the name filter AND have a matching tag.
@@ -1249,26 +1131,13 @@ match the solution filter AND the name filter AND have a matching tag.
 
 Tests run sequentially by default. Use `-j` to run tests in parallel:
 
-{{< tabs "functional-testing-cmd-12" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Run up to 4 tests concurrently
 scafctl test functional -f solution.yaml -j 4
 
 # Force sequential execution (equivalent to -j 1)
 scafctl test functional -f solution.yaml --sequential
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Run up to 4 tests concurrently
-scafctl test functional -f solution.yaml -j 4
-
-# Force sequential execution (equivalent to -j 1)
-scafctl test functional -f solution.yaml --sequential
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Each test gets its own isolated sandbox — no shared mutable state between concurrent tests.
 
@@ -1278,18 +1147,9 @@ Each test gets its own isolated sandbox — no shared mutable state between conc
 
 Use `-v` to see command details, init output, and assertion counts:
 
-{{< tabs "functional-testing-cmd-13" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f solution.yaml -v
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f solution.yaml -v
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Verbose output for passing tests shows assertion counts:
 
@@ -1309,35 +1169,17 @@ Verbose failure output includes the full command, sandbox path, stdout, stderr, 
 
 Preserve sandbox directories for failed tests to inspect files manually:
 
-{{< tabs "functional-testing-cmd-14" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f solution.yaml --keep-sandbox
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f solution.yaml --keep-sandbox
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Dry Run
 
 Validate test definitions without executing any commands:
 
-{{< tabs "functional-testing-cmd-15" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f solution.yaml --dry-run
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f solution.yaml --dry-run
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 This resolves `extends` chains, validates test names, and reports discovery results.
 Exits 0 if valid, exit code 3 if invalid.
@@ -1346,26 +1188,13 @@ Exits 0 if valid, exit code 3 if invalid.
 
 Use `--cwd` (`-C`) to run tests against solutions in a different directory:
 
-{{< tabs "functional-testing-cmd-16" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Run tests from a project in another directory
 scafctl --cwd /path/to/project test functional -f solution.yaml
 
 # Short form
 scafctl -C /path/to/project test functional
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Run tests from a project in another directory
-scafctl --cwd /path/to/project test functional -f solution.yaml
-
-# Short form
-scafctl -C /path/to/project test functional
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The sandbox copies files relative to the working directory, so test `files` entries resolve correctly against `--cwd`.
 
@@ -1383,18 +1212,9 @@ By default, three builtin tests run for every solution:
 
 Builtins run before user-defined tests. Skip all builtins:
 
-{{< tabs "functional-testing-cmd-17" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f solution.yaml --skip-builtins
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f solution.yaml --skip-builtins
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Or skip specific ones in your solution's `testing.config`:
 
@@ -1424,9 +1244,7 @@ Invalid names are rejected during parsing and surfaced as lint errors.
 
 The CLI provides shorthand aliases:
 
-{{< tabs "functional-testing-cmd-18" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # These are all equivalent:
 scafctl test -f solution.yaml
 scafctl test functional -f solution.yaml
@@ -1438,22 +1256,6 @@ scafctl test list -f solution.yaml
 scafctl test ls -f solution.yaml
 scafctl test l -f solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# These are all equivalent:
-scafctl test -f solution.yaml
-scafctl test functional -f solution.yaml
-scafctl test func -f solution.yaml
-scafctl test fn -f solution.yaml
-
-# These are all equivalent:
-scafctl test list -f solution.yaml
-scafctl test ls -f solution.yaml
-scafctl test l -f solution.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -1503,18 +1305,9 @@ tests, giving you a tight feedback loop during development.
 
 ### Basic Usage
 
-{{< tabs "functional-testing-cmd-19" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f solution.yaml --watch
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f solution.yaml --watch
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The `--watch` (or `-w`) flag:
 1. Runs all matched tests immediately
@@ -1527,9 +1320,7 @@ The `--watch` (or `-w`) flag:
 
 Combine `--watch` with filters to focus on specific tests:
 
-{{< tabs "functional-testing-cmd-20" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Only re-run smoke tests
 scafctl test functional -f solution.yaml --watch --tag smoke
 
@@ -1539,20 +1330,6 @@ scafctl test functional -f solution.yaml --watch --filter "render-*"
 # Watch an entire directory of solutions
 scafctl test functional --tests-path ./solutions/ --watch
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Only re-run smoke tests
-scafctl test functional -f solution.yaml --watch --tag smoke
-
-# Only re-run tests matching a name pattern
-scafctl test functional -f solution.yaml --watch --filter "render-*"
-
-# Watch an entire directory of solutions
-scafctl test functional --tests-path ./solutions/ --watch
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### What Gets Watched
 
@@ -1620,20 +1397,10 @@ spec:
               value: Hello
 ```
 
-{{< tabs "functional-testing-cmd-21" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # All compose files under tests/ are watched automatically
 scafctl test functional -f solution.yaml --watch
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# All compose files under tests/ are watched automatically
-scafctl test functional -f solution.yaml --watch
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Editing any file under `tests/` triggers a re-run. Creating a new compose file
 in the directory also triggers re-discovery and a new run.
@@ -1641,47 +1408,20 @@ in the directory also triggers re-discovery and a new run.
 ### Tips
 
 - **Use with `--verbose`** to see full assertion counts on each re-run:
-{{< tabs "functional-testing-cmd-22" >}}
-{{% tab "Bash" %}}
-```bash
-  scafctl test functional -f solution.yaml --watch -v
+```shell
+scafctl test functional -f solution.yaml --watch -v
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-  scafctl test functional -f solution.yaml --watch -v
-```
-{{% /tab %}}
-{{< /tabs >}}
 - **Combine with `--fail-fast`** to stop early when iterating on a broken test:
-{{< tabs "functional-testing-cmd-23" >}}
-{{% tab "Bash" %}}
-```bash
-  scafctl test functional -f solution.yaml --watch --fail-fast
+```shell
+scafctl test functional -f solution.yaml --watch --fail-fast
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-  scafctl test functional -f solution.yaml --watch --fail-fast
-```
-{{% /tab %}}
-{{< /tabs >}}
 - **CI environments** should not use `--watch` — it's designed for interactive
   development only.
 - **Progress output** is automatically re-created for each watch cycle on TTY
   terminals. Use `--no-progress` if you find the spinners distracting:
-{{< tabs "functional-testing-cmd-24" >}}
-{{% tab "Bash" %}}
-```bash
-  scafctl test functional -f solution.yaml --watch --no-progress
+```shell
+scafctl test functional -f solution.yaml --watch --no-progress
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-  scafctl test functional -f solution.yaml --watch --no-progress
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -1693,42 +1433,20 @@ solution's structure. No commands are executed; it performs structural analysis 
 
 ### Basic Usage
 
-{{< tabs "functional-testing-cmd-25" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test init -f solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test init -f solution.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 This outputs YAML to stdout that you can paste into your solution's `spec.testing.cases` section or
 redirect to a file:
 
-{{< tabs "functional-testing-cmd-26" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Save to a file
 scafctl test init -f solution.yaml > tests.yaml
 
 # Append to an existing compose test file
 scafctl test init -f solution.yaml >> solution-tests.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Save to a file
-scafctl test init -f solution.yaml > tests.yaml
-
-# Append to an existing compose test file
-scafctl test init -f solution.yaml >> solution-tests.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### What Gets Generated
 
@@ -1944,18 +1662,9 @@ spec:
 
 ### Step 2 — Generate a Test for `render solution`
 
-{{< tabs "functional-testing-cmd-27" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl render solution -f my-app.yaml -r env=prod -o test
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl render solution -f my-app.yaml -r env=prod -o test
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 scafctl executes `render solution -f my-app.yaml -r env=prod`, captures the JSON output, and prints:
 
@@ -1987,18 +1696,9 @@ The same flag works with `run resolver` and `run solution`.
 
 **Capture resolver output:**
 
-{{< tabs "functional-testing-cmd-28" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f my-app.yaml -r env=staging -o test
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f my-app.yaml -r env=staging -o test
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Produces a test that asserts on the resolved values:
 
@@ -2018,18 +1718,9 @@ run-resolver-env-staging:
 
 **Capture action execution output:**
 
-{{< tabs "functional-testing-cmd-29" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f my-app.yaml -r env=prod -o test
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f my-app.yaml -r env=prod -o test
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Produces a test confirming action results and statuses:
 
@@ -2074,18 +1765,9 @@ spec:
 
 Then run it:
 
-{{< tabs "functional-testing-cmd-30" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f my-app.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f my-app.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The test passes immediately — the snapshot was already written with correct content during generation.
 
@@ -2095,18 +1777,9 @@ The test passes immediately — the snapshot was already written with correct co
 
 By default the test name is derived from the command and arguments. Use `--test-name` to set an explicit name:
 
-{{< tabs "functional-testing-cmd-31" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl render solution -f my-app.yaml -r env=prod -o test --test-name render-prod
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl render solution -f my-app.yaml -r env=prod -o test --test-name render-prod
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output test name becomes `render-prod` and the snapshot is written to `testdata/render-prod.json`.
 
@@ -2153,18 +1826,9 @@ The snapshot:
 
 To refresh a snapshot after an intentional change:
 
-{{< tabs "functional-testing-cmd-32" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl test functional -f my-app.yaml --update-snapshots --filter render-prod
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl test functional -f my-app.yaml --update-snapshots --filter render-prod
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -2215,7 +1879,7 @@ generate → curate → commit → CI
 
 A future command that executes functional tests across solutions in a remote catalog. This enables the scafctl team to validate that changes to scafctl don't break existing solutions.
 
-~~~bash
+~~~shell
 scafctl pipeline test --catalog https://catalog.example.com --solutions "terraform-*"
 ~~~
 

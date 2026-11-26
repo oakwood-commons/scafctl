@@ -1,3 +1,7 @@
+---
+title: "API Surface"
+---
+
 # API Surface Design
 
 Detailed API surface for the scafctl REST API server. All endpoints use JSON request/response bodies and follow REST conventions.

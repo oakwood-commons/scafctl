@@ -59,6 +59,8 @@ markup:
     codeFences: true
     guessSyntax: true
   goldmark:
+    extensions:
+      typographer: false
     renderer:
       unsafe: true
 

@@ -1,3 +1,8 @@
+---
+title: "Auth Handler Migration Guide"
+weight: 42
+---
+
 # Auth Handler Migration Guide
 
 This guide covers migrating from built-in auth handlers to the plugin-based

@@ -54,32 +54,25 @@ scafctl resolves plugins through two mechanisms:
 
 2. **Directory Scanning** — For local development, place plugin binaries in the plugin cache:
 
-{{< tabs "plugin-development-cmd-1" >}}
-{{% tab "Bash" %}}
-
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
-   mkdir -p "$(scafctl paths cache)/plugins"
-   cp my-plugin "$(scafctl paths cache)/plugins/"
+mkdir -p "$(scafctl paths cache)/plugins"
+cp my-plugin "$(scafctl paths cache)/plugins/"
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
-   $pluginDir = "$(scafctl paths cache)/plugins"
-   New-Item -ItemType Directory -Force -Path $pluginDir
-   Copy-Item my-plugin $pluginDir
+$pluginDir = "$(scafctl paths cache)/plugins"
+New-Item -ItemType Directory -Force -Path $pluginDir
+Copy-Item my-plugin $pluginDir
 ```
-
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ## Plugin CLI Commands
 
-{{< tabs "plugin-development-cmd-2" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Pre-fetch plugins declared in a solution
 scafctl plugins install -f my-solution.yaml
 
@@ -89,23 +82,6 @@ scafctl plugins list
 # Push to a remote registry
 scafctl catalog push provider my-plugin@1.0.0 --catalog ghcr.io/myorg
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Pre-fetch plugins declared in a solution
-scafctl plugins install -f my-solution.yaml
-
-# List cached plugin binaries (remote download cache only)
-scafctl plugins list
-
-# Push to a remote registry
-scafctl catalog push provider my-plugin@1.0.0 --catalog ghcr.io/myorg
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 > **Note:** `plugins list` shows only plugins fetched from the remote catalog
 > cache. Local builds loaded via `--plugin-dir` are not listed. By default it
