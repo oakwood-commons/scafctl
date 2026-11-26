@@ -50,7 +50,12 @@ func (c *RemoteCatalog) Find(ctx context.Context, query ArtifactQuery) (Artifact
 		return ArtifactInfo{}, err
 	}
 
-	for _, v := range versionCandidates(ctx, query, versions) {
+	candidates := versionCandidates(ctx, query, versions)
+	if len(candidates) == 0 && len(versions) > 0 {
+		return ArtifactInfo{}, newNoMatchingVersionError(ref, query.Version, versions, c.name)
+	}
+
+	for _, v := range candidates {
 		candidate := ref
 		candidate.Version = v
 		info, err := c.resolveWithKind(ctx, candidate)
@@ -133,4 +138,29 @@ func isRegistryDenied(err error) bool {
 	var resp *errcode.ErrorResponse
 	return errors.As(err, &resp) &&
 		(resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden)
+}
+
+// isProxyOrGatewayUnavailable reports whether err is a proxy authentication
+// challenge (407) or an upstream gateway availability failure (502, 503, 504).
+// These status codes originate from intermediaries or overloaded gateways
+// rather than an authoritative registry response about the artifact, so
+// lookupError classifies them as UnreachableError.
+func isProxyOrGatewayUnavailable(err error) bool {
+	var resp *errcode.ErrorResponse
+	if !errors.As(err, &resp) {
+		return false
+	}
+	switch resp.StatusCode {
+	case http.StatusProxyAuthRequired,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func isTransportOrGatewayUnavailable(err error) bool {
+	return isNetworkError(err) || isProxyOrGatewayUnavailable(err)
 }

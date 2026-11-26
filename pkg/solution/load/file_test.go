@@ -234,11 +234,13 @@ plugins:
 		{
 			name:     "malformed lock",
 			readFile: readFileMap(map[string]string{solPath: validSolutionYAML, lockPath: "version: ["}),
+			wantErr:  bundler.ErrInvalidLockFile,
 			errMsg:   "loading lock file",
 		},
 		{
 			name:     "unsupported lock version",
 			readFile: readFileMap(map[string]string{solPath: validSolutionYAML, lockPath: "version: 99\n"}),
+			wantErr:  bundler.ErrInvalidLockFile,
 			errMsg:   "unsupported lock file version",
 		},
 		{

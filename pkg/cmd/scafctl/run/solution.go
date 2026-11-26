@@ -208,9 +208,12 @@ EXIT CODES:
   0   Success (also partial success unless --detailed-exit-code is set)
   1   Resolver execution failed
   2   Validation failed
-  3   Invalid solution (no workflow, cycle, or parse error)
+  3   Invalid solution or input (no workflow, cycle, parse error, undeclared provider, or bad lock/ref)
   4   File not found
   6   Action/workflow execution failed
+  7   Configuration or policy error (unconfigured catalog, allowlist, or signature policy)
+  8   Catalog or plugin acquisition failed (offline, auth rejected, or digest/signature failure)
+  10  Permission denied
   12  Partial success (only with --detailed-exit-code; some continueOnError actions failed)
 
 Examples:

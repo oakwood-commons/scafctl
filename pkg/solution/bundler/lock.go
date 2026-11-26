@@ -239,6 +239,28 @@ func (lf *LockFile) FindPluginByIdentity(canonical, name, kind string) *LockPlug
 	return nil
 }
 
+// ErrInvalidLockFile is returned when a lock file or embedded lock layer
+// cannot be parsed, declares an unsupported format version, or is not a
+// regular file.
+var ErrInvalidLockFile = errors.New("invalid lock file")
+
+type invalidLockFileError struct {
+	msg   string
+	cause error
+}
+
+func (e *invalidLockFileError) Error() string {
+	return e.msg
+}
+
+func (e *invalidLockFileError) Unwrap() error {
+	return e.cause
+}
+
+func (e *invalidLockFileError) Is(target error) bool {
+	return target == ErrInvalidLockFile //nolint:errorlint // intentional sentinel identity check
+}
+
 // LoadLockFile reads and parses a lock file from the given path using an
 // os.Root handle confined to filepath.Dir(path), rejecting symlinks and
 // directories. Returns nil without error if the file does not exist.
@@ -263,13 +285,13 @@ func LoadLockFile(path string) (*LockFile, error) {
 		return nil, fmt.Errorf("reading lock file: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("reading lock file: refusing to read symlinked %s", base)
+		return nil, &invalidLockFileError{msg: fmt.Sprintf("reading lock file: refusing to read symlinked %s", base)}
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("reading lock file: %s is a directory", base)
+		return nil, &invalidLockFileError{msg: fmt.Sprintf("reading lock file: %s is a directory", base)}
 	}
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("reading lock file: %s is not a regular file", base)
+		return nil, &invalidLockFileError{msg: fmt.Sprintf("reading lock file: %s is not a regular file", base)}
 	}
 
 	data, err := root.ReadFile(base)
@@ -285,11 +307,11 @@ func LoadLockFile(path string) (*LockFile, error) {
 func ParseLockYAML(data []byte) (*LockFile, error) {
 	var lf LockFile
 	if err := yaml.Unmarshal(data, &lf); err != nil {
-		return nil, fmt.Errorf("parsing lock file: %w", err)
+		return nil, &invalidLockFileError{msg: fmt.Sprintf("parsing lock file: %v", err), cause: err}
 	}
 
 	if lf.Version != LockFileVersion {
-		return nil, fmt.Errorf("unsupported lock file version %d (expected %d)", lf.Version, LockFileVersion)
+		return nil, &invalidLockFileError{msg: fmt.Sprintf("unsupported lock file version %d (expected %d)", lf.Version, LockFileVersion)}
 	}
 
 	return &lf, nil
@@ -405,11 +427,11 @@ func MarshalLockJSON(lf *LockFile) ([]byte, error) {
 func ParseLockJSON(data []byte) (*LockFile, error) {
 	var lf LockFile
 	if err := json.Unmarshal(data, &lf); err != nil {
-		return nil, fmt.Errorf("parsing lock file: %w", err)
+		return nil, &invalidLockFileError{msg: fmt.Sprintf("parsing lock file: %v", err), cause: err}
 	}
 
 	if lf.Version != LockFileVersion {
-		return nil, fmt.Errorf("unsupported lock file version %d (expected %d)", lf.Version, LockFileVersion)
+		return nil, &invalidLockFileError{msg: fmt.Sprintf("unsupported lock file version %d (expected %d)", lf.Version, LockFileVersion)}
 	}
 
 	return &lf, nil

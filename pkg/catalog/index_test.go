@@ -179,7 +179,7 @@ func TestFetchIndex_RejectedCredentials(t *testing.T) {
 		cat := newCatalog(t, http.StatusNotFound)
 
 		_, err := cat.FetchIndex(t.Context())
-		require.ErrorIs(t, err, errCredentialsRejected)
+		require.ErrorIs(t, err, ErrCredentialsRejected)
 	})
 }
 

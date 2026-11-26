@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -1194,4 +1197,30 @@ func TestCommandLintSolution(t *testing.T) {
 	okCmd := CommandLintSolution(cliParams, okStreams, "mycli/lint")
 	okCmd.SetArgs([]string{"-f", solFile, "-o", "quiet"})
 	require.NoError(t, okCmd.Execute())
+}
+
+func TestCommandLint_UnreachableCatalogExitsCatalogError(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	unreachSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(unreachSrv.Close)
+	host := strings.TrimPrefix(unreachSrv.URL, "http://")
+
+	appCfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true, DefaultCatalog: "offline"},
+		Catalogs: []config.CatalogConfig{
+			{Name: "offline", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/solutions", Insecure: true},
+		},
+	}
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandLint(cliParams, ioStreams, "scafctl")
+	cmd.SetContext(config.WithConfig(context.Background(), appCfg))
+	cmd.SetArgs([]string{"my-app@1.0.0", "-o", "quiet"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
 }

@@ -32,60 +32,6 @@ type VendorPluginsResult struct {
 	ResolvedPlugins []LockPlugin
 }
 
-// isExactVersion reports whether s parses as a single concrete semver version
-// (e.g. "1.2.3", "2.0.0-rc1") rather than a range constraint (">=1.2", "~1.4",
-// "^1"). semver.NewConstraint accepts a bare version too, so a successful
-// NewVersion parse is what distinguishes "pin this tag" from "select the
-// highest match within a range".
-func isExactVersion(s string) bool {
-	_, err := semver.NewVersion(s)
-	return err == nil
-}
-
-// VersionLister lists all published versions of an artifact. catalog.Catalog
-// satisfies this interface via its List method.
-type VersionLister interface {
-	List(ctx context.Context, kind catalog.ArtifactKind, name string) ([]catalog.ArtifactInfo, error)
-}
-
-// ResolveVersionConstraint picks the concrete semver version to use for a given
-// version string. It handles three cases:
-//   - "" / "latest": returns nil (caller should leave Reference.Version nil so
-//     the catalog resolves to the newest published version).
-//   - exact version ("1.2.3"): returns the parsed *semver.Version directly.
-//   - range constraint (">=1.0 <2", "~1.4", "^1"): lists all published
-//     versions via the lister, filters by the constraint, and returns the
-//     highest satisfying version.
-//
-// The returned *semver.Version can be set directly on a catalog.Reference
-// before calling Resolve.
-func ResolveVersionConstraint(ctx context.Context, lister VersionLister, kind catalog.ArtifactKind, name, versionStr string) (*semver.Version, error) {
-	verStr := strings.TrimSpace(versionStr)
-	switch {
-	case verStr == "" || strings.EqualFold(verStr, "latest"):
-		return nil, nil
-	case isExactVersion(verStr):
-		v, err := semver.NewVersion(verStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid version %q: %w", verStr, err)
-		}
-		return v, nil
-	default:
-		infos, err := lister.List(ctx, kind, name)
-		if err != nil {
-			return nil, fmt.Errorf("listing versions for %s: %w", name, err)
-		}
-		matches, err := catalog.FilterByVersionConstraint(infos, verStr)
-		if err != nil {
-			return nil, err
-		}
-		if len(matches) == 0 {
-			return nil, fmt.Errorf("no published version of %s satisfies constraint %q", name, verStr)
-		}
-		return matches[0].Reference.Version, nil
-	}
-}
-
 // pluginKindToArtifactKind converts a solution.PluginKind to a catalog.ArtifactKind.
 func pluginKindToArtifactKind(kind solution.PluginKind) catalog.ArtifactKind {
 	switch kind {

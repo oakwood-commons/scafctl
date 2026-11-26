@@ -17,10 +17,26 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 )
 
-// ErrFetch wraps a failure to fetch a URL, registry, or catalog solution and
-// write it to the local filesystem in Local. It covers both the load and the
-// local write (temporary directory, bundle extraction, solution file).
+// ErrFetch marks a remote or URL solution acquisition failure in URLLoader.Load
+// or Local (including writing the fetched solution to a temporary directory).
 var ErrFetch = errors.New("fetch solution")
+
+type fetchError struct {
+	msg   string
+	cause error
+}
+
+func (e *fetchError) Error() string {
+	return e.msg
+}
+
+func (e *fetchError) Unwrap() error {
+	return e.cause
+}
+
+func (e *fetchError) Is(target error) bool {
+	return target == ErrFetch //nolint:errorlint // intentional sentinel identity check
+}
 
 const (
 	// fetchedFileName is the file a fetched solution is written to.

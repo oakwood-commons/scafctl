@@ -546,7 +546,7 @@ func isLocalPluginSource(src PluginSource) bool {
 // formatPluginChainWarning builds a concise, user-facing fallback warning for a
 // remote catalog that could not be queried in best-effort mode.
 func formatPluginChainWarning(catalogName string, err error) string {
-	if errors.Is(err, errCredentialsRejected) || isOCIAuthError(err) {
+	if errors.Is(err, ErrCredentialsRejected) || isOCIAuthError(err) {
 		return fmt.Sprintf("catalog %q unauthenticated, trying next catalog...", catalogName)
 	}
 	return fmt.Sprintf("catalog %q unavailable, trying next catalog...", catalogName)

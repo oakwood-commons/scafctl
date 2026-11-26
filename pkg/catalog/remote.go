@@ -361,14 +361,6 @@ func isNetworkError(err error) bool {
 	return false
 }
 
-// errCredentialsRejected marks a lookup that failed after the registry
-// rejected this catalog's credentials. Anonymous access cannot tell "absent"
-// from "hidden" (registries answer anonymous callers for a private repository
-// with 401, 403 or 404), so such a failure is never reported as not-found:
-// a strict source chain must halt rather than serve the same name from a
-// lower-priority catalog.
-var errCredentialsRejected = errors.New("registry rejected the catalog's credentials and anonymous access cannot confirm the artifact is absent; re-authenticate and retry")
-
 // lookupError classifies a failed manifest resolve or tag listing. Only a
 // definitive miss is not-found, the one outcome a strict chain may fall
 // through on:
@@ -382,10 +374,11 @@ var errCredentialsRejected = errors.New("registry rejected the catalog's credent
 //     for a package that does not exist with 403 DENIED too, so the denial is
 //     of the repository, not of the credentials.
 //
-// A transport failure is unreachable, and any other failure (5xx, a 401/403
-// to credentials that are rejected or could not be checked) is returned
-// wrapped so it halts; retryAnonymously then decides whether anonymous access
-// can still serve the request.
+// Transport and proxy/gateway failures (407, 502, 503, 504) are unreachable so
+// warm caches can fall back and cold caches report ErrCatalogUnreachable. Any
+// other failure (e.g. 500, or a 401/403 to credentials that are rejected or
+// could not be checked) is returned wrapped so it halts; retryAnonymously then
+// decides whether anonymous access can still serve the request.
 //
 // client is the client the failed request used, not necessarily the catalog's
 // configured client: during an anonymous retry it carries no credentials, so
@@ -395,7 +388,7 @@ func (c *RemoteCatalog) lookupError(ctx context.Context, client *auth.Client, ac
 	absent := errors.Is(err, errdef.ErrNotFound) || isRegistryNotFound(err)
 	denied := isRegistryDenied(err)
 	switch {
-	case isNetworkError(err):
+	case isTransportOrGatewayUnavailable(err):
 		return &UnreachableError{Catalog: c.name, Cause: err}
 	case absent:
 		return &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
@@ -437,7 +430,7 @@ func (c *RemoteCatalog) sendsCredentialsWith(ctx context.Context, client *auth.C
 // The fallback can only turn a failure into a success. If the anonymous retry
 // also fails -- including with a 404, which registries commonly return to
 // anonymous callers for a private repository -- the original auth error is
-// returned wrapped in errCredentialsRejected and never as not-found, so a
+// returned wrapped in ErrCredentialsRejected and never as not-found, so a
 // strict source chain halts instead of falling through. A request that sent
 // no credentials is not retried: anonymous access is what it already had.
 //
@@ -452,7 +445,7 @@ func (c *RemoteCatalog) sendsCredentialsWith(ctx context.Context, client *auth.C
 // authoritative one.
 func retryAnonymously[T any](ctx context.Context, c *RemoteCatalog, op string, ref Reference, fn func(*auth.Client) (T, error)) (T, error) {
 	result, err := fn(c.client)
-	if err == nil || !isOCIAuthError(err) || errors.Is(err, errCredentialsRejected) {
+	if err == nil || !isOCIAuthError(err) || errors.Is(err, ErrCredentialsRejected) {
 		return result, err
 	}
 	if !c.sendsCredentials(ctx) {
@@ -477,7 +470,7 @@ func retryAnonymously[T any](ctx context.Context, c *RemoteCatalog, op string, r
 	// retryErr is reported as text only: wrapping it would let a not-found
 	// from the anonymous retry satisfy IsNotFound and fall through a strict chain.
 	return zero, fmt.Errorf("%s %s in catalog %q: %w (anonymous retry: %s): %w",
-		op, ref.String(), c.name, errCredentialsRejected, retryErr.Error(), err)
+		op, ref.String(), c.name, ErrCredentialsRejected, retryErr.Error(), err)
 }
 
 // wrapWithCredentialHint enriches err with a credential diagnostic hint when
@@ -1281,11 +1274,15 @@ func (c *RemoteCatalog) List(ctx context.Context, kind ArtifactKind, name string
 func (c *RemoteCatalog) listAcrossKinds(ctx context.Context, name string) ([]ArtifactInfo, error) {
 	kinds := []ArtifactKind{ArtifactKindSolution, ArtifactKindProvider, ArtifactKindAuthHandler}
 	var allInfos []ArtifactInfo
+	var firstErr error
 
 	for _, k := range kinds {
 		ref := Reference{Kind: k, Name: name}
 		versions, err := c.listVersions(ctx, ref)
 		if err != nil {
+			if !IsNotFound(err) && firstErr == nil {
+				firstErr = err
+			}
 			c.logger.V(1).Info("no artifacts found under kind", "kind", k, "name", name)
 			continue
 		}
@@ -1298,6 +1295,9 @@ func (c *RemoteCatalog) listAcrossKinds(ctx context.Context, name string) ([]Art
 		}
 	}
 
+	if len(allInfos) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
 	return allInfos, nil
 }
 
@@ -1466,6 +1466,7 @@ func (c *RemoteCatalog) listAllArtifacts(ctx context.Context, kind ArtifactKind)
 //
 // Returns ErrEnumerationNotSupported if the registry cannot be enumerated.
 func (c *RemoteCatalog) ListRepositories(ctx context.Context) ([]DiscoveredArtifact, error) {
+	callerDone := ctx.Err() != nil
 	// Apply a timeout to the entire enumeration flow so slow or
 	// non-responsive endpoints do not block indefinitely.
 	ctx, cancel := context.WithTimeout(ctx, settings.DefaultHTTPTimeout)
@@ -1491,9 +1492,20 @@ func (c *RemoteCatalog) ListRepositories(ctx context.Context) ([]DiscoveredArtif
 			if indexErr != nil {
 				c.logger.V(1).Info("catalog index fallback failed",
 					"error", indexErr.Error())
+				if !callerDone {
+					if _, ok := IsCatalogUnreachable(indexErr); ok {
+						return nil, fmt.Errorf("fetching catalog index for %s: %w", c.name, indexErr)
+					}
+					if errors.Is(indexErr, ErrCredentialsRejected) {
+						return nil, fmt.Errorf("fetching catalog index for %s: %w", c.name, indexErr)
+					}
+				}
 				return nil, fmt.Errorf("enumerating repositories in %s: %w", c.name, err)
 			}
 			return indexed, nil
+		}
+		if !callerDone && isTransportOrGatewayUnavailable(err) {
+			return nil, fmt.Errorf("enumerating repositories in %s: %w", c.name, &UnreachableError{Catalog: c.name, Cause: err})
 		}
 		return nil, fmt.Errorf("enumerating repositories in %s: %w", c.name, err)
 	}
@@ -1657,13 +1669,13 @@ func (c *RemoteCatalog) Exists(ctx context.Context, ref Reference) (bool, error)
 	if _, ok := IsCatalogUnreachable(err); ok {
 		return false, err
 	}
-	if isNetworkError(err) {
+	if isTransportOrGatewayUnavailable(err) {
 		return false, &UnreachableError{Catalog: c.name, Cause: err}
 	}
 	// Rejected credentials leave "absent" and "hidden" indistinguishable, so
 	// existence cannot be answered: report the failure rather than a false
 	// negative that would let a chain fall through to a lower-priority catalog.
-	if errors.Is(err, errCredentialsRejected) {
+	if errors.Is(err, ErrCredentialsRejected) {
 		return false, err
 	}
 	// Any other resolve error means the artifact doesn't exist.
@@ -1685,7 +1697,7 @@ func (c *RemoteCatalog) Delete(ctx context.Context, ref Reference) error {
 	tag := c.tagForRef(ref)
 	desc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		if isNetworkError(err) {
+		if isTransportOrGatewayUnavailable(err) {
 			return &UnreachableError{Catalog: c.name, Cause: err}
 		}
 		return &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
@@ -1790,7 +1802,7 @@ func (c *RemoteCatalog) Tag(ctx context.Context, ref Reference, alias string) (s
 	tag := c.tagForRef(ref)
 	desc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		if isNetworkError(err) {
+		if isTransportOrGatewayUnavailable(err) {
 			return "", &UnreachableError{Catalog: c.name, Cause: err}
 		}
 		return "", &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
@@ -1856,12 +1868,12 @@ func (c *RemoteCatalog) resolveByTag(ctx context.Context, ref Reference, tag str
 		if _, ok := IsCatalogUnreachable(err); ok {
 			return ocispec.Descriptor{}, err
 		}
-		if isNetworkError(err) {
+		if isTransportOrGatewayUnavailable(err) {
 			return ocispec.Descriptor{}, &UnreachableError{Catalog: c.name, Cause: err}
 		}
 		// A rejected-credential failure cannot be reported as not-found: the
 		// artifact may exist but be hidden from anonymous access.
-		if errors.Is(err, errCredentialsRejected) {
+		if errors.Is(err, ErrCredentialsRejected) {
 			return ocispec.Descriptor{}, err
 		}
 		return ocispec.Descriptor{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
@@ -1910,7 +1922,7 @@ func (c *RemoteCatalog) copyToStorage(ctx context.Context, ref Reference, desc o
 		return oras.Copy(ctx, repo, srcTag, target, destinationReference, copyOpts)
 	})
 	if err != nil {
-		if isNetworkError(err) {
+		if isTransportOrGatewayUnavailable(err) {
 			return &UnreachableError{Catalog: c.name, Cause: err}
 		}
 		return c.wrapWithCredentialHint(fmt.Errorf("copying %s:%s from catalog %q: %w", ref.Name, srcTag, c.name, err))
@@ -1982,7 +1994,7 @@ func (c *RemoteCatalog) Attach(ctx context.Context, ref Reference, artifactType 
 	tag := c.tagForRef(ref)
 	subjectDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		if isNetworkError(err) {
+		if isTransportOrGatewayUnavailable(err) {
 			return ocispec.Descriptor{}, &UnreachableError{Catalog: c.name, Cause: err}
 		}
 		return ocispec.Descriptor{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
@@ -2028,7 +2040,7 @@ func (c *RemoteCatalog) Referrers(ctx context.Context, ref Reference, artifactTy
 	tag := c.tagForRef(ref)
 	subjectDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
-		if isNetworkError(err) {
+		if isTransportOrGatewayUnavailable(err) {
 			return nil, &UnreachableError{Catalog: c.name, Cause: err}
 		}
 		return nil, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}

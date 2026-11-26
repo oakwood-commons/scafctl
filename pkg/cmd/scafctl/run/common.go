@@ -1568,6 +1568,10 @@ func buildPluginFetcher(ctx context.Context) (*plugin.Fetcher, error) {
 	return prepare.BuildPluginFetcher(ctx)
 }
 
+// errNotOfficialProvider indicates that a provider name is not in the official
+// provider registry (or official provider auto-resolution is unavailable).
+var errNotOfficialProvider = errors.New("not an official provider")
+
 // autoResolveProviderByName checks the official provider registry for a
 // provider name and, if found, auto-fetches it via the plugin fetcher.
 // This enables `run provider <name>` to work for extracted official providers
@@ -1575,12 +1579,12 @@ func buildPluginFetcher(ctx context.Context) (*plugin.Fetcher, error) {
 func autoResolveProviderByName(ctx context.Context, name string, reg *provider.Registry) ([]*plugin.Client, error) {
 	officialReg := official.RegistryFromContext(ctx)
 	if officialReg == nil {
-		return nil, fmt.Errorf("official registry not available")
+		return nil, fmt.Errorf("official registry not available: %w", errNotOfficialProvider)
 	}
 
 	p, ok := officialReg.Get(name)
 	if !ok {
-		return nil, fmt.Errorf("provider %q is not an official provider", name)
+		return nil, fmt.Errorf("provider %q is %w", name, errNotOfficialProvider)
 	}
 
 	lgr := logger.FromContext(ctx)

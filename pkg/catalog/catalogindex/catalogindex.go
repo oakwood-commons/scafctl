@@ -452,7 +452,9 @@ func (idx *Index) CheckAllowed(alias string) error {
 		return nil
 	}
 	if !idx.allowed[strings.ToLower(alias)] {
-		return fmt.Errorf("catalog %q is not in the allowed catalogs list", alias)
+		return &catalog.PolicyError{
+			Message: fmt.Sprintf("catalog %q is not in the allowed catalogs list", alias),
+		}
 	}
 	return nil
 }

@@ -861,6 +861,16 @@ scafctl plugins list
 
 ## Troubleshooting
 
+### Catalog unreachable or offline environment
+
+~~~text
+Error: plugin exec (provider): resolving version: ... catalog "official" unreachable: ... (hint: run 'scafctl plugins install' while online or pre-populate the plugin cache for offline environments)
+~~~
+
+- When a remote catalog cannot be contacted (DNS, dial, timeout, or proxy/gateway HTTP 407, 502, 503, 504) and the plugin cache is cold, scafctl exits with code `8` (`CatalogError`) and prints a `plugins install` hint instead of reporting a missing version.
+- If a matching version is already present in `$XDG_CACHE_HOME/scafctl/plugins/` (or the local catalog's remote cache) and the dependency is not locked to enforce fresh signature checks, scafctl falls back to the cached binary automatically.
+- Pre-populate `$XDG_CACHE_HOME/scafctl/plugins/` using `scafctl plugins install` while online before running in air-gapped or offline environments.
+
 ### Plugin not found in any catalog
 
 ```
@@ -873,12 +883,12 @@ Error: plugin my-plugin (provider): resolving version: ...not found in any catal
 
 ### Version constraint not satisfied
 
-```
-Error: resolved version 3.0.0 does not satisfy constraint ^1.0.0
-```
+~~~text
+Error: plugin my-plugin (provider): resolving version: resolving plugin my-plugin (provider): artifact "my-plugin" has no version matching "^1.0.0" in catalog "official" (available: 3.0.0, 2.1.0)
+~~~
 
-- The catalog's latest version doesn't match your constraint
-- Update the constraint in your solution, or publish a compatible version
+- The artifact exists in the catalog, but none of its published versions match your semver constraint
+- Update the constraint in your solution (or pass `--pre-release` when targeting pre-release versions), or publish a compatible version
 
 ### Cache corruption
 

@@ -7,8 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 )
 
@@ -103,21 +105,20 @@ type catalogOutcome struct {
 // (any other error, e.g. auth failure or malformed data). When one or more
 // catalogs were unreachable, the message calls that out explicitly and
 // separately from catalogs that genuinely reported the artifact does not
-// exist — this is the fix for the misleading "not found" message when the
-// real problem is that a catalog (often the official one, always last in
-// the chain) could not be contacted. When there are "other" errors and no
-// unreachable ones, the representative other error is surfaced directly
-// instead of being folded into "not found". When every outcome is a genuine
-// not-found, the returned error wraps ErrArtifactNotFound so callers using
-// errors.Is/IsNotFound still recognize an ordinary chain miss. When no
-// catalog was unreachable and none had an "other" error, the message is
-// unchanged from before this behavior existed, so existing "not found"
-// tests continue to pass unmodified.
-// so existing "not found" tests continue to pass unmodified.
+// exist, so an unreachable catalog (such as the official catalog at the end
+// of the chain) is never misreported as "not found". When there are "other"
+// errors and no unreachable ones, the representative other error is surfaced
+// directly instead of being folded into "not found". When every outcome is a
+// genuine not-found and at least one catalog had versions of the artifact
+// that did not satisfy the requested version constraint, *NoMatchingVersionError
+// is surfaced directly (which still unwraps to ErrArtifactNotFound). Otherwise,
+// the returned error wraps ErrArtifactNotFound with the standard chain-miss
+// message.
 func aggregateChainError(subject string, outcomes []catalogOutcome) error {
 	var unreachable []string
 	var notFound []string
 	var other []string
+	var noMatchErrs []*NoMatchingVersionError
 	var firstUnreachableErr error
 	var firstOtherErr error
 
@@ -134,6 +135,10 @@ func aggregateChainError(subject string, outcomes []catalogOutcome) error {
 		}
 		if errors.Is(o.err, ErrArtifactNotFound) {
 			notFound = append(notFound, o.catalog)
+			var noMatch *NoMatchingVersionError
+			if errors.As(o.err, &noMatch) {
+				noMatchErrs = append(noMatchErrs, noMatch)
+			}
 			continue
 		}
 		other = append(other, o.catalog)
@@ -143,6 +148,12 @@ func aggregateChainError(subject string, outcomes []catalogOutcome) error {
 	}
 
 	if len(unreachable) == 0 && len(other) == 0 {
+		if len(noMatchErrs) == 1 {
+			return noMatchErrs[0]
+		}
+		if len(noMatchErrs) > 1 {
+			return mergeNoMatchingVersionErrors(noMatchErrs)
+		}
 		return fmt.Errorf("artifact %q not found in any catalog: %w", subject, ErrArtifactNotFound)
 	}
 
@@ -161,6 +172,46 @@ func aggregateChainError(subject string, outcomes []catalogOutcome) error {
 	checked = append(checked, other...)
 	return fmt.Errorf("%q unavailable: %s; not found in %s: %w",
 		subject, strings.Join(unreachable, "; "), strings.Join(checked, ", "), firstUnreachableErr)
+}
+
+func mergeNoMatchingVersionErrors(errs []*NoMatchingVersionError) *NoMatchingVersionError {
+	var catalogs []string
+	seenCatalog := make(map[string]bool, len(errs))
+	var parsed []*semver.Version
+	var unparsed []string
+	seenVer := make(map[string]bool)
+
+	for _, e := range errs {
+		if e.Catalog != "" && !seenCatalog[e.Catalog] {
+			seenCatalog[e.Catalog] = true
+			catalogs = append(catalogs, e.Catalog)
+		}
+		for _, v := range e.Available {
+			if seenVer[v] {
+				continue
+			}
+			seenVer[v] = true
+			if sv, err := semver.NewVersion(v); err == nil {
+				parsed = append(parsed, sv)
+			} else {
+				unparsed = append(unparsed, v)
+			}
+		}
+	}
+
+	sort.Sort(sort.Reverse(semver.Collection(parsed)))
+	available := make([]string, 0, len(parsed)+len(unparsed))
+	for _, sv := range parsed {
+		available = append(available, sv.String())
+	}
+	available = append(available, unparsed...)
+
+	return &NoMatchingVersionError{
+		Reference:  errs[0].Reference,
+		Constraint: stripInternalPreReleaseSuffix(errs[0].Constraint),
+		Available:  available,
+		Catalog:    strings.Join(catalogs, ", "),
+	}
 }
 
 // Fetch tries each catalog in order, returning the first successful result.
@@ -250,14 +301,35 @@ func (c *ChainCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo
 }
 
 // List returns artifacts from all catalogs (deduplicated by name+version).
+// In strict mode, any indeterminate error (non-404) halts immediately. In
+// best-effort mode, per-catalog errors are skipped when other catalogs yield
+// results, and surfaced when no results are returned and at least one catalog
+// was unreachable or rejected credentials.
 func (c *ChainCatalog) List(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error) {
 	seen := make(map[string]bool)
 	var results []ArtifactInfo
+	var outcomes []catalogOutcome
+
+	subject := string(kind)
+	if name != "" {
+		if kind != "" {
+			subject = fmt.Sprintf("%s/%s", kind, name)
+		} else {
+			subject = name
+		}
+	}
+	if subject == "" {
+		subject = "artifacts"
+	}
 
 	for _, cat := range c.catalogs {
 		items, err := cat.List(ctx, kind, name)
 		if err != nil {
 			c.logger.V(1).Info("catalog list error", "catalog", cat.Name(), "error", err)
+			outcomes = append(outcomes, catalogOutcome{catalog: cat.Name(), err: err})
+			if c.haltOn(err) {
+				return nil, aggregateChainError(subject, outcomes)
+			}
 			continue
 		}
 		for _, item := range items {
@@ -265,6 +337,17 @@ func (c *ChainCatalog) List(ctx context.Context, kind ArtifactKind, name string)
 			if !seen[key] {
 				seen[key] = true
 				results = append(results, item)
+			}
+		}
+	}
+
+	if len(results) == 0 {
+		for _, o := range outcomes {
+			if _, ok := IsCatalogUnreachable(o.err); ok {
+				return nil, aggregateChainError(subject, outcomes)
+			}
+			if errors.Is(o.err, ErrCredentialsRejected) {
+				return nil, aggregateChainError(subject, outcomes)
 			}
 		}
 	}
@@ -298,7 +381,7 @@ func (c *ChainCatalog) Exists(ctx context.Context, ref Reference) (bool, error) 
 		if _, ok := IsCatalogUnreachable(o.err); ok {
 			return false, aggregateChainError(ref.String(), outcomes)
 		}
-		if errors.Is(o.err, errCredentialsRejected) {
+		if errors.Is(o.err, ErrCredentialsRejected) {
 			return false, aggregateChainError(ref.String(), outcomes)
 		}
 	}

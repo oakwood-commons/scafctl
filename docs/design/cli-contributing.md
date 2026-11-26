@@ -961,20 +961,31 @@ func TestWithMock(t *testing.T) {
 
 ### Exit Codes
 
-Define and use consistent exit codes:
+All commands use the centralized `pkg/exitcode` constants and `exitcode.WithCode(err, code)` (never magic numbers):
+
+| Code | Constant | Meaning |
+|------|----------|---------|
+| `0` | `exitcode.Success` | Command completed successfully |
+| `1` | `exitcode.GeneralError` | Runtime execution failure (resolver, provider, or state) |
+| `2` | `exitcode.ValidationFailed` | Input, schema, lint, or resolver validation failure |
+| `3` | `exitcode.InvalidInput` | Invalid CLI flags/args, malformed ref, undeclared provider, or bad lock/bundle |
+| `4` | `exitcode.FileNotFound` | Solution, schema, state, or artifact file not found or unreadable |
+| `5` | `exitcode.RenderFailed` | Template or solution rendering failure |
+| `6` | `exitcode.ActionFailed` | Action or workflow execution failure |
+| `7` | `exitcode.ConfigError` | Host configuration or policy error (unconfigured catalog, allowlist, signatures) |
+| `8` | `exitcode.CatalogError` | Catalog or plugin acquisition failure (offline, auth rejected, digest/signature) |
+| `9` | `exitcode.TimeoutError` | Operation timed out |
+| `10` | `exitcode.PermissionDenied` | Filesystem or OS permission denied (`fs.ErrPermission`) |
+| `11` | `exitcode.TestFailed` | One or more functional tests failed |
+| `12` | `exitcode.PartialSuccess` | Workflow finished with `continueOnError` failures (`--detailed-exit-code` only) |
+
+Commands that select, load, or prepare a solution map setup failures through `prepare.ErrorExitCode(err)` so configuration (`7`), invalid input/declaration (`3`), catalog/plugin acquisition (`8`), permission (`10`), and missing-file (`4`) errors stay consistent across `run`, `render`, `lint`, `validate`, and `plugins install`:
 
 ```go
-const (
-    ExitSuccess          = 0
-    ExitGeneralError     = 1
-    ExitValidationFailed = 2
-    ExitInvalidInput     = 3
-    ExitFileNotFound     = 4
-)
-
-func (o *Options) exitWithCode(err error, code int) error {
-    // Could log the code or set process exit code
-    return err
+res, err := prepare.Solution(ctx, solOpts...)
+if err != nil {
+    w.Errorf("%v", err)
+    return exitcode.WithCode(err, prepare.ErrorExitCode(err))
 }
 ```
 

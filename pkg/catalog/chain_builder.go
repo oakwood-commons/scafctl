@@ -37,11 +37,15 @@ func CheckPluginPolicy(policies map[string]PluginPolicy, catalogName, pluginName
 		return nil
 	}
 	if catalogName == "" {
-		return fmt.Errorf("plugin origin unknown; cannot verify plugin %q against per-catalog allowlist", pluginName)
+		return &PolicyError{
+			Message: fmt.Sprintf("plugin origin unknown; cannot verify plugin %q against per-catalog allowlist", pluginName),
+		}
 	}
 	policy, ok := policies[strings.ToLower(catalogName)]
 	if !ok {
-		return fmt.Errorf("catalog %q is not permitted to serve any plugins", catalogName)
+		return &PolicyError{
+			Message: fmt.Sprintf("catalog %q is not permitted to serve any plugins", catalogName),
+		}
 	}
 	if policy.AllowAll {
 		return nil
@@ -51,7 +55,9 @@ func CheckPluginPolicy(policies map[string]PluginPolicy, catalogName, pluginName
 			return nil
 		}
 	}
-	return fmt.Errorf("plugin %q is not in catalog %q's allowed plugins list", pluginName, catalogName)
+	return &PolicyError{
+		Message: fmt.Sprintf("plugin %q is not in catalog %q's allowed plugins list", pluginName, catalogName),
+	}
 }
 
 type ChainCatalogOptions struct {

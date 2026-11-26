@@ -6,11 +6,19 @@ package run
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -48,6 +56,166 @@ func TestProviderOptions_Run_ProviderNotFound(t *testing.T) {
 	err := opts.Run(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+}
+
+func TestProviderOptions_Run_ExitCodes(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	t.Run("version pin miss in cache exits InvalidInput", func(t *testing.T) {
+		ctx := newProviderTestCtx(t)
+		opts := &ProviderOptions{
+			IOStreams:     terminal.NewIOStreams(nil, nil, nil, false),
+			CliParams:     settings.NewCliParams(),
+			ProviderName:  "exec",
+			PluginVersion: "99.99.99",
+		}
+		opts.Output = "json"
+
+		err := opts.Run(ctx)
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	})
+
+	t.Run("cold-cache official provider fetch failure preserves error and exits CatalogError", func(t *testing.T) {
+		unreachSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadGateway)
+		}))
+		t.Cleanup(unreachSrv.Close)
+		host := strings.TrimPrefix(unreachSrv.URL, "http://")
+
+		appCfg := &config.Config{
+			Settings: config.Settings{DisableOfficialCatalog: true},
+			Catalogs: []config.CatalogConfig{
+				{Name: "offline", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/providers", Insecure: true},
+			},
+		}
+		var errBuf bytes.Buffer
+		ioStreams := terminal.NewIOStreams(nil, &bytes.Buffer{}, &errBuf, false)
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		w := writer.New(ioStreams, cliParams)
+		ctx := settings.IntoContext(context.Background(), cliParams)
+		ctx = writer.WithWriter(ctx, w)
+		ctx = logger.WithLogger(ctx, logger.GetNoopLogger())
+		ctx = config.WithConfig(ctx, appCfg)
+		ctx = official.WithRegistry(ctx, official.NewRegistry())
+
+		opts := &ProviderOptions{
+			BinaryName:   "mycli",
+			IOStreams:    ioStreams,
+			CliParams:    cliParams,
+			ProviderName: "exec",
+		}
+		opts.Output = "json"
+
+		err := opts.Run(ctx)
+		require.Error(t, err)
+		assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
+		assert.Contains(t, err.Error(), "unreachable")
+		assert.Contains(t, err.Error(), "mycli plugins install")
+		assert.NotContains(t, err.Error(), `provider "exec" not found`)
+	})
+
+	t.Run("invalid signature policy during official provider fetch exits ConfigError", func(t *testing.T) {
+		appCfg := &config.Config{
+			Settings: config.Settings{DisableOfficialCatalog: true},
+			Plugins: config.PluginsConfig{
+				Signatures: config.PluginSignaturesConfig{
+					Mode: "invalid-mode",
+				},
+			},
+		}
+		ctx := config.WithConfig(official.WithRegistry(newProviderTestCtx(t), official.NewRegistry()), appCfg)
+
+		opts := &ProviderOptions{
+			IOStreams:    terminal.NewIOStreams(nil, nil, nil, false),
+			CliParams:    settings.NewCliParams(),
+			ProviderName: "exec",
+		}
+		opts.Output = "json"
+
+		err := opts.Run(ctx)
+		require.Error(t, err)
+		assert.Equal(t, exitcode.ConfigError, exitcode.GetCode(err))
+	})
+
+	t.Run("warm cache does not bypass signature policy or enforce mode on official provider", func(t *testing.T) {
+		cacheRoot := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cacheRoot)
+
+		// Pre-populate warm plugin cache for "exec" under mycli's cache directory.
+		c := plugin.NewCache(filepath.Join(cacheRoot, "mycli", "plugins"))
+		_, err := c.Put("exec", "1.0.0", plugin.CurrentPlatform(), []byte("not-a-valid-plugin-binary"))
+		require.NoError(t, err)
+
+		unreachSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadGateway)
+		}))
+		t.Cleanup(unreachSrv.Close)
+		host := strings.TrimPrefix(unreachSrv.URL, "http://")
+
+		// Enforce mode skips unverified cache reads and must NOT fall back to RegisterCachedPlugin.
+		enforceCfg := &config.Config{
+			Settings: config.Settings{DisableOfficialCatalog: true},
+			Catalogs: []config.CatalogConfig{
+				{Name: "offline", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/providers", Insecure: true},
+			},
+			Plugins: config.PluginsConfig{
+				Signatures: config.PluginSignaturesConfig{
+					Mode:              "enforce",
+					TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+					TrustedIdentities: []string{"https://github.com/oakwood-commons/*"},
+				},
+			},
+		}
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		ioStreams := terminal.NewIOStreams(nil, &bytes.Buffer{}, &bytes.Buffer{}, false)
+		ctx := settings.IntoContext(context.Background(), cliParams)
+		ctx = writer.WithWriter(ctx, writer.New(ioStreams, cliParams))
+		ctx = logger.WithLogger(ctx, logger.GetNoopLogger())
+		ctx = config.WithConfig(ctx, enforceCfg)
+		ctx = official.WithRegistry(ctx, official.NewRegistry())
+
+		opts := &ProviderOptions{
+			BinaryName:   "mycli",
+			IOStreams:    ioStreams,
+			CliParams:    cliParams,
+			ProviderName: "exec",
+		}
+		opts.Output = "json"
+
+		runErr := opts.Run(ctx)
+		require.Error(t, runErr)
+		assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(runErr))
+		assert.Contains(t, runErr.Error(), "unreachable", "must report catalog unreachable rather than spawning unverified cache")
+	})
+
+	t.Run("corrupt cached non-official plugin exits CatalogError with and without version pin", func(t *testing.T) {
+		cacheRoot := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cacheRoot)
+
+		c := plugin.NewCache(filepath.Join(cacheRoot, settings.CliBinaryName, "plugins"))
+		_, err := c.Put("corrupt-cached-prov", "1.0.0", plugin.CurrentPlatform(), []byte("not-an-executable-binary"))
+		require.NoError(t, err)
+
+		for _, ver := range []string{"", "1.0.0"} {
+			ctx := newProviderTestCtx(t)
+			opts := &ProviderOptions{
+				IOStreams:     terminal.NewIOStreams(nil, nil, nil, false),
+				CliParams:     settings.NewCliParams(),
+				ProviderName:  "corrupt-cached-prov",
+				PluginVersion: ver,
+			}
+			opts.Output = "json"
+
+			runErr := opts.Run(ctx)
+			require.Error(t, runErr)
+			assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(runErr), "PluginVersion=%q", ver)
+		}
+	})
 }
 
 // TestProviderOptions_Run_InvalidOnConflict verifies that an invalid --on-conflict

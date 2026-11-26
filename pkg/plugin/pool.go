@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
@@ -30,7 +32,7 @@ var (
 // Returns 0 if the error is not a recognized pool error.
 func PoolErrorHTTPStatus(err error) int {
 	switch {
-	case errors.Is(err, ErrPluginNotAllowed), errors.Is(err, ErrExternalDisabled), errors.Is(err, ErrLocalBuildNotAllowed):
+	case errors.Is(err, ErrPluginNotAllowed), errors.Is(err, ErrExternalDisabled), errors.Is(err, ErrLocalBuildNotAllowed), errors.Is(err, catalog.ErrCatalogPolicyDenied):
 		return 403 // Forbidden — policy rejection
 	case errors.Is(err, ErrUnconfiguredRegistry):
 		return 403 // Forbidden — the server does not serve that registry
@@ -507,10 +509,7 @@ func (p *Pool) waitAndValidate(ctx context.Context, entry *poolEntry, acquire bo
 // plugin process. When sanitize is true, WithSanitizedEnv() is prepended.
 func buildSpawnClientOpts(sanitize bool, extraOpts []ClientOption) []ClientOption {
 	if sanitize {
-		opts := make([]ClientOption, 1, 1+len(extraOpts))
-		opts[0] = WithSanitizedEnv()
-		opts = append(opts, extraOpts...)
-		return opts
+		return slices.Concat([]ClientOption{WithSanitizedEnv()}, extraOpts)
 	}
 	if len(extraOpts) == 0 {
 		return nil

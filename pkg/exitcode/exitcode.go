@@ -3,6 +3,24 @@
 
 // Package exitcode provides centralized exit codes for CLI commands.
 // All commands should import this package to ensure consistent exit codes.
+//
+// Exit-code table:
+//
+//	Code  Constant          Meaning
+//	----  ----------------  --------------------------------------------------------------------------
+//	0     Success           Command completed successfully.
+//	1     GeneralError      Runtime execution failure (resolver resolve/transform, provider, or state).
+//	2     ValidationFailed  Input, schema, lint, or resolver validation failure.
+//	3     InvalidInput      Invalid CLI flags/args, malformed ref, undeclared provider, or bad lock/bundle.
+//	4     FileNotFound      Solution, schema, state, or artifact file not found or unreadable.
+//	5     RenderFailed      Template or solution rendering failure.
+//	6     ActionFailed      Action or workflow execution failure.
+//	7     ConfigError       Host configuration or policy error (unconfigured catalog, allowlist, signatures).
+//	8     CatalogError      Catalog or plugin acquisition failure (offline, auth rejected, digest/signature).
+//	9     TimeoutError      Operation timed out.
+//	10    PermissionDenied  Filesystem or OS permission denied (fs.ErrPermission).
+//	11    TestFailed        One or more functional tests failed.
+//	12    PartialSuccess    Workflow finished with continueOnError failures (--detailed-exit-code only).
 package exitcode
 
 import (

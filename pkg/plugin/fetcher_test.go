@@ -3219,3 +3219,148 @@ func TestFetcher_ResolvePlugins_ResolveError(t *testing.T) {
 	_, err := f.ResolvePlugins(context.Background(), deps)
 	require.Error(t, err)
 }
+
+type unreachableCatalogFetcher struct {
+	err error
+}
+
+func (u *unreachableCatalogFetcher) ResolvePlugin(context.Context, string, catalog.ArtifactKind, string, ...catalog.Option) (catalog.ArtifactInfo, error) {
+	return catalog.ArtifactInfo{}, u.err
+}
+
+func (u *unreachableCatalogFetcher) FetchPlugin(context.Context, string, catalog.ArtifactKind, string, string, ...catalog.Option) ([]byte, catalog.ArtifactInfo, error) {
+	return nil, catalog.ArtifactInfo{}, u.err
+}
+
+func (u *unreachableCatalogFetcher) ResolveContentDigest(context.Context, string, catalog.ArtifactKind, string, string, string, ...catalog.Option) (catalog.ContentDigestInfo, error) {
+	return catalog.ContentDigestInfo{}, u.err
+}
+
+func TestFetcher_WrapOfflineHint(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dep := solution.PluginDependency{Name: "exec", Kind: solution.PluginKindProvider, Version: "^1.0.0"}
+	unreach := &catalog.UnreachableError{Catalog: "official", Cause: errors.New("dial tcp 127.0.0.1:1: connect: connection refused")}
+
+	t.Run("default binary name across FetchPlugin, FetchPlugins, and ResolvePlugins", func(t *testing.T) {
+		t.Parallel()
+		f := NewFetcher(FetcherConfig{
+			CatalogFetcher: &unreachableCatalogFetcher{err: unreach},
+			Cache:          NewCache(t.TempDir()),
+			Platform:       "linux/amd64",
+			NoCache:        true,
+			Logger:         logr.Discard(),
+		})
+		wantHint := "(hint: run 'scafctl plugins install' while online or pre-populate the plugin cache for offline environments)"
+
+		_, err := f.FetchPlugin(ctx, dep, nil)
+		require.ErrorIs(t, err, catalog.ErrCatalogUnreachable)
+		assert.Equal(t, 1, strings.Count(err.Error(), wantHint))
+
+		_, err = f.FetchPlugins(ctx, []solution.PluginDependency{dep}, nil)
+		require.ErrorIs(t, err, catalog.ErrCatalogUnreachable)
+		assert.Equal(t, 1, strings.Count(err.Error(), wantHint))
+
+		_, err = f.ResolvePlugins(ctx, []solution.PluginDependency{dep})
+		require.ErrorIs(t, err, catalog.ErrCatalogUnreachable)
+		assert.Equal(t, 1, strings.Count(err.Error(), wantHint))
+
+		// Idempotency guard when called again on an already-hinted error.
+		again := f.wrapOfflineHint(err)
+		assert.Equal(t, 1, strings.Count(again.Error(), wantHint))
+	})
+
+	t.Run("embedder binary name is respected", func(t *testing.T) {
+		t.Parallel()
+		f := NewFetcher(FetcherConfig{
+			CatalogFetcher: &unreachableCatalogFetcher{err: unreach},
+			Cache:          NewCache(t.TempDir()),
+			Platform:       "linux/amd64",
+			NoCache:        true,
+			BinaryName:     "mycli",
+			Logger:         logr.Discard(),
+		})
+		wantHint := "(hint: run 'mycli plugins install' while online or pre-populate the plugin cache for offline environments)"
+
+		_, err := f.FetchPlugins(ctx, []solution.PluginDependency{dep}, nil)
+		require.ErrorIs(t, err, catalog.ErrCatalogUnreachable)
+		assert.Contains(t, err.Error(), wantHint)
+		assert.NotContains(t, err.Error(), "scafctl plugins install")
+	})
+
+	t.Run("non-unreachable error is returned without offline hint", func(t *testing.T) {
+		t.Parallel()
+		f := NewFetcher(FetcherConfig{
+			CatalogFetcher: newMockCatalog(),
+			Cache:          NewCache(t.TempDir()),
+			Platform:       "linux/amd64",
+			NoCache:        true,
+			Logger:         logr.Discard(),
+		})
+
+		_, err := f.FetchPlugin(ctx, dep, nil)
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "plugins install")
+	})
+}
+
+type failingHandshakePlugin struct {
+	MockProviderPlugin
+}
+
+func (failingHandshakePlugin) GetProviders(context.Context) ([]string, error) {
+	return nil, errors.New("handshake rpc failed")
+}
+
+func TestRegisterFetchedPlugins_StageTagging(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("RegisterFetchedPlugins tags StageSpawn on invalid binary", func(t *testing.T) {
+		t.Parallel()
+		_, err := RegisterFetchedPlugins(ctx, provider.NewRegistry(), []FetchResult{
+			{Name: "bad", Kind: solution.PluginKindProvider, Path: "/nonexistent/plugin-bin"},
+		}, nil)
+		require.Error(t, err)
+		stage, ok := ErrorStage(err)
+		require.True(t, ok)
+		assert.Equal(t, StageSpawn, stage)
+	})
+
+	t.Run("RegisterFetchedVersionedPlugins tags StageSpawn on client factory error", func(t *testing.T) {
+		t.Parallel()
+		_, err := RegisterFetchedVersionedPlugins(ctx, provider.NewCompositeRegistry(), []FetchResult{
+			{Name: "bad", Kind: solution.PluginKindProvider, Path: "/tmp/bad", Version: "1.0.0"},
+		}, nil, func(string, ...ClientOption) (*Client, error) {
+			return nil, errors.New("spawn failed")
+		}, nil)
+		require.Error(t, err)
+		stage, ok := ErrorStage(err)
+		require.True(t, ok)
+		assert.Equal(t, StageSpawn, stage)
+	})
+
+	t.Run("RegisterFetchedVersionedPlugins tags StageHandshake on GetProviders error", func(t *testing.T) {
+		t.Parallel()
+		_, err := RegisterFetchedVersionedPlugins(ctx, provider.NewCompositeRegistry(), []FetchResult{
+			{Name: "bad-hs", Kind: solution.PluginKindProvider, Path: "/tmp/bad-hs", Version: "1.0.0"},
+		}, nil, func(path string, _ ...ClientOption) (*Client, error) {
+			return &Client{plugin: &failingHandshakePlugin{}, path: path, name: "bad-hs"}, nil
+		}, nil)
+		require.Error(t, err)
+		stage, ok := ErrorStage(err)
+		require.True(t, ok)
+		assert.Equal(t, StageHandshake, stage)
+	})
+
+	t.Run("RegisterFetchedAuthHandlerPlugins tags StageSpawn on invalid binary", func(t *testing.T) {
+		t.Parallel()
+		_, err := RegisterFetchedAuthHandlerPlugins(ctx, auth.NewRegistry(), []FetchResult{
+			{Name: "bad-auth", Kind: solution.PluginKindAuthHandler, Path: "/nonexistent/auth-bin"},
+		}, nil)
+		require.Error(t, err)
+		stage, ok := ErrorStage(err)
+		require.True(t, ok)
+		assert.Equal(t, StageSpawn, stage)
+	})
+}

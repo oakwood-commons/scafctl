@@ -191,11 +191,14 @@ FAILURE OUTPUT (json/yaml):
   (table/quiet) keep the prior stderr-only error behavior.
 
 EXIT CODES:
-  0  Success
-  1  Resolver execution failed
-  2  Validation failed
-  3  Invalid solution (cycle/parse error)
-  4  File not found
+  0   Success
+  1   Resolver execution failed
+  2   Validation failed
+  3   Invalid solution or input (cycle, parse error, undeclared provider, or bad lock/ref)
+  4   File not found
+  7   Configuration or policy error (unconfigured catalog, allowlist, or signature policy)
+  8   Catalog or plugin acquisition failed (offline, auth rejected, or digest/signature failure)
+  10  Permission denied
 
 Examples:
   # Run all resolvers (auto-discovery)
@@ -356,11 +359,14 @@ parameters and solution sources work exactly as in 'run resolver'.
 `+ResolverParametersHelp+`
 
 EXIT CODES:
-  0  All resolvers validated and lint passed
-  1  Resolver execution failed
-  2  Validation failed (resolver validation, lint errors, or --strict warnings)
-  3  Invalid solution (cycle/parse error)
-  4  File not found
+  0   All resolvers validated and lint passed
+  1   Resolver execution failed
+  2   Validation failed (resolver validation, lint errors, or --strict warnings)
+  3   Invalid solution or input (cycle, parse error, undeclared provider, or bad lock/ref)
+  4   File not found
+  7   Configuration or policy error (unconfigured catalog, allowlist, or signature policy)
+  8   Catalog or plugin acquisition failed (offline, auth rejected, or digest/signature failure)
+  10  Permission denied
 
 Examples:
   # Validate all resolvers (auto-discovery)

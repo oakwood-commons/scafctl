@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -87,12 +88,12 @@ func TestRemoteCatalog_Find(t *testing.T) {
 		{
 			name:    "constraint with no match",
 			query:   ArtifactQuery{Name: name, Kind: ArtifactKindProvider, Version: ">=3.0.0"},
-			wantErr: ErrArtifactNotFound,
+			wantErr: ErrNoMatchingVersion,
 		},
 		{
 			name:    "exact version absent",
 			query:   ArtifactQuery{Name: name, Kind: ArtifactKindProvider, Version: "9.9.9"},
-			wantErr: ErrArtifactNotFound,
+			wantErr: ErrNoMatchingVersion,
 		},
 		{
 			name:    "unknown repository",
@@ -163,6 +164,9 @@ func TestRemoteCatalog_Find(t *testing.T) {
 			info, err := cat.Find(findCtx, tt.query)
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
+				if errors.Is(tt.wantErr, ErrNoMatchingVersion) {
+					assert.ErrorIs(t, err, ErrArtifactNotFound, "NoMatchingVersionError must unwrap to ErrArtifactNotFound for chain fallthrough")
+				}
 				return
 			}
 
@@ -263,6 +267,51 @@ func TestIsRegistryNotFound(t *testing.T) {
 	t.Parallel()
 	assert.False(t, isRegistryNotFound(nil))
 	assert.False(t, isRegistryNotFound(assert.AnError))
+}
+
+func TestLocalCatalog_Find_NoMatchingVersionAndChainFallthrough(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	local := newTestCatalog(t)
+	_, err := local.Store(ctx, testRef("prov-a", "0.4.0"), []byte("local-040"), nil, nil, false)
+	require.NoError(t, err)
+
+	// LocalCatalog.Find returns NoMatchingVersionError when versions exist but none match.
+	_, err = local.Find(ctx, ArtifactQuery{Name: "prov-a", Kind: ArtifactKindProvider, Version: ">=0.6.0"})
+	require.ErrorIs(t, err, ErrNoMatchingVersion)
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+	noMatch, ok := IsNoMatchingVersion(err)
+	require.True(t, ok)
+	assert.Equal(t, []string{"0.4.0"}, noMatch.Available)
+	assert.Equal(t, LocalCatalogName, noMatch.Catalog)
+
+	// Absent artifact returns plain ArtifactNotFoundError, not ErrNoMatchingVersion.
+	_, err = local.Find(ctx, ArtifactQuery{Name: "absent-prov", Kind: ArtifactKindProvider, Version: ">=0.6.0"})
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+	assert.NotErrorIs(t, err, ErrNoMatchingVersion)
+
+	// In a multi-catalog chain, local 0.4.0 misses ">=0.6.0" with NoMatchingVersionError
+	// and falls through cleanly to remote 0.6.0!
+	remote, ts := newTestRemoteCatalog(t)
+	t.Cleanup(ts.Close)
+	_, err = remote.Store(ctx, testRef("prov-a", "0.6.0"), []byte("remote-060"), nil, nil, false)
+	require.NoError(t, err)
+
+	chain := newPluginSourceChain(local.logger, newLocalPlugin(local), remote)
+	info, err := chain.Find(ctx, ArtifactQuery{Name: "prov-a", Kind: ArtifactKindProvider, Version: ">=0.6.0"})
+	require.NoError(t, err)
+	assert.Equal(t, "0.6.0", info.Reference.Version.String())
+	assert.Equal(t, remote.Name(), info.Catalog)
+
+	// When no catalog in the chain matches ">=1.0.0", aggregateChainError surfaces *NoMatchingVersionError.
+	_, err = chain.Find(ctx, ArtifactQuery{Name: "prov-a", Kind: ArtifactKindProvider, Version: ">=1.0.0"})
+	require.ErrorIs(t, err, ErrNoMatchingVersion)
+	require.ErrorIs(t, err, ErrArtifactNotFound)
+	merged, ok := IsNoMatchingVersion(err)
+	require.True(t, ok)
+	assert.Contains(t, merged.Available, "0.4.0")
+	assert.Contains(t, merged.Available, "0.6.0")
 }
 
 func BenchmarkVersionCandidates(b *testing.B) {

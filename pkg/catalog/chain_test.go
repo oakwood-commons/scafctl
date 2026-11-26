@@ -7,6 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -270,7 +273,7 @@ func TestChainCatalog_Exists_RejectedCredentialsHalt(t *testing.T) {
 	// A catalog whose credentials were rejected cannot tell "absent" from
 	// "hidden", so existence must not be reported as a clean not-found that
 	// lets a caller fall through to a lower-priority catalog.
-	rejected := fmt.Errorf("existence check p@1.0.0: %w", errCredentialsRejected)
+	rejected := fmt.Errorf("existence check p@1.0.0: %w", ErrCredentialsRejected)
 	c1 := NewMockCatalog("remote", WithExistsFunc(func(_ context.Context, _ Reference) (bool, error) {
 		return false, rejected
 	}))
@@ -283,7 +286,7 @@ func TestChainCatalog_Exists_RejectedCredentialsHalt(t *testing.T) {
 
 	ok, err := chain.Exists(context.Background(), testRef("my-plugin", "1.0.0"))
 	assert.False(t, ok)
-	require.ErrorIs(t, err, errCredentialsRejected)
+	require.ErrorIs(t, err, ErrCredentialsRejected)
 	assert.NotErrorIs(t, err, ErrArtifactNotFound)
 	assert.Contains(t, err.Error(), "remote")
 }
@@ -1206,4 +1209,173 @@ func TestBuildCatalogChain_WithPerCatalogArtifacts_OfficialDenyDefault(t *testin
 	require.True(t, ok, "expected official catalog to be wrapped in AllowlistCatalog")
 	assert.Equal(t, config.CatalogNameOfficial, wrapped.Name())
 	assert.False(t, wrapped.isAllowed("exec"))
+}
+
+func TestAggregateChainError_NoMatchingVersion(t *testing.T) {
+	t.Parallel()
+	ref := Reference{Kind: ArtifactKindProvider, Name: "exec"}
+
+	t.Run("single catalog NoMatchingVersionError surfaces directly", func(t *testing.T) {
+		t.Parallel()
+		nm := &NoMatchingVersionError{
+			Reference:  ref,
+			Constraint: "^2.0.0",
+			Available:  []string{"1.5.0", "1.4.0"},
+			Catalog:    "official",
+		}
+		err := aggregateChainError("exec@^2.0.0", []catalogOutcome{
+			{catalog: "local", err: &ArtifactNotFoundError{Reference: ref, Catalog: "local"}},
+			{catalog: "official", err: nm},
+		})
+		require.ErrorIs(t, err, ErrNoMatchingVersion)
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+		got, ok := IsNoMatchingVersion(err)
+		require.True(t, ok)
+		assert.Same(t, nm, got)
+	})
+
+	t.Run("multiple catalogs merge available versions and catalog names", func(t *testing.T) {
+		t.Parallel()
+		err := aggregateChainError("exec@>=3.0.0", []catalogOutcome{
+			{catalog: "local", err: &NoMatchingVersionError{
+				Reference:  ref,
+				Constraint: ">=3.0.0, >=0.0.0-0",
+				Available:  []string{"0.4.0"},
+				Catalog:    "local",
+			}},
+			{catalog: "official", err: &NoMatchingVersionError{
+				Reference:  ref,
+				Constraint: ">=3.0.0, >=0.0.0-0",
+				Available:  []string{"1.2.0", "0.4.0"},
+				Catalog:    "official",
+			}},
+		})
+		require.ErrorIs(t, err, ErrNoMatchingVersion)
+		require.ErrorIs(t, err, ErrArtifactNotFound)
+		got, ok := IsNoMatchingVersion(err)
+		require.True(t, ok)
+		assert.Equal(t, ">=3.0.0", got.Constraint)
+		assert.Equal(t, "local, official", got.Catalog)
+		assert.Equal(t, []string{"1.2.0", "0.4.0"}, got.Available)
+	})
+
+	t.Run("unreachable catalog takes precedence over NoMatchingVersionError", func(t *testing.T) {
+		t.Parallel()
+		err := aggregateChainError("exec@^2.0.0", []catalogOutcome{
+			{catalog: "local", err: &NoMatchingVersionError{
+				Reference:  ref,
+				Constraint: "^2.0.0",
+				Available:  []string{"1.0.0"},
+				Catalog:    "local",
+			}},
+			{catalog: "official", err: &UnreachableError{Catalog: "official", Cause: errors.New("offline")}},
+		})
+		require.ErrorIs(t, err, ErrCatalogUnreachable)
+		assert.NotErrorIs(t, err, ErrNoMatchingVersion)
+	})
+}
+
+func TestChainCatalog_List_ErrorHandling(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	item := ArtifactInfo{Reference: testRef("demo", "1.0.0"), Catalog: "c2"}
+	unreachable := &UnreachableError{Catalog: "c1", Cause: errors.New("dial tcp: connection refused")}
+
+	t.Run("best-effort continues past unreachable catalog when another catalog has items", func(t *testing.T) {
+		t.Parallel()
+		c1 := NewMockCatalog("c1", WithListFunc(func(context.Context, ArtifactKind, string) ([]ArtifactInfo, error) {
+			return nil, unreachable
+		}))
+		c2 := NewMockCatalog("c2", WithListFunc(func(context.Context, ArtifactKind, string) ([]ArtifactInfo, error) {
+			return []ArtifactInfo{item}, nil
+		}))
+		chain, err := NewChainCatalog(logr.Discard(), c1, c2)
+		require.NoError(t, err)
+
+		got, err := chain.List(ctx, ArtifactKindSolution, "")
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, "demo", got[0].Reference.Name)
+	})
+
+	t.Run("best-effort surfaces unreachable error when zero results returned", func(t *testing.T) {
+		t.Parallel()
+		c1 := NewMockCatalog("c1", WithListFunc(func(context.Context, ArtifactKind, string) ([]ArtifactInfo, error) {
+			return nil, nil
+		}))
+		c2 := NewMockCatalog("c2", WithListFunc(func(context.Context, ArtifactKind, string) ([]ArtifactInfo, error) {
+			return nil, &UnreachableError{Catalog: "c2", Cause: errors.New("offline")}
+		}))
+		chain, err := NewChainCatalog(logr.Discard(), c1, c2)
+		require.NoError(t, err)
+
+		got, err := chain.List(ctx, ArtifactKindProvider, "exec")
+		assert.Nil(t, got)
+		require.ErrorIs(t, err, ErrCatalogUnreachable)
+	})
+
+	t.Run("best-effort surfaces credentials rejected when zero results returned", func(t *testing.T) {
+		t.Parallel()
+		c1 := NewMockCatalog("c1", WithListFunc(func(context.Context, ArtifactKind, string) ([]ArtifactInfo, error) {
+			return nil, fmt.Errorf("list: %w", ErrCredentialsRejected)
+		}))
+		chain, err := NewChainCatalog(logr.Discard(), c1)
+		require.NoError(t, err)
+
+		got, err := chain.List(ctx, ArtifactKindProvider, "")
+		assert.Nil(t, got)
+		require.ErrorIs(t, err, ErrCredentialsRejected)
+	})
+
+	t.Run("strict mode halts immediately on indeterminate list error", func(t *testing.T) {
+		t.Parallel()
+		c1 := NewMockCatalog("c1", WithListFunc(func(context.Context, ArtifactKind, string) ([]ArtifactInfo, error) {
+			return nil, unreachable
+		}))
+		c2Called := false
+		c2 := NewMockCatalog("c2", WithListFunc(func(context.Context, ArtifactKind, string) ([]ArtifactInfo, error) {
+			c2Called = true
+			return []ArtifactInfo{item}, nil
+		}))
+		chain, err := NewChainCatalogWithMode(logr.Discard(), ChainModeStrict, c1, c2)
+		require.NoError(t, err)
+
+		got, err := chain.List(ctx, ArtifactKindSolution, "")
+		assert.Nil(t, got)
+		require.ErrorIs(t, err, ErrCatalogUnreachable)
+		assert.False(t, c2Called, "strict mode must not fall through past unreachable catalog")
+	})
+
+	t.Run("real RemoteCatalog 503 propagates ErrCatalogUnreachable for both repository enumeration and cross-kind list", func(t *testing.T) {
+		t.Parallel()
+		gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		t.Cleanup(gw.Close)
+		host := strings.TrimPrefix(gw.URL, "http://")
+
+		remoteCat, err := NewRemoteCatalog(RemoteCatalogConfig{
+			Name:     "offline-remote",
+			Registry: host,
+			Insecure: true,
+			Logger:   logr.Discard(),
+		})
+		require.NoError(t, err)
+
+		emptyLocal := NewMockCatalog("local", WithListFunc(func(context.Context, ArtifactKind, string) ([]ArtifactInfo, error) {
+			return nil, nil
+		}))
+		chain, err := NewChainCatalog(logr.Discard(), emptyLocal, remoteCat)
+		require.NoError(t, err)
+
+		// name == "" -> RemoteCatalog.ListRepositories
+		gotAll, errAll := chain.List(ctx, ArtifactKindSolution, "")
+		assert.Nil(t, gotAll)
+		require.ErrorIs(t, errAll, ErrCatalogUnreachable)
+
+		// kind == "" && name != "" -> RemoteCatalog.listAcrossKinds
+		gotNamed, errNamed := chain.List(ctx, "", "demo")
+		assert.Nil(t, gotNamed)
+		require.ErrorIs(t, errNamed, ErrCatalogUnreachable)
+	})
 }

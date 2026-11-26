@@ -4,6 +4,7 @@
 package load
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -46,6 +47,12 @@ func serve(t testing.TB, status int, body string) *httptest.Server {
 func TestURLLoader_Load(t *testing.T) {
 	t.Parallel()
 
+	var lc net.ListenConfig
+	ln, listenErr := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, listenErr)
+	closedURL := "http://" + ln.Addr().String() + "/solution.yaml"
+	require.NoError(t, ln.Close())
+
 	tests := []struct {
 		name          string
 		status        int
@@ -54,6 +61,8 @@ func TestURLLoader_Load(t *testing.T) {
 		blockLoopback bool
 		opts          []URLOption
 		wantResolvers []string
+		wantErr       error
+		notWantErr    error
 		errMsg        string
 	}{
 		{
@@ -67,10 +76,11 @@ func TestURLLoader_Load(t *testing.T) {
 			body:   composeRootYAML,
 		},
 		{
-			name:   "strict validation failure",
-			status: http.StatusOK,
-			body:   undefinedDepJSON,
-			errMsg: "loading solution from URL",
+			name:       "strict validation failure",
+			status:     http.StatusOK,
+			body:       undefinedDepJSON,
+			notWantErr: ErrFetch,
+			errMsg:     "loading solution from URL",
 		},
 		{
 			name:          "lenient skips spec validation",
@@ -80,26 +90,56 @@ func TestURLLoader_Load(t *testing.T) {
 			wantResolvers: []string{"app"},
 		},
 		{
-			name:   "parse error",
-			status: http.StatusOK,
-			body:   "not valid yaml: [",
-			errMsg: "loading solution from URL",
+			name:       "parse error",
+			status:     http.StatusOK,
+			body:       "not valid yaml: [",
+			notWantErr: ErrFetch,
+			errMsg:     "loading solution from URL",
 		},
 		{
-			name:   "non-200 response",
-			status: http.StatusNotFound,
-			errMsg: "non-200 response",
+			name:       "non-200 404 response stays missing resource",
+			status:     http.StatusNotFound,
+			notWantErr: ErrFetch,
+			errMsg:     "non-200 response",
 		},
 		{
-			name:   "invalid URL",
-			ref:    "not-a-url",
-			errMsg: "not a valid URL",
+			name:       "non-200 410 response stays missing resource",
+			status:     http.StatusGone,
+			notWantErr: ErrFetch,
+			errMsg:     "non-200 response",
+		},
+		{
+			name:    "non-200 503 response marks ErrFetch",
+			status:  http.StatusServiceUnavailable,
+			wantErr: ErrFetch,
+			errMsg:  "fetching solution from URL",
+		},
+		{
+			name:    "non-200 403 response marks ErrFetch",
+			status:  http.StatusForbidden,
+			wantErr: ErrFetch,
+			errMsg:  "non-200 response",
+		},
+		{
+			name:    "dial failure marks ErrFetch",
+			ref:     closedURL,
+			wantErr: ErrFetch,
+			errMsg:  "fetching solution from URL",
+		},
+		{
+			name:       "invalid URL",
+			ref:        "not-a-url",
+			wantErr:    source.ErrInvalidRef,
+			notWantErr: ErrFetch,
+			errMsg:     "not a valid URL",
 		},
 		{
 			name:          "blocked by policy",
 			status:        http.StatusOK,
 			body:          validSolutionYAML,
 			blockLoopback: true,
+			wantErr:       httpc.ErrBlockedByPolicy,
+			notWantErr:    ErrFetch,
 			errMsg:        "fetching solution from URL",
 		},
 	}
@@ -121,6 +161,12 @@ func TestURLLoader_Load(t *testing.T) {
 				require.Error(t, err)
 				assert.Nil(t, got)
 				assert.Contains(t, err.Error(), tt.errMsg)
+				if tt.wantErr != nil {
+					assert.ErrorIs(t, err, tt.wantErr)
+				}
+				if tt.notWantErr != nil {
+					assert.NotErrorIs(t, err, tt.notWantErr)
+				}
 				return
 			}
 
@@ -172,6 +218,32 @@ func TestNewURLLoader(t *testing.T) {
 		assert.Same(t, client, l.client)
 		assert.True(t, l.lenient)
 	})
+}
+
+func TestURLLoader_Load_BodyReadFailureMarksErrFetch(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "1024")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("apiVersion: scafctl.io/v1\n"))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		if hj, ok := w.(http.Hijacker); ok {
+			if conn, _, err := hj.Hijack(); err == nil {
+				_ = conn.Close()
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	l := NewURLLoader(newTestClient(t, true))
+	got, err := l.Load(t.Context(), source.Classification{Kind: source.KindURL, Ref: srv.URL})
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.ErrorIs(t, err, ErrFetch)
+	assert.Contains(t, err.Error(), "reading response body from URL")
 }
 
 func BenchmarkURLLoader_Load(b *testing.B) {
