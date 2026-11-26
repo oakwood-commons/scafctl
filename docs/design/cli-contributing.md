@@ -661,6 +661,19 @@ scafctl run solution -f config.yaml -e 'size(_.results)'
 
 ## Flags and Parameters
 
+### Flag Naming Conventions
+
+Keep flag names and single-letter shorthands consistent across every command:
+
+| Flag | Shorthand | Purpose |
+|------|-----------|---------|
+| `--output` | `-o` | Output **format** (`auto`, `table`, `json`, `yaml`, `quiet`) -- never a file path |
+| `--output-file` | *(none)* | Destination file path when writing command output to disk |
+| `--file` | `-f` | Input file path (solution file, data context file, secret file, or state file) |
+| `--description` / `--data` | `-d` | Command-local description (`new solution`) or inline data context (`eval`) |
+| `--debug` | `-D` | Global debug logging shorthand on the root command (leaves `-d` free for subcommands) |
+| `--catalog` | `-c` | Target or source catalog name/URL |
+
 ### Standard Flags
 
 ```go
@@ -1652,7 +1665,7 @@ Use "scafctl options" for a list of global command-line options (applies to all 
 | `--no-color` | | bool | `false` | Disable colored output |
 | `--config` | | string | `~/.scafctl/config.yaml` | Path to config file |
 | `--log-level` | | string | `none` | Log level: none, error, warn, info, debug, trace, or numeric V-level |
-| `--debug` | `-d` | bool | `false` | Enable debug logging (shorthand for --log-level debug) |
+| `--debug` | `-D` | bool | `false` | Enable debug logging (shorthand for --log-level debug) |
 | `--log-format` | | string | `console` | Log format: console (colored) or json (structured) |
 | `--log-file` | | string | `""` | Write logs to a file path |
 

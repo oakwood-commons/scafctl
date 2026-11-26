@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
@@ -18,23 +19,28 @@ import (
 )
 
 // CommandSet creates the 'secrets set' command.
-func CommandSet(_ *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+func CommandSet(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var (
 		valueFlag     string
 		fileFlag      string
 		overwriteFlag bool
 	)
 
+	binaryName := settings.CliBinaryName
+	if cliParams != nil && cliParams.BinaryName != "" {
+		binaryName = cliParams.BinaryName
+	}
+
 	cmd := &cobra.Command{
 		Use:   "set <name> [value]",
 		Short: "Set a secret value",
-		Long: `Store a secret value. The value can be provided via:
+		Long: strings.ReplaceAll(`Store a secret value. The value can be provided via:
   - Argument: scafctl secrets set name value
   - Flag:     scafctl secrets set name --value value
-  - File:     scafctl secrets set name --file /path/to/file
+  - File:     scafctl secrets set name -f /path/to/file
   - Stdin:    echo value | scafctl secrets set name
 
-If the secret already exists, use --overwrite to replace it.`,
+If the secret already exists, use --overwrite to replace it.`, settings.CliBinaryName, binaryName),
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -149,7 +155,7 @@ If the secret already exists, use --overwrite to replace it.`,
 	}
 
 	cmd.Flags().StringVar(&valueFlag, "value", "", "Secret value")
-	cmd.Flags().StringVar(&fileFlag, "file", "", "Read value from file")
+	cmd.Flags().StringVarP(&fileFlag, "file", "f", "", "Read value from file")
 	cmd.Flags().BoolVar(&overwriteFlag, "overwrite", false, "Overwrite existing secret")
 
 	return cmd

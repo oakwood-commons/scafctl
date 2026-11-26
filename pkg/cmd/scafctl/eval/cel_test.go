@@ -4,6 +4,7 @@
 package eval
 
 import (
+	"os"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -12,17 +13,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func writeTestFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0o600)
+}
+
 func TestCommandCEL(t *testing.T) {
 	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 
-	cmd := CommandCEL(cliParams, ioStreams, "scafctl/eval")
+	cmd := CommandCEL(cliParams, ioStreams, "mycli/eval")
 
 	require.NotNil(t, cmd)
 	assert.Equal(t, "cel", cmd.Use)
 	assert.Contains(t, cmd.Aliases, "c")
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
+	assert.Contains(t, cmd.Long, "mycli eval cel")
+	assert.NotContains(t, cmd.Long, "scafctl eval cel")
 }
 
 func TestCommandCEL_Flags(t *testing.T) {
@@ -69,9 +77,48 @@ func TestCommandCEL_OutputShorthand(t *testing.T) {
 
 	cmd := CommandCEL(cliParams, ioStreams, "scafctl/eval")
 
-	f := cmd.Flags().ShorthandLookup("o")
-	require.NotNil(t, f, "output flag should have -o shorthand")
-	assert.Equal(t, "output", f.Name)
+	shorthands := map[string]string{
+		"v": "var",
+		"d": "data",
+		"f": "file",
+		"o": "output",
+	}
+	for short, full := range shorthands {
+		f := cmd.Flags().ShorthandLookup(short)
+		require.NotNil(t, f, "shorthand -%s should exist", short)
+		assert.Equal(t, full, f.Name, "shorthand -%s should map to --%s", short, full)
+	}
+}
+
+func TestCommandCEL_DataAndFileShorthandExecution(t *testing.T) {
+	t.Parallel()
+
+	t.Run("-d inline JSON data", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, out, _ := terminal.NewTestIOStreams()
+
+		cmd := CommandCEL(cliParams, ioStreams, "scafctl/eval")
+		cmd.SetArgs([]string{"--expression", "int(_.count) + 1", "-d", `{"count": 4}`})
+
+		require.NoError(t, cmd.Execute())
+		assert.Equal(t, "5\n", out.String())
+	})
+
+	t.Run("-f data file", func(t *testing.T) {
+		t.Parallel()
+		dataPath := t.TempDir() + "/ctx.json"
+		require.NoError(t, writeTestFile(dataPath, `{"name": "demo"}`))
+
+		cliParams := settings.NewCliParams()
+		ioStreams, out, _ := terminal.NewTestIOStreams()
+
+		cmd := CommandCEL(cliParams, ioStreams, "scafctl/eval")
+		cmd.SetArgs([]string{"--expression", "_.name", "-f", dataPath})
+
+		require.NoError(t, cmd.Execute())
+		assert.Equal(t, "demo\n", out.String())
+	})
 }
 
 func TestCommandCEL_HidesFullKvxFlags(t *testing.T) {

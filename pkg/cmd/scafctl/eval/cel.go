@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -42,15 +43,20 @@ type CELResult struct {
 func CommandCEL(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	opts := &CELOptions{}
 
+	binaryName := settings.CliBinaryName
+	if cliParams != nil && cliParams.BinaryName != "" {
+		binaryName = cliParams.BinaryName
+	}
+
 	cCmd := &cobra.Command{
 		Use:     "cel",
 		Aliases: []string{"c"},
 		Short:   "Evaluate a CEL expression",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Evaluate a CEL expression with optional data context.
 
 			Provide variables via --var flags (key=value pairs) or structured
-			data via --data (inline JSON) or --file (JSON/YAML file). File data
+			data via -d/--data (inline JSON) or -f/--file (JSON/YAML file). File data
 			is available as the root object "_" in the expression.
 
 			Examples:
@@ -62,11 +68,11 @@ func CommandCEL(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 			    -d '{"items": [{"name": "a", "active": true}]}'
 
 			  # With data from a file
-			  scafctl eval cel --expression 'has(config.timeout)' --file config.json
+			  scafctl eval cel --expression 'has(config.timeout)' -f config.json
 
 			  # Output as JSON
 			  scafctl eval cel --expression '1 + 2' -o json
-		`),
+		`), settings.CliBinaryName, binaryName),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
@@ -92,8 +98,8 @@ func CommandCEL(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 
 	cCmd.Flags().StringVar(&opts.Expression, "expression", "", "CEL expression to evaluate (required)")
 	cCmd.Flags().StringArrayVarP(&opts.Vars, "var", "v", nil, "Variable as key=value (repeatable)")
-	cCmd.Flags().StringVar(&opts.Data, "data", "", "Inline JSON data context")
-	cCmd.Flags().StringVar(&opts.File, "file", "", "JSON/YAML file for data context")
+	cCmd.Flags().StringVarP(&opts.Data, "data", "d", "", "Inline JSON data context")
+	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "JSON/YAML file for data context")
 	flags.AddKvxOutputFormatFlagToStructWithFormats(cCmd, &opts.KvxOutputFlags, dataOutputFormats)
 
 	_ = cCmd.MarkFlagRequired("expression")

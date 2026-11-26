@@ -4,8 +4,11 @@
 package newcmd
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -50,11 +53,21 @@ func TestCommandSolution(t *testing.T) {
 	cmd := CommandSolution(cliParams, ioStreams, "scafctl/new")
 
 	require.NotNil(t, cmd)
-	assert.Equal(t, "solution", cmd.Use)
-	assert.Contains(t, cmd.Aliases, "sol")
-	assert.Contains(t, cmd.Aliases, "s")
+	assert.Equal(t, "solution [name]", cmd.Use)
+	assert.Equal(t, []string{"sol", "s", "solutions"}, cmd.Aliases)
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
+}
+
+func TestCommandSolution_EmbedderBinaryName(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandSolution(cliParams, ioStreams, "mycli/new")
+
+	assert.Contains(t, cmd.Long, "mycli new solution")
+	assert.NotContains(t, cmd.Long, "scafctl new solution")
 }
 
 func TestCommandSolution_Flags(t *testing.T) {
@@ -73,7 +86,7 @@ func TestCommandSolution_Flags(t *testing.T) {
 		{"version flag", "version", ""},
 		{"features flag", "features", ""},
 		{"providers flag", "providers", ""},
-		{"output flag", "output", ""},
+		{"output-file flag", "output-file", ""},
 	}
 
 	for _, tt := range tests {
@@ -83,6 +96,8 @@ func TestCommandSolution_Flags(t *testing.T) {
 			assert.Equal(t, tt.defVal, f.DefValue, "flag %q default value", tt.flagName)
 		})
 	}
+
+	assert.Nil(t, cmd.Flags().Lookup("output"), "--output must not be registered on new solution")
 }
 
 func TestCommandSolution_RequiredFlags(t *testing.T) {
@@ -93,7 +108,7 @@ func TestCommandSolution_RequiredFlags(t *testing.T) {
 	cmd.SetArgs([]string{})
 
 	err := cmd.Execute()
-	assert.Error(t, err, "should fail without required --name and --description flags")
+	assert.Error(t, err, "should fail without required --description flag")
 }
 
 func TestCommandSolution_Shorthands(t *testing.T) {
@@ -104,7 +119,7 @@ func TestCommandSolution_Shorthands(t *testing.T) {
 
 	shorthands := map[string]string{
 		"n": "name",
-		"o": "output",
+		"d": "description",
 	}
 
 	for short, full := range shorthands {
@@ -112,6 +127,106 @@ func TestCommandSolution_Shorthands(t *testing.T) {
 		require.NotNil(t, f, "shorthand -%s should exist", short)
 		assert.Equal(t, full, f.Name, "shorthand -%s should map to --%s", short, full)
 	}
+
+	assert.Nil(t, cmd.Flags().ShorthandLookup("o"), "-o shorthand must not exist on new solution")
+}
+
+func TestCommandSolution_Execution(t *testing.T) {
+	t.Parallel()
+
+	t.Run("positional name and -d shorthand", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, out, _ := terminal.NewTestIOStreams()
+
+		cmd := CommandSolution(cliParams, ioStreams, "scafctl/new")
+		cmd.SetArgs([]string{"my-deploy", "-d", "Deploy to Kubernetes"})
+
+		require.NoError(t, cmd.Execute())
+		assert.Contains(t, out.String(), "name: my-deploy")
+		assert.Contains(t, out.String(), "Deploy to Kubernetes")
+		assert.Equal(t, filepath.Join("scafctl/new", "solution"), cliParams.EntryPointSettings.Path)
+	})
+
+	t.Run("flag -n and -d shorthand", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, out, _ := terminal.NewTestIOStreams()
+
+		cmd := CommandSolution(cliParams, ioStreams, "scafctl/new")
+		cmd.SetArgs([]string{"-n", "my-deploy", "-d", "Deploy to Kubernetes"})
+
+		require.NoError(t, cmd.Execute())
+		assert.Contains(t, out.String(), "name: my-deploy")
+	})
+
+	t.Run("matching positional and --name succeeds", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, out, _ := terminal.NewTestIOStreams()
+
+		cmd := CommandSolution(cliParams, ioStreams, "scafctl/new")
+		cmd.SetArgs([]string{"my-deploy", "-n", "my-deploy", "-d", "Deploy"})
+
+		require.NoError(t, cmd.Execute())
+		assert.Contains(t, out.String(), "name: my-deploy")
+	})
+
+	t.Run("missing both positional name and --name returns InvalidInput", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, _, errBuf := terminal.NewTestIOStreams()
+
+		cmd := CommandSolution(cliParams, ioStreams, "scafctl/new")
+		cmd.SetArgs([]string{"-d", "Deploy"})
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+		assert.Contains(t, errBuf.String(), "solution name is required")
+	})
+
+	t.Run("conflicting positional name and --name returns InvalidInput", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, _, errBuf := terminal.NewTestIOStreams()
+
+		cmd := CommandSolution(cliParams, ioStreams, "scafctl/new")
+		cmd.SetArgs([]string{"pos-app", "-n", "flag-app", "-d", "Deploy"})
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+		assert.Contains(t, errBuf.String(), "conflicting solution names")
+	})
+
+	t.Run("writes to --output-file", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, out, _ := terminal.NewTestIOStreams()
+		outFile := filepath.Join(t.TempDir(), "solution.yaml")
+
+		cmd := CommandSolution(cliParams, ioStreams, "scafctl/new")
+		cmd.SetArgs([]string{"file-app", "-d", "Written to disk", "--output-file", outFile})
+
+		require.NoError(t, cmd.Execute())
+		assert.Contains(t, out.String(), "Solution written to")
+		data, err := os.ReadFile(outFile)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "name: file-app")
+	})
+
+	t.Run("solutions alias resolves to solution subcommand", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, out, _ := terminal.NewTestIOStreams()
+
+		parent := CommandNew(cliParams, ioStreams, "scafctl")
+		parent.SetArgs([]string{"solutions", "alias-app", "-d", "Via plural alias"})
+
+		require.NoError(t, parent.Execute())
+		assert.Contains(t, out.String(), "name: alias-app")
+	})
 }
 
 func BenchmarkCommandNew(b *testing.B) {

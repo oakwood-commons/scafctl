@@ -34,8 +34,8 @@ See `curl-examples.sh` (bash) or `curl-examples.ps1` (PowerShell) for a comprehe
 
 ```bash
 # Export as JSON
-scafctl serve openapi --format json --output openapi.json
+scafctl serve openapi -o json --output-file openapi.json
 
 # Export as YAML
-scafctl serve openapi --format yaml --output openapi.yaml
+scafctl serve openapi -o yaml --output-file openapi.yaml
 ```

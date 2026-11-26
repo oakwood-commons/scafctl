@@ -946,7 +946,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	)
 
 	cCmd.PersistentFlags().StringVar(&cliParams.MinLogLevel, "log-level", "none", "Set the log level (none, error, warn, info, debug, trace, or a numeric V-level)")
-	cCmd.PersistentFlags().BoolVarP(&debugFlag, "debug", "d", false, "Enable debug logging (shorthand for --log-level debug)")
+	cCmd.PersistentFlags().BoolVarP(&debugFlag, "debug", "D", false, "Enable debug logging (shorthand for --log-level debug)")
 	cCmd.PersistentFlags().StringVar(&logFormat, "log-format", "console", "Set the log output format (console, json)")
 	cCmd.PersistentFlags().StringVar(&logFile, "log-file", "", "Write logs to a file instead of stderr")
 	cCmd.PersistentFlags().BoolVarP(&cliParams.IsQuiet, "quiet", "q", false, "Do not print additional information")

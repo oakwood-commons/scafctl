@@ -280,7 +280,7 @@ If the OS keychain is cleared or reset (e.g., OS reinstall), existing encrypted 
 
 ```bash
 # Before clearing the keychain, export your secrets
-scafctl secrets export --encrypt --output secrets-backup.enc
+scafctl secrets export --encrypt --output-file secrets-backup.enc
 ```
 
 {{% /tab %}}
@@ -288,7 +288,7 @@ scafctl secrets export --encrypt --output secrets-backup.enc
 
 ```powershell
 # Before clearing the keychain, export your secrets
-scafctl secrets export --encrypt --output secrets-backup.enc
+scafctl secrets export --encrypt --output-file secrets-backup.enc
 ```
 
 {{% /tab %}}

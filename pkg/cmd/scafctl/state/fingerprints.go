@@ -41,10 +41,9 @@ func CommandFingerprints(cliParams *settings.Run, ioStreams *terminal.IOStreams,
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to working directory or absolute)")
+	addStatePathFlags(cmd, &opts.Path)
 	cmd.Flags().StringVar(&opts.Action, "action", "", "Filter to a specific action name")
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
-	_ = cmd.MarkFlagRequired("path")
 
 	return cmd
 }

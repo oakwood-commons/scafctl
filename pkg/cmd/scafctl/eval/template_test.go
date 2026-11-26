@@ -14,9 +14,10 @@ import (
 
 func TestCommandTemplate(t *testing.T) {
 	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 
-	cmd := CommandTemplate(cliParams, ioStreams, "scafctl/eval")
+	cmd := CommandTemplate(cliParams, ioStreams, "mycli/eval")
 
 	require.NotNil(t, cmd)
 	assert.Equal(t, "template", cmd.Use)
@@ -24,6 +25,8 @@ func TestCommandTemplate(t *testing.T) {
 	assert.Contains(t, cmd.Aliases, "t")
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
+	assert.Contains(t, cmd.Long, "mycli eval template")
+	assert.NotContains(t, cmd.Long, "scafctl eval template")
 }
 
 func TestCommandTemplate_Flags(t *testing.T) {
@@ -76,6 +79,8 @@ func TestCommandTemplate_Shorthands(t *testing.T) {
 	shorthands := map[string]string{
 		"t": "template",
 		"v": "var",
+		"d": "data",
+		"f": "file",
 		"o": "output",
 	}
 
@@ -84,6 +89,37 @@ func TestCommandTemplate_Shorthands(t *testing.T) {
 		require.NotNil(t, f, "shorthand -%s should exist", short)
 		assert.Equal(t, full, f.Name, "shorthand -%s should map to --%s", short, full)
 	}
+}
+
+func TestCommandTemplate_DataAndFileShorthandExecution(t *testing.T) {
+	t.Parallel()
+
+	t.Run("-d inline JSON data", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, out, _ := terminal.NewTestIOStreams()
+
+		cmd := CommandTemplate(cliParams, ioStreams, "scafctl/eval")
+		cmd.SetArgs([]string{"-t", "{{ .env }}", "-d", `{"env": "staging"}`})
+
+		require.NoError(t, cmd.Execute())
+		assert.Equal(t, "staging\n", out.String())
+	})
+
+	t.Run("-f data file", func(t *testing.T) {
+		t.Parallel()
+		dataPath := t.TempDir() + "/data.json"
+		require.NoError(t, writeTestFile(dataPath, `{"host": "example.com"}`))
+
+		cliParams := settings.NewCliParams()
+		ioStreams, out, _ := terminal.NewTestIOStreams()
+
+		cmd := CommandTemplate(cliParams, ioStreams, "scafctl/eval")
+		cmd.SetArgs([]string{"-t", "{{ .host }}", "-f", dataPath})
+
+		require.NoError(t, cmd.Execute())
+		assert.Equal(t, "example.com\n", out.String())
+	})
 }
 
 func TestCommandTemplate_HidesFullKvxFlags(t *testing.T) {

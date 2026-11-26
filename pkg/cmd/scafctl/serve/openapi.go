@@ -23,11 +23,16 @@ import (
 )
 
 // CommandOpenAPI creates the `scafctl serve openapi` subcommand.
-func CommandOpenAPI(cliParams *settings.Run, _ *terminal.IOStreams) *cobra.Command {
+func CommandOpenAPI(cliParams *settings.Run, ioStreams *terminal.IOStreams) *cobra.Command {
 	var (
-		format string
-		output string
+		outputFormat string
+		outputFile   string
 	)
+
+	binaryName := settings.CliBinaryName
+	if cliParams != nil && cliParams.BinaryName != "" {
+		binaryName = cliParams.BinaryName
+	}
 
 	cmd := &cobra.Command{
 		Use:   "openapi",
@@ -38,32 +43,38 @@ func CommandOpenAPI(cliParams *settings.Run, _ *terminal.IOStreams) *cobra.Comma
 
 			The specification includes all endpoints, request/response schemas,
 			authentication schemes, and documentation.
-		`), settings.CliBinaryName, cliParams.BinaryName),
+		`), settings.CliBinaryName, binaryName),
 		Example: strings.ReplaceAll(heredoc.Doc(`
 			# Export as JSON to stdout
 			scafctl serve openapi
 
 			# Export as YAML to a file
-			scafctl serve openapi --format yaml --output openapi.yaml
+			scafctl serve openapi -o yaml --output-file openapi.yaml
 
 			# Export as JSON to a file
-			scafctl serve openapi --format json --output openapi.json
-		`), settings.CliBinaryName, cliParams.BinaryName),
+			scafctl serve openapi -o json --output-file openapi.json
+		`), settings.CliBinaryName, binaryName),
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runOpenAPI(cmd, format, output)
+			return runOpenAPI(cmd, cliParams, ioStreams, outputFormat, outputFile)
 		},
 	}
 
-	cmd.Flags().StringVar(&format, "format", "json", "Output format (json, yaml)")
-	cmd.Flags().StringVarP(&output, "output", "o", "", "Output file path (default: stdout)")
+	cmd.Flags().StringVarP(&outputFormat, "output", "o", "json", "Output format (json, yaml)")
+	cmd.Flags().StringVar(&outputFile, "output-file", "", "Output file path (default: stdout)")
 
 	return cmd
 }
 
-func runOpenAPI(cmd *cobra.Command, format, output string) error {
+func runOpenAPI(cmd *cobra.Command, cliParams *settings.Run, ioStreams *terminal.IOStreams, outputFormat, outputFile string) error {
 	w := writer.FromContext(cmd.Context())
+	if w == nil && ioStreams != nil {
+		w = writer.New(ioStreams, cliParams)
+	}
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
 
 	// Create a minimal router + Huma API for spec generation.
 	// BuildHumaConfig mirrors the live server config including security schemes.
@@ -88,24 +99,24 @@ func runOpenAPI(cmd *cobra.Command, format, output string) error {
 	var data []byte
 	var err error
 
-	switch format {
+	switch outputFormat {
 	case "yaml", "yml":
 		data, err = yaml.Marshal(spec)
 	case "json":
 		data, err = json.MarshalIndent(spec, "", "  ")
 	default:
-		return fmt.Errorf("unsupported format %q: use json or yaml", format)
+		return fmt.Errorf("unsupported output format %q: use json or yaml", outputFormat)
 	}
 
 	if err != nil {
 		return fmt.Errorf("marshaling OpenAPI spec: %w", err)
 	}
 
-	if output != "" {
-		if err := os.WriteFile(output, data, 0o600); err != nil {
-			return fmt.Errorf("writing OpenAPI spec to %s: %w", output, err)
+	if outputFile != "" {
+		if err := os.WriteFile(outputFile, data, 0o600); err != nil {
+			return fmt.Errorf("writing OpenAPI spec to %s: %w", outputFile, err)
 		}
-		w.Successf("OpenAPI spec written to %s\n", output)
+		w.Successf("OpenAPI spec written to %s\n", outputFile)
 		return nil
 	}
 

@@ -323,6 +323,18 @@ func TestCommandList_AllFlag_IsAliasForAllVersions(t *testing.T) {
 	assert.Equal(t, "true", f.Value.String(), "--all should also flip --all-versions since they share the same backing variable")
 }
 
+func TestCommandList_LongReferencesPackagePlugin(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	cmd := CommandList(cliParams, ioStreams, "mycli")
+
+	assert.Contains(t, cmd.Long, "'mycli package plugin'")
+	assert.NotContains(t, cmd.Long, "build plugin")
+}
+
 func TestRunList_NoWriterInContext_ReturnsError(t *testing.T) {
 	t.Parallel()
 

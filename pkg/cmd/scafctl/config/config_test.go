@@ -849,11 +849,11 @@ func TestInitOptions_Run_FullTemplateDocumentsSecuritySettings(t *testing.T) {
 	cliParams := settings.NewCliParams()
 
 	opts := &InitOptions{
-		IOStreams: ioStreams,
-		CliParams: cliParams,
-		Output:    outputPath,
-		Full:      true,
-		Force:     true,
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		OutputFile: outputPath,
+		Full:       true,
+		Force:      true,
 	}
 
 	w := writer.New(ioStreams, cliParams)
@@ -871,6 +871,31 @@ func TestInitOptions_Run_FullTemplateDocumentsSecuritySettings(t *testing.T) {
 	// The generated file must actually work: it has to load back cleanly.
 	_, loadErr := appconfig.NewManager(outputPath).Load()
 	require.NoError(t, loadErr, "the generated full configuration must pass validation")
+}
+
+func TestCommandInit_OutputFileFlag(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams := terminal.NewIOStreams(nil, &bytes.Buffer{}, &bytes.Buffer{}, false)
+
+	cmd := CommandInit(cliParams, ioStreams, "mycli/config")
+	assert.NotNil(t, cmd.Flags().Lookup("output-file"), "--output-file must be registered")
+	assert.Nil(t, cmd.Flags().Lookup("output"), "--output must not be registered on config init")
+	assert.Nil(t, cmd.Flags().ShorthandLookup("o"), "-o shorthand must not be registered on config init")
+	assert.Contains(t, cmd.Long, "mycli config init --output-file ./my-config.yaml")
+
+	existing := filepath.Join(t.TempDir(), "existing.yaml")
+	require.NoError(t, os.WriteFile(existing, []byte("version: 1\n"), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	execStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	execCmd := CommandInit(cliParams, execStreams, "mycli/config")
+	execCmd.SetArgs([]string{"--output-file", existing})
+	err := execCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--output-file")
 }
 
 // TestCommandSchema_DefaultOutputIsJSON documents the deliberate deviation

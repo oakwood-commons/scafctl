@@ -149,7 +149,7 @@ func TestCommandPush_RootFlags(t *testing.T) {
 	assert.NotNil(t, cmd.PersistentFlags().Lookup("origin"))
 	assert.NotNil(t, cmd.Flags().Lookup("no-sbom"))
 	assert.Nil(t, cmd.Flags().Lookup("kind"), "the kind comes from the reference path")
-	assert.Nil(t, cmd.Flags().Lookup("catalog"), "the destination comes from the reference")
+	assert.NotNil(t, cmd.Flags().Lookup("catalog"))
 }
 
 func TestCommandPushKind_RequiresOneArg(t *testing.T) {

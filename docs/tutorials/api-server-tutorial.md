@@ -156,7 +156,7 @@ Export the full OpenAPI spec without starting the server:
 scafctl serve openapi
 
 # YAML to file
-scafctl serve openapi --format yaml --output openapi.yaml
+scafctl serve openapi -o yaml --output-file openapi.yaml
 ```
 
 The spec is also served at `/{version}/openapi.json` when the server is running.

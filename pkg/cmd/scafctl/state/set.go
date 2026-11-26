@@ -109,13 +109,12 @@ func CommandSet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 		},
 	}
 
-	cmd.Flags().StringVar(&path, "path", "", "State file path (relative to working directory or absolute)")
+	addStatePathFlags(cmd, &path)
 	cmd.Flags().StringVar(&key, "key", "", "Key to set")
 	cmd.Flags().StringVar(&value, "value", "", "Value to store")
 	cmd.Flags().StringVar(&valueType, "type", "string", "Value type (string, int, bool, etc.)")
 	cmd.Flags().BoolVar(&immutable, "immutable", false, "Store as an immutable value (locked; cannot be overwritten)")
 	cmd.Flags().BoolVar(&persist, "persist", false, "Store as a persisted resolver value (overwritten on the next run)")
-	_ = cmd.MarkFlagRequired("path")
 	_ = cmd.MarkFlagRequired("key")
 	_ = cmd.MarkFlagRequired("value")
 

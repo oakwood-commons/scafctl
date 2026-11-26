@@ -9,7 +9,7 @@ This example shows how to configure the scafctl REST API server.
 scafctl serve --config api-server-config.yaml
 
 # Export OpenAPI spec
-scafctl serve openapi --format yaml --output openapi.yaml
+scafctl serve openapi -o yaml --output-file openapi.yaml
 ```
 
 ## Files

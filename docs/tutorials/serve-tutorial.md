@@ -226,8 +226,8 @@ open http://localhost:8080/v1/docs
 curl http://localhost:8080/v1/openapi.json
 
 # Export OpenAPI spec without starting the server
-scafctl serve openapi --format json --output openapi.json
-scafctl serve openapi --format yaml --output openapi.yaml
+scafctl serve openapi -o json --output-file openapi.json
+scafctl serve openapi -o yaml --output-file openapi.yaml
 ```
 
 ## Authentication

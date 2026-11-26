@@ -108,10 +108,9 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 		},
 	}
 
-	cmd.Flags().StringVar(&path, "path", "", "State file path (relative to working directory or absolute)")
+	addStatePathFlags(cmd, &path)
 	cmd.Flags().StringVar(&key, "key", "", "Key to delete")
 	cmd.Flags().BoolVar(&force, "force", false, "Force deletion of immutable keys")
-	_ = cmd.MarkFlagRequired("path")
 	_ = cmd.MarkFlagRequired("key")
 
 	return cmd
