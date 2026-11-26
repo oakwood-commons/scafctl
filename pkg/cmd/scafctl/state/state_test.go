@@ -736,7 +736,71 @@ func TestCommandFingerprints_MissingPath(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "required flag(s) \"path\" not set")
+	assert.Contains(t, err.Error(), "at least one of the flags in the group [file path] is required")
+}
+
+func TestStateSubcommands_FileAndPathFlags(t *testing.T) {
+	t.Parallel()
+
+	t.Run("all state subcommands accept -f and reject missing or conflicting -f/--path", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join(t.TempDir(), "state.json")
+		seedFingerprintState(t, path)
+		sd, err := state.LoadFromFile(path, "")
+		require.NoError(t, err)
+		sd.Parameters["env"] = "prod"
+		sd.Resolvers["tok"] = &state.PersistedEntry{Value: "v1", Type: "string"}
+		require.NoError(t, state.SaveToFile(path, "", sd))
+
+		subcommands := []struct {
+			name      string
+			extraArgs []string
+		}{
+			{name: "show"},
+			{name: "list"},
+			{name: "get", extraArgs: []string{"--key", "env"}},
+			{name: "set", extraArgs: []string{"--key", "region", "--value", "us-east-1"}},
+			{name: "fingerprints"},
+			{name: "delete", extraArgs: []string{"--key", "region"}},
+			{name: "clear"},
+		}
+
+		for _, tc := range subcommands {
+			t.Run(tc.name+"/-f works", func(t *testing.T) {
+				ctx, buf := newTestContext(t)
+				cliParams := &settings.Run{BinaryName: "testcli"}
+				ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+				root := CommandState(cliParams, ios, "testcli")
+				root.SetContext(ctx)
+				root.SetArgs(append([]string{tc.name, "-f", path}, tc.extraArgs...))
+				require.NoError(t, root.Execute())
+			})
+
+			t.Run(tc.name+"/missing both -f and --path fails", func(t *testing.T) {
+				ctx, buf := newTestContext(t)
+				cliParams := &settings.Run{BinaryName: "testcli"}
+				ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+				root := CommandState(cliParams, ios, "testcli")
+				root.SetContext(ctx)
+				root.SetArgs(append([]string{tc.name}, tc.extraArgs...))
+				execErr := root.Execute()
+				require.Error(t, execErr)
+				assert.Contains(t, execErr.Error(), "[file path]")
+			})
+
+			t.Run(tc.name+"/both -f and --path fails as mutually exclusive", func(t *testing.T) {
+				ctx, buf := newTestContext(t)
+				cliParams := &settings.Run{BinaryName: "testcli"}
+				ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+				root := CommandState(cliParams, ios, "testcli")
+				root.SetContext(ctx)
+				root.SetArgs(append([]string{tc.name, "-f", path, "--path", path}, tc.extraArgs...))
+				execErr := root.Execute()
+				require.Error(t, execErr)
+				assert.Contains(t, execErr.Error(), "[file path]")
+			})
+		}
+	})
 }
 
 // ── CommandClear selective tests ─────────────────────────────────────────────

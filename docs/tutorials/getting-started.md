@@ -260,7 +260,7 @@ scafctl run resolver -f solution.yaml -i
 scafctl render solution -f solution.yaml -o json
 
 # Scaffold a new solution
-scafctl new solution --name my-app --description "My application scaffold" --output my-app.yaml
+scafctl new solution my-app -d "My application scaffold" --output-file my-app.yaml
 
 # Browse and download examples
 scafctl get examples
@@ -318,7 +318,7 @@ scafctl run resolver -f solution.yaml -i
 scafctl render solution -f solution.yaml -o json
 
 # Scaffold a new solution
-scafctl new solution --name my-app --description "My application scaffold" --output my-app.yaml
+scafctl new solution my-app -d "My application scaffold" --output-file my-app.yaml
 
 # Browse and download examples
 scafctl get examples

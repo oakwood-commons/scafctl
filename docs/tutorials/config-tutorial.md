@@ -39,7 +39,7 @@ scafctl config init --full
 scafctl config init --dry-run
 
 # Write to custom path
-scafctl config init --output ./my-config.yaml
+scafctl config init --output-file ./my-config.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -54,7 +54,7 @@ scafctl config init --full
 scafctl config init --dry-run
 
 # Write to custom path
-scafctl config init --output ./my-config.yaml
+scafctl config init --output-file ./my-config.yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}

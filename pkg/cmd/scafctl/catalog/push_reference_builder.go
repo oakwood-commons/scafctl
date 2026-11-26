@@ -35,10 +35,16 @@ type pushReferenceBuild struct {
 }
 
 // remoteRef returns the artifact as it is named in the destination: the --as
-// target when renamed, otherwise the local reference unchanged.
+// target when renamed, otherwise the local reference unchanged. When the push
+// originated from a kindless short reference, target.Kind is backfilled from
+// the resolved local artifact so remote repository paths include the kind.
 func (p pushReferenceBuild) remoteRef(local catalog.Reference) catalog.Reference {
 	if p.Target.Name != "" {
-		return p.Target
+		target := p.Target
+		if target.Kind == "" {
+			target.Kind = local.Kind
+		}
+		return target
 	}
 	return local
 }
@@ -57,9 +63,9 @@ func newPushReferenceBuilder(ctx context.Context, opts *pushKindOptions) *pushRe
 	return &pushReferenceBuilder{ctx: ctx, opts: opts}
 }
 
-// parseShortReference parses a short reference (kind subcommands). The kind
-// comes from the subcommand; the version is optional and defaults to the
-// latest local version.
+// parseShortReference parses a short reference (root push with --catalog, or
+// kind subcommands). When Kind is unset on opts, Reference.Kind stays empty
+// until local catalog resolution determines the artifact kind.
 func (b *pushReferenceBuilder) parseShortReference() *pushReferenceBuilder {
 	if b.err != nil {
 		return b
@@ -70,15 +76,10 @@ func (b *pushReferenceBuilder) parseShortReference() *pushReferenceBuilder {
 		kind, _ = catalog.ParseArtifactKind(b.opts.Kind)
 	}
 
-	name, version := catalog.ParseNameVersion(b.opts.Reference)
-	ref := catalog.Reference{Kind: kind, Name: name}
-	if version != "" {
-		var err error
-		ref, err = catalog.ParseReference(kind, b.opts.Reference)
-		if err != nil {
-			b.err = fmt.Errorf("invalid reference: %w", err)
-			return b
-		}
+	ref, err := catalog.ParseReference(kind, b.opts.Reference)
+	if err != nil {
+		b.err = fmt.Errorf("invalid reference: %w", err)
+		return b
 	}
 	b.build.Reference = ref
 

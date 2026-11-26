@@ -32,7 +32,7 @@ type InitOptions struct {
 	ConfigPath string
 	Full       bool
 	DryRun     bool
-	Output     string
+	OutputFile string
 	Force      bool
 }
 
@@ -41,6 +41,11 @@ type InitOptions struct {
 //nolint:dupl // Cobra command boilerplate is intentionally similar across commands
 func CommandInit(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	opts := &InitOptions{}
+
+	binaryName := settings.CliBinaryName
+	if cliParams != nil && cliParams.BinaryName != "" {
+		binaryName = cliParams.BinaryName
+	}
 
 	cCmd := &cobra.Command{
 		Use:   "init",
@@ -64,11 +69,11 @@ func CommandInit(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			  scafctl config init --dry-run
 
 			  # Write to custom location
-			  scafctl config init --output ./my-config.yaml
+			  scafctl config init --output-file ./my-config.yaml
 
 			  # Overwrite existing config
 			  scafctl config init --force
-		`), settings.CliBinaryName, cliParams.BinaryName),
+		`), settings.CliBinaryName, binaryName),
 		Args: cobra.NoArgs,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
@@ -86,7 +91,7 @@ func CommandInit(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			opts.IOStreams = ioStreams
 			opts.CliParams = cliParams
-			opts.BinaryName = cliParams.BinaryName
+			opts.BinaryName = binaryName
 
 			// Get config path from parent command context
 			if configFlag := cCmd.Root().Flag("config"); configFlag != nil && configFlag.Value.String() != "" {
@@ -100,7 +105,7 @@ func CommandInit(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 	cCmd.Flags().BoolVar(&opts.Full, "full", false, "Generate full config with all options documented")
 	cCmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Preview config without writing to file")
-	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "", fmt.Sprintf("Output file path (default: ~/.%s/config.yaml)", cliParams.BinaryName))
+	cCmd.Flags().StringVar(&opts.OutputFile, "output-file", "", fmt.Sprintf("Output file path (default: ~/.%s/config.yaml)", binaryName))
 	cCmd.Flags().BoolVar(&opts.Force, "force", false, "Overwrite existing config file")
 
 	return cCmd
@@ -118,7 +123,7 @@ func (o *InitOptions) Run(ctx context.Context) error {
 	}
 
 	// Determine output path
-	outputPath := o.Output
+	outputPath := o.OutputFile
 	if outputPath == "" {
 		if o.ConfigPath != "" {
 			outputPath = o.ConfigPath
@@ -136,7 +141,7 @@ func (o *InitOptions) Run(ctx context.Context) error {
 	// Check if file exists (unless dry-run or force)
 	if !o.DryRun && !o.Force {
 		if _, err := os.Stat(outputPath); err == nil {
-			err := fmt.Errorf("config file already exists: %s\nUse --force to overwrite or --output to specify a different location", outputPath)
+			err := fmt.Errorf("config file already exists: %s\nUse --force to overwrite or --output-file to specify a different location", outputPath)
 			w.Errorf("%v", err)
 			return exitcode.WithCode(err, exitcode.ConfigError)
 		}

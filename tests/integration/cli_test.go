@@ -12759,7 +12759,7 @@ func TestIntegration_NewSolution_ToFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "solution.yaml")
 
-	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "file-test", "--description", "Written to file", "-o", outFile)
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "file-test", "--description", "Written to file", "--output-file", outFile)
 	assert.Equal(t, 0, exitCode)
 
 	data, err := os.ReadFile(outFile)
@@ -12785,7 +12785,7 @@ func TestIntegration_NewSolution_ScaffoldPassesLint(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "solution.yaml")
 
-	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "lint-check", "--description", "Lint check", "-o", outFile)
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "lint-check", "--description", "Lint check", "--output-file", outFile)
 	require.Equal(t, 0, exitCode)
 
 	stdout, _, exitCode := runScafctl(t, "lint", "-f", outFile, "-o", "json")
@@ -12803,7 +12803,7 @@ func TestIntegration_NewSolution_ScaffoldRunsSuccessfully(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "solution.yaml")
 
-	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "run-check", "--description", "Run check", "-o", outFile)
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "run-check", "--description", "Run check", "--output-file", outFile)
 	require.Equal(t, 0, exitCode)
 
 	stdout, stderr, exitCode := runScafctl(t, "run", "solution", "-f", outFile, "-r", "inputName=world")
@@ -12820,7 +12820,7 @@ func TestIntegration_NewSolution_AllFeaturesScaffoldPassesLint(t *testing.T) {
 	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "all-features",
 		"--description", "All features", "--features",
 		"parameters,resolvers,actions,transforms,validation,tests,composition",
-		"-o", outFile)
+		"--output-file", outFile)
 	require.Equal(t, 0, exitCode)
 
 	stdout, _, exitCode := runScafctl(t, "lint", "-f", outFile, "-o", "json")
@@ -12838,7 +12838,7 @@ func TestIntegration_NewSolution_ScaffoldFunctionalTestsPass(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "solution.yaml")
 
-	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "func-test", "--description", "Functional test check", "-o", outFile)
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "func-test", "--description", "Functional test check", "--output-file", outFile)
 	require.Equal(t, 0, exitCode)
 
 	stdout, stderr, exitCode := runScafctlLong(t, "test", "functional", "-f", outFile, "--no-color")
@@ -15447,7 +15447,7 @@ func TestIntegration_RunSolution_StdinParams(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "solution.yaml")
 
-	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "stdin-test", "--description", "Stdin test", "-o", outFile)
+	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "stdin-test", "--description", "Stdin test", "--output-file", outFile)
 	require.Equal(t, 0, exitCode)
 
 	stdin := strings.NewReader(`{"inputName": "StdinWorld"}`)
@@ -15649,13 +15649,13 @@ func TestIntegration_ServeOpenAPIHelp(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "serve", "openapi", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Generate the full OpenAPI specification")
-	assert.Contains(t, stdout, "--format")
+	assert.Contains(t, stdout, "--output-file")
 	assert.Contains(t, stdout, "--output")
 }
 
 func TestIntegration_ServeOpenAPI_JSON(t *testing.T) {
 	t.Parallel()
-	stdout, stderr, exitCode := runScafctl(t, "serve", "openapi", "--format", "json")
+	stdout, stderr, exitCode := runScafctl(t, "serve", "openapi", "-o", "json")
 	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "openapi")
 	assert.Contains(t, stdout, "scafctl API")
@@ -15664,7 +15664,7 @@ func TestIntegration_ServeOpenAPI_JSON(t *testing.T) {
 
 func TestIntegration_ServeOpenAPI_YAML(t *testing.T) {
 	t.Parallel()
-	stdout, stderr, exitCode := runScafctl(t, "serve", "openapi", "--format", "yaml")
+	stdout, stderr, exitCode := runScafctl(t, "serve", "openapi", "-o", "yaml")
 	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "openapi:")
 	assert.Contains(t, stdout, "scafctl API")
@@ -15674,7 +15674,7 @@ func TestIntegration_ServeOpenAPI_ToFile(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "openapi.json")
-	_, stderr, exitCode := runScafctl(t, "serve", "openapi", "--format", "json", "--output", outFile)
+	_, stderr, exitCode := runScafctl(t, "serve", "openapi", "-o", "json", "--output-file", outFile)
 	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
 	assert.FileExists(t, outFile)
 

@@ -16,7 +16,7 @@ When you need to see what's happening under the hood — debugging a solution, r
 | Flag | Description |
 |------|-------------|
 | *(default)* | No logs, just styled output |
-| `--debug` | Console-format debug logs |
+| `--debug`, `-D` | Console-format debug logs |
 | `--log-level` | Named or numeric verbosity |
 | `--log-format` | `console` (default) or `json` |
 | `--log-file` | Write logs to a file |
@@ -332,7 +332,7 @@ When multiple sources set the log level, scafctl applies them in this order (hig
 
 ```
 1. --log-level flag          (explicit flag always wins)
-2. --debug / -d flag         (shorthand for --log-level debug)
+2. --debug / -D flag         (shorthand for --log-level debug)
 3. SCAFCTL_LOG_LEVEL env     (environment variable)
 4. SCAFCTL_DEBUG env         (debug shortcut)
 5. config file logging.level (persistent preference)

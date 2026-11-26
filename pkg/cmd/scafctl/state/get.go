@@ -106,9 +106,8 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 	}
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
-	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to working directory or absolute)")
+	addStatePathFlags(cmd, &opts.Path)
 	cmd.Flags().StringVar(&opts.Key, "key", "", "Key to retrieve")
-	_ = cmd.MarkFlagRequired("path")
 	_ = cmd.MarkFlagRequired("key")
 
 	return cmd

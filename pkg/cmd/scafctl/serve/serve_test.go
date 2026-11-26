@@ -247,16 +247,63 @@ func TestCommandOpenAPI(t *testing.T) {
 
 func TestCommandOpenAPI_Flags(t *testing.T) {
 	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 
 	cmd := CommandOpenAPI(cliParams, ioStreams)
 
-	formatFlag := cmd.Flags().Lookup("format")
-	require.NotNil(t, formatFlag)
-	assert.Equal(t, "json", formatFlag.DefValue)
+	assert.Nil(t, cmd.Flags().Lookup("format"), "--format flag must not exist on serve openapi")
 
 	outputFlag := cmd.Flags().Lookup("output")
 	require.NotNil(t, outputFlag)
+	assert.Equal(t, "json", outputFlag.DefValue)
+	assert.Equal(t, "o", outputFlag.Shorthand)
+
+	outputFileFlag := cmd.Flags().Lookup("output-file")
+	require.NotNil(t, outputFileFlag)
+	assert.Empty(t, outputFileFlag.DefValue)
+	assert.Empty(t, outputFileFlag.Shorthand)
+
+	assert.Contains(t, cmd.Example, "mycli serve openapi -o yaml --output-file openapi.yaml")
+}
+
+func TestCommandOpenAPI_Execution(t *testing.T) {
+	t.Parallel()
+
+	t.Run("default json to stdout", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, out, _ := terminal.NewTestIOStreams()
+
+		cmd := CommandOpenAPI(cliParams, ioStreams)
+		cmd.SetArgs([]string{})
+		require.NoError(t, cmd.Execute())
+		assert.Contains(t, out.String(), `"openapi"`)
+	})
+
+	t.Run("-o yaml to file via --output-file", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, out, _ := terminal.NewTestIOStreams()
+		outPath := t.TempDir() + "/openapi.yaml"
+
+		cmd := CommandOpenAPI(cliParams, ioStreams)
+		cmd.SetArgs([]string{"-o", "yaml", "--output-file", outPath})
+		require.NoError(t, cmd.Execute())
+		assert.Contains(t, out.String(), "OpenAPI spec written to")
+	})
+
+	t.Run("invalid -o format errors", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+
+		cmd := CommandOpenAPI(cliParams, ioStreams)
+		cmd.SetArgs([]string{"-o", "xml"})
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported output format")
+	})
 }
 
 func BenchmarkCommandServe(b *testing.B) {

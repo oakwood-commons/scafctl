@@ -71,7 +71,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			Shows the name, version, platform, and size for each cached binary.
 			This command shows the remote download cache only (plugins fetched
 			from OCI registries). To see locally-built artifacts created with
-			'scafctl build plugin', use:
+			'scafctl package plugin', use:
 			  scafctl catalog list --kind provider --pre-release --all-versions
 
 			By default, only the latest cached version of each plugin (per name

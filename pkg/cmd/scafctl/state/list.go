@@ -83,8 +83,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	}
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
-	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to working directory or absolute)")
-	_ = cmd.MarkFlagRequired("path")
+	addStatePathFlags(cmd, &opts.Path)
 
 	return cmd
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -47,15 +48,20 @@ type TemplateResult struct {
 func CommandTemplate(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	opts := &TemplateOptions{}
 
+	binaryName := settings.CliBinaryName
+	if cliParams != nil && cliParams.BinaryName != "" {
+		binaryName = cliParams.BinaryName
+	}
+
 	cCmd := &cobra.Command{
 		Use:     "template",
 		Aliases: []string{"tmpl", "t"},
 		Short:   "Evaluate a Go template",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Evaluate a Go template with optional data context.
 
 			Provide a template inline via --template or from a file via --template-file.
-			Data can come from --var flags, inline JSON via --data, or a file via --file.
+			Data can come from --var flags, inline JSON via -d/--data, or a file via -f/--file.
 
 			Use --show-refs to also list template variable references found in the template.
 
@@ -71,7 +77,7 @@ func CommandTemplate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 			  # Output as JSON
 			  scafctl eval template -t '{{ .name }}' -v name=world -o json
-		`),
+		`), settings.CliBinaryName, binaryName),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
@@ -98,8 +104,8 @@ func CommandTemplate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	cCmd.Flags().StringVarP(&opts.Template, "template", "t", "", "Go template string (inline)")
 	cCmd.Flags().StringVar(&opts.TemplateFile, "template-file", "", "Go template file path")
 	cCmd.Flags().StringArrayVarP(&opts.Vars, "var", "v", nil, "Variable as key=value (repeatable)")
-	cCmd.Flags().StringVar(&opts.Data, "data", "", "Inline JSON data context")
-	cCmd.Flags().StringVar(&opts.File, "file", "", "JSON/YAML file for data context")
+	cCmd.Flags().StringVarP(&opts.Data, "data", "d", "", "Inline JSON data context")
+	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "JSON/YAML file for data context")
 	cCmd.Flags().BoolVar(&opts.ShowRefs, "show-refs", false, "Also output referenced template variables")
 	cCmd.Flags().StringVar(&opts.MissingKey, "missing-key", "error", "Behavior when a map key is missing: default, zero, error")
 	flags.AddKvxOutputFormatFlagToStructWithFormats(cCmd, &opts.KvxOutputFlags, dataOutputFormats)

@@ -20,8 +20,8 @@ const catalogFlagUsage = `Target catalog (registry URL or configured catalog nam
 
 // PushOptions holds options for the push command.
 type PushOptions struct {
-	Reference  string // Artifact reference (full remote reference, or short name for kind subcommands)
-	Catalog    string // Target catalog (URL or configured catalog name, kind subcommands only)
+	Reference  string // Artifact reference (full remote reference, or short name[@version] with -c/--catalog or kind subcommands)
+	Catalog    string // Target catalog (URL or configured catalog name)
 	TargetName string // Optional name@version the artifact is published as in the remote (--as)
 	Kind       string // Artifact kind (set by the kind subcommands)
 	Force      bool   // Overwrite existing (--force)
@@ -42,19 +42,23 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		},
 	}
 
+	binaryName := cliBinaryName(cliParams)
+
 	cmd := &cobra.Command{
 		Use:   "push <reference>",
 		Short: "Push an artifact to a remote registry",
 		Long: heredoc.Docf(`
 			Push a catalog artifact from the local catalog to a remote OCI registry.
 
-			The artifact must exist in the local catalog. Use '%[1]s build' to
-			create artifacts from solution files.
+			The artifact must exist in the local catalog. Use '%[1]s package' to
+			create artifacts from solution files or plugin binaries.
 
-			The root push command only accepts full remote OCI references. The
-			reference names both the artifact (kind, name and version) and the
-			destination (registry and repository). Use kind subcommands for short
-			references with a --catalog destination:
+			The root push command accepts full remote OCI references, or short
+			references (<name[@version]>) when --catalog (-c) specifies the target
+			catalog. When pushing a short reference on the root command, the artifact
+			kind is resolved automatically from the local catalog if unique. Use kind
+			subcommands to disambiguate when multiple kinds share the same name or to
+			push to the default catalog without -c:
 			  - %[1]s catalog push solution <name[@version]>
 			  - %[1]s catalog push provider <name[@version]>
 			  - %[1]s catalog push auth-handler <name[@version]>
@@ -73,6 +77,9 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			  # Push using a full remote reference
 			  %[1]s catalog push ghcr.io/myorg/solutions/my-solution@1.0.0
 
+			  # Push a short reference to a target catalog (kind auto-detected)
+			  %[1]s catalog push my-solution@1.0.0 -c ghcr.io/myorg
+
 			  # Push the locally built copy when several origins hold this version
 			  %[1]s catalog push ghcr.io/myorg/solutions/my-solution@1.0.0 --origin built
 
@@ -81,12 +88,12 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			  # Force overwrite existing
 			  %[1]s catalog push ghcr.io/myorg/solutions/my-solution@1.0.0 --force
-		`, cliParams.BinaryName),
+		`, binaryName),
 
-		Args:         rootArgs("push", cliParams.BinaryName, flags.RequireArg("reference", cliParams.BinaryName+" catalog push ghcr.io/myorg/solutions/my-solution@1.0.0")),
+		Args:         rootArgs("push", binaryName, flags.RequireArg("reference", binaryName+" catalog push ghcr.io/myorg/solutions/my-solution@1.0.0")),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := reportUnknownKind(cmd, "push", cliParams.BinaryName, args); err != nil {
+			if err := reportUnknownKind(cmd, "push", binaryName, args); err != nil {
 				return err
 			}
 			options.Reference = args[0]
@@ -100,14 +107,15 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd.PersistentFlags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be pushed without actually pushing")
 	cmd.PersistentFlags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 	cmd.PersistentFlags().BoolVar(&options.Latest, "latest", false, "Tag the pushed version as 'latest' in the remote registry")
+	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", "Destination catalog (registry URL or configured catalog name) for short references")
 	cmd.Flags().BoolVar(&options.NoSBOM, "no-sbom", false, "Disable automatic SBOM generation (solutions generate SBOMs by default)")
 	addPushKindCommands(cmd, cliParams, ioStreams, options)
 
 	return cmd
 }
 
-// runPush pushes the local artifact named by a full remote reference to the
-// registry the reference points at.
+// runPush pushes the local artifact named by a full remote reference (or a
+// short reference paired with --catalog) to its destination registry.
 func runPush(ctx context.Context, opts *pushKindOptions) error {
 	return runKind(ctx, "push", opts.Reference, opts,
 		validatePushRoot,
@@ -117,6 +125,23 @@ func runPush(ctx context.Context, opts *pushKindOptions) error {
 
 func buildPushRemoteReference(ctx context.Context, opts *pushKindOptions) (pushReferenceBuild, error) {
 	w := writer.FromContext(ctx)
+
+	if !looksLikeRemoteReference(opts.Reference) {
+		w.Verbosef("Pushing short reference to catalog %q", opts.Catalog)
+		build, err := newPushReferenceBuilder(ctx, opts).
+			parseShortReference().
+			rejectDigest().
+			parseOrigin().
+			parseTarget().
+			resolveCatalogLocation().
+			Build()
+		if err != nil {
+			return pushReferenceBuild{}, err
+		}
+		verboseRefInfo(w, build.Reference.Name, string(build.Reference.Kind), build.Reference.VersionOrDigest())
+		return build, nil
+	}
+
 	w.Verbose("Pushing to full OCI reference")
 
 	build, err := newPushReferenceBuilder(ctx, opts).
@@ -134,13 +159,21 @@ func buildPushRemoteReference(ctx context.Context, opts *pushKindOptions) (pushR
 	return build, nil
 }
 
-// validatePushRoot performs pure option checks for the root push command: the
-// reference must be a full remote reference that names its artifact kind. It
+// validatePushRoot performs pure option checks for the root push command: a
+// full remote reference must name its artifact kind and cannot be combined with
+// --catalog, while a short reference requires --catalog on the root command. It
 // returns plain errors; runKind assigns the exit code.
 func validatePushRoot(opts *pushKindOptions) error {
 	if !looksLikeRemoteReference(opts.Reference) {
-		return fmt.Errorf("%w; use '%s catalog push <kind> <name[@version]> --catalog <catalog>' for short references",
-			ErrRemoteReferenceRequired, cliBinaryName(opts.CliParams))
+		if opts.Catalog == "" {
+			return fmt.Errorf("%w; pass --catalog (-c) or use '%s catalog push <kind> <name[@version]>' for short references",
+				ErrRemoteReferenceRequired, cliBinaryName(opts.CliParams))
+		}
+		return validateTargetName(catalog.Reference{}, opts.TargetName)
+	}
+
+	if opts.Catalog != "" {
+		return ErrCatalogWithRemoteReference
 	}
 
 	remoteRef, err := catalog.ParseRemoteReference(opts.Reference)

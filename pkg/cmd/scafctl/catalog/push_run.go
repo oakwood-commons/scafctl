@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -19,8 +20,8 @@ import (
 )
 
 // pushKindOptions holds the options of the push commands: the root command
-// (full remote reference) and the `catalog push <kind>` subcommands. It extends
-// PushOptions with --origin.
+// (full remote reference, or short reference with --catalog) and the
+// `catalog push <kind>` subcommands. It extends PushOptions with --origin.
 type pushKindOptions struct {
 	PushOptions
 	Origin string // Select the local artifact by origin: "built" or a registry URL (--origin)
@@ -66,13 +67,27 @@ func runPushResolvedBuiltReference(ctx context.Context, opts *pushKindOptions, b
 func resolvePushSource(ctx context.Context, opts *pushKindOptions, localCatalog *catalog.LocalCatalog, build pushReferenceBuild) (catalog.ArtifactInfo, error) {
 	w := writer.FromContext(ctx)
 
-	info, err := localCatalog.Resolve(ctx, build.Reference)
+	var (
+		info catalog.ArtifactInfo
+		err  error
+	)
+	if build.Reference.Kind == "" {
+		info, err = localCatalog.ResolveAnyKind(ctx, build.Reference)
+	} else {
+		info, err = localCatalog.Resolve(ctx, build.Reference)
+	}
 	if err == nil {
 		return info, nil
 	}
 
+	var ambiguousKind *catalog.AmbiguousKindError
 	var ambiguous *catalog.AmbiguousArtifactError
 	switch {
+	case errors.As(err, &ambiguousKind):
+		hint := kindDisambiguationHint(opts, ambiguousKind)
+		err = fmt.Errorf("%w; %s", err, hint)
+		w.Errorf("%v", err)
+		return catalog.ArtifactInfo{}, exitcode.WithCode(err, exitcode.InvalidInput)
 	case errors.As(err, &ambiguous):
 		w.Errorf("%v\n%s", err, originHint(ambiguous))
 		return catalog.ArtifactInfo{}, exitcode.WithCode(err, exitcode.InvalidInput)
@@ -87,6 +102,21 @@ func resolvePushSource(ctx context.Context, opts *pushKindOptions, localCatalog 
 		w.Errorf("%v", err)
 		return catalog.ArtifactInfo{}, exitcode.WithCode(err, exitcode.CatalogError)
 	}
+}
+
+func kindDisambiguationHint(opts *pushKindOptions, amb *catalog.AmbiguousKindError) string {
+	kinds := make([]string, len(amb.Kinds))
+	for i, k := range amb.Kinds {
+		kinds[i] = catalogKindName(k)
+	}
+	hint := fmt.Sprintf("specify kind: %s catalog push <%s> %s",
+		cliBinaryName(opts.CliParams),
+		strings.Join(kinds, "|"),
+		quoteIfNeeded(opts.Reference))
+	if opts.Catalog != "" {
+		hint += " --catalog " + quoteIfNeeded(opts.Catalog)
+	}
+	return hint
 }
 
 // pushSourceLabel names where the local copy came from.

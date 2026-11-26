@@ -6,6 +6,7 @@ package catalog
 import (
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -18,13 +19,16 @@ func TestCommandPush(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandPush(cliParams, ioStreams, "scafctl/catalog")
+	cmd := CommandPush(cliParams, ioStreams, "mycli/catalog")
 
 	require.NotNil(t, cmd)
 	assert.Equal(t, "push <reference>", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
+	assert.Contains(t, cmd.Long, "'mycli package'")
+	assert.NotContains(t, cmd.Long, "'mycli build'")
 }
 
 func TestCommandPush_Flags(t *testing.T) {
@@ -60,16 +64,18 @@ func TestCommandPush_Flags(t *testing.T) {
 	assert.Equal(t, "false", noSBOM.DefValue, "flag %q default value", "no-sbom")
 }
 
-func TestCommandPush_NoCatalogOrKindFlags(t *testing.T) {
+func TestCommandPush_CatalogAndNoKindFlags(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := CommandPush(cliParams, ioStreams, "scafctl/catalog")
 
-	assert.Nil(t, cmd.Flags().Lookup("catalog"), "the destination comes from the reference")
-	assert.Nil(t, cmd.Flags().ShorthandLookup("c"))
-	assert.Nil(t, cmd.Flags().Lookup("kind"), "the kind comes from the reference path")
+	catFlag := cmd.Flags().Lookup("catalog")
+	require.NotNil(t, catFlag, "root push command must register local --catalog flag")
+	assert.Equal(t, "c", catFlag.Shorthand)
+	assert.Nil(t, cmd.PersistentFlags().Lookup("catalog"), "--catalog must stay local so kind subcommands do not collide")
+	assert.Nil(t, cmd.Flags().Lookup("kind"), "the kind comes from the reference path or local auto-detection")
 }
 
 func TestCommandPush_PersistentFlags(t *testing.T) {
@@ -83,6 +89,7 @@ func TestCommandPush_PersistentFlags(t *testing.T) {
 		assert.NotNil(t, cmd.PersistentFlags().Lookup(name), "persistent flag %q should exist", name)
 	}
 	assert.NotNil(t, cmd.Flags().Lookup("no-sbom"), "local flag --no-sbom should exist")
+	assert.NotNil(t, cmd.Flags().Lookup("catalog"), "local flag --catalog should exist")
 }
 
 func TestCommandPush_ForceFlagShorthand(t *testing.T) {
@@ -110,7 +117,7 @@ func TestCommandPush_RequiresExactlyOneArg(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing required argument: <reference>")
 }
 
-func TestCommandPush_ShortReferenceRejected(t *testing.T) {
+func TestCommandPush_ShortReferenceWithoutCatalogRejected(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
@@ -133,6 +140,7 @@ func TestValidatePushRoot(t *testing.T) {
 	tests := []struct {
 		name       string
 		reference  string
+		catalog    string
 		targetName string
 		wantErr    string
 		wantIs     error
@@ -141,10 +149,14 @@ func TestValidatePushRoot(t *testing.T) {
 		{name: "oci scheme", reference: "oci://ghcr.io/org/scafctl/providers/my-plugin@1.0.0"},
 		{name: "no version", reference: "ghcr.io/org/scafctl/solutions/my-sol"},
 		{name: "valid rename", reference: "ghcr.io/org/scafctl/solutions/my-sol@1.0.0", targetName: "renamed@2.0.0"},
-		{name: "short name", reference: "my-sol@1.0.0", wantIs: ErrRemoteReferenceRequired},
+		{name: "short name with catalog", reference: "my-sol@1.0.0", catalog: testPushCatalogURL},
+		{name: "short name with catalog and rename", reference: "my-sol@1.0.0", catalog: testPushCatalogURL, targetName: "renamed@2.0.0"},
+		{name: "short name without catalog", reference: "my-sol@1.0.0", wantIs: ErrRemoteReferenceRequired},
+		{name: "full reference with catalog", reference: "ghcr.io/org/scafctl/solutions/my-sol@1.0.0", catalog: testPushCatalogURL, wantIs: ErrCatalogWithRemoteReference},
 		{name: "no kind in path", reference: "ghcr.io/org/my-sol@1.0.0", wantErr: "must include the artifact kind"},
 		{name: "invalid version", reference: "ghcr.io/org/scafctl/solutions/my-sol@not-a-version", wantErr: "invalid reference"},
 		{name: "rename without version", reference: "ghcr.io/org/scafctl/solutions/my-sol@1.0.0", targetName: "renamed", wantErr: "bare name"},
+		{name: "short ref rename without version", reference: "my-sol@1.0.0", catalog: testPushCatalogURL, targetName: "renamed", wantErr: "bare name"},
 	}
 
 	for _, tt := range tests {
@@ -152,6 +164,7 @@ func TestValidatePushRoot(t *testing.T) {
 			t.Parallel()
 
 			opts := pushOpts("", tt.reference, "")
+			opts.Catalog = tt.catalog
 			opts.TargetName = tt.targetName
 
 			err := validatePushRoot(opts)
@@ -159,7 +172,6 @@ func TestValidatePushRoot(t *testing.T) {
 			switch {
 			case tt.wantIs != nil:
 				require.ErrorIs(t, err, tt.wantIs)
-				assert.Contains(t, err.Error(), "mycli catalog push <kind>")
 			case tt.wantErr != "":
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -168,6 +180,27 @@ func TestValidatePushRoot(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPushReferenceBuild_RemoteRefBackfillsKind(t *testing.T) {
+	t.Parallel()
+
+	local := catalog.Reference{
+		Kind:    catalog.ArtifactKindProvider,
+		Name:    "my-plugin",
+		Version: semver.MustParse("1.0.0"),
+	}
+	build := pushReferenceBuild{
+		Target: catalog.Reference{
+			Name:    "renamed-plugin",
+			Version: semver.MustParse("2.0.0"),
+		},
+	}
+
+	got := build.remoteRef(local)
+	assert.Equal(t, catalog.ArtifactKindProvider, got.Kind)
+	assert.Equal(t, "renamed-plugin", got.Name)
+	assert.Equal(t, "2.0.0", got.Version.String())
 }
 
 func TestPushReferenceBuilder_ParseRemoteReference(t *testing.T) {
@@ -282,6 +315,103 @@ func TestCommandPush_RootDryRun(t *testing.T) {
 
 		assert.Contains(t, out.String(), "(origin: "+testPluginsOrigin+")")
 	})
+
+	t.Run("short reference with -c auto-detects unique solution", func(t *testing.T) {
+		cat := newXDGLocalCatalog(t)
+		seedLocal(t, cat, catalog.ArtifactKindSolution, "my-sol", "1.0.0", "")
+		ctx, out := newCapturingCtx(t)
+		cmd := newPushTestCommand(ctx)
+		cmd.SetArgs([]string{"my-sol@1.0.0", "-c", testPushCatalogURL, "--dry-run"})
+
+		require.NoError(t, cmd.Execute())
+
+		assert.Contains(t, out.String(), "Would push my-sol@1.0.0 (origin: built) to ghcr.io/org/scafctl/solutions/my-sol")
+	})
+
+	t.Run("short reference with -c auto-detects unique provider and backfills kind on --as", func(t *testing.T) {
+		cat := newXDGLocalCatalog(t)
+		seedLocal(t, cat, catalog.ArtifactKindProvider, "my-plugin", "1.0.0", "")
+		ctx, out := newCapturingCtx(t)
+		cmd := newPushTestCommand(ctx)
+		cmd.SetArgs([]string{"my-plugin@1.0.0", "-c", testPushCatalogURL, "--as", "renamed-plugin@2.0.0", "--dry-run"})
+
+		require.NoError(t, cmd.Execute())
+
+		assert.Contains(t, out.String(), "Would push my-plugin@1.0.0 (origin: built) to ghcr.io/org/scafctl/providers/renamed-plugin")
+		assert.Contains(t, out.String(), "--as: would publish as renamed-plugin@2.0.0")
+	})
+
+	t.Run("short reference with -c auto-detects unique auth-handler", func(t *testing.T) {
+		cat := newXDGLocalCatalog(t)
+		seedLocal(t, cat, catalog.ArtifactKindAuthHandler, "my-auth", "1.0.0", "")
+		ctx, out := newCapturingCtx(t)
+		cmd := newPushTestCommand(ctx)
+		cmd.SetArgs([]string{"my-auth", "-c", testPushCatalogURL, "--dry-run"})
+
+		require.NoError(t, cmd.Execute())
+
+		assert.Contains(t, out.String(), "Would push my-auth@1.0.0 (origin: built) to ghcr.io/org/scafctl/auth-handlers/my-auth")
+	})
+}
+
+func TestCommandPush_RootShortRefErrors(t *testing.T) {
+	t.Run("not found in local catalog returns FileNotFound", func(t *testing.T) {
+		newXDGLocalCatalog(t)
+		cmd := newPushTestCommand(newCatalogTestCtx(t))
+		cmd.SetArgs([]string{"missing@1.0.0", "-c", testPushCatalogURL, "--dry-run"})
+
+		err := cmd.Execute()
+
+		require.Error(t, err)
+		assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+	})
+
+	t.Run("multi-kind match returns InvalidInput with disambiguation hint", func(t *testing.T) {
+		cat := newXDGLocalCatalog(t)
+		seedLocal(t, cat, catalog.ArtifactKindSolution, "shared", "1.0.0", "")
+		seedLocal(t, cat, catalog.ArtifactKindProvider, "shared", "1.0.0", "")
+		ctx, out := newCapturingCtx(t)
+
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		cmd := CommandPush(cliParams, ioStreams, "mycli/catalog")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"shared@1.0.0", "-c", testPushCatalogURL, "--dry-run"})
+
+		err := cmd.Execute()
+
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+		assert.Contains(t, out.String(), "specify kind: mycli catalog push <solution|provider> shared@1.0.0 --catalog "+testPushCatalogURL)
+	})
+
+	t.Run("single-kind multi-origin preserves --origin hint", func(t *testing.T) {
+		cat := newXDGLocalCatalog(t)
+		seedLocal(t, cat, catalog.ArtifactKindSolution, "my-sol", "1.0.0", "")
+		seedLocal(t, cat, catalog.ArtifactKindSolution, "my-sol", "1.0.0", testPluginsOrigin)
+		ctx, out := newCapturingCtx(t)
+		cmd := newPushTestCommand(ctx)
+		cmd.SetArgs([]string{"my-sol@1.0.0", "-c", testPushCatalogURL, "--dry-run"})
+
+		err := cmd.Execute()
+
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+		assert.Contains(t, out.String(), "--origin built")
+		assert.Contains(t, out.String(), "--origin "+testPluginsOrigin)
+	})
+
+	t.Run("full remote reference combined with -c returns ErrCatalogWithRemoteReference", func(t *testing.T) {
+		newXDGLocalCatalog(t)
+		cmd := newPushTestCommand(newCatalogTestCtx(t))
+		cmd.SetArgs([]string{testPushRootRef, "-c", testPushCatalogURL, "--dry-run"})
+
+		err := cmd.Execute()
+
+		require.ErrorIs(t, err, ErrCatalogWithRemoteReference)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	})
 }
 
 func TestCommandPush_RootLocalNotFound(t *testing.T) {
@@ -318,6 +448,7 @@ func TestCommandPush_RootInvalidInput(t *testing.T) {
 		wantErr string
 	}{
 		{name: "digest reference", args: []string{"ghcr.io/org/scafctl/solutions/my-sol@" + testPushDigest}, wantErr: pushDigestUnsupportedMsg},
+		{name: "short digest reference with -c", args: []string{"my-sol@" + testPushDigest, "-c", testPushCatalogURL}, wantErr: pushDigestUnsupportedMsg},
 		{name: "empty origin registry", args: []string{testPushRootRef, "--origin", "oci://"}, wantErr: "invalid --origin"},
 		{name: "rename without version", args: []string{testPushRootRef, "--as", "renamed"}, wantErr: "bare name"},
 		{name: "no kind in path", args: []string{"ghcr.io/org/my-sol@1.0.0"}, wantErr: "must include the artifact kind"},

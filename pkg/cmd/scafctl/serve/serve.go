@@ -86,7 +86,7 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			scafctl serve --enable-tls --tls-cert cert.pem --tls-key key.pem
 
 			# Export OpenAPI spec without starting the server
-			scafctl serve openapi --format yaml --output openapi.yaml
+			scafctl serve openapi -o yaml --output-file openapi.yaml
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,

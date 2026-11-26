@@ -36,7 +36,7 @@ scafctl config init --full
 scafctl config init --dry-run
 
 # Write to custom location
-scafctl config init --output ./my-config.yaml
+scafctl config init --output-file ./my-config.yaml
 ```
 
 ### Manual Setup

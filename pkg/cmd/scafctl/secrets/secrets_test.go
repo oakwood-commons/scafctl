@@ -4,10 +4,17 @@
 package secrets
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
+	"github.com/adrg/xdg"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,12 +84,144 @@ func TestCommandExists(t *testing.T) {
 
 func TestCommandExport(t *testing.T) {
 	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandExport(cliParams, ioStreams, "scafctl/secrets")
+	cmd := CommandExport(cliParams, ioStreams, "mycli/secrets")
 	require.NotNil(t, cmd)
 	assert.Equal(t, "export", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
+	assert.Contains(t, cmd.Long, "mycli secrets export --output-file")
+
+	outputFileFlag := cmd.Flags().Lookup("output-file")
+	require.NotNil(t, outputFileFlag, "--output-file flag should exist")
+	assert.Empty(t, outputFileFlag.Shorthand, "--output-file must not claim -o shorthand")
+
+	outputFlag := cmd.Flags().Lookup("output")
+	require.NotNil(t, outputFlag, "--output format flag should exist")
+	assert.Equal(t, "yaml", outputFlag.DefValue)
+	assert.Equal(t, "o", outputFlag.Shorthand)
+
+	assert.Nil(t, cmd.Flags().Lookup("format"), "--format should be replaced by -o/--output")
+	assert.Nil(t, cmd.Flags().ShorthandLookup("f"), "-f shorthand should not exist on secrets export")
+
+	cmd.SetArgs([]string{})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `required flag(s) "output-file" not set`)
+}
+
+func TestRunExport_ExecutionAndValidation(t *testing.T) {
+	// Uses XDG_DATA_HOME + a Base64-encoded 32-byte SCAFCTL_SECRET_KEY for the
+	// environment keyring fallback; cannot run in parallel due to Setenv + xdg.Reload.
+	tmpDir := t.TempDir()
+	t.Cleanup(func() { xdg.Reload() })
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("SCAFCTL_SECRET_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	xdg.Reload()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+
+	// Seed a user secret via CommandSet -f <file>.
+	secretIn := filepath.Join(tmpDir, "token.txt")
+	require.NoError(t, os.WriteFile(secretIn, []byte("s3cr3t-value"), 0o600))
+	setCmd := CommandSet(cliParams, ioStreams, "scafctl/secrets")
+	setCmd.SetContext(ctx)
+	setCmd.SetArgs([]string{"api-token", "-f", secretIn})
+	require.NoError(t, setCmd.Execute())
+
+	// Seed default-namespace and custom-embedder internal secrets directly in the store.
+	store, err := newStoreFromContext(ctx)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(ctx, "scafctl.auth.token", []byte("default-internal-tok")))
+	require.NoError(t, store.Set(ctx, "mycli.auth.token", []byte("embedder-internal-tok")))
+
+	t.Run("empty output-file returns InvalidInput", func(t *testing.T) {
+		err := runExport(ctx, cliParams, exportRunOptions{
+			outputFile: "",
+			format:     "yaml",
+		})
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+		assert.Contains(t, err.Error(), "--output-file")
+	})
+
+	t.Run("invalid output format returns InvalidInput before confirmation", func(t *testing.T) {
+		calledConfirm := false
+		err := runExport(ctx, cliParams, exportRunOptions{
+			outputFile: filepath.Join(tmpDir, "bad.txt"),
+			format:     "table",
+			confirmPlaintext: func(context.Context, bool) (bool, error) {
+				calledConfirm = true
+				return true, nil
+			},
+		})
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+		assert.Contains(t, err.Error(), "unsupported output format")
+		assert.False(t, calledConfirm, "invalid -o format must fail before prompting")
+	})
+
+	t.Run("exports JSON and YAML files with 0600 permissions and excludes embedder internal secrets", func(t *testing.T) {
+		embedderParams := settings.NewCliParams()
+		embedderParams.BinaryName = "mycli"
+
+		for _, format := range []string{"json", "yaml"} {
+			outBuf.Reset()
+			errBuf.Reset()
+			outPath := filepath.Join(tmpDir, "exported."+format)
+
+			err := runExport(ctx, embedderParams, exportRunOptions{
+				outputFile: outPath,
+				format:     format,
+				confirmPlaintext: func(context.Context, bool) (bool, error) {
+					return true, nil
+				},
+			})
+			require.NoError(t, err)
+
+			if runtime.GOOS != "windows" {
+				info, statErr := os.Stat(outPath)
+				require.NoError(t, statErr)
+				assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+			}
+
+			data, readErr := os.ReadFile(outPath)
+			require.NoError(t, readErr)
+			assert.Contains(t, string(data), "api-token")
+			assert.Contains(t, string(data), "s3cr3t-value")
+			assert.NotContains(t, string(data), "mycli.auth.token")
+			assert.NotContains(t, string(data), "embedder-internal-tok")
+			assert.NotContains(t, string(data), "scafctl.auth.token")
+			assert.NotContains(t, string(data), "default-internal-tok")
+			if format == "json" {
+				assert.Contains(t, string(data), `"secrets"`)
+			} else {
+				assert.Contains(t, string(data), "secrets:")
+			}
+		}
+
+		// With --all, both embedder and default internal secrets are included.
+		allPath := filepath.Join(tmpDir, "exported-all.json")
+		err := runExport(ctx, embedderParams, exportRunOptions{
+			outputFile: allPath,
+			format:     "json",
+			all:        true,
+			confirmPlaintext: func(context.Context, bool) (bool, error) {
+				return true, nil
+			},
+		})
+		require.NoError(t, err)
+		allData, readErr := os.ReadFile(allPath)
+		require.NoError(t, readErr)
+		assert.Contains(t, string(allData), "api-token")
+		assert.Contains(t, string(allData), "mycli.auth.token")
+		assert.Contains(t, string(allData), "scafctl.auth.token")
+	})
 }
 
 func TestCommandGet(t *testing.T) {
@@ -127,12 +266,19 @@ func TestCommandRotate(t *testing.T) {
 
 func TestCommandSet(t *testing.T) {
 	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandSet(cliParams, ioStreams, "scafctl/secrets")
+	cmd := CommandSet(cliParams, ioStreams, "mycli/secrets")
 	require.NotNil(t, cmd)
 	assert.Equal(t, "set <name> [value]", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
+	assert.Contains(t, cmd.Long, "mycli secrets set name -f /path/to/file")
+	assert.NotContains(t, cmd.Long, "scafctl secrets set")
+
+	fileFlag := cmd.Flags().ShorthandLookup("f")
+	require.NotNil(t, fileFlag, "-f shorthand should exist on secrets set")
+	assert.Equal(t, "file", fileFlag.Name)
 }
 
 func BenchmarkCommandSecrets(b *testing.B) {

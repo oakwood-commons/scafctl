@@ -36,10 +36,9 @@ func CommandClear(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to working directory or absolute)")
+	addStatePathFlags(cmd, &opts.Path)
 	cmd.Flags().StringVar(&opts.Action, "action", "", "Clear fingerprints for a specific action only")
 	cmd.Flags().BoolVar(&opts.FingerprintsOnly, "fingerprints-only", false, "Clear only fingerprint entries, keep parameters and persisted resolvers")
-	_ = cmd.MarkFlagRequired("path")
 	cmd.MarkFlagsMutuallyExclusive("action", "fingerprints-only")
 
 	return cmd

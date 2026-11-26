@@ -23,19 +23,17 @@ flowchart LR
 {{< tabs "scaffolding-tutorial-cmd-1" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl new solution \
-  --name my-app \
-  --description "My application configuration" \
-  --output my-app.yaml
+scafctl new solution my-app \
+  -d "My application configuration" \
+  --output-file my-app.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-```powershell
-scafctl new solution `
-  --name my-app `
-  --description "My application configuration" `
-  --output my-app.yaml
-```
+~~~powershell
+scafctl new solution my-app `
+  -d "My application configuration" `
+  --output-file my-app.yaml
+~~~
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -85,22 +83,20 @@ Specify which providers to include in the scaffolded solution:
 {{% tab "Bash" %}}
 ```bash
 # Include specific providers
-scafctl new solution \
-  --name api-collector \
-  --description "Collect data from APIs" \
+scafctl new solution api-collector \
+  -d "Collect data from APIs" \
   --providers http,cel,exec \
-  --output api-collector.yaml
+  --output-file api-collector.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-```powershell
+~~~powershell
 # Include specific providers
-scafctl new solution `
-  --name api-collector `
-  --description "Collect data from APIs" `
+scafctl new solution api-collector `
+  -d "Collect data from APIs" `
   --providers http,cel,exec `
-  --output api-collector.yaml
-```
+  --output-file api-collector.yaml
+~~~
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -175,21 +171,19 @@ For solutions that just gather and transform data without side-effect actions:
 {{< tabs "scaffolding-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl new solution \
-  --name data-collector \
-  --description "Gather configuration from multiple sources" \
+scafctl new solution data-collector \
+  -d "Gather configuration from multiple sources" \
   --providers static,env,http,cel \
-  --output data-collector.yaml
+  --output-file data-collector.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-```powershell
-scafctl new solution `
-  --name data-collector `
-  --description "Gather configuration from multiple sources" `
+~~~powershell
+scafctl new solution data-collector `
+  -d "Gather configuration from multiple sources" `
   --providers static,env,http,cel `
-  --output data-collector.yaml
-```
+  --output-file data-collector.yaml
+~~~
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -215,21 +209,19 @@ For solutions with actions:
 {{< tabs "scaffolding-tutorial-cmd-7" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl new solution \
-  --name deploy-pipeline \
-  --description "Deployment automation pipeline" \
+scafctl new solution deploy-pipeline \
+  -d "Deployment automation pipeline" \
   --providers static,exec,cel \
-  --output deploy-pipeline.yaml
+  --output-file deploy-pipeline.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-```powershell
-scafctl new solution `
-  --name deploy-pipeline `
-  --description "Deployment automation pipeline" `
+~~~powershell
+scafctl new solution deploy-pipeline `
+  -d "Deployment automation pipeline" `
   --providers static,exec,cel `
-  --output deploy-pipeline.yaml
-```
+  --output-file deploy-pipeline.yaml
+~~~
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -258,18 +250,18 @@ scafctl lint -f my-solution.yaml
 
 The recommended scaffolding workflow:
 
-1. **Scaffold** — `scafctl new solution --name my-app --output my-app.yaml`
-2. **Lint** — `scafctl lint -f my-app.yaml`
-3. **Edit** — Modify resolvers and actions for your needs
-4. **Lint again** — `scafctl lint -f my-app.yaml`
-5. **Test** — `scafctl run resolver -f my-app.yaml` to verify resolvers
-6. **Run** — `scafctl run solution -f my-app.yaml` for the full workflow
+1. **Scaffold** -- `scafctl new solution my-app -d "My application" --output-file my-app.yaml`
+2. **Lint** -- `scafctl lint -f my-app.yaml`
+3. **Edit** -- Modify resolvers and actions for your needs
+4. **Lint again** -- `scafctl lint -f my-app.yaml`
+5. **Test** -- `scafctl run resolver -f my-app.yaml` to verify resolvers
+6. **Run** -- `scafctl run solution -f my-app.yaml` for the full workflow
 
 ## Next Steps
 
-- [Getting Started](getting-started.md) — Full getting started guide
-- [Resolver Tutorial](resolver-tutorial.md) — Deep dive into resolvers
-- [Actions Tutorial](actions-tutorial.md) — Build workflow actions
-- [Provider Reference](provider-reference.md) — All available providers
-- [Functional Testing Tutorial](functional-testing.md) — Add automated tests
-- [Eval Tutorial](eval-tutorial.md) — Test expressions before adding to solutions
+- [Getting Started](getting-started.md) -- Full getting started guide
+- [Resolver Tutorial](resolver-tutorial.md) -- Deep dive into resolvers
+- [Actions Tutorial](actions-tutorial.md) -- Build workflow actions
+- [Provider Reference](provider-reference.md) -- All available providers
+- [Functional Testing Tutorial](functional-testing.md) -- Add automated tests
+- [Eval Tutorial](eval-tutorial.md) -- Test expressions before adding to solutions

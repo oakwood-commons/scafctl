@@ -27,8 +27,8 @@ func CommandState(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 			written automatically when a solution's state block has a save target
 			that uses the file provider.
 
-			The --path flag specifies the state file relative to the current working
-			directory. Use an absolute path to reference files in other locations.
+			The -f/--file (or --path) flag specifies the state file relative to the current
+			working directory. Use an absolute path to reference files in other locations.
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 	})
@@ -43,4 +43,13 @@ func CommandState(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 	cmd.AddCommand(CommandFingerprints(cliParams, ioStreams, cmdPath))
 
 	return cmd
+}
+
+// addStatePathFlags registers -f/--file and --path bound to path, requiring
+// callers to supply one of the two without mixing both.
+func addStatePathFlags(cmd *cobra.Command, path *string) {
+	cmd.Flags().StringVarP(path, "file", "f", "", "State file path (relative to working directory or absolute)")
+	cmd.Flags().StringVar(path, "path", "", "State file path (alias for --file)")
+	cmd.MarkFlagsOneRequired("file", "path")
+	cmd.MarkFlagsMutuallyExclusive("file", "path")
 }
