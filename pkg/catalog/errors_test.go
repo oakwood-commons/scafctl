@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -322,4 +323,75 @@ func TestBuilderError(t *testing.T) {
 		e := &BuilderError{Stage: BuildStagePush, Builder: BuilderKindIndex, Detail: "pushing image index", Cause: cause}
 		assert.ErrorIs(t, e, cause)
 	})
+}
+
+func TestNoMatchingVersionError(t *testing.T) {
+	t.Parallel()
+	ref := Reference{Kind: ArtifactKindProvider, Name: "exec"}
+
+	t.Run("newNoMatchingVersionError sorts descending, deduplicates, and strips internal pre-release suffix", func(t *testing.T) {
+		t.Parallel()
+		err := newNoMatchingVersionError(
+			ref,
+			">=1.0.0, >=0.0.0-0 || ^2.0.0, >=0.0.0-0",
+			[]*semver.Version{
+				semver.MustParse("0.4.0"),
+				nil,
+				semver.MustParse("0.5.0"),
+				semver.MustParse("0.4.0"),
+			},
+			"official",
+		)
+		assert.Equal(t, ">=1.0.0 || ^2.0.0", err.Constraint)
+		assert.Equal(t, []string{"0.5.0", "0.4.0"}, err.Available)
+		assert.Equal(t, `artifact "exec" has no version matching ">=1.0.0 || ^2.0.0" in catalog "official" (available: 0.5.0, 0.4.0)`, err.Error())
+		assert.ErrorIs(t, err, ErrNoMatchingVersion)
+		assert.ErrorIs(t, err, ErrArtifactNotFound)
+		assert.True(t, IsNotFound(err))
+
+		got, ok := IsNoMatchingVersion(fmt.Errorf("resolving: %w", err))
+		assert.True(t, ok)
+		assert.Same(t, err, got)
+	})
+
+	t.Run("literal >=0.0.0-0 constraint is preserved", func(t *testing.T) {
+		t.Parallel()
+		err := newNoMatchingVersionError(ref, ">=0.0.0-0", []*semver.Version{semver.MustParse("0.1.0")}, "")
+		assert.Equal(t, ">=0.0.0-0", err.Constraint)
+		assert.Equal(t, `artifact "exec" has no version matching ">=0.0.0-0" (available: 0.1.0)`, err.Error())
+	})
+
+	t.Run("message variants without constraint or available", func(t *testing.T) {
+		t.Parallel()
+		e1 := &NoMatchingVersionError{Reference: ref, Catalog: "local"}
+		assert.Equal(t, `artifact "exec" has no matching version in catalog "local"`, e1.Error())
+
+		e2 := &NoMatchingVersionError{Reference: ref}
+		assert.Equal(t, `artifact "exec" has no matching version`, e2.Error())
+
+		got, ok := IsNoMatchingVersion(errors.New("unrelated"))
+		assert.False(t, ok)
+		assert.Nil(t, got)
+	})
+
+	t.Run("MockCatalog.Find returns NoMatchingVersionError when versions exist", func(t *testing.T) {
+		t.Parallel()
+		mc := NewMockCatalog("mock", WithListFunc(func(context.Context, ArtifactKind, string) ([]ArtifactInfo, error) {
+			return []ArtifactInfo{
+				{Reference: Reference{Kind: ArtifactKindProvider, Name: "exec", Version: semver.MustParse("0.4.0")}},
+			}, nil
+		}))
+		_, err := mc.(*mockCatalog).Find(context.Background(), ArtifactQuery{Name: "exec", Kind: ArtifactKindProvider, Version: ">=1.0.0"})
+		assert.ErrorIs(t, err, ErrNoMatchingVersion)
+		assert.ErrorIs(t, err, ErrArtifactNotFound)
+	})
+}
+
+func TestPolicyError(t *testing.T) {
+	t.Parallel()
+
+	err := &PolicyError{Message: `catalog "corp" is not in the allowed catalogs list`}
+	assert.Equal(t, `catalog "corp" is not in the allowed catalogs list`, err.Error())
+	assert.ErrorIs(t, err, ErrCatalogPolicyDenied)
+	assert.ErrorIs(t, fmt.Errorf("plugin exec: %w", err), ErrCatalogPolicyDenied)
 }

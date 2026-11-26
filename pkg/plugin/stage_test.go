@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -75,6 +76,7 @@ func TestPoolErrorHTTPStatus_StageTagged(t *testing.T) {
 		{name: "local build not allowed", err: withStage(StageBind, errLocalBuild("built")), want: 403},
 		{name: "unconfigured registry", err: withStage(StageBind, fmt.Errorf("r: %w", ErrUnconfiguredRegistry)), want: 403},
 		{name: "plugin not allowed", err: withStage(StageResolve, fmt.Errorf("p: %w", ErrPluginNotAllowed)), want: 403},
+		{name: "catalog policy denied", err: withStage(StageResolve, &catalog.PolicyError{Message: `catalog "corp" is not in the allowed catalogs list`}), want: 403},
 		{name: "untyped download failure", err: withStage(StageDownload, errors.New("registry down")), want: 502},
 	}
 	for _, tt := range tests {

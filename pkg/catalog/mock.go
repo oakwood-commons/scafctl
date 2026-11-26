@@ -265,12 +265,24 @@ func (m *mockCatalog) Find(ctx context.Context, query ArtifactQuery) (ArtifactIn
 	if err != nil {
 		return ArtifactInfo{}, err
 	}
+	allInfos := infos
 	if query.Version != "" && !strings.EqualFold(query.Version, "latest") {
 		if infos, err = FilterByVersionConstraint(infos, query.Version); err != nil {
 			return ArtifactInfo{}, fmt.Errorf("%w: %w", ErrInvalidQuery, err)
 		}
 	}
 	if len(infos) == 0 {
+		if len(allInfos) > 0 && query.Version != "" && !strings.EqualFold(query.Version, "latest") {
+			versions := make([]*semver.Version, 0, len(allInfos))
+			for _, item := range allInfos {
+				if item.Reference.Version != nil {
+					versions = append(versions, item.Reference.Version)
+				}
+			}
+			if len(versions) > 0 {
+				return ArtifactInfo{}, newNoMatchingVersionError(ref, query.Version, versions, m.name)
+			}
+		}
 		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: m.name}
 	}
 	sortByVersionDesc(infos)

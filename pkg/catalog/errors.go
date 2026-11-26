@@ -7,8 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 // ErrArtifactNotFound is returned when an artifact cannot be found.
@@ -456,4 +459,122 @@ func IsAuthDegraded(err error) (*AuthDegradedError, bool) {
 		return e, true
 	}
 	return nil, false
+}
+
+// ErrCredentialsRejected marks a lookup that failed after the registry
+// rejected this catalog's credentials. Anonymous access cannot tell "absent"
+// from "hidden" (registries answer anonymous callers for a private repository
+// with 401, 403 or 404), so such a failure is never reported as not-found:
+// a strict source chain must halt rather than serve the same name from a
+// lower-priority catalog.
+var ErrCredentialsRejected = errors.New("registry rejected the catalog's credentials and anonymous access cannot confirm the artifact is absent; re-authenticate and retry")
+
+// ErrCatalogPolicyDenied is returned when a catalog allowlist or per-catalog
+// plugin allowlist policy forbids serving an artifact from a catalog.
+var ErrCatalogPolicyDenied = errors.New("disallowed by catalog policy")
+
+// PolicyError wraps a policy-denial message so errors.Is matches
+// ErrCatalogPolicyDenied without changing the user-facing error text.
+type PolicyError struct {
+	Message string
+}
+
+// Error implements the error interface.
+func (e *PolicyError) Error() string {
+	return e.Message
+}
+
+// Is reports whether target is ErrCatalogPolicyDenied.
+func (e *PolicyError) Is(target error) bool {
+	return target == ErrCatalogPolicyDenied //nolint:errorlint // intentional sentinel identity check
+}
+
+// ErrNoMatchingVersion is returned when an artifact exists in a catalog (one or
+// more versions are published), but none of its versions satisfy the requested
+// version or semver constraint.
+var ErrNoMatchingVersion = errors.New("no matching artifact version")
+
+// NoMatchingVersionError reports that an artifact exists in a catalog, but none
+// of its published versions satisfy the requested version or semver constraint.
+//
+// Unwrap returns ErrArtifactNotFound so multi-catalog chains continue falling
+// through to lower-priority catalogs that may publish a matching version, while
+// Is matches ErrNoMatchingVersion so callers and aggregateChainError can
+// distinguish a constraint mismatch from a completely absent artifact.
+type NoMatchingVersionError struct {
+	Reference  Reference
+	Constraint string
+	Available  []string
+	Catalog    string
+}
+
+// Error implements the error interface.
+func (e *NoMatchingVersionError) Error() string {
+	constraint := stripInternalPreReleaseSuffix(e.Constraint)
+	var avail string
+	if len(e.Available) > 0 {
+		avail = fmt.Sprintf(" (available: %s)", strings.Join(e.Available, ", "))
+	}
+	if e.Catalog != "" {
+		if constraint != "" {
+			return fmt.Sprintf("artifact %q has no version matching %q in catalog %q%s", e.Reference.String(), constraint, e.Catalog, avail)
+		}
+		return fmt.Sprintf("artifact %q has no matching version in catalog %q%s", e.Reference.String(), e.Catalog, avail)
+	}
+	if constraint != "" {
+		return fmt.Sprintf("artifact %q has no version matching %q%s", e.Reference.String(), constraint, avail)
+	}
+	return fmt.Sprintf("artifact %q has no matching version%s", e.Reference.String(), avail)
+}
+
+// Unwrap returns ErrArtifactNotFound so chain lookups treat a version miss in
+// one catalog as eligible to fall through to subsequent catalogs.
+func (e *NoMatchingVersionError) Unwrap() error {
+	return ErrArtifactNotFound
+}
+
+// Is reports whether target is ErrNoMatchingVersion.
+func (e *NoMatchingVersionError) Is(target error) bool {
+	return target == ErrNoMatchingVersion //nolint:errorlint // intentional sentinel identity check
+}
+
+// IsNoMatchingVersion reports whether err (or any error it wraps) is a
+// NoMatchingVersionError, returning the typed value when it is.
+func IsNoMatchingVersion(err error) (*NoMatchingVersionError, bool) {
+	var e *NoMatchingVersionError
+	if errors.As(err, &e) {
+		return e, true
+	}
+	return nil, false
+}
+
+func newNoMatchingVersionError(ref Reference, constraint string, versions []*semver.Version, catalogName string) *NoMatchingVersionError {
+	sorted := make([]*semver.Version, 0, len(versions))
+	for _, v := range versions {
+		if v != nil {
+			sorted = append(sorted, v)
+		}
+	}
+	sort.Sort(sort.Reverse(semver.Collection(sorted)))
+
+	available := make([]string, 0, len(sorted))
+	seen := make(map[string]bool, len(sorted))
+	for _, v := range sorted {
+		s := v.String()
+		if !seen[s] {
+			seen[s] = true
+			available = append(available, s)
+		}
+	}
+
+	return &NoMatchingVersionError{
+		Reference:  ref,
+		Constraint: stripInternalPreReleaseSuffix(constraint),
+		Available:  available,
+		Catalog:    catalogName,
+	}
+}
+
+func stripInternalPreReleaseSuffix(constraint string) string {
+	return strings.TrimSpace(strings.ReplaceAll(constraint, ", >=0.0.0-0", ""))
 }

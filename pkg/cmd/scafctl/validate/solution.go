@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -59,7 +60,10 @@ too. Use it in CI pipelines or pre-commit checks as a single pass/fail gate.
 EXIT CODES:
   0  Solution is valid (no errors; warnings allowed unless --strict)
   2  Validation failed (lint errors, or warnings with --strict)
-  4  Solution file not found
+  3  Invalid input (malformed reference or ambiguous discovery)
+  4  Solution file or catalog artifact not found
+  7  Configuration error (unknown or unconfigured catalog)
+  8  Catalog error (catalog unreachable or fetch failed)
 
 Examples:
   # Validate the auto-discovered solution
@@ -152,7 +156,7 @@ func runValidateSolution(ctx context.Context, opts *solutionOptions, cliParams *
 		if w := writer.FromContext(ctx); w != nil {
 			w.Errorf("%v", err)
 		}
-		return exitcode.WithCode(err, exitcode.FileNotFound)
+		return exitcode.WithCode(err, prepare.ErrorExitCode(err))
 	}
 
 	appName := cliParams.BinaryName

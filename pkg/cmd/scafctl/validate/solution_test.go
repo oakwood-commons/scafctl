@@ -5,11 +5,16 @@ package validate
 
 import (
 	"bytes"
+	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -229,4 +234,31 @@ func TestCommandValidateSolution_FileFlagRejectsCatalogRef(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mycli validate solution my-app")
+}
+
+func TestCommandValidateSolution_UnreachableCatalogExitsCatalogError(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	unreachSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(unreachSrv.Close)
+	host := strings.TrimPrefix(unreachSrv.URL, "http://")
+
+	appCfg := &config.Config{
+		Settings: config.Settings{DisableOfficialCatalog: true, DefaultCatalog: "offline"},
+		Catalogs: []config.CatalogConfig{
+			{Name: "offline", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/solutions", Insecure: true},
+		},
+	}
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandValidateSolution(cliParams, streams, "scafctl/validate")
+	cmd.SetContext(config.WithConfig(context.Background(), appCfg))
+	cmd.SetArgs([]string{"my-app@1.0.0", "-o", "quiet"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
 }

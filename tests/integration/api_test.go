@@ -2594,7 +2594,7 @@ func TestAPI_SolutionRun_AllowedCatalogs_Rejected(t *testing.T) {
 	e.POST("/v1/solutions/run").
 		WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
 		Expect().
-		Status(http.StatusBadGateway).
+		Status(http.StatusForbidden).
 		HasContentType("application/problem+json").
 		Body().Contains("is not in the allowed catalogs list")
 }

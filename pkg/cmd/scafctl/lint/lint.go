@@ -24,6 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -290,7 +291,7 @@ func runLint(ctx context.Context, opts *Options) error {
 	ms, err := load.NewRouterFromContext(ctx, *lgr, routerOpts...).Load(ctx, c)
 	if err != nil {
 		writeError(opts, fmt.Sprintf("failed to load solution: %v", err))
-		return exitcode.WithCode(err, exitcode.FileNotFound)
+		return exitcode.WithCode(err, prepare.ErrorExitCode(err))
 	}
 	load.ReportDiscovery(ctx, ms)
 	if ms.Discovery != nil {
@@ -433,6 +434,6 @@ func writeError(opts *Options, msg string) {
 		opts.IOStreams,
 		output.MessageTypeError,
 		opts.CliParams.NoColor,
-		opts.CliParams.ExitOnError,
+		false,
 	).WriteMessage(msg)
 }

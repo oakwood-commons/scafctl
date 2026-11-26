@@ -242,7 +242,7 @@ func TestPluginSourceChain_BestEffortAndStrictModes(t *testing.T) {
 				var warnings []string
 				private := &fakePluginSource{
 					name: "corp",
-					err:  errCredentialsRejected,
+					err:  ErrCredentialsRejected,
 				}
 				official := okSource("official")
 
@@ -282,7 +282,7 @@ func TestPluginSourceChain_BestEffortAndStrictModes(t *testing.T) {
 				t.Parallel()
 				private := &fakePluginSource{
 					name: "corp",
-					err:  errCredentialsRejected,
+					err:  ErrCredentialsRejected,
 				}
 				official := notFoundSource("official")
 
@@ -290,7 +290,7 @@ func TestPluginSourceChain_BestEffortAndStrictModes(t *testing.T) {
 
 				_, err := op(chain)
 				require.Error(t, err)
-				assert.ErrorIs(t, err, errCredentialsRejected)
+				assert.ErrorIs(t, err, ErrCredentialsRejected)
 				assert.NotErrorIs(t, err, ErrArtifactNotFound)
 				assert.Equal(t, 1, official.calls)
 			})
@@ -370,7 +370,7 @@ func TestPluginSourceChain_BestEffortAndStrictModes(t *testing.T) {
 		t.Parallel()
 		var warnings []string
 		c1 := &fakePluginSource{name: "corp-1", err: &UnreachableError{Catalog: "corp-1", Cause: errors.New("down")}}
-		c2 := &fakePluginSource{name: "corp-2", err: errCredentialsRejected}
+		c2 := &fakePluginSource{name: "corp-2", err: ErrCredentialsRejected}
 		c3 := &fakePluginSource{name: "corp-3", err: &UnreachableError{Catalog: "corp-3", Cause: errors.New("down")}}
 		official := okSource("official")
 
@@ -403,7 +403,7 @@ func TestPluginFetcher_StrictVsBestEffortAndWithCatalog(t *testing.T) {
 	newBrokenCorp := func() *fakePluginSource {
 		return &fakePluginSource{
 			name: "corp",
-			err:  errCredentialsRejected,
+			err:  ErrCredentialsRejected,
 		}
 	}
 	newOfficial := func(pluginName string) *fakePluginSource {
@@ -426,7 +426,7 @@ func TestPluginFetcher_StrictVsBestEffortAndWithCatalog(t *testing.T) {
 
 	// Explicit WithCatalog("corp") on the SAME fetcher fails closed with zero fallback.
 	_, err = bestEffortFetcher.ResolvePlugin(ctx, "brand-new-official-plugin", ArtifactKindProvider, "", WithCatalog("corp"))
-	require.ErrorIs(t, err, errCredentialsRejected)
+	require.ErrorIs(t, err, ErrCredentialsRejected)
 
 	// Strict fetcher (--strict / serve mode) fails closed on unpinned lookup too.
 	strictCorp := newBrokenCorp()
@@ -441,7 +441,7 @@ func TestPluginFetcher_StrictVsBestEffortAndWithCatalog(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = strictFetcher.ResolvePlugin(ctx, "brand-new-official-plugin", ArtifactKindProvider, "")
-	require.ErrorIs(t, err, errCredentialsRejected)
+	require.ErrorIs(t, err, ErrCredentialsRejected)
 	assert.Zero(t, strictOfficial.calls, "strict mode must not fall through to official")
 }
 

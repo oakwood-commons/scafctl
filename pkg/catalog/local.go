@@ -685,7 +685,23 @@ func (c *LocalCatalog) findLocked(ctx context.Context, query ArtifactQuery, stri
 	}
 	switch len(artifacts) {
 	case 0:
-		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: Reference{Kind: query.Kind, Name: query.Name}, Catalog: LocalCatalogName}
+		ref := Reference{Kind: query.Kind, Name: query.Name}
+		if query.Version != "" && !wantsLatest(query) && query.Digest == "" {
+			anyVersionQuery := query
+			anyVersionQuery.Version = ""
+			if existing, scanErr := c.findByAnnotation(ctx, anyVersionQuery); scanErr == nil && len(existing) > 0 {
+				versions := make([]*semver.Version, 0, len(existing))
+				for _, item := range existing {
+					if item.Reference.Version != nil {
+						versions = append(versions, item.Reference.Version)
+					}
+				}
+				if len(versions) > 0 {
+					return ArtifactInfo{}, newNoMatchingVersionError(ref, query.Version, versions, LocalCatalogName)
+				}
+			}
+		}
+		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
 	case 1:
 		return artifacts[0], nil
 	}

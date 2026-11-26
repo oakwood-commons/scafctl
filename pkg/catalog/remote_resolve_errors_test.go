@@ -214,7 +214,7 @@ func TestRemoteCatalog_ManifestErrors_StrictChain(t *testing.T) {
 					assert.NotErrorIs(t, err, ErrArtifactNotFound)
 					assert.Zero(t, fallback.calls, "a registry failure must not fall through to a lower-priority source")
 					if tc.rejected {
-						assert.ErrorIs(t, err, errCredentialsRejected)
+						assert.ErrorIs(t, err, ErrCredentialsRejected)
 						assert.NotNil(t, CredentialRejection(ctx), "the rejection is recorded on the request context")
 					}
 				})
@@ -311,12 +311,13 @@ func TestRemoteCatalog_LookupError(t *testing.T) {
 	}
 
 	tests := []struct {
-		name         string
-		credentialed bool
-		probe        *probeResult
-		err          error
-		wantNotFound bool
-		wantProbes   int32
+		name            string
+		credentialed    bool
+		probe           *probeResult
+		err             error
+		wantNotFound    bool
+		wantUnreachable bool
+		wantProbes      int32
 	}{
 		{name: "anonymous 404", err: missing, wantNotFound: true},
 		{name: "anonymous errdef not found", err: errdef.ErrNotFound, wantNotFound: true},
@@ -327,6 +328,11 @@ func TestRemoteCatalog_LookupError(t *testing.T) {
 		{name: "credentialed 403 with rejected credentials", credentialed: true, probe: rejected, err: denied, wantProbes: 1},
 		{name: "credentialed 403 with unverified credentials", credentialed: true, probe: unverified, err: denied, wantProbes: 1},
 		{name: "credentialed 403 when the probe fails", credentialed: true, err: denied, wantProbes: 1},
+		{name: "proxy 407 is unreachable", err: &errcode.ErrorResponse{StatusCode: http.StatusProxyAuthRequired}, wantUnreachable: true},
+		{name: "gateway 502 is unreachable", err: &errcode.ErrorResponse{StatusCode: http.StatusBadGateway}, wantUnreachable: true},
+		{name: "gateway 503 is unreachable", err: &errcode.ErrorResponse{StatusCode: http.StatusServiceUnavailable}, wantUnreachable: true},
+		{name: "gateway 504 is unreachable", err: &errcode.ErrorResponse{StatusCode: http.StatusGatewayTimeout}, wantUnreachable: true},
+		{name: "registry 500 is not unreachable", err: &errcode.ErrorResponse{StatusCode: http.StatusInternalServerError}},
 		{name: "anonymous other", err: assert.AnError},
 	}
 	for _, tc := range tests {
@@ -337,7 +343,12 @@ func TestRemoteCatalog_LookupError(t *testing.T) {
 			err := cat.lookupError(t.Context(), cat.client, "resolving", ref, tc.err)
 			require.Error(t, err)
 			assert.Equal(t, tc.wantNotFound, IsNotFound(err))
-			assert.NotErrorIs(t, err, errCredentialsRejected, "only retryAnonymously reports rejected credentials")
+			_, gotUnreachable := IsCatalogUnreachable(err)
+			assert.Equal(t, tc.wantUnreachable, gotUnreachable)
+			if tc.wantUnreachable {
+				assert.ErrorIs(t, err, ErrCatalogUnreachable)
+			}
+			assert.NotErrorIs(t, err, ErrCredentialsRejected, "only retryAnonymously reports rejected credentials")
 			assert.Equal(t, tc.wantProbes, probes.Load(), "credential probes")
 			if !tc.wantNotFound {
 				assert.ErrorIs(t, err, tc.err)
@@ -512,7 +523,7 @@ func TestRemoteCatalog_VersionedFetch_RejectedCredentials(t *testing.T) {
 
 			_, err := op(t.Context(), cat)
 			require.Error(t, err)
-			require.ErrorIs(t, err, errCredentialsRejected)
+			require.ErrorIs(t, err, ErrCredentialsRejected)
 			assert.NotErrorIs(t, err, ErrArtifactNotFound)
 		})
 
@@ -557,7 +568,7 @@ func TestRemoteCatalog_RejectedCredentials_NotReportedAsAbsent(t *testing.T) {
 			h.status.Store(http.StatusNotFound)
 
 			err := op(t.Context(), cat)
-			require.ErrorIs(t, err, errCredentialsRejected)
+			require.ErrorIs(t, err, ErrCredentialsRejected)
 			assert.NotErrorIs(t, err, ErrArtifactNotFound, "a hidden artifact must not be reported as absent")
 		})
 	}
@@ -640,7 +651,7 @@ func TestRemoteCatalog_RejectedCredentials_AnonymousRetrySkipsCredentialProbe(t 
 			h.status.Store(http.StatusForbidden)
 
 			err := op(t.Context(), cat)
-			require.ErrorIs(t, err, errCredentialsRejected)
+			require.ErrorIs(t, err, ErrCredentialsRejected)
 			assert.Equal(t, int32(1), h.authProbes.Load(),
 				"only the credentialed attempt may probe the registry's credentials")
 			assert.Equal(t, int32(1), h.credLookups.Load(),
@@ -687,7 +698,7 @@ func TestRemoteCatalog_DeniedRepository_ValidCredentials(t *testing.T) {
 
 		_, err := cat.resolveByTag(ctx, testRef("q", "1.0.0"), "1.0.0")
 		require.ErrorIs(t, err, ErrArtifactNotFound)
-		assert.NotErrorIs(t, err, errCredentialsRejected)
+		assert.NotErrorIs(t, err, ErrCredentialsRejected)
 		assert.Nil(t, CredentialRejection(ctx), "valid credentials must not be reported as rejected")
 		assert.Equal(t, int32(1), h.credLookups.Load(), "no anonymous retry follows a repository denial")
 	})
@@ -699,7 +710,7 @@ func TestRemoteCatalog_DeniedRepository_ValidCredentials(t *testing.T) {
 
 		_, err := cat.FetchIndex(ctx)
 		require.ErrorIs(t, err, ErrArtifactNotFound)
-		assert.NotErrorIs(t, err, errCredentialsRejected)
+		assert.NotErrorIs(t, err, ErrCredentialsRejected)
 		assert.Nil(t, CredentialRejection(ctx), "valid credentials must not be reported as rejected")
 		assert.Equal(t, int32(1), h.authProbes.Load(), "the denial is checked against the login once")
 		assert.Equal(t, int32(1), h.credLookups.Load(), "no anonymous retry follows a repository denial")

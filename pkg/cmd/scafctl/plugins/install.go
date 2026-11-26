@@ -5,7 +5,9 @@ package plugins
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,7 +143,13 @@ func runInstall(ctx context.Context, opts *InstallOptions, args []string) error 
 		var err error
 		plugins, lockPlugins, err = loadPluginsFromSolution(ctx, opts)
 		if err != nil {
-			return err
+			return reclassifyLoadError(err)
+		}
+		if len(plugins) > 0 && len(lockPlugins) == 0 {
+			if lockErr := checkAdjacentLockError(ctx, opts.File); lockErr != nil {
+				w.Errorf("failed to load lock file: %v", lockErr)
+				return exitcode.WithCode(lockErr, prepare.ErrorExitCode(lockErr))
+			}
 		}
 	}
 
@@ -184,7 +192,7 @@ func runInstall(ctx context.Context, opts *InstallOptions, args []string) error 
 	})
 	if err != nil {
 		w.Errorf("failed to build plugin catalog fetcher: %v", err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
+		return exitcode.WithCode(err, installErrorExitCode(err))
 	}
 
 	// Fetch all plugins
@@ -193,7 +201,7 @@ func runInstall(ctx context.Context, opts *InstallOptions, args []string) error 
 	results, err := fetcher.FetchPlugins(ctx, plugins, lockPlugins)
 	if err != nil {
 		w.Errorf("failed to install plugins: %v", err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
+		return exitcode.WithCode(err, installErrorExitCode(err))
 	}
 
 	// Report results
@@ -223,6 +231,42 @@ func runInstall(ctx context.Context, opts *InstallOptions, args []string) error 
 
 	w.Successf("Installed %d plugin(s).", len(results))
 	return nil
+}
+
+func reclassifyLoadError(err error) error {
+	cause := err
+	var exitErr *exitcode.ExitError
+	if errors.As(err, &exitErr) && exitErr.Err != nil {
+		cause = exitErr.Err
+	}
+	switch {
+	case errors.Is(cause, os.ErrNotExist):
+		return exitcode.WithCode(cause, exitcode.FileNotFound)
+	case errors.Is(cause, fs.ErrPermission):
+		return exitcode.WithCode(cause, exitcode.PermissionDenied)
+	default:
+		return err
+	}
+}
+
+func checkAdjacentLockError(ctx context.Context, explicitFile string) error {
+	filePath := explicitFile
+	if filePath == "" {
+		filePath, _ = load.DiscoverPath(ctx, load.DiscoveryRiskLow)
+	}
+	if filePath == "" {
+		return nil
+	}
+	_, err := bundler.LoadLockFile(filepath.Join(filepath.Dir(filePath), bundler.DefaultLockFileName))
+	return err
+}
+
+func installErrorExitCode(err error) int {
+	code := prepare.ErrorExitCode(err)
+	if code == exitcode.FileNotFound {
+		return exitcode.CatalogError
+	}
+	return code
 }
 
 func loadSolution(path string) (*solution.Solution, error) {
@@ -259,6 +303,9 @@ func resolveStandalonePlugins(ctx context.Context, names []string, kind, version
 	deps := make([]solution.PluginDependency, 0, len(names))
 
 	for _, name := range names {
+		if strings.HasSuffix(name, "@") || strings.HasPrefix(name, "@") {
+			return nil, fmt.Errorf("invalid plugin reference %q: expected <name>[@<version>]", name)
+		}
 		// Parse optional name@version syntax.
 		pluginName, pluginVersion := parseNameVersion(name)
 		if version != "" {

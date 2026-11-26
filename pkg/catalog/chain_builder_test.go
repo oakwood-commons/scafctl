@@ -703,7 +703,7 @@ func TestBuildPluginFetcher_ChainModeBestEffortVsStrict(t *testing.T) {
 	t.Cleanup(unavailSrv.Close)
 	unavailHost := strings.TrimPrefix(unavailSrv.URL, "http://")
 
-	// TLS server rejecting bearer credentials produces errCredentialsRejected ("unauthenticated").
+	// TLS server rejecting bearer credentials produces ErrCredentialsRejected ("unauthenticated").
 	unauthSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)

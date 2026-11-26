@@ -346,11 +346,13 @@ func TestWithAllowed_Gating(t *testing.T) {
 	// A configured-but-not-allowed catalog is rejected.
 	err := idx.CheckAllowed("local")
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, catalog.ErrCatalogPolicyDenied)
 	assert.Contains(t, err.Error(), "not in the allowed catalogs list")
 
 	// An empty alias is rejected when a gate is set.
 	err = idx.CheckAllowed("")
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, catalog.ErrCatalogPolicyDenied)
 }
 
 func TestWithAllowed_NoGate(t *testing.T) {
@@ -417,6 +419,7 @@ func TestCheckPluginAllowed(t *testing.T) {
 	assert.NoError(t, idx.CheckPluginAllowed("prod", "gcp"))
 	err := idx.CheckPluginAllowed("prod", "azure")
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, catalog.ErrCatalogPolicyDenied)
 	assert.Contains(t, err.Error(), "not in catalog")
 
 	// Alias match is case-insensitive.
@@ -428,11 +431,13 @@ func TestCheckPluginAllowed(t *testing.T) {
 	// Catalog absent from the policy map is deny-all.
 	err = idx.CheckPluginAllowed("local", "aws")
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, catalog.ErrCatalogPolicyDenied)
 	assert.Contains(t, err.Error(), "not permitted to serve any plugins")
 
 	// Empty alias is rejected under a gate (unverifiable origin).
 	err = idx.CheckPluginAllowed("", "aws")
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, catalog.ErrCatalogPolicyDenied)
 	assert.Contains(t, err.Error(), "origin unknown")
 }
 

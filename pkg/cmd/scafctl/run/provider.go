@@ -5,8 +5,10 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"sort"
 	"strings"
@@ -24,6 +26,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -151,6 +154,9 @@ EXIT CODES:
   0  Success
   1  Provider execution failed
   2  Validation failed (invalid inputs)
+  3  Invalid input (unknown provider, version mismatch, or invalid capability)
+  7  Configuration or policy error (unconfigured catalog or signature policy)
+  8  Catalog or plugin acquisition failed (offline or unreachable registry)
 
 Examples:
   # Positional key=value syntax (recommended)
@@ -253,6 +259,7 @@ func setProviderHelpFunc(cmd *cobra.Command) {
 		}
 
 		prov, ok := reg.Get(providerName)
+		var resolveErr error
 		if !ok {
 			// Try auto-resolving official providers for dynamic help.
 			// The help function may run before PersistentPreRunE sets up context,
@@ -261,13 +268,14 @@ func setProviderHelpFunc(cmd *cobra.Command) {
 			if official.RegistryFromContext(helpCtx) == nil {
 				helpCtx = official.WithRegistry(helpCtx, official.NewRegistry())
 			}
-			clients, resolveErr := autoResolveProviderByName(helpCtx, providerName, reg)
+			var clients []*plugin.Client
+			clients, resolveErr = autoResolveProviderByName(helpCtx, providerName, reg)
 			if resolveErr == nil {
 				defer plugin.KillAll(clients)
 				prov, ok = reg.Get(providerName)
 			}
 		}
-		if !ok {
+		if !ok && (resolveErr == nil || errors.Is(resolveErr, errNotOfficialProvider)) {
 			// Fallback: try loading from the local plugin cache.
 			// nil config is intentional — help probe doesn't need quiet/color settings.
 			clients, cacheErr := plugin.RegisterCachedPlugin(c.Context(), providerName, reg, nil, settings.PluginCacheDirFor(settings.BinaryNameFromContext(c.Context())))
@@ -390,17 +398,24 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 		} else if desc.Version.String() != o.PluginVersion {
 			err := fmt.Errorf("provider %q is loaded at version %s but version %s was requested", o.ProviderName, desc.Version, o.PluginVersion)
 			w.Errorf("%v", err)
-			return exitcode.WithCode(err, exitcode.FileNotFound)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
 	}
 	if !ok && o.PluginVersion == "" {
 		// Auto-resolve official providers on miss (only when no version pin is active).
-		if clients, resolveErr := autoResolveProviderByName(ctx, o.ProviderName, reg); resolveErr == nil {
+		// FetchPlugins already consults every policy-permitted cache layout while
+		// enforcing signature, allowlist, and local-build policies, so any non-sentinel
+		// error must fail closed without falling back to raw RegisterCachedPlugin.
+		clients, resolveErr := autoResolveProviderByName(ctx, o.ProviderName, reg)
+		if resolveErr == nil {
 			defer plugin.KillAll(clients)
 			prov, ok = reg.Get(o.ProviderName)
 			if ok && w != nil {
 				w.Verbosef("Resolved provider %q from official registry", o.ProviderName)
 			}
+		} else if !errors.Is(resolveErr, errNotOfficialProvider) {
+			w.Errorf("%v", resolveErr)
+			return exitcode.WithCode(resolveErr, providerFetchExitCode(resolveErr))
 		}
 	}
 	if !ok {
@@ -413,22 +428,26 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 		} else {
 			clients, cacheErr = plugin.RegisterCachedPlugin(ctx, o.ProviderName, reg, pluginCfg, settings.PluginCacheDirFor(o.BinaryName), clientOpts...)
 		}
-		if cacheErr == nil {
+		switch {
+		case cacheErr == nil:
 			defer plugin.KillAll(clients)
 			prov, ok = reg.Get(o.ProviderName)
 			if ok && w != nil {
 				w.Verbosef("Resolved provider %q from local plugin cache", o.ProviderName)
 			}
-		} else if o.PluginVersion != "" {
+		case isFatalCachePluginError(cacheErr):
+			w.Errorf("%v", cacheErr)
+			return exitcode.WithCode(cacheErr, providerFetchExitCode(cacheErr))
+		case o.PluginVersion != "":
 			// Version-pinned lookups should surface the version-specific error.
 			w.Errorf("%v", cacheErr)
-			return exitcode.WithCode(cacheErr, exitcode.FileNotFound)
+			return exitcode.WithCode(cacheErr, exitcode.InvalidInput)
 		}
 	}
 	if !ok {
 		err := fmt.Errorf("provider %q not found (use '%s get providers' to list available providers)", o.ProviderName, o.BinaryName)
 		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.FileNotFound)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	desc := prov.Descriptor()
@@ -496,6 +515,21 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	}
 
 	return o.writeOutput(ctx, output)
+}
+
+func providerFetchExitCode(err error) int {
+	code := prepare.ErrorExitCode(err)
+	if code == exitcode.FileNotFound {
+		return exitcode.CatalogError
+	}
+	return code
+}
+
+func isFatalCachePluginError(err error) bool {
+	if _, ok := plugin.ErrorStage(err); ok {
+		return true
+	}
+	return errors.Is(err, fs.ErrPermission)
 }
 
 // resolveCapability determines which capability to use for execution.

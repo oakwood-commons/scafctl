@@ -6,6 +6,8 @@ package plugins
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -55,6 +58,7 @@ func TestRunInstall_NoFileProvided_NoAutoDiscover(t *testing.T) {
 	err := runInstall(ctx, opts, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no plugin names or solution file provided")
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
 }
 
 func TestLoadPluginsFromSolution_AutoDiscover(t *testing.T) {
@@ -84,6 +88,7 @@ func TestRunInstall_FileNotFound(t *testing.T) {
 	err := runInstall(ctx, opts, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reading solution")
+	assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
 }
 
 func TestRunInstall_InvalidYAML(t *testing.T) {
@@ -104,6 +109,7 @@ func TestRunInstall_InvalidYAML(t *testing.T) {
 	err = runInstall(ctx, opts, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing solution")
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
 }
 
 func TestRunInstall_NoPluginsDeclared(t *testing.T) {
@@ -499,4 +505,141 @@ spec: {}
 		PreRelease: true,
 	}, nil)
 	assert.Contains(t, outLocked, "custom-prov@0.4.0", "locked solution must stay pinned to 0.4.0 despite --pre-release")
+}
+
+func TestRunInstall_ExitCodes(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	t.Run("unconfigured source registry exits ConfigError", func(t *testing.T) {
+		dir := t.TempDir()
+		solFile := filepath.Join(dir, "solution.yaml")
+		solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: unconfigured-reg
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: custom
+      kind: provider
+      version: ^1.0.0
+      source:
+        registry: registry.unconfigured.invalid/plugins
+spec: {}
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solYAML), 0o600))
+
+		appCfg := &config.Config{
+			Settings: config.Settings{DisableOfficialCatalog: true},
+		}
+		ctx := config.WithConfig(newInstallTestCtx(t), appCfg)
+		err := runInstall(ctx, &InstallOptions{
+			CliParams: settings.NewCliParams(),
+			IOStreams: &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
+			File:      solFile,
+			CacheDir:  t.TempDir(),
+		}, nil)
+		require.Error(t, err)
+		assert.Equal(t, exitcode.ConfigError, exitcode.GetCode(err))
+	})
+
+	t.Run("invalid signature policy exits ConfigError", func(t *testing.T) {
+		appCfg := &config.Config{
+			Settings: config.Settings{DisableOfficialCatalog: true},
+			Plugins: config.PluginsConfig{
+				Signatures: config.PluginSignaturesConfig{
+					Mode: "invalid-mode",
+				},
+			},
+		}
+		ctx := config.WithConfig(newInstallTestCtx(t), appCfg)
+		err := runInstall(ctx, &InstallOptions{
+			CliParams: settings.NewCliParams(),
+			IOStreams: &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
+			CacheDir:  t.TempDir(),
+			Kind:      "provider",
+		}, []string{"exec"})
+		require.Error(t, err)
+		assert.Equal(t, exitcode.ConfigError, exitcode.GetCode(err))
+	})
+
+	t.Run("unreachable catalog exits CatalogError with offline hint", func(t *testing.T) {
+		unreachSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		t.Cleanup(unreachSrv.Close)
+		host := strings.TrimPrefix(unreachSrv.URL, "http://")
+
+		appCfg := &config.Config{
+			Settings: config.Settings{DisableOfficialCatalog: true},
+			Catalogs: []config.CatalogConfig{
+				{Name: "offline-cat", Type: config.CatalogTypeOCI, URL: "oci://" + host + "/plugins", Insecure: true},
+			},
+		}
+		ctx := config.WithConfig(newInstallTestCtx(t), appCfg)
+		err := runInstall(ctx, &InstallOptions{
+			CliParams: settings.NewCliParams(),
+			IOStreams: &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
+			CacheDir:  t.TempDir(),
+			NoCache:   true,
+			Kind:      "provider",
+		}, []string{"exec"})
+		require.Error(t, err)
+		assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
+		assert.Contains(t, err.Error(), "plugins install")
+	})
+
+	t.Run("permission denied on solution load exits PermissionDenied", func(t *testing.T) {
+		wrapped := exitcode.WithCode(fmt.Errorf("reading solution: %w", fs.ErrPermission), exitcode.InvalidInput)
+		got := reclassifyLoadError(wrapped)
+		require.Error(t, got)
+		assert.Equal(t, exitcode.PermissionDenied, exitcode.GetCode(got))
+	})
+
+	t.Run("malformed plugin version selector exits InvalidInput", func(t *testing.T) {
+		appCfg := &config.Config{
+			Settings: config.Settings{DisableOfficialCatalog: true},
+		}
+		ctx := config.WithConfig(newInstallTestCtx(t), appCfg)
+		for _, badArg := range []string{"exec@not-a-version", "exec@", "@1.0.0"} {
+			err := runInstall(ctx, &InstallOptions{
+				CliParams: settings.NewCliParams(),
+				IOStreams: &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
+				CacheDir:  t.TempDir(),
+				NoCache:   true,
+				Kind:      "provider",
+			}, []string{badArg})
+			require.Error(t, err, "arg=%s", badArg)
+			assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err), "arg=%s", badArg)
+		}
+	})
+
+	t.Run("malformed adjacent solution.lock exits InvalidInput", func(t *testing.T) {
+		dir := t.TempDir()
+		solFile := filepath.Join(dir, "solution.yaml")
+		lockFile := filepath.Join(dir, bundler.DefaultLockFileName)
+		solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: bad-lock-install
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: "^1.0.0"
+spec: {}
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solYAML), 0o600))
+		require.NoError(t, os.WriteFile(lockFile, []byte("version: ["), 0o600))
+
+		err := runInstall(newInstallTestCtx(t), &InstallOptions{
+			CliParams: settings.NewCliParams(),
+			IOStreams: &terminal.IOStreams{Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}},
+			File:      solFile,
+			CacheDir:  t.TempDir(),
+		}, nil)
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	})
 }

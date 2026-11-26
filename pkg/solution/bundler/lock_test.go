@@ -495,6 +495,7 @@ func TestLoadLockFile_InvalidVersion(t *testing.T) {
 
 	lf, err := LoadLockFile(path)
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidLockFile)
 	assert.Nil(t, lf)
 	assert.Contains(t, err.Error(), "unsupported lock file version")
 }
@@ -508,6 +509,7 @@ func TestLoadLockFile_InvalidYAML(t *testing.T) {
 
 	lf, err := LoadLockFile(path)
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidLockFile)
 	assert.Nil(t, lf)
 }
 

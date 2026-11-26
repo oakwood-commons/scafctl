@@ -5,6 +5,7 @@ package load
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,7 +60,7 @@ func (l *URLLoader) Load(ctx context.Context, c source.Classification) (*Materia
 
 	url := c.Ref
 	if !filepath.IsURL(url) {
-		return nil, fmt.Errorf("the provided path to the solution is not a valid URL: %s", url)
+		return nil, &invalidURLRefError{msg: fmt.Sprintf("the provided path to the solution is not a valid URL: %s", url)}
 	}
 
 	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(
@@ -78,12 +79,24 @@ func (l *URLLoader) Load(ctx context.Context, c source.Classification) (*Materia
 		err = httpc.ExplainBlocked(err)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		return nil, fmt.Errorf("fetching solution from URL %q: %w", url, err)
+		if errors.Is(err, httpc.ErrBlockedByPolicy) {
+			return nil, fmt.Errorf("fetching solution from URL %q: %w", url, err)
+		}
+		return nil, &fetchError{
+			msg:   fmt.Sprintf("fetching solution from URL %q: %v", url, err),
+			cause: err,
+		}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		err := fmt.Errorf("non-200 response from URL %q: %d", url, resp.StatusCode)
+		msg := fmt.Sprintf("non-200 response from URL %q: %d", url, resp.StatusCode)
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+			err := errors.New(msg)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, err
+		}
+		err := &fetchError{msg: msg}
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
@@ -92,7 +105,10 @@ func (l *URLLoader) Load(ctx context.Context, c source.Classification) (*Materia
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		return nil, fmt.Errorf("reading response body from URL %q: %w", url, err)
+		return nil, &fetchError{
+			msg:   fmt.Sprintf("reading response body from URL %q: %v", url, err),
+			cause: err,
+		}
 	}
 
 	sol := &solution.Solution{}
@@ -111,4 +127,16 @@ func (l *URLLoader) Load(ctx context.Context, c source.Classification) (*Materia
 		Solution: sol,
 		Source:   c,
 	}, nil
+}
+
+type invalidURLRefError struct {
+	msg string
+}
+
+func (e *invalidURLRefError) Error() string {
+	return e.msg
+}
+
+func (e *invalidURLRefError) Is(target error) bool {
+	return target == source.ErrInvalidRef //nolint:errorlint // intentional sentinel identity check
 }

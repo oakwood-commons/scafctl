@@ -343,8 +343,29 @@ func (f *Fetcher) aliasForCanonical(canonical string) string {
 	return ""
 }
 
+// wrapOfflineHint appends an actionable embedder-aware pre-fetch hint when a
+// plugin operation fails because a catalog could not be reached.
+func (f *Fetcher) wrapOfflineHint(err error) error {
+	if err == nil || !errors.Is(err, catalog.ErrCatalogUnreachable) {
+		return err
+	}
+	bin := f.binaryName
+	if bin == "" {
+		bin = settings.CliBinaryName
+	}
+	hint := fmt.Sprintf("(hint: run '%s plugins install' while online or pre-populate the plugin cache for offline environments)", bin)
+	if strings.Contains(err.Error(), hint) {
+		return err
+	}
+	return fmt.Errorf("%w %s", err, hint)
+}
+
 func (s *Fetcher) ResolvePlugins(ctx context.Context, deps []solution.PluginDependency) ([]catalog.ArtifactInfo, error) {
-	return resolvePlugins(ctx, s, deps)
+	infos, err := resolvePlugins(ctx, s, deps)
+	if err != nil {
+		return nil, s.wrapOfflineHint(err)
+	}
+	return infos, nil
 }
 
 func resolvePlugins[T pluginArtifact](ctx context.Context, s resolver, deps []T) ([]catalog.ArtifactInfo, error) {
@@ -782,7 +803,7 @@ func fetchPlugins[T pluginArtifact](ctx context.Context, f *Fetcher, deps []T, l
 		filtered = append(filtered, dep)
 	}
 
-	return mapConcurrent(ctx, settings.DefaultFetchConcurrency, filtered,
+	results, err := mapConcurrent(ctx, settings.DefaultFetchConcurrency, filtered,
 		func(ctx context.Context, dep T) (FetchResult, error) {
 			locked := findLockPluginByDep(lockPlugins, dep)
 			result, err := f.fetchOne(ctx, dep, locked)
@@ -791,6 +812,10 @@ func fetchPlugins[T pluginArtifact](ctx context.Context, f *Fetcher, deps []T, l
 			}
 			return result, nil
 		})
+	if err != nil {
+		return results, f.wrapOfflineHint(err)
+	}
+	return results, nil
 }
 
 // FetchPlugin resolves and downloads the binary for a single plugin dependency.
@@ -807,7 +832,7 @@ func (f *Fetcher) FetchPlugin(ctx context.Context, dep solution.PluginDependency
 	locked := findLockPluginByDep(lockPlugins, dep)
 	result, err := f.fetchOne(ctx, dep, locked)
 	if err != nil {
-		return FetchResult{}, fmt.Errorf("plugin %s (%s): %w", dep.DisplayName(), dep.Kind, err)
+		return FetchResult{}, f.wrapOfflineHint(fmt.Errorf("plugin %s (%s): %w", dep.DisplayName(), dep.Kind, err))
 	}
 	return result, nil
 }
@@ -1051,6 +1076,15 @@ func (f *Fetcher) localBuildShadows(ctx context.Context, dep pluginArtifact, kin
 // the content digest. Returns (FetchResult, nil, nil) for an early cache hit,
 // or (zero, &resolvedPlugin, nil) when resolution succeeded and a fetch is needed.
 func (f *Fetcher) resolveFromCatalog(ctx context.Context, dep pluginArtifact, kind catalog.ArtifactKind) (FetchResult, *resolvedPlugin, error) {
+	if cat := dep.CatalogName(); cat != "" {
+		if err := f.catalogIndex.CheckAllowed(cat); err != nil {
+			return FetchResult{}, nil, err
+		}
+		if err := f.catalogIndex.CheckPluginAllowed(cat, dep.ArtifactName()); err != nil {
+			return FetchResult{}, nil, err
+		}
+	}
+
 	// Prefer cached version to avoid network latency. The shortcut only covers
 	// remote catalogs; see tryCachedAcrossCatalogs. Enforce mode disables it
 	// (including the offline fallback below) so every binary is signature-checked.
@@ -1387,7 +1421,7 @@ func RegisterFetchedPlugins(ctx context.Context, registry *provider.Registry, re
 			for _, c := range clients {
 				c.Kill()
 			}
-			return nil, fmt.Errorf("loading plugin %s from %s: %w", r.Name, r.Path, err)
+			return nil, withStage(StageSpawn, fmt.Errorf("loading plugin %s from %s: %w", r.Name, r.Path, err))
 		}
 
 		providers, err := client.GetProviders(ctx)
@@ -1396,7 +1430,7 @@ func RegisterFetchedPlugins(ctx context.Context, registry *provider.Registry, re
 			for _, c := range clients {
 				c.Kill()
 			}
-			return nil, fmt.Errorf("getting providers from plugin %s: %w", r.Name, err)
+			return nil, withStage(StageHandshake, fmt.Errorf("getting providers from plugin %s: %w", r.Name, err))
 		}
 
 		for _, providerName := range providers {
@@ -1486,14 +1520,14 @@ func RegisterFetchedVersionedPlugins(
 		client, err := newClient(r.Path, clientOpts...)
 		if err != nil {
 			killAll()
-			return nil, fmt.Errorf("loading plugin %s from %s: %w", r.Name, r.Path, err)
+			return nil, withStage(StageSpawn, fmt.Errorf("loading plugin %s from %s: %w", r.Name, r.Path, err))
 		}
 
 		providers, err := client.GetProviders(ctx)
 		if err != nil {
 			client.Kill()
 			killAll()
-			return nil, fmt.Errorf("getting providers from plugin %s: %w", r.Name, err)
+			return nil, withStage(StageHandshake, fmt.Errorf("getting providers from plugin %s: %w", r.Name, err))
 		}
 
 		regVersion, verr := semver.NewVersion(r.Version)
@@ -1568,7 +1602,7 @@ func RegisterFetchedAuthHandlerPluginsNamed(ctx context.Context, registry *auth.
 			for _, c := range clients {
 				c.Kill()
 			}
-			return nil, fmt.Errorf("loading auth handler plugin %s from %s: %w", r.Name, r.Path, err)
+			return nil, withStage(StageSpawn, fmt.Errorf("loading auth handler plugin %s from %s: %w", r.Name, r.Path, err))
 		}
 
 		handlers, err := client.GetAuthHandlers(ctx)
@@ -1577,7 +1611,7 @@ func RegisterFetchedAuthHandlerPluginsNamed(ctx context.Context, registry *auth.
 			for _, c := range clients {
 				c.Kill()
 			}
-			return nil, fmt.Errorf("getting auth handlers from plugin %s: %w", r.Name, err)
+			return nil, withStage(StageHandshake, fmt.Errorf("getting auth handlers from plugin %s: %w", r.Name, err))
 		}
 
 		if only != "" {
