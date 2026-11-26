@@ -1,0 +1,37 @@
+{{- $id := .Get 0 | default "install" -}}
+{{- $includeSource := eq (.Get 1 | default "") "source" -}}
+{{- $macCode := "brew install oakwood-commons/tap/scafctl" -}}
+{{- $linuxCode := "curl -fsSL https://github.com/oakwood-commons/scafctl/releases/download/v0.47.0/scafctl_0.47.0_Linux_x86_64.tar.gz \\\n  | sudo tar -xz -C /usr/local/bin scafctl" -}}
+{{- $winCode := "Invoke-WebRequest -Uri \"https://github.com/oakwood-commons/scafctl/releases/download/v0.47.0/scafctl_0.47.0_Windows_x86_64.zip\" -OutFile scafctl.zip\nExpand-Archive -Force scafctl.zip -DestinationPath ." -}}
+{{- $srcCode := "go install github.com/oakwood-commons/scafctl/cmd/scafctl@latest" -}}
+{{- $quarantineCode := "xattr -dr 'com.apple.quarantine' /usr/local/bin/scafctl" -}}
+<div class="book-tabs">
+  <input type="radio" class="toggle" name="tabs-{{ $id }}" id="tabs-{{ $id }}-0" checked="checked" />
+  <label for="tabs-{{ $id }}-0">macOS</label>
+  <div class="book-tabs-content markdown-inner">
+    {{ highlight $macCode "bash" "" }}
+    {{- if $includeSource }}
+    <p>Or download a prebuilt <code>Darwin_arm64</code> / <code>Darwin_x86_64</code> archive from <a href="https://github.com/oakwood-commons/scafctl/releases/latest">GitHub Releases</a>. If downloading the binary directly on macOS, clear the quarantine attribute if prompted:</p>
+    {{ highlight $quarantineCode "bash" "" }}
+    {{- end }}
+  </div>
+  <input type="radio" class="toggle" name="tabs-{{ $id }}" id="tabs-{{ $id }}-1" />
+  <label for="tabs-{{ $id }}-1">Linux</label>
+  <div class="book-tabs-content markdown-inner">
+    {{ highlight $linuxCode "bash" "" }}
+    <p>Also available via Homebrew on Linux (<code>brew install oakwood-commons/tap/scafctl</code>) or <code>Linux_arm64</code> on <a href="https://github.com/oakwood-commons/scafctl/releases/latest">GitHub Releases</a>.</p>
+  </div>
+  <input type="radio" class="toggle" name="tabs-{{ $id }}" id="tabs-{{ $id }}-2" />
+  <label for="tabs-{{ $id }}-2">Windows (PowerShell)</label>
+  <div class="book-tabs-content markdown-inner">
+    {{ highlight $winCode "powershell" "" }}
+    <p>Extract <code>scafctl.exe</code> and add its directory to your <code>PATH</code> (<code>Windows_arm64.zip</code> is also available on <a href="https://github.com/oakwood-commons/scafctl/releases/latest">GitHub Releases</a>).</p>
+  </div>
+  {{- if $includeSource }}
+  <input type="radio" class="toggle" name="tabs-{{ $id }}" id="tabs-{{ $id }}-3" />
+  <label for="tabs-{{ $id }}-3">From Source</label>
+  <div class="book-tabs-content markdown-inner">
+    {{ highlight $srcCode "bash" "" }}
+  </div>
+  {{- end }}
+</div>

@@ -44,7 +44,7 @@ hugo server -s site
 hugo server -s site -p 8080
 ```
 
-The site will be available at `http://localhost:1313/scafctl/` (matching `baseURL` in `site/hugo.yaml`).
+The site will be available at `http://localhost:1313/` (matching `baseURL` in `site/hugo.yaml`).
 
 ### Production Static Build
 

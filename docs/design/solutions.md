@@ -252,8 +252,8 @@ A solution follows a fixed lifecycle.
 
 {{< mermaid >}}
 flowchart TD
-    A["1. Load<br/>Parse YAML, validate schema,<br/>discover providers & plugins"] --> B["2. Resolve<br/>Build DAG, execute resolvers,<br/>evaluate CEL & templates"]
-    B --> C["3. Render Actions<br/>Evaluate when/forEach,<br/>resolve inputs, produce action graph"]
+    A["1\. Load<br/>Parse YAML, validate schema,<br/>discover providers & plugins"] --> B["2\. Resolve<br/>Build DAG, execute resolvers,<br/>evaluate CEL & templates"]
+    B --> C["3\. Render Actions<br/>Evaluate when/forEach,<br/>resolve inputs, produce action graph"]
     C --> D{Command?}
     D -->|run| E["4a. Execute<br/>Invoke providers,<br/>perform side effects"]
     D -->|render| F["4b. Emit<br/>Output rendered action graph,<br/>no side effects"]

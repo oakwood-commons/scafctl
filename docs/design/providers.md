@@ -111,11 +111,12 @@ Providers follow a strict execution pipeline to ensure consistent behavior and v
 
 {{< mermaid >}}
 flowchart TD
-    A[Provider Invocation Request] --> B["1. Schema Validation<br/>Validate inputs against Descriptor.Schema"]
-    B --> C["2. Decode (optional)<br/>Convert map to strongly-typed struct"]
-    C --> D["3. Execute<br/>Provider-specific logic"]
-    D --> E["4. Output Schema Validation<br/>Validate Output.Data against OutputSchemas"]
-    E --> F["5. Return Output<br/>Data, Warnings, Metadata"]
+    A[Provider Invocation Request] --> B["1\. Schema Validation<br/>Validate inputs against Descriptor.Schema"]
+    B --> C["2\. Decode (optional)<br/>Convert map to strongly-typed struct"]
+    C --> D["3\. Execute<br/>Provider-specific logic"]
+    E["4\. Output Schema Validation<br/>Validate Output.Data against OutputSchemas"]
+    D --> E
+    E --> F["5\. Return Output<br/>Data, Warnings, Metadata"]
 {{< /mermaid >}}
 
 **Lifecycle Phases:**
