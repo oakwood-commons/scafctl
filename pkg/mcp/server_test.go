@@ -156,6 +156,8 @@ func TestServerInfo(t *testing.T) {
 		assert.True(t, toolNames["explain_lint_rule"])
 		// Scaffold tools
 		assert.True(t, toolNames["scaffold_solution"])
+		// Packaging tools
+		assert.True(t, toolNames["package_solution"])
 		// Action tools
 		assert.True(t, toolNames["preview_action"])
 		// Diff tools
@@ -277,6 +279,16 @@ func TestBuildInstructions(t *testing.T) {
 		supplemental := "Run " + settings.CliBinaryName + " solve to execute."
 		result := buildInstructions(settings.CliBinaryName, supplemental)
 		assert.Contains(t, result, "Run "+settings.CliBinaryName+" solve to execute.")
+	})
+
+	t.Run("archetypes and idioms substituted for embedder binary name", func(t *testing.T) {
+		result := buildInstructions("mycli", "")
+		assert.Contains(t, result, "Solution Archetypes & CLI Idioms:")
+		assert.Contains(t, result, "./actions.yaml")
+		assert.Contains(t, result, "explicit: true")
+		assert.Contains(t, result, "mycli run solution <name>")
+		assert.Contains(t, result, "package_solution")
+		assert.NotContains(t, result, settings.CliBinaryName)
 	})
 }
 

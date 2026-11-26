@@ -6,6 +6,8 @@ package action
 import (
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -234,4 +236,55 @@ func TestFilterWorkflowActions_NoExplicitUnchanged(t *testing.T) {
 	result, err := FilterWorkflowActions(w, nil)
 	require.NoError(t, err)
 	assert.Equal(t, w, result, "should return original workflow when no explicit actions exist")
+}
+
+func TestFilterWorkflowActions_InferredActionReferences(t *testing.T) {
+	t.Parallel()
+
+	artifactExpr := celexp.Expression("__actions.build.results.path")
+	prepWhenExpr := celexp.Expression("__actions.prep.results.ready == true")
+
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"prep": {
+				Name:     "prep",
+				Explicit: true,
+			},
+			"build": {
+				Name: "build",
+				When: &spec.Condition{Expr: &prepWhenExpr},
+			},
+			"deploy": {
+				Name:     "deploy",
+				Explicit: true,
+				Inputs: map[string]*spec.ValueRef{
+					"artifact": {Expr: &artifactExpr},
+				},
+			},
+			"unrelated": {
+				Name: "unrelated",
+			},
+		},
+	}
+
+	// Targeting "deploy" pulls in "build" (via __actions.build in inputs) and
+	// "prep" (via __actions.prep in build.when), while excluding "unrelated".
+	targeted, err := FilterWorkflowActions(w, []string{"deploy"})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"prep", "build", "deploy"}, func() []string {
+		names := make([]string, 0, len(targeted.Actions))
+		for k := range targeted.Actions {
+			names = append(names, k)
+		}
+		return names
+	}())
+
+	// Bare invocation pulls explicit "prep" because default "build" references
+	// __actions.prep, while excluding explicit "deploy".
+	bare, err := FilterWorkflowActions(w, nil)
+	require.NoError(t, err)
+	assert.NotNil(t, bare.Actions["prep"])
+	assert.NotNil(t, bare.Actions["build"])
+	assert.NotNil(t, bare.Actions["unrelated"])
+	assert.Nil(t, bare.Actions["deploy"])
 }

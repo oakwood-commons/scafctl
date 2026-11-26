@@ -302,12 +302,30 @@ browsing the solution catalog, previewing resolver outputs, and running function
 
 Most tools are read-only and safe to call. The following tools execute solution code 
 and may have side effects depending on the providers used (e.g., exec, http):
+  - run_solution: executes resolvers and workflow actions end-to-end (use actions param for opt-in tasks)
+  - package_solution: verifies bundle discovery by default (dry_run=true); writes to local catalog when dry_run=false
   - preview_resolvers: executes the resolver chain
   - preview_action: builds action graph from live resolver data (executes resolvers, but NOT actions)
   - dry_run_solution: full dry-run — resolvers execute in mock mode, action graph is built but NOT executed
   - run_solution_tests: runs functional test cases
   - render_solution: executes resolvers to build graphs
 All other tools only inspect, validate, or list — they never modify files or trigger side effects.
+
+Solution Archetypes & CLI Idioms:
+  • Repo task runner (./actions.yaml): auto-discovered project tasks (build, test, lint).
+    Actions are typically opt-in (explicit: true) and run selectively via
+    'scafctl run action <name>' or 'scafctl run solution -f ./actions.yaml --action <name>'.
+  • Published catalog solution (./solution.yaml): distributable package with metadata.name
+    and metadata.version (and optional bundle:). Keep primary workflow actions default
+    (explicit: false, the default) so 'scafctl run solution <name>' executes the main
+    workflow out of the box; mark optional tasks (e.g., teardown, smoke-check) with
+    explicit: true so users opt in via 'scafctl run solution <name> --action <task>'
+    (or run_solution with actions: ["<task>"]).
+  • Bundle verification: for multi-file or bundled solutions (compose:, templates, file reads,
+    bundle.include), call package_solution (defaults to dry_run: true) to verify static file
+    discovery, bundle.include globs, and bundle root boundaries ('../' parent-relative paths
+    fail with 'path escapes bundle root'). Package locally with 'scafctl package solution'
+    and publish to OCI registries with 'scafctl catalog push'.
 
 Solution Development Workflow:
   For the best AI-assisted solution authoring experience, follow this loop:
@@ -316,9 +334,10 @@ Solution Development Workflow:
   3. Call validate_expression to check CEL/Go-template syntax in isolation
   4. Call preview_resolvers to verify resolver outputs (use resolver param to focus on one)
   5. Call preview_action to dry-run the action graph and see materialized inputs
-  6. Call run_solution_tests to run functional tests (use verbose=true for full assertion details)
-  7. Call diff_solution to compare solution versions before committing changes
-  8. Call get_run_command to get the exact CLI command for the user
+  6. Call package_solution (dry_run=true) when bundling local files or compose partials
+  7. Call run_solution_tests to run functional tests (use verbose=true for full assertion details)
+  8. Call diff_solution to compare solution versions before committing changes
+  9. Call get_run_command to get the exact CLI command for the user
   For lint findings, call explain_lint_rule with the ruleName, or use the fix_lint prompt.
   When the user wants to run a solution, use the prepare_execution prompt — it validates,
   previews, and generates the CLI command WITHOUT executing.
@@ -909,6 +928,9 @@ func (s *Server) registerTools() {
 
 	// Catalog multi-platform tools (list platforms, build plugin)
 	s.registerCatalogMultiPlatformTools()
+
+	// Solution packaging and bundle verification tools
+	s.registerPackageTools()
 
 	// Plugin cache tools (list, cache path)
 	s.registerPluginTools()

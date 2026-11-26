@@ -83,3 +83,31 @@ spec:
 	assert.Contains(t, joined, "catalog dependencies but has no vendored copies",
 		"must warn about referenced catalog deps regardless of CWD")
 }
+
+func TestVerifyBundle_NoBundle_WarnsOnUnmatchedBundleInclude(t *testing.T) {
+	sol := &solution.Solution{}
+	require.NoError(t, sol.UnmarshalFromBytes([]byte(`
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: glob-only
+  version: 1.0.0
+bundle:
+  include:
+    - missing/*.tpl
+spec:
+  resolvers:
+    val:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ok
+`)))
+
+	result, err := VerifyBundle(context.Background(), sol, nil, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Warnings, 1)
+	assert.Contains(t, result.Warnings[0], `pattern "missing/*.tpl" matches no bundled files`)
+}

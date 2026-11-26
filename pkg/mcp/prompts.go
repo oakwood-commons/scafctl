@@ -302,6 +302,8 @@ Follow these rules when creating the solution:
   NEVER set type: string on resolvers using providers that return objects (e.g., http returns {statusCode, body, headers}).
   When in doubt, omit the type field entirely.
 - Actions go under spec.workflow.actions.<name> with provider and inputs
+- Default actions omit explicit (or set explicit: false) so bare 'scafctl run solution' executes them; set explicit: true on optional/auxiliary actions so they run only when selected via '--action <name>' (or pulled in via dependsOn by a selected action). Keep at least one default action in catalog/bundled solutions so 'scafctl run solution <name>' executes a default workflow
+- When an action sets continueOnError: true and fails, independent branches continue, while downstream actions declaring dependsOn on that failed action are skipped (dependency-failed); place unconditional cleanup in spec.workflow.finally
 - To reuse one request shape across many call sites, define it once under spec.calls.<name> (typed args + provider + inputs referencing args via _.args.x in CEL and {{ .args.x }} in Go templates), then invoke it from any resolve/transform/validate step or action with call: + args: instead of provider: + inputs:. A host step sets EXACTLY ONE of call or provider. Set dedup: true on a definition to collapse identical bound-arg invocations within a single run (in-memory only). Call explain_concepts with concept "call" for details.
 - Use ValueRef format for inputs: literal (raw value), rslvr (resolver reference), expr (CEL expression), or tmpl (Go template)
 - Always validate user inputs using the validate phase with the validation provider
@@ -326,6 +328,8 @@ without "./" get auto-linkified by VS Code Chat into broken content-reference UR
 IMPORTANT: Choose the correct run command based on whether the solution has a workflow:
   • If the solution has spec.workflow.actions (i.e. it performs side-effects/actions):
       scafctl run solution -f ./<filename>.yaml -r key=value
+      scafctl run solution {name} -r key=value                      # once packaged/pulled in a catalog
+      scafctl run solution -f ./<filename>.yaml --action <opt-in>   # for explicit: true actions
   • If the solution has ONLY resolvers and NO spec.workflow section:
       scafctl run resolver -f ./<filename>.yaml key=value
     'scafctl run solution' will FAIL if there is no workflow defined.
@@ -342,8 +346,9 @@ Example:
 After creating the solution file:
 1. Call lint_solution to validate the YAML structure
 2. Call preview_resolvers to verify the resolver chain produces expected values
-3. Call get_run_command to show the user the exact command to run it
-4. If the solution has tests, call run_solution_tests to verify they pass`)
+3. If the solution bundles local files, templates, or compose partials, call package_solution (dry_run: true) to verify bundle file discovery and ensure no '../' parent-relative paths escape the bundle root
+4. Call get_run_command to show the user the exact command to run it
+5. If the solution has tests, call run_solution_tests to verify they pass`)
 
 	return &mcp.GetPromptResult{
 		Description: s.replaceName(fmt.Sprintf("Create a new scafctl solution: %s", name)),
@@ -504,11 +509,12 @@ func (s *Server) handleAddActionPrompt(_ context.Context, request mcp.GetPromptR
 		purposeDesc = purpose
 	}
 
-	featureHints := make([]string, 0, 6)
+	featureHints := make([]string, 0, 8)
 	featureHints = append(featureHints, "dependsOn: explicit ordering for same-section actions. If inputs or when already reference __actions.<name> within the same section, that dependency is auto-inferred and dependsOn is optional (still required for ordering without a data dependency)")
 	featureHints = append(featureHints, "dependsOn in workflow.finally: can only reference other finally actions—never actions in workflow.actions. To read results from a main action in finally, use __actions.<name> in inputs or when; the reference appears in crossSectionRefs on the rendered graph (informational only—cross-section ordering is guaranteed structurally)")
+	featureHints = append(featureHints, "explicit: set explicit: true to make the action opt-in so it is excluded from bare 'scafctl run solution' runs unless targeted via '--action <name>' (or MCP run_solution actions) or required via dependsOn by a selected action. Leave unset/false for default workflow actions")
 	featureHints = append(featureHints, "when: CEL expression for conditional execution")
-	featureHints = append(featureHints, "continueOnError: bool or CEL expression (error bound as __error) — truthy continues the workflow when this action fails, falsy stops it. Replaces the deprecated onError enum ('fail'/'continue'); continueOnError wins when both are set")
+	featureHints = append(featureHints, "continueOnError: bool or CEL expression (error bound as __error) — truthy continues independent workflow branches when this action fails, while downstream actions listing this action in dependsOn are skipped (dependency-failed); falsy stops the workflow. Replaces the deprecated onError enum ('fail'/'continue'); continueOnError wins when both are set")
 	featureHints = append(featureHints, "retry: { maxAttempts, backoff: fixed|linear|exponential, initialDelay, maxDelay }")
 	featureHints = append(featureHints, "forEach: { in: <ValueRef>, item: 'item', index: 'index', concurrency: N }")
 	featureHints = append(featureHints, "timeout: duration string (e.g., '30s', '5m')")
@@ -546,7 +552,8 @@ Input values use ValueRef format:
 - CEL expression: expr: "<expression>"
 - Go template: tmpl: "<template>"
 
-Cleanup actions go under spec.workflow.finally.<name> (same structure, always run).`, providerName, purposeDesc, providerName, providerName, strings.Join(featureHints, "\n"))
+Cleanup actions go under spec.workflow.finally.<name> (same structure, always run).
+If the action reads local files or sub-solutions in a bundled solution, call package_solution (dry_run: true) afterwards to verify bundle discovery.`, providerName, purposeDesc, providerName, providerName, strings.Join(featureHints, "\n"))
 
 	return &mcp.GetPromptResult{
 		Description: fmt.Sprintf("Add action using %s provider", providerName),
@@ -555,7 +562,7 @@ Cleanup actions go under spec.workflow.finally.<name> (same structure, always ru
 				Role: mcp.RoleUser,
 				Content: mcp.TextContent{
 					Type: "text",
-					Text: prompt,
+					Text: s.replaceName(prompt),
 				},
 			},
 		},

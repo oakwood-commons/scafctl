@@ -731,12 +731,14 @@ The AI calls `explain_concepts` with `name: "resolver"` and returns a detailed e
 
 The AI calls `explain_concepts` with `category: "testing"` and gets summaries for all testing-related concepts — functional testing, test sandbox, test scaffold, and test assertions.
 
-#### Inspect Solution File Dependencies
+#### Inspect Solution File Dependencies and Verify Bundles
 
 > [!NOTE]
-> **You:** "What files does my solution depend on?"
+> **You:** "What files does my solution depend on, and will its bundle build cleanly?"
 
-The AI calls `inspect_solution` with `path: "solution.yaml"` and the response includes a `fileDependencies` array listing all external files referenced by providers (e.g., template files loaded via `go-template`, HCL files via `hcl`), along with which resolver references each file.
+The AI calls `inspect_solution` with `path: "solution.yaml"` to see the `fileDependencies` array, then calls `package_solution` with `path: "solution.yaml"` (which defaults to `dry_run: true`) to compose partials, expand `bundle.include` globs, check that no `../` parent-relative paths escape the bundle root, and surface any unmatched glob or dynamic path warnings without modifying the local catalog.
+
+To run opt-in (`explicit: true`) workflow actions directly through MCP, pass the `actions` array to `run_solution` (for example, `{"path": "solution.yaml", "actions": ["teardown"]}`).
 
 ## 7. Available Tools Reference
 
@@ -754,7 +756,7 @@ The AI calls `inspect_solution` with `path: "solution.yaml"` and the response in
 | `get_provider_schema` | Get comprehensive provider info: input schema (with per-property required), output schemas, examples, CLI usage. Works for builtin and official plugin providers -- plugin schemas are auto-fetched on first request and cached locally for offline access (response includes `"source": "cached"` when served from cache) |
 | `get_provider_output_shape` | Get the output schema for a provider. Optionally filter by capability (`from`, `transform`, `action`). Falls back to cached descriptor when the plugin binary is unavailable |
 | `get_solution_schema` | Get the full JSON Schema for the solution YAML file format. Optionally drill into a specific field (e.g., `metadata`, `spec`) |
-| `get_run_command` | Get the exact CLI command to run a solution (determines run solution vs run resolver) |
+| `get_run_command` | Get the exact CLI command to run a solution (determines `run solution` vs `run resolver`, omits optional fallback-defaulted parameters from `-r` flags, and includes `catalogCommand` and `explicitActions` when applicable) |
 | `explain_concepts` | Look up and explain scafctl concepts (resolvers, providers, testing, CEL, etc.). Use without arguments to list all, or provide a name/query/category |
 | `inspect_solution` | Full solution metadata — resolvers, actions, tags, links, maintainers, and file dependencies |
 | `lint_solution` | Validate a solution YAML file and return structured findings |
@@ -790,6 +792,8 @@ The AI calls `inspect_solution` with `path: "solution.yaml"` and the response in
 | `validate_expressions` | Batch-validate multiple CEL expressions or Go templates — returns validity, errors, and referenced fields for each |
 | `get_version` | Return scafctl version, commit SHA, and build timestamp |
 | `dry_run_solution` | Dry-run a solution without executing action providers. Resolvers run normally; each action gets a provider-generated WhatIf description of what it would do |
+| `run_solution` | Execute a solution end-to-end with optional `params`, `actions` (selective execution of named or `explicit: true` actions and their dependencies), `output_dir`, `on_conflict`, and `backup` |
+| `package_solution` | Verify bundle file discovery, `bundle.include` globs, and bundle root boundaries (`dry_run: true` by default), or package and store a solution artifact into the local catalog (`dry_run: false`) |
 
 ## 8. Available Resources
 
