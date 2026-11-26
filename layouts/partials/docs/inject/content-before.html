@@ -1,0 +1,48 @@
+{{- $page := . -}}
+{{- if $page.IsPage -}}
+  {{- with $page.File -}}
+    {{- $relPath := replace .Path "\\" "/" -}}
+    {{- $excluded := slice "provider-reference" "provider-output-shapes" "extension-concepts" -}}
+    {{- if and (hasPrefix $relPath "docs/tutorials/") (not (in $excluded .ContentBaseName)) (ne $page.Params.bookHidden true) (ne $page.Params.BookHidden true) (ne $page.Params.bpWalkthrough false) -}}
+      {{- with $page.Site.GetPage "/docs/tutorials" -}}
+        {{- $steps := slice -}}
+        {{- range .RegularPages -}}
+          {{- $base := "" -}}
+          {{- with .File }}{{ $base = .ContentBaseName }}{{ end -}}
+          {{- if and (ne (strings.TrimSpace .RawContent) "") (not (in $excluded $base)) (ne .Params.bookHidden true) (ne .Params.BookHidden true) (ne .Params.bpWalkthrough false) -}}
+            {{- $steps = $steps | append . -}}
+          {{- end -}}
+        {{- end -}}
+        {{- $total := len $steps -}}
+        {{- $idx := -1 -}}
+        {{- range $i, $p := $steps -}}
+          {{- if eq $p.RelPermalink $page.RelPermalink -}}
+            {{- $idx = $i -}}
+          {{- end -}}
+        {{- end -}}
+        {{- if and (ge $idx 0) (gt $total 0) -}}
+          {{- $stepNum := add $idx 1 -}}
+          {{- $pct := printf "%.1f" (div (mul (float $stepNum) 100.0) (float $total)) -}}
+          {{- $state := dict "step" $stepNum "total" $total "pct" $pct "sectionURL" .RelPermalink "sectionTitle" (partial "docs/title" .) -}}
+          {{- if gt $idx 0 -}}
+            {{- $state = merge $state (dict "prev" (index $steps (sub $idx 1)) "prevStep" $idx) -}}
+          {{- end -}}
+          {{- if lt $stepNum $total -}}
+            {{- $state = merge $state (dict "next" (index $steps $stepNum) "nextStep" (add $stepNum 1)) -}}
+          {{- end -}}
+          {{- $page.Store.Set "bpWalkthrough" $state -}}
+          <nav class="bp-step-bar" aria-label="Tutorial walkthrough progress">
+            <div class="bp-step-bar__meta">
+              <a class="bp-step-bar__section" href="{{ .RelPermalink }}">{{ partial "docs/title" . }}</a>
+              <span class="bp-step-bar__sep" aria-hidden="true">/</span>
+              <span class="bp-step-bar__pill">STEP {{ printf "%02d" $stepNum }} OF {{ printf "%02d" $total }}</span>
+            </div>
+            <div class="bp-step-bar__track" role="progressbar" aria-valuenow="{{ $stepNum }}" aria-valuemin="1" aria-valuemax="{{ $total }}" aria-label="Step {{ $stepNum }} of {{ $total }}">
+              <span class="bp-step-bar__fill" style="width: {{ $pct }}%"></span>
+            </div>
+          </nav>
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}

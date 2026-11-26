@@ -1,26 +1,34 @@
-# scafctl
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/oakwood-commons/scafctl/main/static/images/scafctl-logo-dark-card.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/oakwood-commons/scafctl/main/static/images/scafctl-logo-light.svg">
+    <img alt="scafctl" src="https://raw.githubusercontent.com/oakwood-commons/scafctl/main/static/images/scafctl-logo-light.svg" width="320">
+  </picture>
+</div>
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/oakwood-commons/scafctl)](https://goreportcard.com/report/github.com/oakwood-commons/scafctl)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/oakwood-commons/scafctl)](https://github.com/oakwood-commons/scafctl/releases)
-[![CI](https://github.com/oakwood-commons/scafctl/actions/workflows/test.yml/badge.svg)](https://github.com/oakwood-commons/scafctl/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/oakwood-commons/scafctl/graph/badge.svg)](https://codecov.io/gh/oakwood-commons/scafctl)
-[![Documentation](https://img.shields.io/badge/docs-github.io-blue)](https://oakwood-commons.github.io/scafctl/)
+<p align="center">
+  <a href="https://goreportcard.com/report/github.com/oakwood-commons/scafctl"><img src="https://goreportcard.com/badge/github.com/oakwood-commons/scafctl" alt="Go Report Card"></a>
+  <a href="https://github.com/oakwood-commons/scafctl/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
+  <a href="https://github.com/oakwood-commons/scafctl/releases"><img src="https://img.shields.io/github/v/release/oakwood-commons/scafctl" alt="Release"></a>
+  <a href="https://github.com/oakwood-commons/scafctl/actions/workflows/test.yml"><img src="https://github.com/oakwood-commons/scafctl/actions/workflows/test.yml/badge.svg" alt="CI"></a>
+  <a href="https://codecov.io/gh/oakwood-commons/scafctl"><img src="https://codecov.io/gh/oakwood-commons/scafctl/graph/badge.svg" alt="codecov"></a>
+  <a href="https://oakwood-commons.github.io/scafctl/"><img src="https://img.shields.io/badge/docs-github.io-blue" alt="Documentation"></a>
+</p>
 
-> **Alpha** — scafctl is under active development. APIs and CLI commands may
+> **Alpha** -- scafctl is under active development. APIs and CLI commands may
 > change between releases. Breaking changes are documented in release notes.
 > Questions? Open an issue or start a
 > [Discussion](https://github.com/oakwood-commons/scafctl/discussions).
 
 Define, discover, and deliver configuration as code using CEL-powered solutions.
 
-scafctl is a CLI tool that lets you declaratively gather data from any source (APIs, files, environment, Git, and more), transform it with [CEL](https://cel.dev/) expressions, and execute side-effect workflows — all defined in a single **Solution** file.
+scafctl is a CLI tool that lets you declaratively gather data from any source (APIs, files, environment, Git, and more), transform it with [CEL](https://cel.dev/) expressions, and execute side-effect workflows -- all defined in a single **Solution** file.
 
 ### Core Concepts
 
-- **Solution** — A YAML file that declares what data to gather and what work to do. Solutions are versionable, composable, and shareable via OCI registries.
-- **Resolver** — A named unit that gathers or computes a value using one or more providers. Resolvers can depend on each other and execute in parallel when possible.
-- **Action** — A side-effect operation (run a command, call an API, write a file) organized into a dependency graph with support for parallelism, retries, conditions, and forEach loops.
+- **Solution** -- A YAML file that declares what data to gather and what work to do. Solutions are versionable, composable, and shareable via OCI registries.
+- **Resolver** -- A named unit that gathers or computes a value using one or more providers. Resolvers can depend on each other and execute in parallel when possible.
+- **Action** -- A side-effect operation (run a command, call an API, write a file) organized into a dependency graph with support for parallelism, retries, conditions, and forEach loops.
 - **Provider** -- A pluggable backend that does the actual work (e.g. `http`, `exec`, `file`, `cel`). scafctl ships with 11 built-in providers and 11 official plugin providers that auto-resolve from OCI catalogs.
 
 ## Installation
@@ -550,4 +558,6 @@ Have a question? Start a [GitHub Discussion](https://github.com/oakwood-commons/
 
 ## License
 
-This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 -- see the [LICENSE](https://github.com/oakwood-commons/scafctl/blob/main/LICENSE) file for details.
+
+The `scafctl` wordmark outlines in `static/images/` are derived from [Inter](https://github.com/rsms/inter) Bold 700 (Copyright (c) 2016 The Inter Project Authors), licensed under the [SIL Open Font License 1.1](https://github.com/oakwood-commons/scafctl/blob/main/static/images/INTER-OFL-LICENSE.txt).

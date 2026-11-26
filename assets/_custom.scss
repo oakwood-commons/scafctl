@@ -1,63 +1,265 @@
-// Copy-to-clipboard button
+// Blueprint visual theme matching pkg/authpage/template.go
+@mixin theme-blueprint {
+  color-scheme: dark;
+
+  --bp-navy: #071e3d;
+  --bp-surface: #0b2547;
+  --bp-code-bg: #05152a;
+  --bp-cyan: #00e9f2;
+  --bp-mint: #a4f6c5;
+  --bp-amber: #ffc28e;
+  --bp-muted: #9bafc4;
+  --bp-border: rgba(99, 162, 187, 0.24);
+  --bp-border-strong: rgba(0, 233, 242, 0.45);
+
+  --body-background: #071e3d;
+  --body-background-tint: none;
+  --body-font-color: #eff7ff;
+
+  --color-link: #00e9f2;
+  --color-visited-link: #66eff6;
+
+  --icon-filter: brightness(0) invert(1);
+
+  --gray-100: #0b2547;
+  --gray-200: #1b3d63;
+  --gray-500: #9bafc4;
+
+  @include accent("default", #9bafc4, 0.12);
+  @include accent("note", #00e9f2, 0.10);
+  @include accent("tip", #a4f6c5, 0.10);
+  @include accent("important", #7cc4ff, 0.12);
+  @include accent("warning", #ffc28e, 0.12);
+  @include accent("caution", #ff8a8a, 0.12);
+
+  // Fallback for {{< hint >}} shortcodes
+  @include accent("info", #00e9f2, 0.10);
+  @include accent("success", #a4f6c5, 0.10);
+  @include accent("danger", #ff8a8a, 0.12);
+}
+
+// CAD drafting grid (24px minor / 120px major) + subtle radial glow behind content
+body {
+  position: relative;
+  isolation: isolate;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    radial-gradient(ellipse at 68% 35%, rgba(0, 233, 242, 0.06), rgba(11, 56, 80, 0.28) 40%, transparent 70%),
+    linear-gradient(rgba(99, 162, 187, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(99, 162, 187, 0.055) 1px, transparent 1px),
+    linear-gradient(rgba(99, 162, 187, 0.105) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(99, 162, 187, 0.105) 1px, transparent 1px);
+  background-size: 100% 100%, 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+}
+
+// Sidebar brand lockup, search, and navigation polish
+.book-brand {
+  a {
+    gap: 0.625rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: #ffffff;
+
+    &:hover {
+      opacity: 0.9;
+    }
+  }
+
+  img {
+    width: 1.75rem;
+    height: 1.75rem;
+    flex-shrink: 0;
+  }
+}
+
+.book-menu {
+  .book-menu-content {
+    border-inline-end: 1px solid rgba(99, 162, 187, 0.18);
+  }
+
+  a {
+    color: #cbdae8;
+
+    &:hover {
+      color: #ffffff;
+      opacity: 1;
+    }
+
+    &.active {
+      color: #00e9f2;
+      font-weight: 600;
+    }
+  }
+}
+
+.book-toc {
+  a {
+    color: #9bafc4;
+
+    &:hover {
+      color: #00e9f2;
+      opacity: 1;
+    }
+  }
+}
+
+.book-search input {
+  background: rgba(5, 21, 42, 0.8);
+  border-color: rgba(99, 162, 187, 0.3);
+
+  &:focus {
+    border-color: #00e9f2;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(0, 233, 242, 0.18);
+  }
+}
+
+// Markdown typography, tables, alerts, and code surfaces
+.markdown {
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: #ffffff;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  h2 {
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid rgba(99, 162, 187, 0.2);
+  }
+
+  :not(pre) > code {
+    background: rgba(5, 21, 42, 0.85);
+    border: 1px solid rgba(99, 162, 187, 0.28);
+    color: #b8f6fa;
+  }
+
+  pre,
+  .highlight pre {
+    background-color: #05152a !important;
+    border: 1px solid rgba(99, 162, 187, 0.26);
+    border-radius: 6px;
+  }
+
+  .highlight pre:has(code[data-lang]) {
+    padding-top: 1.9rem;
+  }
+
+  pre.mermaid {
+    background-color: rgba(11, 37, 71, 0.65) !important;
+    border: 1px solid rgba(99, 162, 187, 0.24);
+    text-align: center;
+    padding: 1.25rem;
+  }
+
+  table {
+    tr th {
+      background: rgba(5, 21, 42, 0.75);
+      color: #ffffff;
+      font-weight: 600;
+    }
+
+    tr:nth-child(2n) {
+      background: rgba(11, 37, 71, 0.55);
+    }
+  }
+
+  // Blueprint numbered cyan step rail for {{% steps %}}
+  .book-steps > ol {
+    > li {
+      border-inline-start: 2px solid rgba(0, 233, 242, 0.35);
+    }
+
+    > li:last-child {
+      border-inline-start-color: transparent;
+    }
+
+    > li::before {
+      background: #0b2547;
+      color: #00e9f2;
+      border: 1.5px solid #00e9f2;
+      outline: 4px solid #071e3d;
+      align-items: center;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+  }
+}
+
+// Copy-to-clipboard button and language badge on code blocks
 .highlight {
   position: relative;
 }
 
 .copy-button {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 6px;
+  right: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   height: 32px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(99, 162, 187, 0.3);
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.5);
+  background: rgba(11, 37, 71, 0.85);
+  color: #9bafc4;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
   z-index: 1;
 
   &:hover {
-    background: rgba(255, 255, 255, 0.12);
-    color: rgba(255, 255, 255, 0.9);
+    background: rgba(0, 233, 242, 0.14);
+    border-color: rgba(0, 233, 242, 0.5);
+    color: #00e9f2;
   }
 
   &.copied {
-    color: #3fb950;
+    color: #a4f6c5;
+    border-color: rgba(164, 246, 197, 0.5);
     opacity: 1;
   }
 }
 
-.highlight:hover .copy-button {
+.highlight:hover .copy-button,
+.highlight:focus-within .copy-button,
+.copy-button:focus-visible {
   opacity: 1;
 }
 
-// Always show on touch devices (no hover)
 @media (hover: none) {
   .copy-button {
-    opacity: 0.7;
+    opacity: 0.75;
   }
 }
 
-// Language label
 .highlight pre code[data-lang]::before {
   content: attr(data-lang);
   position: absolute;
   top: 0;
   left: 0;
   padding: 2px 8px;
-  font-family: inherit;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 0.65em;
   line-height: 1.6;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.06);
+  letter-spacing: 0.08em;
+  color: #9bafc4;
+  background: rgba(11, 37, 71, 0.9);
+  border-inline-end: 1px solid rgba(99, 162, 187, 0.24);
+  border-bottom: 1px solid rgba(99, 162, 187, 0.24);
   border-bottom-right-radius: 4px;
   pointer-events: none;
   user-select: none;
@@ -65,4 +267,255 @@
 
 .highlight pre {
   position: relative;
+}
+
+// Home page Blueprint hero sheet
+.bp-hero {
+  position: relative;
+  margin-bottom: 2rem;
+  padding: 2rem 2.25rem;
+  background: linear-gradient(115deg, rgba(11, 37, 71, 0.92), rgba(5, 21, 42, 0.94));
+  border: 1px solid rgba(0, 233, 242, 0.3);
+  border-radius: 8px;
+  overflow: hidden;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(99, 162, 187, 0.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99, 162, 187, 0.07) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  > * {
+    position: relative;
+  }
+
+  .bp-hero__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin-bottom: 0.9rem;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #a4f6c5;
+  }
+
+  .bp-hero__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #a4f6c5;
+    flex-shrink: 0;
+  }
+
+  .bp-hero__logo {
+    display: block;
+    width: 300px;
+    max-width: 82%;
+    height: auto;
+    margin: 0 0 1rem -6px;
+  }
+
+  .bp-hero__tagline {
+    margin: 0 0 0.65rem;
+    font-size: 1.2rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: #ffffff;
+  }
+
+  .bp-hero__desc {
+    margin: 0 0 1.35rem;
+    max-width: 46rem;
+    color: #cbdae8;
+    line-height: 1.65;
+  }
+
+  .bp-hero__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .bp-hero__btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 1.05rem;
+    border-radius: 5px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-decoration: none !important;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+
+    &--primary {
+      background: #00e9f2;
+      color: #05152a !important;
+      border: 1px solid #00e9f2;
+
+      &:hover {
+        background: #66eff6;
+        border-color: #66eff6;
+      }
+    }
+
+    &--secondary {
+      background: rgba(5, 21, 42, 0.7);
+      color: #eff7ff !important;
+      border: 1px solid rgba(99, 162, 187, 0.4);
+
+      &:hover {
+        border-color: #00e9f2;
+        color: #00e9f2 !important;
+      }
+    }
+  }
+
+  .bp-hero__badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+
+    img {
+      display: block;
+      height: 20px;
+    }
+  }
+}
+
+// Guided walkthrough progress bar (top of tutorial RegularPages)
+.bp-step-bar {
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  background: rgba(11, 37, 71, 0.72);
+  border: 1px solid rgba(99, 162, 187, 0.26);
+  border-radius: 6px;
+
+  &__meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  &__section {
+    color: #9bafc4 !important;
+    text-decoration: none;
+
+    &:hover {
+      color: #00e9f2 !important;
+    }
+  }
+
+  &__sep {
+    color: rgba(155, 175, 196, 0.45);
+  }
+
+  &__pill {
+    color: #00e9f2;
+    font-weight: 600;
+  }
+
+  &__track {
+    width: 100%;
+    height: 4px;
+    background: rgba(5, 21, 42, 0.9);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  &__fill {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, #00e9f2, #a4f6c5);
+    border-radius: 999px;
+  }
+}
+
+// Guided walkthrough previous / next transition cards (bottom of tutorial RegularPages)
+.bp-step-nav {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(99, 162, 187, 0.22);
+}
+
+.bp-step-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1rem 1.2rem;
+  background: rgba(11, 37, 71, 0.65);
+  border: 1px solid rgba(99, 162, 187, 0.28);
+  border-radius: 6px;
+  text-decoration: none !important;
+  transition: border-color 0.15s ease, background 0.15s ease;
+
+  &:hover {
+    background: rgba(11, 37, 71, 0.95);
+    border-color: rgba(0, 233, 242, 0.6);
+  }
+
+  &--next {
+    grid-column: 2;
+    text-align: right;
+    align-items: flex-end;
+  }
+
+  &__eyebrow {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #9bafc4;
+  }
+
+  &__title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #eff7ff;
+  }
+
+  &:hover &__title {
+    color: #00e9f2;
+  }
+}
+
+@media (max-width: 640px) {
+  .bp-hero {
+    padding: 1.5rem 1.25rem;
+  }
+
+  .bp-step-nav {
+    grid-template-columns: 1fr;
+  }
+
+  .bp-step-card--next {
+    grid-column: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

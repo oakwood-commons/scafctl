@@ -20,8 +20,33 @@
     {{- with .Page.GetPage $url -}}
       {{- $url = .RelPermalink -}}
     {{- else -}}
-      {{- /* Fallback: keep original .md URL and warn so broken links surface during build */ -}}
-      {{- warnf "render-link: could not resolve .md link %q on page %q — check the file exists in Hugo's content tree" $url .Page.RelPermalink -}}
+      {{- $resolved := false -}}
+      {{- if not (strings.Contains $url "/") -}}
+        {{- $stem := strings.TrimSuffix ".md" $url -}}
+        {{- with .Page.CurrentSection -}}
+          {{- with .GetPage (printf "%s/%s" $stem $url) -}}
+            {{- $url = .RelPermalink -}}
+            {{- $resolved = true -}}
+          {{- end -}}
+        {{- end -}}
+      {{- end -}}
+      {{- if and (not $resolved) .Page.File .Page.Site.Params.BookRepo -}}
+        {{- $pagePath := replace .Page.File.Path "\\" "/" -}}
+        {{- $repoFile := cond (hasPrefix $pagePath "docs/") $pagePath (printf "home/%s" $pagePath) -}}
+        {{- $clean := path.Clean (printf "%s/%s" (path.Dir $repoFile) $url) -}}
+        {{- if hasPrefix $clean "examples/" -}}
+          {{- $exampleRel := strings.TrimPrefix "examples/" $clean -}}
+          {{- if gt (len (where (resources.Match "_examples/**") "Name" (printf "/_examples/%s" $exampleRel))) 0 -}}
+            {{- $url = printf "%s/blob/main/%s" (strings.TrimSuffix "/" .Page.Site.Params.BookRepo) $clean -}}
+            {{- $isExternal = true -}}
+            {{- $resolved = true -}}
+          {{- end -}}
+        {{- end -}}
+      {{- end -}}
+      {{- if not $resolved -}}
+        {{- /* Fallback: keep original .md URL and warn so broken links surface during build */ -}}
+        {{- warnf "render-link: could not resolve .md link %q on page %q -- check the file exists in Hugo's content tree or examples/" $url .Page.RelPermalink -}}
+      {{- end -}}
     {{- end -}}
   {{- end -}}
 
