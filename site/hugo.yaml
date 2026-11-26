@@ -4,7 +4,7 @@
 # from the main project's go.mod. Paths in module mounts are relative to this
 # directory.
 
-baseURL: "https://oakwood-commons.github.io/scafctl/"
+baseURL: "https://scafctl.oakwood-commons.org/"
 languageCode: "en-us"
 title: "scafctl"
 enableRobotsTXT: true
