@@ -32,18 +32,17 @@ func TestCommandMCP(t *testing.T) {
 		assert.NotEmpty(t, cmd.Long)
 		assert.True(t, cmd.SilenceUsage)
 
-		// Verify serve subcommand is registered
+		// Verify init, serve, and list subcommands are registered
 		subCmds := cmd.Commands()
 		require.NotEmpty(t, subCmds)
 
-		var serveFound bool
+		found := make(map[string]bool, len(subCmds))
 		for _, sub := range subCmds {
-			if sub.Use == "serve" {
-				serveFound = true
-				break
-			}
+			found[sub.Name()] = true
 		}
-		assert.True(t, serveFound, "expected 'serve' subcommand")
+		assert.True(t, found["init"], "expected 'init' subcommand")
+		assert.True(t, found["serve"], "expected 'serve' subcommand")
+		assert.True(t, found["list"], "expected 'list' subcommand")
 	})
 }
 

@@ -31,6 +31,7 @@ Step-by-step guides for learning scafctl features.
 - [Reference-Data Lookups](reference-data-lookups.md) -- Look up taxonomy values from inline, file, or HTTP datasets
 - [Catalog Tutorial](catalog-tutorial.md) — Store and manage solutions in your local catalog
 - [MCP Server Tutorial](mcp-server-tutorial.md) — Set up AI agent integration with VS Code Copilot, Claude, Cursor, and Windsurf
+- [MCP Harness Setup Tutorial](mcp-init-tutorial.md) -- Register the MCP server and authoring skill across AI coding harnesses with `scafctl mcp init`
 - [Security Hardening](security-hardening.md) — Secure your solutions and workflows
 - [Validation Patterns Tutorial](validation-patterns-tutorial.md) — Input constraints, runtime validation, and common regex/CEL patterns
 - [Snapshots Tutorial](snapshots-tutorial.md) — Capture and compare execution snapshots

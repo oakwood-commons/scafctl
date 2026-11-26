@@ -56,6 +56,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/kube"
 	"github.com/oakwood-commons/scafctl/pkg/kube/clusterconfig"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/mcp/initconfig"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -254,6 +255,14 @@ type RootOptions struct {
 	// "scafctl", and Blueprint with a plain-text brand wordmark when
 	// BinaryName is set to a custom CLI name.
 	AuthPageRenderer authpage.Renderer
+
+	// MCPSkillSupplement is optional markdown appended to the embedded
+	// SKILL.md installed or printed by '<binary> mcp init'. Embedders can
+	// supply organization- or platform-specific authoring guidance (such as
+	// custom auth handlers, catalogs, or internal conventions) while keeping
+	// the built-in authoring skill intact. When empty, only the built-in
+	// skill template is emitted.
+	MCPSkillSupplement string
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -854,6 +863,10 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				ctx = official.WithRegistry(ctx, officialReg)
 			} else {
 				lgr.V(1).Info("official provider registry disabled via config")
+			}
+
+			if opts.MCPSkillSupplement != "" {
+				ctx = initconfig.WithSkillSupplement(ctx, opts.MCPSkillSupplement)
 			}
 
 			cCmd.SetContext(ctx)

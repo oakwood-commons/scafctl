@@ -20,6 +20,7 @@ func CommandMCP(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 		Long:         `Manage the MCP server that exposes scafctl capabilities to AI agents like GitHub Copilot, Claude, and Cursor.`,
 		SilenceUsage: true,
 	})
+	cmd.AddCommand(CommandInit(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cmd.Use)))
 	cmd.AddCommand(CommandServe(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cmd.Use)))
 	cmd.AddCommand(CommandList(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cmd.Use)))
 	return cmd
