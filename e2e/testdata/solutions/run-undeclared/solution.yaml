@@ -1,0 +1,20 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: run-undeclared
+  version: 1.0.0
+  description: >-
+    Uses the exec provider (official, not a builtin) without declaring it in
+    bundle.plugins. The run is rejected with or without --strict, because
+    undeclared non-builtin providers fail validation before any strict-mode
+    logic runs.
+
+spec:
+  workflow:
+    actions:
+      hello:
+        description: Runs an official provider that is not declared
+        provider: exec
+        inputs:
+          command: "echo ok"

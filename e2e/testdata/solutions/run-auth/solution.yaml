@@ -1,0 +1,30 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: run-auth
+  version: 1.0.0
+  description: Calls a scope-protected URL through a custom auth handler.
+
+spec:
+  resolvers:
+    url:
+      description: Protected resource URL (pass with -r url=...)
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: url
+
+    protected:
+      description: Authenticated GET; status 200 proves the handler injected a token
+      dependsOn: [url]
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                rslvr: url
+              method: GET
+              authProvider: e2e-oauth

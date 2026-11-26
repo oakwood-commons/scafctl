@@ -1,0 +1,25 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: run-locked
+  version: 1.0.0
+  description: >-
+    Declares an official (non-builtin) provider in bundle.plugins but ships no
+    lock file, so --lock-mode strict/constrained must refuse before any
+    network fetch is attempted.
+
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
+spec:
+  workflow:
+    actions:
+      hello:
+        description: Would run the declared provider if resolution got this far
+        provider: exec
+        inputs:
+          command: "echo ok"
