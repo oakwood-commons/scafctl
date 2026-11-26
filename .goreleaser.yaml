@@ -37,12 +37,13 @@ checksum:
 signs:
   - cmd: cosign
     artifacts: checksum
-    output: true
+    output: false
+    signature: "${artifact}.bundle"
+    certificate: ""
     args:
       - "sign-blob"
       - "${artifact}"
-      - "--output-certificate=${certificate}"
-      - "--output-signature=${signature}"
+      - "--bundle=${signature}"
       - "--yes"
 sboms:
   - artifacts: archive
@@ -52,24 +53,100 @@ homebrew_casks:
       owner: oakwood-commons
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    homepage: "https://github.com/oakwood-commons/scafctl"
+    homepage: "https://scafctl.oakwood-commons.org"
     description: "A configuration discovery and scaffolding tool using CEL for dynamic evaluation"
     license: "Apache-2.0"
 release:
   draft: false
   prerelease: auto
+  header: |
+    <details>
+    <summary><strong>📦 Quick Install / Upgrade to {{ .Tag }}</strong> (macOS · Linux · Windows)</summary>
+
+    **macOS / Linux (Homebrew)**
+    ```bash
+    brew install oakwood-commons/tap/scafctl
+    # or upgrade:
+    brew upgrade oakwood-commons/tap/scafctl
+    ```
+
+    **Linux (`x86_64`)**
+    ```bash
+    curl -fsSL https://github.com/oakwood-commons/scafctl/releases/download/{{ .Tag }}/scafctl_{{ .Version }}_Linux_x86_64.tar.gz \
+      | sudo tar -xz -C /usr/local/bin scafctl
+    ```
+
+    **Windows (PowerShell)**
+    ```powershell
+    Invoke-WebRequest -Uri "https://github.com/oakwood-commons/scafctl/releases/download/{{ .Tag }}/scafctl_{{ .Version }}_Windows_x86_64.zip" -OutFile scafctl.zip
+    Expand-Archive -Force scafctl.zip -DestinationPath .
+    ```
+
+    Documentation: [scafctl.oakwood-commons.org](https://scafctl.oakwood-commons.org/)
+    </details>
+  footer: |
+    ---
+
+    **Full Changelog**: https://github.com/oakwood-commons/scafctl/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    <details>
+    <summary><strong>🔐 Verify Checksums &amp; Cosign Signature</strong></summary>
+
+    ```bash
+    cosign verify-blob \
+      --bundle scafctl_{{ .Version }}_SHA256SUMS.bundle \
+      --certificate-identity 'https://github.com/oakwood-commons/scafctl/.github/workflows/release.yml@refs/tags/{{ .Tag }}' \
+      --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+      scafctl_{{ .Version }}_SHA256SUMS
+
+    sha256sum --ignore-missing -c scafctl_{{ .Version }}_SHA256SUMS
+    ```
+    </details>
 changelog:
   disable: false
   use: github
+  sort: asc
+  abbrev: -1
+  format: >-
+    {{- $parts := split .Message ":" -}}
+    {{- $head := index $parts 0 -}}
+    {{- if and (gt (len $parts) 1) (not (contains $head " ")) -}}
+      {{- $body := trim (trimprefix .Message (printf "%s:" $head)) -}}
+      {{- if and (contains $head "(") (contains $head ")") -}}
+        {{- $scope := index (split (index (split $head "(") 1) ")") 0 -}}
+        **{{ $scope }}:** {{ $body }}
+      {{- else -}}
+        {{ $body }}
+      {{- end -}}
+    {{- else -}}
+      {{ .Message }}
+    {{- end -}}
+    {{- if .Logins }} ({{ .Logins | englishJoin }}){{ end -}}
   groups:
-    - title: Features
-      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
-    - title: Bug Fixes
-      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
-    - title: Documentation
-      regexp: '^.*?docs(\([[:word:]]+\))??!?:.+$'
-    - title: Others
+    - title: "💥 Breaking Changes"
+      regexp: '^[a-zA-Z]+(\([^)]+\))?!:.+$'
+      order: 0
+    - title: "🚀 Features"
+      regexp: '^feat(\([^)]+\))?:.+$'
+      order: 1
+    - title: "🐛 Bug Fixes"
+      regexp: '^fix(\([^)]+\))?:.+$'
+      order: 2
+    - title: "⚡ Performance"
+      regexp: '^perf(\([^)]+\))?:.+$'
+      order: 3
+    - title: "🚜 Refactor"
+      regexp: '^refactor(\([^)]+\))?:.+$'
+      order: 4
+    - title: "📚 Documentation"
+      regexp: '^docs(\([^)]+\))?:.+$'
+      order: 5
+    - title: "⚙️ Build & Dependencies"
+      regexp: '^build(\([^)]+\))?:.+$'
+      order: 6
+    - title: "Other"
       order: 999
   filters:
     exclude:
-      - '^chore:'
+      - "^Merge "
+      - '^(chore|ci|style|test)(\([^)]+\))?:'

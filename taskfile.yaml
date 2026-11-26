@@ -1482,7 +1482,7 @@ tasks:
     cmds:
       - |
         echo "Releasing Product..."
-        if [[ -n "$GPG_FINGERPRINT" ]]; then
+        if [[ -n "${GPG_FINGERPRINT:-}" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
           goreleaser release --clean
         else
           goreleaser release --clean --skip sign
