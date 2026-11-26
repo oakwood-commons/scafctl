@@ -211,11 +211,11 @@ scafctl enforces defense-in-depth protections whenever `scrt:` or `tkn:` is used
 | `invalid-credential-ref` | `error` | Rejects empty/malformed `scrt:` names, reserved `<binary>.*` internal secret prefixes, empty `tkn.handler`, invalid `tkn.minValidFor` durations, and malformed nested `scrt:`/`tkn:` objects. |
 | `unmarked-sensitive-credential-resolver` | `warning` | Flags resolvers whose inputs contain `scrt:` or `tkn:` without `sensitive: true`. |
 
-Run `scafctl lint explain <rule>` for examples and remediation steps:
+Run `scafctl lint rule <rule>` for examples and remediation steps:
 
 ```bash
-scafctl lint explain invalid-credential-ref
-scafctl lint explain unmarked-sensitive-credential-resolver
+scafctl lint rule invalid-credential-ref
+scafctl lint rule unmarked-sensitive-credential-resolver
 ```
 
 ## Related Guides

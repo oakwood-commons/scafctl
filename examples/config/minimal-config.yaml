@@ -33,7 +33,7 @@ logging:
   # format: "json"
 
 # Add your catalogs below
-# Use: scafctl config add-catalog to add interactively
+# Use: scafctl catalog remote add <name> --type oci --url oci://ghcr.io/my-org
 #
 # Default catalog location (XDG data directory):
 #   Linux:   ~/.local/share/scafctl/catalog/

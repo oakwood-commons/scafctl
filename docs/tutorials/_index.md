@@ -30,6 +30,7 @@ Step-by-step guides for learning scafctl features.
 - [Go Templates Tutorial](go-templates-tutorial.md) — Generate files with Go template rendering
 - [Reference-Data Lookups](reference-data-lookups.md) -- Look up taxonomy values from inline, file, or HTTP datasets
 - [Catalog Tutorial](catalog-tutorial.md) — Store and manage solutions in your local catalog
+- [Authoring & Publishing Catalog Solutions](publishing-solutions-tutorial.md) -- Design, test, sign, and publish reusable catalog solutions end to end
 - [MCP Server Tutorial](mcp-server-tutorial.md) — Set up AI agent integration with VS Code Copilot, Claude, Cursor, and Windsurf
 - [MCP Harness Setup Tutorial](mcp-init-tutorial.md) -- Register the MCP server and authoring skill across AI coding harnesses with `scafctl mcp init`
 - [Security Hardening](security-hardening.md) — Secure your solutions and workflows

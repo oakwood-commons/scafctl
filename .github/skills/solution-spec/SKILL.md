@@ -207,6 +207,16 @@ cases:
 Any declared mask makes the test report a relaxed status (`PASS*`). Regenerate
 golden files with `--update-snapshots`.
 
+## Solution Archetypes & Catalog Publishing
+
+`scafctl` uses the same `Solution` YAML schema for two distinct archetypes:
+
+- **`actions.yaml` (repo task runner)**: Checked into an application/library repo root and auto-discovered first in `DiscoveryModeAction` (`scafctl run action <name>`). Selective tasks (`build`, `test`, `lint`, `release`) may all set `explicit: true`.
+- **`solution.yaml` (distributable catalog package)**: Lives in a dedicated `sln-<name>` repository and publishes to `ghcr.io/<org>/solutions/<name>:<version>` for zero-clone execution (`scafctl run solution <name> key=value`).
+- **`explicit` action gating & `no-default-action`**: Workflow actions default to `explicit: false` and execute during a bare `scafctl run solution <name>`. Mark opt-in or destructive helpers (`clean`, `teardown`, `release`) with `explicit: true` (invoked via `-a <action>` or `scafctl run action <action> -s <name>`). Leaving *every* action `explicit: true` in a bundled or non-task `solution.yaml` triggers the `no-default-action` lint warning (fatal under `validate --strict`).
+- **Bundle root boundary & `solution.lock`**: All static file paths, `bundle.include` globs (required for dynamic `expr:`/`tmpl:` file paths and also used to stage files into `scafctl test` sandboxes), `compose` partials, and symlinks must stay inside the `solution.yaml` directory -- `../` escapes are rejected. Declare external/official plugins in `bundle.plugins` (never built-in providers, enforced by `builtin-in-bundle-plugins`); `package solution` pins digests in `solution.lock` (`vendor update` refreshes locks).
+- **Pre-publish & push flow**: Verify with `validate -f ./solution.yaml --strict`, `test -f ./solution.yaml`, `inspect solution -f ./solution.yaml --usage` (enriched by `metadata.usage`), and `package_solution` (`dry_run: true` by default) / `scafctl package solution --dry-run`. Package and publish with `scafctl package solution -f ./solution.yaml` and `scafctl catalog push <name>@<version> -c <catalog>` (attaches an SPDX 2.3 SBOM referrer by default).
+
 ## Built-in Providers
 
 For the list of built-in and official providers and their capabilities, call the
