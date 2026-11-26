@@ -2,16 +2,35 @@
 
 Example configurations for connecting AI clients to scafctl's MCP server.
 
-## Quick Start
+## Automated Setup (`scafctl mcp init`)
+
+For supported AI harnesses (`vscode`, `claude`, `cursor`, `opencode`, `agy`), run `scafctl mcp init` to register `scafctl mcp serve` (preserving existing JSON/JSONC comments and neighbor MCP servers) and install the official `scafctl` authoring `SKILL.md` in one step:
+
+~~~bash
+# Auto-detect active harnesses in the current repository
+scafctl mcp init
+
+# Configure specific harnesses or your user-level profile
+scafctl mcp init --target vscode --target claude
+scafctl mcp init --target cursor --scope user
+
+# Print generic MCP JSON + SKILL.md for any other editor, or write a custom skill path
+scafctl mcp init --print
+scafctl mcp init --skill-dir .windsurf/skills
+~~~
+
+See the [MCP Harness Setup Tutorial](../../docs/tutorials/mcp-init-tutorial.md) for all flags and target paths, or use the manual snippets below.
+
+## Manual Quick Start
 
 1. Copy the appropriate config file for your AI client
 2. Ensure `scafctl` is on your `$PATH`
 3. Restart the AI client
-4. Start chatting — the AI will discover and use scafctl tools automatically
+4. Start chatting -- the AI will discover and use scafctl tools automatically
 
 ## VS Code / GitHub Copilot
 
-Copy `vscode-mcp.json` to `.vscode/mcp.json` in your project root:
+Run `scafctl mcp init --target vscode`, or copy `vscode-mcp.json` to `.vscode/mcp.json` in your project root:
 
 ```bash
 mkdir -p .vscode
@@ -20,9 +39,11 @@ cp examples/mcp/vscode-mcp.json .vscode/mcp.json
 
 Reload VS Code and open Copilot chat. See [vscode-mcp.json](vscode-mcp.json).
 
-## Claude Desktop
+## Claude Code & Claude Desktop
 
-Merge the content of `claude-desktop-config.json` into your Claude Desktop config:
+For Claude Code CLI, run `scafctl mcp init --target claude` (writes `.mcp.json` + `.claude/skills/scafctl/SKILL.md`, or `~/.claude.json` with `--scope user`).
+
+For Claude Desktop, merge the content of `claude-desktop-config.json` into your Claude Desktop config:
 
 - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
@@ -31,7 +52,7 @@ See [claude-desktop-config.json](claude-desktop-config.json).
 
 ## Cursor
 
-Copy `cursor-mcp.json` to `.cursor/mcp.json` in your project root:
+Run `scafctl mcp init --target cursor`, or copy `cursor-mcp.json` to `.cursor/mcp.json` in your project root:
 
 ```bash
 mkdir -p .cursor
@@ -40,9 +61,17 @@ cp examples/mcp/cursor-mcp.json .cursor/mcp.json
 
 Restart Cursor. See [cursor-mcp.json](cursor-mcp.json).
 
+## OpenCode
+
+Run `scafctl mcp init --target opencode` to configure `opencode.jsonc` (or update an existing `opencode.json`) and `.opencode/skills/scafctl/SKILL.md`.
+
+## Antigravity (AGY)
+
+Run `scafctl mcp init --target agy` (or `scafctl mcp init --target agy --scope user` for `~/.gemini/config/mcp_config.json`, falling back to an existing `~/.gemini/antigravity/mcp_config.json`).
+
 ## Windsurf
 
-Copy `windsurf-mcp.json` to `.windsurf/mcp.json` in your project root:
+Copy `windsurf-mcp.json` to `.windsurf/mcp.json` in your project root and optionally install the authoring skill with `scafctl mcp init --skill-dir .windsurf/skills`:
 
 ```bash
 mkdir -p .windsurf
@@ -106,4 +135,4 @@ Enable file logging for troubleshooting:
 | `get_openapi_spec` | Generate full OpenAPI specification for the REST API |
 | `list_api_endpoints` | List all REST API endpoints with method, path, and summary |
 
-For the full tutorial, see the [MCP Server Tutorial](../../docs/tutorials/mcp-server-tutorial.md).
+For the full tutorials, see the [MCP Harness Setup Tutorial](../../docs/tutorials/mcp-init-tutorial.md) and [MCP Server Tutorial](../../docs/tutorials/mcp-server-tutorial.md).
