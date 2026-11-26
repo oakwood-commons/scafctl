@@ -1335,3 +1335,31 @@ func TestActionOptions_getEffectiveActionConfig_CIOutputPrecedence(t *testing.T)
 	optsFallback.flagsChanged = map[string]bool{}
 	assert.Equal(t, "auto", optsFallback.getEffectiveActionConfig(badCfgCtx).CIOutput)
 }
+
+func TestCommandAction_SolutionFlagAndStrictFile(t *testing.T) {
+	t.Parallel()
+
+	streams, _, errBuf := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	cliParams.ExitOnError = false
+
+	cmd := CommandAction(cliParams, streams, "mycli/run")
+	solFlag := cmd.Flags().Lookup("solution")
+	require.NotNil(t, solFlag)
+	assert.Equal(t, "s", solFlag.Shorthand)
+
+	// -f with a catalog reference is rejected with a -s hint using the embedder binary name
+	cmd.SetArgs([]string{"lint", "-f", "my-app"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error()+errBuf.String(), "mycli run action -s my-app")
+
+	// -f - combined with positional @- is rejected early
+	streams2, _, _ := terminal.NewTestIOStreams()
+	cmd2 := CommandAction(cliParams, streams2, "mycli/run")
+	cmd2.SetArgs([]string{"lint", "-f", "-", "@-"})
+	err2 := cmd2.Execute()
+	require.Error(t, err2)
+	assert.Contains(t, err2.Error(), "cannot use both -f - and @-")
+}

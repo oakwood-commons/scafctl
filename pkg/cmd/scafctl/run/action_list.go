@@ -43,8 +43,13 @@ func (o *ActionOptions) runList(ctx context.Context) error {
 			exitcode.InvalidInput)
 	}
 
+	explicitSource, err := o.resolveExplicitSource(o.BinaryName+" run action", o.Names)
+	if err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
 	loader := o.newSolutionLoader(ctx)
-	sel, err := loader.Select(ctx, o.File, o.Names, load.ArgsAreNames, o.sourceOptions()...)
+	sel, err := loader.Select(ctx, explicitSource, o.Names, load.ArgsAreNames, o.sourceOptions()...)
 	if err != nil {
 		// Under ArgsAreNames, unambiguous source refs in args[0] (URL, remote ref,
 		// versioned name) are selected before discovery. If discovery failed with

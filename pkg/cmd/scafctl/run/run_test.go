@@ -27,10 +27,39 @@ func TestCommandRun_UnknownSubcommandErrors(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown command")
+	assert.Contains(t, err.Error(), `"scafctl run solution bogus-xyz"`)
+	assert.Contains(t, err.Error(), `"scafctl run action bogus-xyz"`)
 
 	cmd2 := CommandRun(cliParams, ioStreams, "scafctl")
 	cmd2.SetArgs([]string{})
 	cmd2.SilenceErrors = true
 	cmd2.SilenceUsage = true
 	assert.NoError(t, cmd2.Execute())
+}
+
+func TestCommandRun_EmbedderBinaryNameHint(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandRun(cliParams, ioStreams, "mycli")
+	cmd.SetArgs([]string{"deploy-app"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"mycli run solution deploy-app"`)
+	assert.Contains(t, err.Error(), `"mycli run action deploy-app"`)
+	assert.NotContains(t, err.Error(), "scafctl")
+
+	cmdFile := CommandRun(cliParams, ioStreams, "mycli")
+	cmdFile.SetArgs([]string{"./solution.yaml"})
+	cmdFile.SilenceErrors = true
+	cmdFile.SilenceUsage = true
+	errFile := cmdFile.Execute()
+	require.Error(t, errFile)
+	assert.Contains(t, errFile.Error(), `"mycli run solution -f ./solution.yaml"`)
+	assert.Contains(t, errFile.Error(), `"mycli run action -f ./solution.yaml"`)
 }

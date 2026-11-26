@@ -99,8 +99,12 @@ type SolutionOptions struct {
 	// executed (unless --resolve-all is set). Finally actions always run.
 	ActionNames []string
 
-	// positionalPathErr is set in PreRun when the user passes a local file
-	// path as a positional argument instead of using -f/--file.
+	// DynamicArgs are resolver parameters from positional key=value/@file/@-
+	// arguments passed after [name[@version]].
+	DynamicArgs []string
+
+	// positionalPathErr is set in PreRun when the user passes invalid
+	// -f/--file or positional arguments.
 	positionalPathErr error
 
 	// validationWarn holds a non-fatal validation-only failure captured under
@@ -139,7 +143,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	}
 
 	cCmd := &cobra.Command{
-		Use:     "solution [name[@version]]",
+		Use:     "solution [name[@version]] [key=value...]",
 		Aliases: []string{"sol", "s", "solutions"},
 		Short:   "Run a solution by executing resolvers and actions",
 		Long: strings.ReplaceAll(`Execute a solution by running resolvers and then actions in dependency order.
@@ -148,10 +152,11 @@ Solutions can be loaded from:
 - Local catalog: Use the solution name as a positional argument (e.g., "my-app" or "my-app@1.2.3")
 - Local file: Use -f/--file flag (e.g., -f ./solution.yaml)
 - Stdin: Use -f - to read from stdin
-- URL: Use an HTTP(S) URL either as a positional argument or with -f/--file
+- URL: Use an HTTP(S) URL as a positional argument
 - Auto-discovery: If no source is specified, searches for solution.yaml in current directory
 
-NOTE: Positional arguments accept catalog names, remote registry refs, and URLs.
+NOTE: Positional arguments accept at most one catalog name, remote registry ref, or URL,
+followed by optional key=value / @file / @- resolver parameters.
 Local file paths must use -f/--file.
 
 The solution MUST define a workflow with actions. If no workflow is defined,
@@ -219,10 +224,11 @@ Examples:
   scafctl run solution -f ./my-solution.yaml
 
   # Run only specific actions (and their transitive dependencies)
-  scafctl run solution -f ./my-solution.yaml --action lint
-  scafctl run solution -f ./my-solution.yaml --action lint --action test
+  scafctl run solution -f ./my-solution.yaml -a lint
+  scafctl run solution -f ./my-solution.yaml -a lint -a test
 
-  # Run with parameters
+  # Run with parameters (positional key=value or -r)
+  scafctl run solution my-app env=prod region=us-east1
   scafctl run solution -r env=prod -r region=us-east1
 
   # Load parameters from a YAML file
@@ -254,22 +260,39 @@ Examples:
 
   # Include resolver execution metadata in output
   scafctl run solution --show-execution -f ./my-solution.yaml -o json`, settings.CliBinaryName, cliParams.BinaryName),
-		Args: cobra.MaximumNArgs(1),
+		Args: cobra.ArbitraryArgs,
 		PreRun: func(cCmd *cobra.Command, args []string) {
+			options.positionalPathErr = nil
+			options.DynamicArgs = nil
 			// Track which flags were explicitly set by the user
 			options.flagsChanged = make(map[string]bool)
 			cCmd.Flags().Visit(func(f *pflag.Flag) {
 				options.flagsChanged[f.Name] = true
 			})
-			// If a positional argument is provided, it must be a catalog/registry
-			// reference. Local file paths require -f/--file. Providing both
-			// -f/--file and a positional arg is also an error.
-			if len(args) > 0 {
-				if _, err := source.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" run solution"); err != nil {
+			binName := settings.CliBinaryName
+			if cliParams != nil && cliParams.BinaryName != "" {
+				binName = cliParams.BinaryName
+			}
+			cmdUsage := binName + " run solution"
+			if _, err := source.ValidateFileFlagPositional(options.File, cmdUsage); err != nil {
+				options.positionalPathErr = err
+				return
+			}
+			names, params := splitNamesAndParams(args)
+			options.DynamicArgs = params
+			if len(names) >= 1 {
+				if _, err := source.ValidatePositionalRef(names[0], options.File, cmdUsage); err != nil {
 					options.positionalPathErr = err
-				} else {
-					options.File = args[0]
+					return
 				}
+				if len(names) >= 2 {
+					options.positionalPathErr = fmt.Errorf(
+						"accepts at most 1 solution reference (got %d: %s); to run specific actions use -a/--action (e.g. %s %s -a %s) or pass parameters as key=value",
+						len(names), strings.Join(names, ", "), cmdUsage, names[0], names[1],
+					)
+					return
+				}
+				options.File = names[0]
 			}
 		},
 		RunE:         makeRunEFunc(cfg, "solution"),
@@ -284,7 +307,7 @@ Examples:
 	cCmd.Flags().IntVar(&options.MaxActionConcurrency, "max-action-concurrency", 0, "Maximum concurrent actions (0=unlimited)")
 	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Validate and show what would be executed without running")
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata in output (phases, timing, dependencies, providers)")
-	cCmd.Flags().StringSliceVar(&options.ActionNames, "action", nil, "Run only the named action(s), their transitive dependencies, and the resolvers they require (repeatable)")
+	cCmd.Flags().StringSliceVarP(&options.ActionNames, "action", "a", nil, "Run only the named action(s), their transitive dependencies, and the resolvers they require (repeatable)")
 
 	// File conflict strategy flags
 	cCmd.Flags().StringVar(&options.OnConflict, "on-conflict", "", "Conflict strategy for file writes (error|overwrite|skip|skip-unchanged|append) (default: error)")
@@ -437,7 +460,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 
 	// Detect @- / -f - conflict early: stdin can only be consumed once.
-	if o.File == "-" && flags.ContainsStdinRef(o.ResolverParams) {
+	if o.File == "-" && (flags.ContainsStdinRef(o.ResolverParams) || flags.ContainsStdinRef(o.DynamicArgs)) {
 		return o.exitWithCode(ctx,
 			fmt.Errorf("cannot use both -f - and @-: stdin can only be read once"),
 			exitcode.InvalidInput)
@@ -523,12 +546,22 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		}
 	}
 
+	// Parse dynamic positional arguments (key=value and @file.yaml from argv)
+	extraParsed, err := flags.ParseDynamicInputArgs(o.DynamicArgs)
+	if err != nil {
+		return o.exitWithCode(ctx, fmt.Errorf("failed to parse positional parameters: %w", err), exitcode.ValidationFailed)
+	}
+
+	allParams := make([]string, 0, len(o.ResolverParams)+len(extraParsed))
+	allParams = append(allParams, o.ResolverParams...)
+	allParams = append(allParams, extraParsed...)
+
 	// Parse resolver parameters (pass stdin for @- support)
 	var stdinReader io.Reader
 	if o.IOStreams != nil {
 		stdinReader = o.IOStreams.In
 	}
-	params, err := flags.ParseResolverFlagsWithStdin(o.ResolverParams, stdinReader)
+	params, err := flags.ParseResolverFlagsWithStdin(allParams, stdinReader)
 	if err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 	}
@@ -1211,8 +1244,15 @@ func (o *SolutionOptions) writeActionTestOutput(ctx context.Context, result *act
 		return fmt.Errorf("failed to marshal output for test generation: %w", err)
 	}
 
-	testArgs := make([]string, 0, len(o.ResolverParams)*2)
+	normalizedDynamic, err := flags.ParseDynamicInputArgs(o.DynamicArgs)
+	if err != nil {
+		return fmt.Errorf("failed to parse positional parameters for test generation: %w", err)
+	}
+	var testArgs []string
 	for _, param := range o.ResolverParams {
+		testArgs = append(testArgs, "-r", param)
+	}
+	for _, param := range normalizedDynamic {
 		testArgs = append(testArgs, "-r", param)
 	}
 

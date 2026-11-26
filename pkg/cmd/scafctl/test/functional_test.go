@@ -84,6 +84,20 @@ func TestCommandFunctional_Shorthands(t *testing.T) {
 	}
 }
 
+func TestCommandFunctional_RejectsCatalogRefInFileFlag(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+
+	cmd := CommandFunctional(cliParams, ioStreams, "mycli/test")
+	cmd.SetArgs([]string{"-f", "my-app"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error()+errBuf.String(), "mycli test functional my-app")
+}
+
 func BenchmarkCommandFunctional(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()

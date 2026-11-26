@@ -1428,6 +1428,7 @@ The CLI provides shorthand aliases:
 {{% tab "Bash" %}}
 ```bash
 # These are all equivalent:
+scafctl test -f solution.yaml
 scafctl test functional -f solution.yaml
 scafctl test func -f solution.yaml
 scafctl test fn -f solution.yaml
@@ -1441,6 +1442,7 @@ scafctl test l -f solution.yaml
 {{% tab "PowerShell" %}}
 ```powershell
 # These are all equivalent:
+scafctl test -f solution.yaml
 scafctl test functional -f solution.yaml
 scafctl test func -f solution.yaml
 scafctl test fn -f solution.yaml

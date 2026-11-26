@@ -84,7 +84,7 @@ reach a service on `localhost` without hand-editing a configuration file:
 
 ```bash
 # reach anything private, for one command
-SCAFCTL_HTTPCLIENT_ALLOWPRIVATEIPS=true scafctl lint -f http://127.0.0.1:8080/solution.yaml
+SCAFCTL_HTTPCLIENT_ALLOWPRIVATEIPS=true scafctl lint http://127.0.0.1:8080/solution.yaml
 
 # or stay narrow, even locally -- separate multiple ranges with commas
 SCAFCTL_HTTPCLIENT_ALLOWEDPRIVATECIDRS=127.0.0.0/8,10.42.0.0/16 scafctl run

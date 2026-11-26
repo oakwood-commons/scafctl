@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	cmdflags "github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	cmdlint "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -28,7 +29,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
-	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
@@ -128,9 +128,9 @@ usage summary, and an aggregate summary.
 
 SOLUTION SOURCE:
   Solutions can be loaded from:
-  - Local file or catalog: Use -f flag (e.g., -f ./solution.yaml or -f my-app@1.2.3)
-  - URL: Provide an HTTP(S) URL via -f/--file (also detected as a positional arg)
-  - Auto-discovery: If no source is specified, searches for solution files first (falling back to actions.yaml when none exist, or preferring actions.yaml when --action is set)
+  - Local file: Use -f/--file flag (e.g., -f ./solution.yaml, or -f - for stdin)
+  - Catalog, registry, or URL: Use -s/--solution flag (e.g., -s my-app, -s my-app@1.2.3, -s https://example.com/solution.yaml)
+  - Auto-discovery: If no source is specified, searches for solution files first (falling back to actions.yaml when none exist, or preferring actions.yaml when -a/--action is set)
 
 RESOLVER SELECTION:
   Pass resolver names as positional arguments to execute only specific
@@ -140,7 +140,7 @@ RESOLVER SELECTION:
   Examples:
     scafctl run resolver                           Execute all resolvers (auto-discovery)
     scafctl run resolver db config                 Execute 'db', 'config', and their deps
-    scafctl run resolver db config -f my-app       Execute from catalog, filter to db + config
+    scafctl run resolver db config -s my-app       Execute from catalog, filter to db + config
 
 SKIPPING PHASES:
   Use --on-validation-error ignore to skip the validation phase of all resolvers.
@@ -208,10 +208,10 @@ Examples:
   scafctl run resolver -f ./my-solution.yaml
 
   # Run specific resolvers from catalog
-  scafctl run resolver db config -f my-app
+  scafctl run resolver db config -s my-app
 
   # Run all resolvers from specific catalog version
-  scafctl run resolver -f my-app@1.2.3
+  scafctl run resolver -s my-app@1.2.3
 
   # Run with parameters (positional key=value — recommended)
   scafctl run resolver -f ./my-solution.yaml env=prod region=us-east1
@@ -290,6 +290,7 @@ Examples:
 
 	// Shared resolver flags
 	addSharedResolverFlags(cCmd, &options.sharedResolverOptions)
+	addSolutionRefFlag(cCmd, &options.sharedResolverOptions)
 
 	// Resolver-specific flags
 	cCmd.Flags().BoolVar(&options.SkipTransform, "skip-transform", false, "Skip transform and validation phases, returning raw resolved values")
@@ -299,9 +300,9 @@ Examples:
 	cCmd.Flags().StringVar(&options.SnapshotFile, "snapshot-file", "", "Snapshot output file (required with --snapshot)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive values in snapshot")
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata (phases, timing, dependencies, providers) in output")
-	cCmd.Flags().StringArrayVar(&options.Actions, "action", nil, "Scope resolver output to the resolvers consumed by this action (repeatable)")
+	cCmd.Flags().StringArrayVarP(&options.Actions, "action", "a", nil, "Scope resolver output to the resolvers consumed by this action (repeatable)")
 
-	setResolverHelpFunc(cCmd, cliParams)
+	setResolverHelpFunc(cCmd, cliParams, ioStreams)
 
 	return cCmd
 }
@@ -389,8 +390,9 @@ Examples:
 	}
 
 	addSharedResolverFlags(cCmd, &options.sharedResolverOptions)
+	addSolutionRefFlag(cCmd, &options.sharedResolverOptions)
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata (phases, timing, dependencies, providers) in output")
-	cCmd.Flags().StringArrayVar(&options.Actions, "action", nil, "Scope validation to the resolvers consumed by this action (repeatable)")
+	cCmd.Flags().StringArrayVarP(&options.Actions, "action", "a", nil, "Scope validation to the resolvers consumed by this action (repeatable)")
 	// --strict is registered by addSharedResolverFlags (it also disables
 	// provider auto-resolution). In the validate gate it additionally makes
 	// lint warnings fatal; reflect that combined meaning in the help text.
@@ -398,7 +400,7 @@ Examples:
 		f.Usage = "Strict gate: treat lint warnings as fatal and require explicit bundle.plugins (errors and schema violations are always fatal)"
 	}
 
-	setResolverHelpFunc(cCmd, cliParams)
+	setResolverHelpFunc(cCmd, cliParams, ioStreams)
 
 	return cCmd
 }
@@ -483,6 +485,15 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 			exitcode.InvalidInput)
 	}
 
+	subCmd := " run resolver"
+	if o.LintAfterValidate {
+		subCmd = " validate resolver"
+	}
+	explicitSource, err := o.resolveExplicitSource(o.BinaryName+subCmd, o.Names)
+	if err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
 	// Capture the invoking working directory before loading the solution,
 	// which may os.Chdir into a bundle extraction directory: relative state
 	// paths (declared, --state-file, --state-output) resolve against it.
@@ -491,12 +502,12 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
 	}
 
-	// Decide where the solution comes from before loading anything: -f, a
+	// Decide where the solution comes from before loading anything: -f/-s, a
 	// solution reference in the first positional arg, a discovered solution
 	// file, or else a catalog name in the first positional arg. Whatever the
 	// selection does not consume are resolver names.
 	loader := o.newSolutionLoader(ctx)
-	sel, err := loader.Select(ctx, o.File, o.Names, load.ArgsAreNamesOrCatalog, o.sourceOptions()...)
+	sel, err := loader.Select(ctx, explicitSource, o.Names, load.ArgsAreNamesOrCatalog, o.sourceOptions()...)
 	if err != nil {
 		return o.exitWithCode(ctx, err, prepare.ErrorExitCode(err))
 	}
@@ -1077,31 +1088,25 @@ func (a *resolverAdapter) GetSensitive() bool { return a.sensitive }
 // resolver input documentation when a solution file is available.
 // For example, `scafctl run resolver -f solution.yaml --help` will show the
 // standard command help plus the solution's resolver parameter table.
-func setResolverHelpFunc(cmd *cobra.Command, cliParams *settings.Run) {
+func setResolverHelpFunc(cmd *cobra.Command, cliParams *settings.Run, ioStreams *terminal.IOStreams) {
 	defaultHelp := cmd.HelpFunc()
 	cmd.SetHelpFunc(func(c *cobra.Command, args []string) {
-		// Cobra skips PersistentPreRun on --help; seed cliParams into the
-		// context when absent so embedder BinaryName and ActionDiscoveryFileNames
-		// still govern help-time auto-discovery.
+		// Cobra skips PersistentPreRun on --help; seed cliParams, config, and
+		// catalog aliases into context when absent so embedder defaults and
+		// configured catalogs still govern help-time resolution.
 		ctx := c.Context()
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		ctx = helpDiscoveryContext(ctx, c, cliParams)
+		ctx = helpDiscoveryContext(ctx, c, cliParams, args)
 		c.SetContext(ctx)
 
 		// Render the default help first
 		defaultHelp(c, args)
 
-		// Try to determine the solution file path from the -f flag or auto-discovery
-		solutionPath := extractSolutionPathWithArgs(c, args)
-		if solutionPath == "" {
-			return
-		}
-
 		// Load the solution (best effort -- don't fail help on errors)
-		sol, err := inspect.LoadSolution(ctx, solutionPath)
-		if err != nil {
+		sol := loadHelpSolution(ctx, c, ioStreams, args)
+		if sol == nil {
 			return
 		}
 
@@ -1113,8 +1118,9 @@ func setResolverHelpFunc(cmd *cobra.Command, cliParams *settings.Run) {
 	})
 }
 
-// helpDiscoveryContext loads discovery.actionFiles for --help when PersistentPreRun is skipped.
-func helpDiscoveryContext(ctx context.Context, c *cobra.Command, cliParams *settings.Run) context.Context {
+// helpDiscoveryContext seeds settings, loaded configuration, and the catalog
+// alias index into ctx for --help when PersistentPreRun is skipped.
+func helpDiscoveryContext(ctx context.Context, c *cobra.Command, cliParams *settings.Run, helpArgs []string) context.Context {
 	effective := *settings.NewCliParams()
 	if cliParams != nil {
 		effective = *cliParams
@@ -1122,28 +1128,62 @@ func helpDiscoveryContext(ctx context.Context, c *cobra.Command, cliParams *sett
 	if existing, ok := settings.FromContext(ctx); ok && existing != nil {
 		effective = *existing
 	}
-	if len(effective.ActionDiscoveryFileNames) == 0 {
-		cfg := config.FromContext(ctx)
-		if cfg == nil {
-			binaryName := effective.BinaryName
-			if binaryName == "" {
-				binaryName = settings.CliBinaryName
-			}
-			opts := []config.ManagerOption{config.WithEnvPrefix(settings.SafeEnvPrefix(binaryName))}
+
+	cfg := config.FromContext(ctx)
+	loadedCfg := false
+	if cfg == nil {
+		binaryName := effective.BinaryName
+		if binaryName == "" {
+			binaryName = settings.CliBinaryName
+		}
+		opts := []config.ManagerOption{config.WithEnvPrefix(settings.SafeEnvPrefix(binaryName))}
+		if c != nil && c.Root() != nil {
 			if raw := c.Root().Annotations["configDefaults"]; raw != "" {
 				opts = append(opts, config.WithBaseConfig([]byte(raw)))
 			}
-			var cfgPath string
-			if f := c.Flag("config"); f != nil {
-				cfgPath = f.Value.String()
-			}
-			cfg, _ = config.NewManager(cfgPath, opts...).Load()
 		}
-		if cfg != nil {
+		cfgPath := extractHelpConfigPath(c, helpArgs)
+		cfg, _ = config.NewManager(cfgPath, opts...).Load()
+		loadedCfg = cfg != nil
+	}
+	if cfg != nil {
+		if len(effective.ActionDiscoveryFileNames) == 0 {
 			effective.ActionDiscoveryFileNames = cfg.Discovery.ActionFiles
+		}
+		if loadedCfg {
+			ctx = config.WithConfig(ctx, cfg)
+			ctx = catalogindex.WithIndex(ctx, catalogindex.FromConfig(cfg))
 		}
 	}
 	return settings.IntoContext(ctx, &effective)
+}
+
+func extractHelpConfigPath(c *cobra.Command, helpArgs []string) string {
+	var defaultPath string
+	if c != nil {
+		if f := c.Flag("config"); f != nil {
+			if f.Changed {
+				return f.Value.String()
+			}
+			defaultPath = f.Value.String()
+		}
+	}
+	rawArgs := helpArgs
+	if len(rawArgs) == 0 {
+		rawArgs = os.Args
+	}
+	for i, arg := range rawArgs {
+		if arg == "--" {
+			break
+		}
+		switch {
+		case arg == "--config" && i+1 < len(rawArgs):
+			return rawArgs[i+1]
+		case strings.HasPrefix(arg, "--config="):
+			return strings.TrimPrefix(arg, "--config=")
+		}
+	}
+	return defaultPath
 }
 
 // resolveActionResolverNames delegates to execute.NamedActionsResolverRefs to
@@ -1180,39 +1220,39 @@ func localSolutionFile(sel load.Selection, cwd string) string {
 	return path
 }
 
-// extractSolutionPath determines the solution file path from:
-// 1. The -f/--file flag value (most reliable)
-// 2. os.Args as a fallback (scanning for -f flag)
-// 3. Auto-discovery in the current directory
+type helpSourceSpec struct {
+	source     source.Classification
+	hasSource  bool
+	invalid    bool
+	catalog    string
+	version    string
+	preRelease bool
+	noCache    bool
+}
+
+// extractSolutionPath determines the solution reference or file path from:
+// 1. The -f/--file or -s/--solution flag values
+// 2. os.Args as a fallback (scanning for -f/--file or -s/--solution)
+// 3. Auto-discovery in the current directory when no explicit source flag was passed
 func extractSolutionPath(c *cobra.Command) string {
 	return extractSolutionPathWithArgs(c, nil)
 }
 
 func extractSolutionPathWithArgs(c *cobra.Command, helpArgs []string) string {
-	// Try the parsed flag value
-	if f := c.Flags().Lookup("file"); f != nil && f.Value.String() != "" {
-		return f.Value.String()
+	spec := extractHelpSourceWithArgs(c, helpArgs)
+	if spec.invalid {
+		return ""
+	}
+	if spec.hasSource {
+		return spec.source.Ref
+	}
+	if spec.catalog != "" || spec.version != "" {
+		return ""
 	}
 
 	rawArgs := helpArgs
 	if len(rawArgs) == 0 {
 		rawArgs = os.Args
-	}
-
-	// Fallback: scan rawArgs for -f or --file
-	for i, arg := range rawArgs {
-		if arg == "--" {
-			break
-		}
-		if (arg == "-f" || arg == "--file") && i+1 < len(rawArgs) {
-			return rawArgs[i+1]
-		}
-		if strings.HasPrefix(arg, "-f=") {
-			return strings.TrimPrefix(arg, "-f=")
-		}
-		if strings.HasPrefix(arg, "--file=") {
-			return strings.TrimPrefix(arg, "--file=")
-		}
 	}
 
 	// Final fallback: auto-discover the solution file using the same discovery
@@ -1231,6 +1271,190 @@ func extractSolutionPathWithArgs(c *cobra.Command, helpArgs []string) string {
 	return path
 }
 
+func extractHelpSourceWithArgs(c *cobra.Command, helpArgs []string) helpSourceSpec {
+	var fileVal, solVal, catalogVal, versionVal string
+	var preRelease, noCache bool
+
+	if f := c.Flags().Lookup("file"); f != nil && f.Value.String() != "" {
+		fileVal = f.Value.String()
+	}
+	if s := c.Flags().Lookup("solution"); s != nil && s.Value.String() != "" {
+		solVal = s.Value.String()
+	}
+	if cat := c.Flags().Lookup("catalog"); cat != nil && cat.Value.String() != "" {
+		catalogVal = cat.Value.String()
+	}
+	if ver := c.Flags().Lookup("version"); ver != nil && ver.Value.String() != "" {
+		versionVal = ver.Value.String()
+	}
+	if pr, err := c.Flags().GetBool("pre-release"); err == nil && pr {
+		preRelease = true
+	}
+	if nc, err := c.Flags().GetBool("no-cache"); err == nil && nc {
+		noCache = true
+	}
+
+	rawArgs := helpArgs
+	if len(rawArgs) == 0 {
+		rawArgs = os.Args
+	}
+
+	// Scan rawArgs as fallback for flags placed after --help or when flags are unparsed.
+	for i, arg := range rawArgs {
+		if arg == "--" {
+			break
+		}
+		switch {
+		case (arg == "-f" || arg == "--file") && i+1 < len(rawArgs):
+			if fileVal == "" {
+				fileVal = rawArgs[i+1]
+			}
+		case strings.HasPrefix(arg, "-f="):
+			if fileVal == "" {
+				fileVal = strings.TrimPrefix(arg, "-f=")
+			}
+		case strings.HasPrefix(arg, "--file="):
+			if fileVal == "" {
+				fileVal = strings.TrimPrefix(arg, "--file=")
+			}
+		case (arg == "-s" || arg == "--solution") && i+1 < len(rawArgs):
+			if solVal == "" {
+				solVal = rawArgs[i+1]
+			}
+		case strings.HasPrefix(arg, "-s="):
+			if solVal == "" {
+				solVal = strings.TrimPrefix(arg, "-s=")
+			}
+		case strings.HasPrefix(arg, "--solution="):
+			if solVal == "" {
+				solVal = strings.TrimPrefix(arg, "--solution=")
+			}
+		case (arg == "-c" || arg == "--catalog") && i+1 < len(rawArgs):
+			if catalogVal == "" {
+				catalogVal = rawArgs[i+1]
+			}
+		case strings.HasPrefix(arg, "-c="):
+			if catalogVal == "" {
+				catalogVal = strings.TrimPrefix(arg, "-c=")
+			}
+		case strings.HasPrefix(arg, "--catalog="):
+			if catalogVal == "" {
+				catalogVal = strings.TrimPrefix(arg, "--catalog=")
+			}
+		case arg == "--version" && i+1 < len(rawArgs):
+			if versionVal == "" {
+				versionVal = rawArgs[i+1]
+			}
+		case strings.HasPrefix(arg, "--version="):
+			if versionVal == "" {
+				versionVal = strings.TrimPrefix(arg, "--version=")
+			}
+		case arg == "--pre-release" || arg == "--pre-release=true":
+			preRelease = true
+		case arg == "--no-cache" || arg == "--no-cache=true":
+			noCache = true
+		}
+	}
+
+	srcOpts := []source.Option{
+		source.WithCatalog(catalogVal),
+		source.WithVersion(versionVal),
+	}
+
+	if solVal != "" {
+		if _, err := source.ValidateSolutionFlag(solVal, fileVal, "run resolver"); err != nil {
+			return helpSourceSpec{invalid: true}
+		}
+		cls, err := source.Classify(solVal, srcOpts...)
+		if err != nil {
+			return helpSourceSpec{invalid: true}
+		}
+		return helpSourceSpec{
+			source:     cls,
+			hasSource:  true,
+			catalog:    catalogVal,
+			version:    versionVal,
+			preRelease: preRelease,
+			noCache:    noCache,
+		}
+	}
+	if fileVal != "" {
+		if _, err := source.ValidateFileFlagSolution(fileVal, "run resolver"); err != nil {
+			return helpSourceSpec{invalid: true}
+		}
+		cls, err := source.Classify(fileVal, srcOpts...)
+		if err != nil {
+			return helpSourceSpec{invalid: true}
+		}
+		return helpSourceSpec{
+			source:     cls,
+			hasSource:  true,
+			catalog:    catalogVal,
+			version:    versionVal,
+			preRelease: preRelease,
+			noCache:    noCache,
+		}
+	}
+	return helpSourceSpec{
+		catalog:    catalogVal,
+		version:    versionVal,
+		preRelease: preRelease,
+		noCache:    noCache,
+	}
+}
+
+func loadHelpSolution(ctx context.Context, c *cobra.Command, ioStreams *terminal.IOStreams, helpArgs []string) *solution.Solution {
+	spec := extractHelpSourceWithArgs(c, helpArgs)
+	if spec.invalid {
+		return nil
+	}
+	if spec.preRelease {
+		ctx = catalog.WithIncludePreRelease(ctx)
+	}
+
+	rawArgs := helpArgs
+	if len(rawArgs) == 0 {
+		rawArgs = os.Args
+	}
+	mode := settings.DiscoveryModeResolver
+	if hasActionFlag(c, rawArgs) {
+		mode = settings.DiscoveryModeAction
+	}
+
+	var stdinReader io.Reader
+	if spec.hasSource && spec.source.Kind == source.KindStdin {
+		if ioStreams != nil && ioStreams.In != nil {
+			stdinReader = ioStreams.In
+		} else {
+			stdinReader = c.InOrStdin()
+		}
+	}
+
+	lgr := logger.FromContext(ctx)
+	router := load.NewRouterFromContext(ctx, *lgr, load.CLIRouterOptions(stdinReader, spec.noCache, mode)...)
+	if spec.hasSource {
+		ms, err := router.Load(ctx, spec.source)
+		if err != nil || ms == nil {
+			return nil
+		}
+		return ms.Solution
+	}
+
+	positionalNames, _ := splitNamesAndParams(c.Flags().Args())
+	sel, err := router.Select(ctx, "", positionalNames, load.ArgsAreNamesOrCatalog,
+		source.WithCatalog(spec.catalog),
+		source.WithVersion(spec.version),
+	)
+	if err != nil {
+		return nil
+	}
+	ms, err := router.SelectionLoader(sel).Load(ctx, sel.Source)
+	if err != nil || ms == nil {
+		return nil
+	}
+	return ms.Solution
+}
+
 // hasActionFlag reports whether --action was provided on c or in rawArgs.
 func hasActionFlag(c *cobra.Command, rawArgs []string) bool {
 	if actions, err := c.Flags().GetStringArray("action"); err == nil && len(actions) > 0 {
@@ -1239,17 +1463,20 @@ func hasActionFlag(c *cobra.Command, rawArgs []string) bool {
 	return hasActionFlagInArgs(rawArgs)
 }
 
-// hasActionFlagInArgs reports whether args contains a non-empty --action flag
-// before any "--" argument terminator.
+// hasActionFlagInArgs reports whether args contains a non-empty -a/--action
+// flag before any "--" argument terminator.
 func hasActionFlagInArgs(args []string) bool {
 	for i, arg := range args {
 		if arg == "--" {
 			break
 		}
-		if arg == "--action" && i+1 < len(args) && args[i+1] != "" {
+		if (arg == "--action" || arg == "-a") && i+1 < len(args) && args[i+1] != "" {
 			return true
 		}
 		if strings.HasPrefix(arg, "--action=") && len(arg) > len("--action=") {
+			return true
+		}
+		if strings.HasPrefix(arg, "-a=") && len(arg) > len("-a=") {
 			return true
 		}
 	}

@@ -341,10 +341,18 @@ func TestResolveDiffSlotOrder(t *testing.T) {
 func TestCommandDiffSolution_RejectsPositionalFilePaths(t *testing.T) {
 	t.Parallel()
 	_, ioStreams := makeIOStreams()
-	cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "scafctl")
+	cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "mycli")
+	assert.Equal(t, []string{"sol", "s", "solutions"}, cmd.Aliases)
 	cmd.SetArgs([]string{"./solution.yaml", "my-app@1.0.0"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "local file paths must use -f/--file flag")
+
+	// Also rejects catalog/remote references passed via -f
+	cmd2 := CommandDiffSolution(&settings.Run{}, ioStreams, "mycli")
+	cmd2.SetArgs([]string{"-f", "my-app@1.0.0", "-f", "./solution.yaml"})
+	err2 := cmd2.Execute()
+	require.Error(t, err2)
+	assert.Contains(t, err2.Error(), "mycli diff solution my-app@1.0.0")
 }

@@ -570,11 +570,13 @@ func TestResolverParametersHelp_EmbeddedInCommands(t *testing.T) {
 	assert.Contains(t, resolverCmd.Long, ResolverParametersHelp,
 		"run resolver Long description should contain ResolverParametersHelp")
 
-	// run solution uses the flag-only help (no positional params)
+	// run solution advertises positional key=value after [name[@version]] (not resolver names)
 	assert.Contains(t, solutionCmd.Long, ResolverParametersFlagHelp,
 		"run solution Long description should contain ResolverParametersFlagHelp")
-	assert.NotContains(t, solutionCmd.Long, "Positional key=value",
-		"run solution should not advertise positional key=value parameters")
+	assert.Contains(t, solutionCmd.Long, "Positional key=value",
+		"run solution should advertise positional key=value parameters")
+	assert.NotContains(t, solutionCmd.Long, "After resolver names",
+		"run solution help should refer to [name[@version]], not resolver names")
 }
 
 func TestResolverParametersHelp_ContainsStdinConventions(t *testing.T) {

@@ -1424,7 +1424,7 @@ scafctl run action setup --resolve-all -f conditional-demo.yaml
 {{% /tab %}}
 {{< /tabs >}}
 
-When you select specific actions with `scafctl run action <name...>` or `scafctl run solution --action <name>`, scafctl automatically scopes the resolver phase to only the resolvers referenced by the selected actions, their transitive `dependsOn` actions, `finally` actions, and active state configuration (including transitive resolver and cross-resolver validation dependencies). Unrelated slow, failing, or side-effecting resolvers do not execute. Pass `--resolve-all` to execute every resolver in the solution regardless of action selection.
+When you select specific actions with `scafctl run action <name...>` or `scafctl run solution -a <name>` (`--action`), scafctl automatically scopes the resolver phase to only the resolvers referenced by the selected actions, their transitive `dependsOn` actions, `finally` actions, and active state configuration (including transitive resolver and cross-resolver validation dependencies). Unrelated slow, failing, or side-effecting resolvers do not execute. Pass `--resolve-all` to execute every resolver in the solution regardless of action selection. To run an action from a catalog or remote solution, pass `-s/--solution <name[@version]>` to `run action` (e.g. `scafctl run action setup -s conditional-demo env=prod`) or `-a/--action` to `run solution` (e.g. `scafctl run solution conditional-demo -a setup env=prod`).
 
 ### Render Mode
 

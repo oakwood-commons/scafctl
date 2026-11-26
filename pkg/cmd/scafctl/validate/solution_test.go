@@ -4,6 +4,8 @@
 package validate
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -75,6 +77,7 @@ func TestCommandValidateSolution_Metadata(t *testing.T) {
 
 	cmd := CommandValidateSolution(cliParams, streams, "mycli/validate")
 	assert.Equal(t, "solution", cmd.Name())
+	assert.Equal(t, []string{"sol", "s", "solutions"}, cmd.Aliases)
 	assert.Contains(t, cmd.Short, "mycli")
 	assert.NotNil(t, cmd.Flags().Lookup("file"))
 	assert.NotNil(t, cmd.Flags().Lookup("strict"))
@@ -200,14 +203,30 @@ func TestCommandValidateSolution_PositionalLocalPathRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "-f/--file")
 }
 
-// TestCommandValidateSolution_NoStdinClaim verifies the file flag help no
-// longer advertises stdin support (which the loader does not implement).
-func TestCommandValidateSolution_NoStdinClaim(t *testing.T) {
-	streams, _, _ := terminal.NewTestIOStreams()
+// TestCommandValidateSolution_Stdin verifies -f - reads the solution from stdin.
+func TestCommandValidateSolution_Stdin(t *testing.T) {
+	t.Parallel()
+	streams := terminal.NewIOStreams(io.NopCloser(bytes.NewBufferString(cleanSolution)), &bytes.Buffer{}, &bytes.Buffer{}, false)
 	cliParams := settings.NewCliParams()
 
 	cmd := CommandValidateSolution(cliParams, streams, "scafctl/validate")
 	fileFlag := cmd.Flags().Lookup("file")
 	require.NotNil(t, fileFlag)
-	assert.NotContains(t, fileFlag.Usage, "stdin")
+	assert.Contains(t, fileFlag.Usage, "stdin")
+
+	cmd.SetArgs([]string{"-f", "-", "-o", "quiet"})
+	require.NoError(t, cmd.Execute())
+}
+
+func TestCommandValidateSolution_FileFlagRejectsCatalogRef(t *testing.T) {
+	t.Parallel()
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+
+	cmd := CommandValidateSolution(cliParams, streams, "mycli/validate")
+	cmd.SetArgs([]string{"-f", "my-app"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mycli validate solution my-app")
 }

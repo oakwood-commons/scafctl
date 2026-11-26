@@ -36,6 +36,7 @@ flowchart LR
 
 ```bash
 scafctl lint -f solution.yaml
+scafctl lint solution -f solution.yaml
 ```
 
 {{% /tab %}}
@@ -43,6 +44,7 @@ scafctl lint -f solution.yaml
 
 ```powershell
 scafctl lint -f solution.yaml
+scafctl lint solution -f solution.yaml
 ```
 
 {{% /tab %}}

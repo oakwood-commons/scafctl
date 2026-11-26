@@ -8,12 +8,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -211,4 +213,33 @@ spec:
 	assert.True(t, hyphenated, "an unrelated finding must also surface in the same pass")
 	assert.Positive(t, res.Lint.ErrorCount, "error-severity finding drives a non-zero result")
 	assert.False(t, res.Passed(false), "validate must still fail")
+}
+
+func TestValidateSolution_Stdin(t *testing.T) {
+	t.Parallel()
+
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: stdin-valid
+  version: 1.0.0
+  description: loaded from stdin
+spec:
+  resolvers:
+    greeting:
+      description: a greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+	reg, err := builtin.DefaultRegistry(context.Background())
+	require.NoError(t, err)
+
+	res, err := Solution(context.Background(), "-", reg, load.WithStdin(strings.NewReader(content)))
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, "-", res.File)
+	assert.True(t, res.Passed(false))
 }

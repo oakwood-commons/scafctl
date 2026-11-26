@@ -133,9 +133,9 @@ used by 'scafctl run resolver'.
 
 SOLUTION SOURCE:
   Solutions can be loaded from:
-  - Local file or catalog: Use -f flag (e.g., -f ./solution.yaml or -f my-app@1.2.3)
-  - URL: Provide an HTTP(S) URL via -f/--file (also detected as a positional arg)
-  - Auto-discovery: If no source is specified, searches for solution.yaml in current directory
+  - Local file: Use -f/--file flag (e.g., -f ./solution.yaml, or -f - for stdin)
+  - Catalog, registry, or URL: Use -s/--solution flag (e.g., -s my-app, -s my-app@1.2.3, -s https://example.com/solution.yaml)
+  - Auto-discovery: If no source is specified, searches for actions.yaml or solution.yaml in current directory
 
 ACTION SELECTION:
   Pass action names (or aliases) as positional arguments to execute only those
@@ -184,7 +184,7 @@ Examples:
   scafctl run action lint -f ./taskfile.yaml
 
   # Run from catalog
-  scafctl run action lint -f my-app
+  scafctl run action lint -s my-app
 
   # Run with resolver parameters
   scafctl run action build -f ./solution.yaml version=1.0.0
@@ -205,6 +205,7 @@ Examples:
 
 	// Shared resolver flags
 	addSharedResolverFlags(cCmd, &options.sharedResolverOptions)
+	addSolutionRefFlag(cCmd, &options.sharedResolverOptions)
 
 	// Action discovery / listing flag
 	cCmd.Flags().BoolVarP(&options.List, "list", "l", false, "List available actions without executing")
@@ -356,10 +357,15 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		"dryRun", o.DryRun)
 
 	// Detect @- / -f - conflict early
-	if o.File == "-" && flags.ContainsStdinRef(o.ResolverParams) {
+	if o.File == "-" && (flags.ContainsStdinRef(o.ResolverParams) || flags.ContainsStdinRef(o.DynamicArgs)) {
 		return o.exitWithCode(ctx,
 			fmt.Errorf("cannot use both -f - and @-: stdin can only be read once"),
 			exitcode.InvalidInput)
+	}
+
+	explicitSource, err := o.resolveExplicitSource(o.BinaryName+" run action", o.Names)
+	if err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
 	originalCwd, err := provider.GetWorkingDirectory(ctx)
@@ -367,11 +373,11 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
 	}
 
-	// Decide where the solution comes from: -f, a solution reference in the
+	// Decide where the solution comes from: -f/-s, a solution reference in the
 	// first positional arg, or a discovered file. The remaining args are
 	// action names.
 	loader := o.newSolutionLoader(ctx)
-	sel, err := loader.Select(ctx, o.File, o.Names, load.ArgsAreNames, o.sourceOptions()...)
+	sel, err := loader.Select(ctx, explicitSource, o.Names, load.ArgsAreNames, o.sourceOptions()...)
 	if err != nil {
 		return o.exitWithCode(ctx, err, prepare.ErrorExitCode(err))
 	}

@@ -249,7 +249,11 @@ func buildActionSourceFlags(sourceVal, selectorFlags string) string {
 	if sourceVal == "" {
 		return ""
 	}
-	return " -f " + shellQuote(sourceVal) + selectorFlags
+	flag := "-f"
+	if c, err := source.Classify(sourceVal); err == nil && c.Kind.IsReference() {
+		flag = "-s"
+	}
+	return " " + flag + " " + shellQuote(sourceVal) + selectorFlags
 }
 
 // resolveSolutionSource determines the raw source argument value and whether

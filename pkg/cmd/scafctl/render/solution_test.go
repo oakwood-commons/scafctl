@@ -502,13 +502,23 @@ func TestCommandSolution_PositionalArgValidation(t *testing.T) {
 			args:    []string{"-f", "solution.yaml", "my-catalog-app"},
 			wantErr: "cannot use both -f/--file",
 		},
+		{
+			name:    "catalog ref in -f rejected",
+			args:    []string{"-f", "my-catalog-app"},
+			wantErr: "mycli render solution my-catalog-app",
+		},
+		{
+			name:    "url in -f rejected",
+			args:    []string{"-f", "https://example.com/solution.yaml"},
+			wantErr: "mycli render solution https://example.com/solution.yaml",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ioStreams, _, _ := terminal.NewTestIOStreams()
-			cliParams := &settings.Run{}
+			cliParams := &settings.Run{BinaryName: "mycli"}
 			cmd := CommandSolution(cliParams, ioStreams, "render")
 			cmd.SetArgs(tc.args)
 

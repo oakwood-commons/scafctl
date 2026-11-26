@@ -19,6 +19,7 @@ import (
 func CommandPlugins(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:          "plugins",
+		Aliases:      []string{"plugin"},
 		Short:        fmt.Sprintf("Manage %s plugins", path),
 		SilenceUsage: true,
 		Long: strings.ReplaceAll(heredoc.Doc(`

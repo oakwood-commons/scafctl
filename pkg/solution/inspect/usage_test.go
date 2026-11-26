@@ -518,7 +518,7 @@ func TestBuildUsage_AllActionsExplicitAndAlias(t *testing.T) {
 	assert.Equal(t, "mycli run action <name>", stdinUsage.Run)
 	assert.Equal(t, "mycli run action build -f -", stdinUsage.Actions[0].Command)
 
-	// URL, catalog, and remote OCI references convert to "-f <ref>" for explicit actions.
+	// URL, catalog, and remote OCI references convert to "-s <ref>" for explicit actions.
 	for _, tc := range []struct {
 		resolvedPath string
 		rawPath      string
@@ -527,17 +527,17 @@ func TestBuildUsage_AllActionsExplicitAndAlias(t *testing.T) {
 		{
 			resolvedPath: "https://example.com/actions.yaml",
 			rawPath:      "https://example.com/actions.yaml",
-			wantCmd:      "scafctl run action build -f https://example.com/actions.yaml",
+			wantCmd:      "scafctl run action build -s https://example.com/actions.yaml",
 		},
 		{
 			resolvedPath: "catalog:my-app@1.0.0",
 			rawPath:      "my-app@1.0.0",
-			wantCmd:      "scafctl run action build -f my-app@1.0.0",
+			wantCmd:      "scafctl run action build -s my-app@1.0.0",
 		},
 		{
 			resolvedPath: "remote:ghcr.io/org/app@1.0.0",
 			rawPath:      "ghcr.io/org/app@1.0.0",
-			wantCmd:      "scafctl run action build -f ghcr.io/org/app@1.0.0",
+			wantCmd:      "scafctl run action build -s ghcr.io/org/app@1.0.0",
 		},
 	} {
 		refSol := *sol
@@ -548,7 +548,7 @@ func TestBuildUsage_AllActionsExplicitAndAlias(t *testing.T) {
 	}
 
 	// Catalog, version constraint, and pre-release selectors are preserved on both
-	// default ("run solution ...") and explicit ("run action <name> -f ...") commands.
+	// default ("run solution ...") and explicit ("run action <name> -s ...") commands.
 	scopedSol := &solution.Solution{
 		Metadata: solution.Metadata{Name: "scoped-app"},
 		Spec: solution.Spec{
@@ -572,7 +572,7 @@ func TestBuildUsage_AllActionsExplicitAndAlias(t *testing.T) {
 	)
 	require.Len(t, scopedEntries, 2)
 	assert.Equal(t, "scafctl run solution scoped-app --catalog official --version '^1.0.0' --pre-release", scopedEntries[0].Command)
-	assert.Equal(t, "scafctl run action release -f scoped-app --catalog official --version '^1.0.0' --pre-release", scopedEntries[1].Command)
+	assert.Equal(t, "scafctl run action release -s scoped-app --catalog official --version '^1.0.0' --pre-release", scopedEntries[1].Command)
 
 	// Paths containing spaces, trailing whitespace, and URL query metacharacters
 	// are shell-quoted consistently across default, when-gated, and explicit actions.
@@ -621,7 +621,7 @@ func TestBuildUsage_AllActionsExplicitAndAlias(t *testing.T) {
 			rawPath:     "https://example.com/actions.yaml?a=1&b=2",
 			wantCheck:   "scafctl run solution 'https://example.com/actions.yaml?a=1&b=2'",
 			wantDeploy:  "scafctl run solution 'https://example.com/actions.yaml?a=1&b=2' -r mode=prod",
-			wantRelease: "scafctl run action release -f 'https://example.com/actions.yaml?a=1&b=2'",
+			wantRelease: "scafctl run action release -s 'https://example.com/actions.yaml?a=1&b=2'",
 		},
 	} {
 		s := *mixedSol

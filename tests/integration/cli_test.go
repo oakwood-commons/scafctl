@@ -8089,7 +8089,7 @@ func TestIntegration_RunSolution_FromCatalog_ByName(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Run the solution from catalog by name (should pick latest version)
-	stdout, _, exitCode := runScafctlWithEnv(t, env, "run", "resolver", "-f", "builtin-resolver-demo", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "run", "resolver", "-s", "builtin-resolver-demo", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have resolver output
 	assert.Contains(t, stdout, "environment")
@@ -8112,7 +8112,7 @@ func TestIntegration_RunSolution_FromCatalog_ByNameVersion(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Run the solution from catalog by name@version
-	stdout, _, exitCode := runScafctlWithEnv(t, env, "run", "resolver", "-f", "builtin-resolver-demo@1.0.0", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "run", "resolver", "-s", "builtin-resolver-demo@1.0.0", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have resolver output
 	assert.Contains(t, stdout, "environment")
@@ -8170,7 +8170,7 @@ func TestIntegration_RenderSolution_FromCatalog_ByName(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Render the resolver graph from catalog by name
-	stdout, _, exitCode := runScafctlWithEnv(t, env, "run", "resolver", "-f", "builtin-resolver-demo", "--graph")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "run", "resolver", "-s", "builtin-resolver-demo", "--graph")
 	assert.Equal(t, 0, exitCode)
 	// Should have graph output with resolver info
 	assert.Contains(t, stdout, "environment")
@@ -8224,7 +8224,7 @@ func TestIntegration_Lint_FromCatalog_ByName(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Lint the solution from catalog by name
-	stdout, _, exitCode := runScafctlWithEnv(t, env, "lint", "-f", "resolver-demo", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "lint", "resolver-demo", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have lint output
 	assert.Contains(t, stdout, "findings")
@@ -8542,7 +8542,7 @@ func TestIntegration_CatalogSaveLoad_RoundTrip(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Verify the solution can be run
-	stdout, _, exitCode := runScafctlWithEnv(t, dstEnv, "run", "resolver", "-f", "builtin-resolver-demo", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, dstEnv, "run", "resolver", "-s", "builtin-resolver-demo", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "environment")
 	assert.Contains(t, stdout, "production")
@@ -15085,7 +15085,6 @@ func TestIntegration_UnknownSubcommand_ErrorsNonZero(t *testing.T) {
 		{"mcp", "bogus-xyz"},
 		{"get", "bogus-xyz"},
 		{"run", "bogus-xyz"},
-		{"validate", "bogus-xyz"},
 		{"new", "bogus-xyz"},
 		{"eval", "bogus-xyz"},
 		{"vendor", "bogus-xyz"},

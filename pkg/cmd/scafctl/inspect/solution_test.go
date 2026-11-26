@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -244,7 +246,8 @@ func TestCommandInspectSolution_CatalogArg(t *testing.T) {
 	out, ioStreams := makeIOStreams()
 	cliParams := settings.NewCliParams()
 
-	cmd := CommandInspectSolution(cliParams, ioStreams, "scafctl")
+	cmd := CommandInspectSolution(cliParams, ioStreams, "mycli")
+	assert.Equal(t, []string{"sol", "s", "solutions"}, cmd.Aliases)
 	// Using a file path as positional arg should fail validation
 	cmd.SetArgs([]string{"./local-file.yaml"})
 	cmd.SetOut(out)
@@ -255,6 +258,14 @@ func TestCommandInspectSolution_CatalogArg(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err, "local file paths must use -f/--file")
+
+	// Using a catalog ref or URL in -f should fail validation with embedder hint
+	cmd2 := CommandInspectSolution(cliParams, ioStreams, "mycli")
+	cmd2.SetArgs([]string{"-f", "my-app"})
+	cmd2.SetContext(ctx)
+	err2 := cmd2.Execute()
+	require.Error(t, err2)
+	assert.Contains(t, err2.Error(), "mycli inspect solution my-app")
 }
 
 func TestBuildInspectResult(t *testing.T) {
@@ -510,4 +521,29 @@ spec:
 	assert.Equal(t, "mycli run action <name>", usage.Run)
 	require.Len(t, usage.Actions, 2)
 	assert.Equal(t, "b", usage.Actions[0].Alias)
+}
+
+func TestCommandInspectSolution_Stdin(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	ioStreams := &terminal.IOStreams{
+		In:     io.NopCloser(strings.NewReader(inspectSolution)),
+		Out:    &out,
+		ErrOut: &bytes.Buffer{},
+	}
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandInspectSolution(cliParams, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"-f", "-", "-o", "json"})
+	cmd.SetOut(&out)
+	cmd.SetContext(writer.WithWriter(context.Background(), writer.New(ioStreams, cliParams)))
+
+	require.NoError(t, cmd.Execute())
+
+	var result Result
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result))
+	assert.Equal(t, "inspect-test", result.Name)
+	assert.Equal(t, "1.0.0", result.Version)
+	assert.Contains(t, result.RunCommand, "-f -")
 }

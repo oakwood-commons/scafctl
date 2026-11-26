@@ -45,7 +45,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	options := &CmdOptionsVersion{}
 	cCmd := &cobra.Command{
 		Use:     "solution [name[@version]]",
-		Aliases: []string{"sol", "SOL", "Solution", "solutions"},
+		Aliases: []string{"sol", "s", "solutions"},
 		Short:   fmt.Sprintf("List or get %s solutions", strings.SplitN(path, "/", 2)[0]),
 		Long: strings.ReplaceAll(`List solutions from the catalog or get details about a specific solution.
 
@@ -83,9 +83,24 @@ Examples:
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
 
+			bin := settings.CliBinaryName
+			if cliParams != nil && cliParams.BinaryName != "" {
+				bin = cliParams.BinaryName
+			}
+			cmdUsage := bin + " get solution"
+			if _, err := source.ValidateFileFlagPositional(options.File, cmdUsage); err != nil {
+				output.NewWriteMessageOptions(
+					options.IOStreams,
+					output.MessageTypeError,
+					options.CliParams.NoColor,
+					options.CliParams.ExitOnError,
+				).WriteMessage(err.Error())
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
 			// Handle positional catalog name argument
 			if len(args) > 0 {
-				if _, err := source.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" get solution"); err != nil {
+				if _, err := source.ValidatePositionalRef(args[0], options.File, cmdUsage); err != nil {
 					output.NewWriteMessageOptions(
 						options.IOStreams,
 						output.MessageTypeError,
@@ -119,7 +134,7 @@ Examples:
 		SilenceUsage: true,
 	}
 	cCmd.PersistentFlags().StringVarP(&options.Output, "output", "o", "", fmt.Sprintf("Output format. One of: (%s)", strings.Join(ValidOutputTypes, ", ")))
-	cCmd.PersistentFlags().StringVarP(&options.File, "file", "f", "", "Path to the solution. This can be a local file path or a URL. If not provided and no arguments given, lists catalog solutions.")
+	cCmd.PersistentFlags().StringVarP(&options.File, "file", "f", "", "Local path to the solution file. If not provided and no arguments given, lists catalog solutions.")
 	cCmd.PersistentFlags().BoolVar(&options.NoCache, "no-cache", false, "Bypass the artifact cache and fetch directly from the catalog")
 	cCmd.PersistentFlags().BoolVar(&options.Local, "local", false, "Auto-discover and display a solution from the current directory")
 	return cCmd

@@ -42,6 +42,7 @@ func CommandDiffSolution(cliParams *settings.Run, ioStreams terminal.IOStreams, 
 
 	cmd := &cobra.Command{
 		Use:          subSolution + " [catalog-ref-a] [catalog-ref-b]",
+		Aliases:      []string{"sol", "s", "solutions"},
 		Short:        "Compare two solution files structurally",
 		SilenceUsage: true,
 		Long: heredoc.Doc(`
@@ -95,9 +96,22 @@ func CommandDiffSolution(cliParams *settings.Run, ioStreams terminal.IOStreams, 
 
 			w := writer.FromContext(ctx)
 
+			bin := binaryName
+			if bin == "" {
+				bin = settings.CliBinaryName
+			}
+			cmdUsage := bin + " diff solution"
+
+			for _, f := range opts.Files {
+				if _, err := source.ValidateFileFlagPositional(f, cmdUsage); err != nil {
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+			}
+
 			// Validate positional args are catalog references
 			for _, arg := range args {
-				if _, err := source.ValidatePositionalRef(arg, "", binaryName+" diff solution"); err != nil {
+				if _, err := source.ValidatePositionalRef(arg, "", cmdUsage); err != nil {
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
@@ -151,7 +165,7 @@ func resolveDiffSlotOrder(osArgs []string, flags *pflag.FlagSet, flagFiles, posi
 	// back to "diff" here would point startIdx at "solution" and mis-parse.
 	startIdx := 0
 	for i, arg := range osArgs {
-		if arg == subSolution {
+		if arg == subSolution || arg == "sol" || arg == "s" || arg == "solutions" {
 			startIdx = i + 1
 			break
 		}

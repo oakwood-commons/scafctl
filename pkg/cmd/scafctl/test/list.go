@@ -13,7 +13,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
-	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -74,19 +73,7 @@ Examples:
   %[1]s test list -f ./solution.yaml -o json`, cliParams.BinaryName),
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
-		PreRunE: func(_ *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				c, err := source.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test list")
-				if err != nil {
-					return err
-				}
-				if c.IsUnversionedName() {
-					return fmt.Errorf("bare names are not supported as positional args for test list; use -f to specify a solution file or a versioned catalog ref (name@version)")
-				}
-				opts.File = args[0]
-			}
-			return nil
-		},
+		PreRunE:      newVersionedPositionalPreRunE(&opts.File, cliParams, ioStreams, "test list"),
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Name())
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
