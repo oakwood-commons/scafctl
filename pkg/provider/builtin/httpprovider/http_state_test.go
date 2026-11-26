@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -742,6 +744,76 @@ func TestHTTPProvider_StateOperations_ProfileQualifiedAuthProvider(t *testing.T)
 	require.NoError(t, err)
 	assert.True(t, delOut.Data.(map[string]any)["success"].(bool))
 	assert.Equal(t, "", githubHandler.LastContextProfile)
+}
+
+func TestHTTPProvider_StateOperations_ReuseConnectionAndIsolateContext(t *testing.T) {
+	t.Parallel()
+
+	sd := state.NewData()
+	sd.Parameters["env"] = "prod"
+	encodedState, err := json.Marshal(sd)
+	require.NoError(t, err)
+
+	var newConns atomic.Int32
+	var saveAttempts atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(encodedState)
+		case http.MethodPut:
+			if saveAttempts.Add(1) == 1 && r.Header.Get("Authorization") == "Bearer stale-save" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		case http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	handler := newMultiTenantRefreshHandler()
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(handler))
+	baseCtx := testContextWithCLIAuth(t, reg)
+
+	p := NewHTTPProvider()
+	defer func() { _ = p.Close() }()
+
+	// 1. state_load with a cancellable context that is cancelled after completion.
+	ctx1, cancel1 := context.WithCancel(baseCtx)
+	_, err = p.Execute(ctx1, map[string]any{
+		"operation": "state_load",
+		"url":       srv.URL + "/state",
+	})
+	require.NoError(t, err)
+	cancel1()
+
+	// 2. state_save reuses the pooled client, encounters 401, and refreshes cleanly.
+	_, err = p.Execute(baseCtx, map[string]any{
+		"operation":    "state_save",
+		"url":          srv.URL + "/state",
+		"data":         sd,
+		"authProvider": "entra@save",
+		"scope":        "api://state/.default",
+	})
+	require.NoError(t, err)
+
+	// 3. state_delete reuses the same connection.
+	_, err = p.Execute(baseCtx, map[string]any{
+		"operation": "state_delete",
+		"url":       srv.URL + "/state",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(1), newConns.Load(), "state_load, state_save (with 401 retry), and state_delete must reuse one TCP connection")
 }
 
 func BenchmarkHTTPProvider_StateLoad(b *testing.B) {

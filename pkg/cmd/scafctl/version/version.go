@@ -140,9 +140,13 @@ func (options *CmdOptionsVersion) PrintVersion(ctx context.Context) error {
 	return nil
 }
 
-func GetLatestVersion(ctx context.Context) (string, error) {
-	const url = "https://api.github.com/repos/oakwood-commons/scafctl/releases/latest"
+const latestReleaseURL = "https://api.github.com/repos/oakwood-commons/scafctl/releases/latest"
 
+func GetLatestVersion(ctx context.Context) (string, error) {
+	return getLatestVersionFromURL(ctx, latestReleaseURL)
+}
+
+func getLatestVersionFromURL(ctx context.Context, releaseURL string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -153,17 +157,20 @@ func GetLatestVersion(ctx context.Context) (string, error) {
 		RetryWaitMax:      2 * time.Second,
 		EnableCache:       false,
 		EnableCompression: true,
+		IPPolicy:          httpc.PolicyFromContext(ctx),
+		Transport:         httpc.ProxyAwareTransport(httpc.TrustedProxyFromContext(ctx)),
 	})
+	defer func() { _ = client.Close() }()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // releaseURL is latestReleaseURL or an in-package test server URL
 	if err != nil {
-		return "", fmt.Errorf("fetching latest release: %w", err)
+		return "", fmt.Errorf("fetching latest release: %w", httpc.ExplainBlocked(err))
 	}
 	defer resp.Body.Close()
 

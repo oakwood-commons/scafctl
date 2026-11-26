@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/gavv/httpexpect/v2"
@@ -32,6 +34,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/httpprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/messageprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
@@ -3237,4 +3240,268 @@ func TestAPI_ProviderDetail_OperationsMetadata(t *testing.T) {
 		Expect().
 		Status(http.StatusOK).
 		HasContentType("application/openapi+json")
+}
+
+// TestAPI_SolutionURL_ReusesConnectionsAcrossRequests verifies that repeated
+// API requests loading a solution by URL share the pooled HTTP client and reuse
+// a single keep-alive TCP connection rather than dialing per request.
+func TestAPI_SolutionURL_ReusesConnectionsAcrossRequests(t *testing.T) {
+	e, ts := setupExpect(t)
+	defer ts.Close()
+
+	const solYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: pooled-url-solution
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	var newConns atomic.Int32
+	var fetches atomic.Int32
+	solSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fetches.Add(1)
+		w.Header().Set("Content-Type", "application/x-yaml")
+		_, _ = w.Write([]byte(solYAML))
+	}))
+	solSrv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	solSrv.Start()
+	defer solSrv.Close()
+
+	solURL := solSrv.URL + "/solution.yaml"
+	for range 3 {
+		e.POST("/v1/solutions/dryrun").
+			WithJSON(map[string]any{"path": solURL}).
+			Expect().
+			Status(http.StatusOK)
+	}
+
+	assert.Equal(t, int32(3), fetches.Load(), "each dryrun request fetches the uncached solution URL")
+	assert.Equal(t, int32(1), newConns.Load(), "API solution URL loads must reuse one TCP connection across requests")
+}
+
+type closerAPITestProvider struct {
+	apiOpsTestProvider
+	closeCalls atomic.Int32
+}
+
+func (p *closerAPITestProvider) Close() error {
+	p.closeCalls.Add(1)
+	return nil
+}
+
+// TestAPI_ServerShutdown_ClosesCloserProviders verifies that Server.Shutdown
+// closes registered providers implementing io.Closer (such as HTTPProvider)
+// idempotently without double-closing providers shared across Registry and
+// CompositeRegistry, and drains in-flight requests before cancelling the
+// server BaseContext.
+func TestAPI_ServerShutdown_ClosesCloserProviders(t *testing.T) {
+	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+
+	newCloser := func(name string) *closerAPITestProvider {
+		return &closerAPITestProvider{
+			apiOpsTestProvider: apiOpsTestProvider{
+				desc: &provider.Descriptor{
+					Name:          name,
+					DisplayName:   "Closer Test",
+					Description:   "Provider tracking Close invocations on server shutdown",
+					APIVersion:    "v1",
+					Version:       semver.MustParse("1.0.0"),
+					Capabilities:  []provider.Capability{provider.CapabilityFrom},
+					Schema:        fileprovider.NewFileProvider().Descriptor().Schema,
+					OutputSchemas: fileprovider.NewFileProvider().Descriptor().OutputSchemas,
+				},
+			},
+		}
+	}
+
+	t.Run("shared and distinct same-named closers across registries", func(t *testing.T) {
+		sharedProv := newCloser("closer-shared")
+		regSameNameProv := newCloser("closer-same-name")
+		compSameNameProv := newCloser("closer-same-name")
+		onlyCompositeProv := newCloser("closer-composite-only")
+
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(httpprovider.NewHTTPProvider()))
+		require.NoError(t, reg.Register(sharedProv))
+		require.NoError(t, reg.Register(regSameNameProv))
+
+		compositeReg := provider.NewCompositeRegistry()
+		require.NoError(t, compositeReg.RegisterBase(sharedProv))
+		require.NoError(t, compositeReg.RegisterBase(compSameNameProv))
+		require.NoError(t, compositeReg.RegisterBase(onlyCompositeProv))
+
+		srv, err := api.NewServer(
+			api.WithServerConfig(cfg),
+			api.WithServerVersion("test-dev"),
+			api.WithServerRegistry(reg),
+			api.WithServerCompositeRegistry(compositeReg),
+		)
+		require.NoError(t, err)
+
+		require.NoError(t, srv.Shutdown(t.Context()))
+		require.NoError(t, srv.Shutdown(t.Context()))
+		assert.Equal(t, int32(1), sharedProv.closeCalls.Load(), "shared provider instance must be closed once")
+		assert.Equal(t, int32(1), regSameNameProv.closeCalls.Load(), "registry instance with colliding name must be closed once")
+		assert.Equal(t, int32(1), compSameNameProv.closeCalls.Load(), "distinct composite instance with colliding name must also be closed once")
+		assert.Equal(t, int32(1), onlyCompositeProv.closeCalls.Load(), "composite-only base provider must be closed once")
+	})
+
+	t.Run("early and racing Shutdown with Start prevents listener from serving indefinitely", func(t *testing.T) {
+		for _, raceStart := range []bool{false, true} {
+			ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			freePort := ln.Addr().(*net.TCPAddr).Port
+			require.NoError(t, ln.Close())
+
+			earlyCfg := &config.Config{
+				HTTPClient: loopbackHTTPClientConfig(),
+				APIServer: config.APIServerConfig{
+					Host:       "127.0.0.1",
+					Port:       freePort,
+					APIVersion: settings.DefaultAPIVersion,
+				},
+			}
+			closerProv := newCloser("closer-early")
+			reg := provider.NewRegistry()
+			require.NoError(t, reg.Register(closerProv))
+
+			srv, err := api.NewServer(
+				api.WithServerConfig(earlyCfg),
+				api.WithServerRegistry(reg),
+			)
+			require.NoError(t, err)
+			srv.InitAPI()
+
+			startDone := make(chan error, 1)
+			if raceStart {
+				go func() { startDone <- srv.Start() }()
+				require.NoError(t, srv.Shutdown(t.Context()))
+			} else {
+				require.NoError(t, srv.Shutdown(t.Context()))
+				go func() { startDone <- srv.Start() }()
+			}
+
+			select {
+			case startErr := <-startDone:
+				require.NoError(t, startErr)
+			case <-time.After(2 * time.Second):
+				t.Fatalf("Start blocked (raceStart=%v)", raceStart)
+			}
+			assert.Equal(t, int32(1), closerProv.closeCalls.Load())
+		}
+	})
+
+	t.Run("Start plus concurrent Shutdown respects each caller context even when short deadline arrives first", func(t *testing.T) {
+		ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		freePort := ln.Addr().(*net.TCPAddr).Port
+		require.NoError(t, ln.Close())
+
+		liveCfg := &config.Config{
+			HTTPClient: loopbackHTTPClientConfig(),
+			APIServer: config.APIServerConfig{
+				Host:       "127.0.0.1",
+				Port:       freePort,
+				APIVersion: settings.DefaultAPIVersion,
+			},
+		}
+
+		closerProv := newCloser("closer-live")
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(closerProv))
+
+		srv, err := api.NewServer(
+			api.WithServerConfig(liveCfg),
+			api.WithServerRegistry(reg),
+			api.WithServerCompositeRegistry(provider.NewCompositeRegistryFromBase(reg)),
+		)
+		require.NoError(t, err)
+
+		reqEntered := make(chan struct{})
+		releaseReq := make(chan struct{})
+		var handlerCtxErr atomic.Value
+		srv.Router().Get("/inflight", func(w http.ResponseWriter, r *http.Request) {
+			close(reqEntered)
+			<-releaseReq
+			if err := r.Context().Err(); err != nil {
+				handlerCtxErr.Store(err.Error())
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+		srv.InitAPI()
+
+		startErrCh := make(chan error, 1)
+		go func() { startErrCh <- srv.Start() }()
+
+		reqURL := fmt.Sprintf("http://127.0.0.1:%d/inflight", freePort)
+		respCh := make(chan error, 1)
+		go func() {
+			client := &http.Client{Timeout: 5 * time.Second}
+			for range 50 {
+				req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, reqURL, nil)
+				if reqErr != nil {
+					respCh <- reqErr
+					return
+				}
+				resp, doErr := client.Do(req)
+				if doErr == nil {
+					_ = resp.Body.Close()
+					respCh <- nil
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			respCh <- fmt.Errorf("failed to connect to %s", reqURL)
+		}()
+
+		select {
+		case <-reqEntered:
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for in-flight request to enter handler")
+		}
+
+		// Launch the short-deadline Shutdown FIRST so we prove first-caller
+		// context expiry does NOT abort draining while another caller still waits.
+		shortErrCh := make(chan error, 1)
+		go func() {
+			shortCtx, shortCancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+			defer shortCancel()
+			shortErrCh <- srv.Shutdown(shortCtx)
+		}()
+
+		require.Eventually(t, srv.IsShuttingDown, time.Second, time.Millisecond)
+
+		bgShutDone := make(chan error, 1)
+		go func() {
+			bgShutDone <- srv.Shutdown(context.Background())
+		}()
+
+		// Short caller times out while the handler is still blocked, without
+		// aborting the background Shutdown caller's drain.
+		select {
+		case shortErr := <-shortErrCh:
+			require.ErrorIs(t, shortErr, context.DeadlineExceeded)
+		case <-time.After(2 * time.Second):
+			t.Fatal("short-deadline Shutdown blocked behind concurrent caller")
+		}
+
+		close(releaseReq)
+
+		require.NoError(t, <-respCh)
+		require.NoError(t, <-bgShutDone)
+		require.NoError(t, <-startErrCh)
+		assert.Nil(t, handlerCtxErr.Load(), "in-flight request BaseContext must not be cancelled before handler finishes draining")
+		assert.Equal(t, int32(1), closerProv.closeCalls.Load(), "Start + Shutdown must close io.Closer providers once")
+	})
 }

@@ -4,8 +4,10 @@
 package load
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -158,11 +160,12 @@ func TestURLLoader_Load_UnsupportedKinds(t *testing.T) {
 func TestNewURLLoader(t *testing.T) {
 	t.Parallel()
 
-	t.Run("nil client uses secure default", func(t *testing.T) {
+	t.Run("nil client reuses shared secure default", func(t *testing.T) {
 		t.Parallel()
 		l := NewURLLoader(nil)
-		assert.NotNil(t, l.client)
+		require.NotNil(t, l.client)
 		assert.False(t, l.lenient)
+		assert.Same(t, l.client, NewURLLoader(nil).client, "nil client must reuse the shared secure-default client")
 	})
 
 	t.Run("custom client and options", func(t *testing.T) {
@@ -171,6 +174,33 @@ func TestNewURLLoader(t *testing.T) {
 		l := NewURLLoader(client, WithLenient())
 		assert.Same(t, client, l.client)
 		assert.True(t, l.lenient)
+	})
+
+	t.Run("reuses TCP connection across loads", func(t *testing.T) {
+		t.Parallel()
+		var newConns atomic.Int32
+		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(validSolutionYAML))
+		}))
+		srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+			if state == http.StateNew {
+				newConns.Add(1)
+			}
+		}
+		srv.Start()
+		t.Cleanup(srv.Close)
+
+		client := newTestClient(t, true)
+		t.Cleanup(func() { _ = client.Close() })
+		l := NewURLLoader(client)
+		c := source.Classification{Kind: source.KindURL, Ref: srv.URL + "/solution.yaml"}
+		for range 3 {
+			got, err := l.Load(t.Context(), c)
+			require.NoError(t, err)
+			assert.Equal(t, "test-solution", got.Solution.Metadata.Name)
+		}
+		assert.Equal(t, int32(1), newConns.Load())
 	})
 }
 

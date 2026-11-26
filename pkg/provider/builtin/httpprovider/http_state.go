@@ -202,7 +202,7 @@ func (p *HTTPProvider) dispatchStateOperation(ctx context.Context, operation str
 		}
 	}
 
-	// Build httpc client and wire authentication through the shared token pipeline.
+	// Resolve authentication onto the execution context and obtain a pooled client.
 	authProvider, _ := inputs[fieldAuthProvider].(string)
 	scope, _ := inputs[fieldScope].(string)
 	hostname, _ := inputs[fieldHostname].(string)
@@ -210,22 +210,19 @@ func (p *HTTPProvider) dispatchStateOperation(ctx context.Context, operation str
 		return nil, fmt.Errorf("%s: hostname requires authProvider to be set", ProviderName)
 	}
 	retryCfg := parseRetryConfig(inputs)
-	httpcCfg := buildHTTPClientConfig(ctx, timeoutDuration, retryCfg)
 
+	var onUnauth onUnauthorizedFunc
 	if authProvider != "" {
-		token, err := getToken(ctx, authProvider, scope, urlStr, hostname, timeoutDuration, httpcCfg)
+		token, refreshFn, err := getToken(ctx, authProvider, scope, urlStr, hostname, timeoutDuration)
 		if err != nil {
 			return nil, err
 		}
+		onUnauth = refreshFn
 		setAuthorizationHeader(headers, formatAuthHeader(token))
 	}
+	ctx = withOnUnauthorized(ctx, onUnauth)
 
-	client := newHTTPClient(httpcCfg)
-	// See the matching comment in http.go: each client owns an idle connection
-	// pool that leaks for the process lifetime unless it is released. This
-	// client cannot be shared between executions because OnUnauthorized above
-	// captures the current request's context and token options.
-	defer func() { _ = client.Close() }()
+	client := p.clientFor(ctx, timeoutDuration, retryCfg)
 
 	switch operation {
 	case "state_load":

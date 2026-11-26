@@ -11,19 +11,17 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/go-logr/logr"
-
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
-	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
 // maxInventoryBytes caps the inventory response body read to guard against
 // oversized or malicious responses. Real inventories are tens of KB.
 const maxInventoryBytes = 8 << 20 // 8 MiB
 
-// defaultFetch retrieves the inventory body over HTTP(S) using the scafctl
-// HTTP client, injecting static headers and an optional bearer token.
+// defaultFetch retrieves the inventory body over HTTP(S) using the shared
+// non-caching scafctl HTTP client, injecting static headers and an optional
+// bearer token.
 func defaultFetch(ctx context.Context, src config.HostnameResolverSource, bearer string) ([]byte, error) {
 	u, err := url.Parse(src.URL)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
@@ -36,16 +34,7 @@ func defaultFetch(ctx context.Context, src config.HostnameResolverSource, bearer
 		return nil, fmt.Errorf("refusing to send bearer token to non-HTTPS inventory URL %q: use https", src.URL)
 	}
 
-	var httpCfg *config.HTTPClientConfig
-	if c := config.FromContext(ctx); c != nil {
-		httpCfg = &c.HTTPClient
-	}
-
-	lg := logr.Discard()
-	if l := logger.FromContext(ctx); l != nil {
-		lg = *l
-	}
-	client := httpc.NewClientFromAppConfig(httpCfg, lg)
+	client := httpc.FetchClient(ctx)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.URL, nil)
 	if err != nil {

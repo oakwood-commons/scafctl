@@ -5,10 +5,13 @@ package httpc
 
 import (
 	"context"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,17 +20,47 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 )
 
-// resetSharedClients clears the shared client map so a test starts from a known
-// state and does not inherit clients built by another test.
+// resetSharedClients closes and clears the default shared client pool so a test
+// starts from a known state and does not inherit clients built by another test.
 func resetSharedClients(t *testing.T) {
 	t.Helper()
-	sharedClientsMu.Lock()
-	defer sharedClientsMu.Unlock()
-	sharedClients = make(map[string]*Client, 1)
+	require.NoError(t, defaultPool.Close())
 }
 
 func ctxWithHTTPConfig(cfg config.HTTPClientConfig) context.Context {
 	return config.WithConfig(context.Background(), &config.Config{HTTPClient: cfg})
+}
+
+func TestClientPool_Lifecycle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil pool is safe", func(t *testing.T) {
+		t.Parallel()
+		var p *ClientPool
+		assert.Zero(t, p.Len())
+		require.NoError(t, p.Close())
+	})
+
+	t.Run("zero value and non-positive capacity default to DefaultClientPoolCap", func(t *testing.T) {
+		t.Parallel()
+		p := NewClientPool(0)
+		assert.Equal(t, DefaultClientPoolCap, p.capacity)
+
+		var zero ClientPool
+		c := zero.GetOrBuild("k", func() *Client { return NewClient(&ClientConfig{EnableCache: false}) })
+		require.NotNil(t, c)
+		assert.Equal(t, 1, zero.Len())
+		assert.Nil(t, zero.GetOrBuild("nil", func() *Client { return nil }))
+		assert.Equal(t, 1, zero.Len())
+		require.NoError(t, zero.Close())
+		assert.Zero(t, zero.Len())
+
+		// Reusable after Close.
+		c2 := zero.GetOrBuild("k", func() *Client { return NewClient(&ClientConfig{EnableCache: false}) })
+		require.NotNil(t, c2)
+		assert.NotSame(t, c, c2)
+		require.NoError(t, zero.Close())
+	})
 }
 
 func TestFetchClient_ReusesClientForSamePolicy(t *testing.T) {
@@ -47,8 +80,8 @@ func TestFetchClient_ReusesClientForSamePolicy(t *testing.T) {
 
 // Clients are keyed on the configuration verbatim, so two allowlists that are
 // equivalent but differently ordered may get separate clients. That is an
-// accepted cost (bounded by maxCachedClients) rather than paying normalization
-// on every call. What must NOT happen is the reverse -- see
+// accepted cost (bounded by DefaultClientPoolCap) rather than paying
+// normalization on every call. What must NOT happen is the reverse -- see
 // TestFetchClient_DoesNotShareAcrossPolicies.
 func TestFetchClient_IdenticalConfigShares(t *testing.T) {
 	resetSharedClients(t)
@@ -112,6 +145,8 @@ func TestFetchClient_MissingConfigGetsItsOwnClient(t *testing.T) {
 	assert.NotSame(t, withCfg, noCfg)
 	assert.Same(t, noCfg, FetchClient(context.Background()),
 		"the no-config case should still be reused")
+	assert.Same(t, noCfg, FetchClientFromConfig(nil),
+		"FetchClientFromConfig(nil) shares the no-config client")
 }
 
 // The shared client must actually work, and must still enforce its policy.
@@ -144,33 +179,139 @@ func TestFetchClient_EnforcesPolicy(t *testing.T) {
 	})
 }
 
+func TestFetchClient_HonorsAppSettingsAndDisablesCache(t *testing.T) {
+	resetSharedClients(t)
+
+	var newConns atomic.Int32
+	var hits atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := hits.Add(1)
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("hit-" + strconv.Itoa(int(n))))
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	enableCache := true
+	ctx := ctxWithHTTPConfig(config.HTTPClientConfig{
+		EnableCache:         &enableCache,
+		CacheDir:            t.TempDir(),
+		Timeout:             "5s",
+		AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+	})
+
+	for i := range 3 {
+		resp, err := FetchClient(ctx).Get(ctx, srv.URL+"/item")
+		require.NoError(t, err)
+		body, readErr := io.ReadAll(resp.Body)
+		require.NoError(t, readErr)
+		require.NoError(t, resp.Body.Close())
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "hit-"+strconv.Itoa(i+1), string(body))
+	}
+
+	assert.Equal(t, int32(3), hits.Load(), "FetchClient must force EnableCache=false even when app config enables caching")
+	assert.Equal(t, int32(1), newConns.Load(), "repeated FetchClient requests to one host must reuse a single connection")
+}
+
+func TestAppClient_HonorsCacheAndReusesConnection(t *testing.T) {
+	resetSharedClients(t)
+
+	t.Run("distinct from FetchClient and caches when enabled", func(t *testing.T) {
+		var hits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits.Add(1)
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("cached-payload"))
+		}))
+		defer srv.Close()
+
+		enableCache := true
+		cfg := &config.Config{
+			HTTPClient: config.HTTPClientConfig{
+				EnableCache:         &enableCache,
+				CacheType:           "memory",
+				CacheDir:            t.TempDir(),
+				AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+			},
+		}
+		ctx := config.WithConfig(t.Context(), cfg)
+
+		appClient := AppClient(ctx)
+		fetchClient := FetchClient(ctx)
+		assert.NotSame(t, appClient, fetchClient, "app and fetch shapes must not share a client")
+		assert.Same(t, appClient, AppClientFromConfig(cfg))
+
+		for range 2 {
+			resp, err := appClient.Get(ctx, srv.URL+"/cached")
+			require.NoError(t, err)
+			body, readErr := io.ReadAll(resp.Body)
+			require.NoError(t, readErr)
+			require.NoError(t, resp.Body.Close())
+			assert.Equal(t, "cached-payload", string(body))
+		}
+		assert.Equal(t, int32(1), hits.Load(), "AppClient must honor EnableCache=true")
+	})
+
+	t.Run("reuses TCP connection across uncached requests", func(t *testing.T) {
+		var newConns atomic.Int32
+		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		}))
+		srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+			if state == http.StateNew {
+				newConns.Add(1)
+			}
+		}
+		srv.Start()
+		defer srv.Close()
+
+		disableCache := false
+		ctx := ctxWithHTTPConfig(config.HTTPClientConfig{
+			EnableCache:         &disableCache,
+			AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128"),
+		})
+
+		for range 3 {
+			resp, err := AppClient(ctx).Get(ctx, srv.URL+"/uncached")
+			require.NoError(t, err)
+			_, readErr := io.ReadAll(resp.Body)
+			require.NoError(t, readErr)
+			require.NoError(t, resp.Body.Close())
+		}
+		assert.Equal(t, int32(1), newConns.Load(), "AppClient must reuse one TCP connection across requests")
+	})
+}
+
 func TestFetchClient_BoundsCachedClients(t *testing.T) {
 	resetSharedClients(t)
 
-	// Well past the bound, so the map must stop growing.
-	for i := range maxCachedClients * 3 {
-		cidr := "10." + string(rune('0'+i%10)) + ".0.0/16"
+	// Well past the bound, so the pool must stop growing.
+	for i := range DefaultClientPoolCap * 3 {
+		cidr := "10." + strconv.Itoa(i%250) + ".0.0/16"
 		_ = FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
 			AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8", cidr),
 		}))
 	}
 
-	sharedClientsMu.Lock()
-	size := len(sharedClients)
-	sharedClientsMu.Unlock()
-
-	assert.LessOrEqual(t, size, maxCachedClients,
-		"the shared map must not grow without bound")
+	assert.LessOrEqual(t, defaultPool.Len(), DefaultClientPoolCap,
+		"the shared pool must not grow without bound")
 }
 
-// TestFetchClient_EvictedClientStillServicesBorrower pins the other half of
-// the eviction contract: the cache owns bookkeeping, not the client's
-// lifetime. A borrower that already holds a client when a different policy
-// trips the bound loses nothing -- Close at eviction is a cleanup hint that
-// reaps currently-idle connections only, so the borrower's next request dials
-// fresh and completes normally. (The idle pool such a raced request reopens
-// is bounded by IdleConnTimeout; see the eviction comment in shared.go for
-// the full reasoning and why no lease API is used.)
+// TestFetchClient_EvictedClientStillServicesBorrower pins the eviction
+// contract: the pool owns bookkeeping, not the client's lifetime. A borrower
+// that already holds a client when a different policy trips the bound loses
+// nothing -- Close at eviction is a cleanup hint that reaps currently-idle
+// connections only, so the borrower's next request dials fresh and completes
+// normally.
 func TestFetchClient_EvictedClientStillServicesBorrower(t *testing.T) {
 	resetSharedClients(t)
 
@@ -179,33 +320,19 @@ func TestFetchClient_EvictedClientStillServicesBorrower(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Fill the cache to exactly its bound with distinct policies, holding
-	// the borrower's reference to each client FetchClient returns.
-	borrowed := make([]*Client, 0, maxCachedClients)
-	for i := range maxCachedClients {
-		// A distinct allowlist yields a distinct cache key, so each insert
-		// lands in its own entry; the loopback ranges keep the test server
-		// reachable under every policy.
+	borrowed := make([]*Client, 0, DefaultClientPoolCap)
+	for i := range DefaultClientPoolCap {
 		borrowed = append(borrowed, FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
 			AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128", "10."+strconv.Itoa(i)+".0.0/16"),
 		})))
 	}
 
-	// One more entry trips the bound and evicts exactly one of the eight
-	// above -- the map held only this test's keys, so pigeonhole puts the
-	// victim inside `borrowed`, whatever map iteration picked.
 	_ = FetchClient(ctxWithHTTPConfig(config.HTTPClientConfig{
 		AllowedPrivateCIDRs: config.PrivateCIDRList("127.0.0.0/8", "::1/128", "10.200.0.0/16"),
 	}))
 
-	sharedClientsMu.Lock()
-	size := len(sharedClients)
-	sharedClientsMu.Unlock()
-	assert.LessOrEqual(t, size, maxCachedClients, "the eviction must have kept the map at its bound")
+	assert.LessOrEqual(t, defaultPool.Len(), DefaultClientPoolCap, "the eviction must have kept the pool at its bound")
 
-	// Every borrowed client -- including whichever one was evicted and
-	// Closed -- must still service a request: Close reaped idle sockets only
-	// and never marked the client unusable.
 	for i, c := range borrowed {
 		resp, err := c.Get(t.Context(), srv.URL)
 		require.NoError(t, err, "borrowed client %d must still service requests after eviction+Close", i)
@@ -251,12 +378,12 @@ func TestConfigKey(t *testing.T) {
 
 	// Absent, empty, and populated allowlists are three different policies.
 	keys := map[string]string{
-		"nil config":     configKey(nil),
-		"zero":           configKey(&config.Config{}),
-		"allow true":     configKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow}}),
-		"allow false":    configKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &deny}}),
-		"empty list":     configKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowedPrivateCIDRs: config.PrivateCIDRList()}}),
-		"populated list": configKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8")}}),
+		"nil config":     ConfigKey(nil),
+		"zero":           ConfigKey(&config.Config{}),
+		"allow true":     ConfigKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow}}),
+		"allow false":    ConfigKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &deny}}),
+		"empty list":     ConfigKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowedPrivateCIDRs: config.PrivateCIDRList()}}),
+		"populated list": ConfigKey(&config.Config{HTTPClient: config.HTTPClientConfig{AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8")}}),
 	}
 
 	seen := make(map[string]string, len(keys))
@@ -266,6 +393,28 @@ func TestConfigKey(t *testing.T) {
 		}
 		seen[key] = name
 	}
+
+	assert.Equal(t, "nilhttp", HTTPConfigKey(nil))
+	assert.NotEqual(t, HTTPConfigKey(&config.HTTPClientConfig{}), HTTPConfigKey(&config.HTTPClientConfig{AllowedPrivateCIDRs: config.PrivateCIDRList()}))
+}
+
+func TestConfigKey_EmbedderAndCacheDirIsolation(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			CacheDir: "/tmp/shared-cache",
+		},
+	}
+	keyDefault := configKeyForApp("scafctl", "/cache/scafctl", cfg)
+	keyEmbedder := configKeyForApp("mycli", "/cache/mycli", cfg)
+	assert.NotEqual(t, keyDefault, keyEmbedder, "distinct binary names must never share a ConfigKey")
+
+	// When CacheDir is unset on HTTPClientConfig, changing the default XDG HTTP
+	// cache directory must also yield a distinct key.
+	keyCacheA := configKeyForApp("scafctl", "/tmp/xdg-a/scafctl/http-cache", &config.Config{})
+	keyCacheB := configKeyForApp("scafctl", "/tmp/xdg-b/scafctl/http-cache", &config.Config{})
+	assert.NotEqual(t, keyCacheA, keyCacheB)
 }
 
 func BenchmarkFetchClient(b *testing.B) {
@@ -282,5 +431,25 @@ func BenchmarkFetchClient(b *testing.B) {
 
 	for b.Loop() {
 		_ = FetchClient(ctx)
+	}
+}
+
+func BenchmarkAppClient(b *testing.B) {
+	allow := true
+	disableCache := false
+	ctx := config.WithConfig(context.Background(), &config.Config{
+		HTTPClient: config.HTTPClientConfig{
+			EnableCache:         &disableCache,
+			CacheDir:            b.TempDir(),
+			AllowPrivateIPs:     &allow,
+			AllowedPrivateCIDRs: config.PrivateCIDRList("10.0.0.0/8", "192.168.0.0/16"),
+		},
+	})
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		_ = AppClient(ctx)
 	}
 }

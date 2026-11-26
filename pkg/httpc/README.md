@@ -7,6 +7,7 @@ Thin adapter over [`github.com/oakwood-commons/httpc`](https://github.com/oakwoo
 - **OTel metrics bridge** -- `OTelMetrics` implements the upstream `Metrics` interface using `pkg/metrics` OTel instruments
 - **Dial-time SSRF policy** -- `PolicyFromAppConfig`/`PolicyFromContext` build an `IPPolicy` enforced by the transport when each connection is dialed
 - **`config.HTTPClientConfig` bridge** -- `NewClientFromAppConfig` converts the string-based app config to a typed `ClientConfig`
+- **Shared clients and pooling** -- `FetchClient` / `AppClient` reuse one `*Client` per policy configuration, and `ClientPool` provides bounded per-key pooling for callers with per-operation settings
 
 ## Usage
 
@@ -15,11 +16,22 @@ All consumers import this package as before:
 ~~~go
 import "github.com/oakwood-commons/scafctl/pkg/httpc"
 
-client := httpc.NewClient(nil)            // scafctl defaults
+client := httpc.FetchClient(ctx)          // shared non-caching client (do NOT Close)
+client := httpc.AppClient(ctx)            // shared client honoring EnableCache (do NOT Close)
+client := httpc.NewClient(nil)            // caller-owned client; call Close when done
 client := httpc.NewClient(&httpc.ClientConfig{...})
 client := httpc.NewClientFromAppConfig(cfg, logger)
 config := httpc.DefaultConfig()
 ~~~
+
+## Client pooling and connection reuse
+
+Each `*Client` owns an isolated `*http.Transport` clone so its idle-connection pool is governed exclusively by that client's dial-time `IPPolicy` (sharing a raw `*http.Transport` across `NewClient` calls does not share connections because upstream clones the transport on construction). Constructing a new client per call therefore pays a fresh TCP/TLS handshake and leaves an idle pool behind unless closed.
+
+- **`FetchClient(ctx)` / `FetchClientFromConfig(cfg)`**: shared client that applies all `cfg.HTTPClient` settings while forcing `EnableCache: false`. Use for non-cached URL fetches (parameter URLs, flag `@url` resolution, `--no-cache` solution loads, and authenticated hostname inventory fetches where response caching must not ignore `Authorization` headers). Do **not** call `Close` on the returned client.
+- **`AppClient(ctx)` / `AppClientFromConfig(cfg)`**: shared client honoring `cfg.HTTPClient` in full, including `EnableCache`. Use for repeatable application fetches such as solution URL loading when caching is permitted. Do **not** call `Close` on the returned client.
+- **`ClientPool`** (`NewClientPool(capacity)`, `DefaultClientPoolCap = 16`, `GetOrBuild(key, build)`, `Close()`, `Len()`): bounded, thread-safe pool for components like `HTTPProvider` whose client key combines `ConfigKey(cfg)` with per-call timeout and retry settings.
+- **`ConfigKey(cfg)` / `HTTPConfigKey(httpCfg)`**: deterministic keys incorporating the active application name (`paths.AppName()`) and serialized `config.HTTPClientConfig` (preserving `nil` vs empty `AllowedPrivateCIDRs`) so distinct SSRF or embedder configurations never share a connection pool.
 
 ## Re-exported symbols
 
