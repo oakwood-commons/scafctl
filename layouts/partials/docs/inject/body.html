@@ -18,7 +18,7 @@
 
     btn.addEventListener('click', function () {
       var code = el.querySelector('pre code');
-      if (!code) return;
+      if (!code || !navigator.clipboard || !navigator.clipboard.writeText) return;
 
       navigator.clipboard.writeText(code.textContent).then(function () {
         btn.innerHTML = svgCheck;
@@ -27,11 +27,66 @@
           btn.innerHTML = svgCopy;
           btn.classList.remove('copied');
         }, 2000);
-      });
+      }).catch(function () {});
     });
 
     el.appendChild(btn);
   });
+
+  var toggles = document.querySelectorAll('[data-shell-toggle]');
+  if (toggles.length) {
+    var STORAGE_KEY = 'bp-shell-pref';
+
+    function getSavedShell() {
+      try {
+        var saved = localStorage.getItem(STORAGE_KEY);
+        if (saved === 'bash' || saved === 'powershell') return saved;
+      } catch (_) {}
+      var ua = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || '';
+      return /Win/i.test(ua) ? 'powershell' : 'bash';
+    }
+
+    function applyShell(shell, persist) {
+      toggles.forEach(function (group) {
+        group.querySelectorAll('[data-shell-target]').forEach(function (btn) {
+          var active = btn.getAttribute('data-shell-target') === shell;
+          btn.classList.toggle('is-active', active);
+          btn.setAttribute('aria-selected', active ? 'true' : 'false');
+          btn.setAttribute('tabindex', active ? '0' : '-1');
+        });
+        group.querySelectorAll('[data-shell-pane]').forEach(function (pane) {
+          var active = pane.getAttribute('data-shell-pane') === shell;
+          pane.classList.toggle('is-active', active);
+          pane.hidden = !active;
+        });
+      });
+
+      if (persist) {
+        try {
+          localStorage.setItem(STORAGE_KEY, shell);
+        } catch (_) {}
+      }
+    }
+
+    toggles.forEach(function (group) {
+      var buttons = Array.prototype.slice.call(group.querySelectorAll('[data-shell-target]'));
+      buttons.forEach(function (btn, idx) {
+        btn.addEventListener('click', function () {
+          applyShell(btn.getAttribute('data-shell-target'), true);
+        });
+        btn.addEventListener('keydown', function (e) {
+          if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+          e.preventDefault();
+          var nextIdx = e.key === 'ArrowRight' ? (idx + 1) % buttons.length : (idx - 1 + buttons.length) % buttons.length;
+          var nextBtn = buttons[nextIdx];
+          applyShell(nextBtn.getAttribute('data-shell-target'), true);
+          nextBtn.focus();
+        });
+      });
+    });
+
+    applyShell(getSavedShell(), false);
+  }
 
   function applyLatestReleaseTag(tag) {
     if (!tag || !/^v\d+\.\d+\.\d+$/.test(tag)) return;

@@ -118,7 +118,7 @@ spec:
 
 Run the resolvers:
 
-```bash
+```shell
 scafctl run resolver -f calls-demo.yaml -o yaml
 ```
 
@@ -303,7 +303,7 @@ spec:
 
 Run it:
 
-```bash
+```shell
 scafctl run solution -f calls-demo.yaml
 ```
 

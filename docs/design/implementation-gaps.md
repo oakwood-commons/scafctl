@@ -122,7 +122,7 @@ Phases 9–10 of the MCP server design — executing solutions through the MCP s
 
 ## Not Implemented (Excluding State)
 
-> **Note:** [state.md](state.md) is excluded from this document — it is still under active design discussion.
+> **Note:** [state/_index.md](state/_index.md) is excluded from this document -- it is still under active design discussion.
 
 No outstanding items at this time. All previously tracked gaps have been implemented or promoted to the Deferred section above.
 

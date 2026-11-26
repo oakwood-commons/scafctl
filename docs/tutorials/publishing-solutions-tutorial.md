@@ -117,7 +117,7 @@ In the six steps below, you will create `sln-service-scaffold`, verify it locall
            version: "^1.0.0"
      ~~~
 
-     Running `scafctl package solution` resolves matching plugin versions and multi-platform SHA-256 digests into `solution.lock`. Commit `solution.lock` to Git for reproducible builds, and run `scafctl vendor update` whenever you want to upgrade locked dependencies. Never list built-in providers (`cel`, `file`, `go-template`, `http`, `message`, `parameter`, `solution`, `state`, `static`, `validation`) in `bundle.plugins` -- `scafctl lint` flags them with `builtin-in-bundle-plugins`.
+     Running `scafctl package solution` resolves matching plugin versions and multi-platform SHA-256 digests into `solution.lock`. Commit `solution.lock` to Git for reproducible builds, and run `scafctl vendor update` whenever you want to upgrade locked dependencies. Never list built-in providers (`cel`, `debug`, `file`, `go-template`, `http`, `message`, `parameter`, `solution`, `state`, `static`, `validation`) in `bundle.plugins` -- `scafctl lint` flags them with `builtin-in-bundle-plugins`.
 
 2. **Step 2: Author `solution.yaml` with Default Workflow, Opt-in Actions, Usage, and Tests**
 
@@ -306,7 +306,7 @@ In the six steps below, you will create `sln-service-scaffold`, verify it locall
 
    Before packaging, run the four pre-publish verification checks:
 
-   ~~~bash
+   ~~~shell
    # 1. Strict validation gate (schema + lint; warnings fail under --strict)
    scafctl validate -f ./solution.yaml --strict
 
@@ -327,13 +327,13 @@ In the six steps below, you will create `sln-service-scaffold`, verify it locall
 
    Package the solution into your local OCI catalog and emit a structured JSON build report to capture the content digest:
 
-   ~~~bash
+   ~~~shell
    scafctl package solution -f ./solution.yaml -o json
    ~~~
 
    Authenticate to your OCI registry and push `service-scaffold@1.0.0` using `-c` / `--catalog`:
 
-   ~~~bash
+   ~~~shell
    # Bridge GitHub credentials to GHCR (no Docker daemon required)
    scafctl auth login github --registry ghcr.io
 
@@ -343,7 +343,7 @@ In the six steps below, you will create `sln-service-scaffold`, verify it locall
 
    Verify the remote artifact and its attached SPDX SBOM referrer:
 
-   ~~~bash
+   ~~~shell
    scafctl catalog inspect service-scaffold@1.0.0 -c ghcr.io/my-org
    scafctl catalog inspect service-scaffold@1.0.0 --referrers -c ghcr.io/my-org
    ~~~

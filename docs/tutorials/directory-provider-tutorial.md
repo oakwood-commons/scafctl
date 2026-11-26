@@ -53,18 +53,9 @@ spec:
 
 Run it:
 
-{{< tabs "directory-provider-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f list-dir.yaml -o json
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f list-dir.yaml -o json
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output (entries will vary based on your directory contents):
 
@@ -273,18 +264,9 @@ spec:
 
 Run it:
 
-{{< tabs "directory-provider-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f create-dirs.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f create-dirs.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 The command completes silently on success. Verify the directory was created:
 
@@ -339,18 +321,9 @@ Both `path` (source) and `destination` are required. The source must be an exist
 
 All mutating operations (`mkdir`, `rmdir`, `copy`) support dry-run mode. Use `--dry-run` to see what would happen without making changes:
 
-{{< tabs "directory-provider-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f solution.yaml --dry-run
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f solution.yaml --dry-run
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 In dry-run mode, the provider returns the intended operation details without modifying the filesystem. The `list` operation runs normally since it is read-only.
 

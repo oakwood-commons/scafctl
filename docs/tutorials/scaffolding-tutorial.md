@@ -20,22 +20,22 @@ flowchart LR
 
 ### Generate a Basic Solution
 
-{{< tabs "scaffolding-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl new solution my-app \
   -d "My application configuration" \
   --output-file my-app.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ~~~powershell
 scafctl new solution my-app `
   -d "My application configuration" `
   --output-file my-app.yaml
 ~~~
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 This generates a valid solution file with:
 - Correct `apiVersion` and `kind`
@@ -47,40 +47,22 @@ This generates a valid solution file with:
 
 Immediately validate the generated file:
 
-{{< tabs "scaffolding-lint-verify" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl lint -f my-app.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl lint -f my-app.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Run it:
 
-{{< tabs "scaffolding-run-solution" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f my-app.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f my-app.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## 2. Choosing Providers
 
 Specify which providers to include in the scaffolded solution:
 
-{{< tabs "scaffolding-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Include specific providers
 scafctl new solution api-collector \
@@ -88,8 +70,8 @@ scafctl new solution api-collector \
   --providers http,cel,exec \
   --output-file api-collector.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ~~~powershell
 # Include specific providers
 scafctl new solution api-collector `
@@ -97,8 +79,8 @@ scafctl new solution api-collector `
   --providers http,cel,exec `
   --output-file api-collector.yaml
 ~~~
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 The generator creates resolver examples using each specified provider with correct input schemas.
 
@@ -106,40 +88,22 @@ The generator creates resolver examples using each specified provider with corre
 
 Not sure which providers to use? List them first:
 
-{{< tabs "scaffolding-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get provider
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get provider
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Or get details on a specific provider:
 
-{{< tabs "scaffolding-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl get provider http
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl get provider http
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## 3. Starting from Examples
 
 Instead of scaffolding from scratch, you can also start from an existing example:
 
-{{< tabs "scaffolding-from-examples" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Browse available solution examples
 scafctl get examples --category solutions
@@ -150,15 +114,15 @@ scafctl get examples solutions/email-notifier/solution.yaml > my-solution.yaml
 # Modify and validate
 scafctl lint -f my-solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 scafctl get examples --category solutions
 scafctl get examples solutions/email-notifier/solution.yaml > my-solution.yaml
 scafctl lint -f my-solution.yaml
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 This is useful when you want a more complete starting point with real patterns (parameters, validation, actions, composition).
 
@@ -168,69 +132,60 @@ This is useful when you want a more complete starting point with real patterns (
 
 For solutions that just gather and transform data without side-effect actions:
 
-{{< tabs "scaffolding-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl new solution data-collector \
   -d "Gather configuration from multiple sources" \
   --providers static,env,http,cel \
   --output-file data-collector.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ~~~powershell
 scafctl new solution data-collector `
   -d "Gather configuration from multiple sources" `
   --providers static,env,http,cel `
   --output-file data-collector.yaml
 ~~~
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 Then run with the resolver command:
 
-{{< tabs "scaffolding-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run resolver -f data-collector.yaml -o yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run resolver -f data-collector.yaml -o yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Full Workflow Solution
 
 For solutions with actions:
 
-{{< tabs "scaffolding-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl new solution deploy-pipeline \
   -d "Deployment automation pipeline" \
   --providers static,exec,cel \
   --output-file deploy-pipeline.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ~~~powershell
 scafctl new solution deploy-pipeline `
   -d "Deployment automation pipeline" `
   --providers static,exec,cel `
   --output-file deploy-pipeline.yaml
 ~~~
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Adding Tests After Scaffolding
 
 Once your solution works, add functional tests:
 
-{{< tabs "scaffolding-add-tests" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Validate the solution
 scafctl lint -f my-solution.yaml
@@ -238,13 +193,13 @@ scafctl lint -f my-solution.yaml
 # Use the MCP server to generate test scaffolding (if using AI tools)
 # Or see the Functional Testing Tutorial for manual test writing
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 scafctl lint -f my-solution.yaml
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ## 5. Workflow
 

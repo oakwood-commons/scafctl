@@ -26,7 +26,7 @@ Download the `hugo_extended` archive from [Hugo Releases](https://github.com/goh
 
 ### Verify Installation
 
-```bash
+```shell
 hugo version
 ```
 
@@ -36,7 +36,7 @@ Hugo is run from the isolated `site/` directory so its Hugo module (`site/go.mod
 
 ### Local Development Server
 
-```bash
+```shell
 # Start the development server with live reload
 hugo server -s site
 
@@ -48,7 +48,7 @@ The site will be available at `http://localhost:1313/` (matching `baseURL` in `s
 
 ### Production Static Build
 
-```bash
+```shell
 # Build to public/ with garbage collection, minification, and path checks
 hugo -s site --gc --minify --printPathWarnings
 ```
@@ -61,7 +61,7 @@ scafctl/
 |   +-- hugo.yaml          # Primary Hugo configuration and module mounts
 |   +-- go.mod             # Isolated Hugo module (hugo-book)
 +-- home/
-|   +-- _index.md          # Landing page content (.bp-hero + walkthrough)
+|   +-- _index.md          # Landing page content (.bp-hero, .bp-pillars, walkthrough)
 +-- docs/
 |   +-- _index.md          # Documentation overview
 |   +-- tutorials/         # Guided tutorials (walkthrough stepper enabled)
@@ -70,12 +70,12 @@ scafctl/
 |   +-- favicon.svg        # Blueprint tile favicon
 |   +-- images/            # Official brand logos, symbol, and OFL notice
 +-- assets/
-|   +-- _custom.scss       # @mixin theme-blueprint, CAD grid, stepper styles
+|   +-- _custom.scss       # @mixin theme-blueprint, CAD grid, hero, shell-toggle, stepper styles
 |   +-- mermaid.json       # Dark Blueprint Mermaid theme configuration
 +-- layouts/
 |   +-- _default/_markup/  # Link resolution render hook (render-link.html)
-|   +-- partials/docs/     # Head favicons and walkthrough stepper partials
-|   +-- shortcodes/        # Shortcode overrides
+|   +-- partials/docs/     # Head favicons, copy/shell-toggle JS, and walkthrough stepper partials
+|   +-- shortcodes/        # Shortcode overrides (shell-toggle, shell-pane, install-tabs, hint)
 +-- public/                # Generated static site (git-ignored)
 ```
 
@@ -129,6 +129,39 @@ func main() {
 }
 ```
 
+### Cross-Platform Shell Commands (`shell` Fence vs `shell-toggle`)
+
+Use a single ```` ```shell ```` (or `~~~shell` when the snippet contains backticks) fence whenever a command runs identically in Bash and PowerShell (such as standard `scafctl` CLI invocations). Its language badge renders as `SHELL`:
+
+~~~markdown
+```shell
+scafctl run solution -f solution.yaml --dry-run
+```
+~~~
+
+When syntax genuinely differs between Bash and PowerShell (for example environment variables `export` vs `$env:VAR`, line continuations `\` vs `` ` ``, heredocs, or `jq` vs `ConvertFrom-Json`), use the interactive `{{</* shell-toggle */>}}` shortcode instead of `{{</* tabs */>}}`. Wrap each pane's body in a fenced code block (` ```bash ` / `~~~powershell`) so the snippet also renders as copyable code when viewed directly on GitHub (`shell-pane` strips the outer fence before highlighting). The toggle auto-detects Windows vs Unix, supports Left/Right arrow keys, and persists the reader's choice across the entire site in `localStorage` (`bp-shell-pref`):
+
+~~~~markdown
+{{</* shell-toggle */>}}
+{{</* shell-pane "bash" */>}}
+```bash
+export ENVIRONMENT=production
+scafctl run solution \
+  -f solution.yaml
+```
+{{</* /shell-pane */>}}
+{{</* shell-pane "powershell" */>}}
+~~~powershell
+$env:ENVIRONMENT = "production"
+scafctl run solution `
+  -f solution.yaml
+~~~
+{{</* /shell-pane */>}}
+{{</* /shell-toggle */>}}
+~~~~
+
+Reserve `{{</* tabs */>}}` for non-shell multi-view content (such as OS installation tabs or comparing preview modes).
+
 ### Alerts / Callouts (GitHub-Flavored Markdown)
 
 ```markdown
@@ -162,7 +195,7 @@ Wrap an ordered Markdown list in `{{%/* steps */%}}` (using `%` delimiters so in
 
 2. **Run a Solution**
 
-   ```bash
+   ```shell
    scafctl run solution -f solution.yaml
    ```
 {{%/* /steps */%}}
@@ -172,14 +205,14 @@ Wrap an ordered Markdown list in `{{%/* steps */%}}` (using `%` delimiters so in
 
 ~~~markdown
 {{</* tabs "uniqueid" */>}}
-{{%/* tab "Bash" */%}}
-```bash
-export ENVIRONMENT=production
+{{%/* tab "Preview (diff)" */%}}
+```shell
+scafctl lint --fix-dry-run --diff -f ./solution.yaml
 ```
 {{%/* /tab */%}}
-{{%/* tab "PowerShell" */%}}
-```powershell
-$env:ENVIRONMENT = "production"
+{{%/* tab "Apply" */%}}
+```shell
+scafctl lint --fix -f ./solution.yaml
 ```
 {{%/* /tab */%}}
 {{</* /tabs */>}}
@@ -215,7 +248,7 @@ To verify repository settings manually:
 
 ### Module cache or theme issues
 
-```bash
+```shell
 hugo mod tidy -s site
 ```
 

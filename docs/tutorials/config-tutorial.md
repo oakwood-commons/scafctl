@@ -26,9 +26,7 @@ scafctl uses a YAML configuration file to control application behavior including
 
 Create a new config file:
 
-{{< tabs "config-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Create minimal config
 scafctl config init
 
@@ -41,31 +39,12 @@ scafctl config init --dry-run
 # Write to custom path
 scafctl config init --output-file ./my-config.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Create minimal config
-scafctl config init
-
-# Create with all options documented
-scafctl config init --full
-
-# Preview without writing
-scafctl config init --dry-run
-
-# Write to custom path
-scafctl config init --output-file ./my-config.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### 2. View Configuration
 
 See the current effective configuration:
 
-{{< tabs "config-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Full config (kvx auto-picks the format)
 scafctl config view
 
@@ -81,35 +60,13 @@ scafctl config view -e '_.settings'
 # Interactive TUI explorer
 scafctl config view -i
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Full config (kvx auto-picks the format)
-scafctl config view
-
-# As YAML
-scafctl config view -o yaml
-
-# As JSON
-scafctl config view -o json
-
-# Filter with CEL expression
-scafctl config view -e '_.settings'
-
-# Interactive TUI explorer
-scafctl config view -i
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### 3. Show Config Sources
 
 See where each value comes from (file, dropin, environment, default) and
 filter by source:
 
-{{< tabs "config-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Annotate every key with its source and list env-var overrides
 scafctl config view --show-origin
 
@@ -119,20 +76,6 @@ scafctl config view --source=file
 # Only environment variable overrides
 scafctl config view --source=env
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Annotate every key with its source and list env-var overrides
-scafctl config view --show-origin
-
-# Only values coming from the config file
-scafctl config view --source=file
-
-# Only environment variable overrides
-scafctl config view --source=env
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## Getting and Setting Values
 
@@ -140,9 +83,7 @@ scafctl config view --source=env
 
 Use dot notation to read specific config values:
 
-{{< tabs "config-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Get logging level
 scafctl config get logging.level
 
@@ -152,28 +93,12 @@ scafctl config get settings.defaultCatalog
 # Get HTTP timeout
 scafctl config get httpClient.timeout
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Get logging level
-scafctl config get logging.level
-
-# Get default catalog
-scafctl config get settings.defaultCatalog
-
-# Get HTTP timeout
-scafctl config get httpClient.timeout
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Write Values
 
 > **Warning (`config.d` drop-in fragments):** When non-empty `config.d/*.yaml` fragments are loaded, `scafctl config set` only persists `logging.level`, `logging.format`, `logging.timestamps`, `logging.enableProfiling`, `settings.quiet`, `settings.noColor`, `settings.defaultCatalog`, `httpClient.allowPrivateIPs`, `httpClient.trustProxyResolution`, `httpClient.trustedProxy`, `httpClient.allowedPrivateCIDRs`, `action.ciOutput`, and `auth.browser` to `config.yaml`. For any other key (such as `settings.disableOfficialAuthHandlers`, `apiServer.*`, `resolver.*`, or `httpClient.timeout`), edit `config.yaml` or a `config.d/*.yaml` fragment directly so changes survive reload.
 
-{{< tabs "config-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Set logging level
 scafctl config set logging.level debug
 
@@ -186,54 +111,22 @@ scafctl config set resolver.concurrency 8
 # Enable a boolean
 scafctl config set httpClient.caching.enabled true
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Set logging level
-scafctl config set logging.level debug
-
-# Set HTTP timeout
-scafctl config set httpClient.timeout 60s
-
-# Set resolver concurrency
-scafctl config set resolver.concurrency 8
-
-# Enable a boolean
-scafctl config set httpClient.caching.enabled true
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Reset to Default
 
-{{< tabs "config-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Reset a value to its default
 scafctl config unset logging.level
 
 # Reset HTTP configuration
 scafctl config unset httpClient.timeout
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Reset a value to its default
-scafctl config unset logging.level
-
-# Reset HTTP configuration
-scafctl config unset httpClient.timeout
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## Managing Catalogs
 
 ### Add a Catalog
 
-{{< tabs "config-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Add a local filesystem catalog
 scafctl catalog remote add my-catalog --type filesystem --path ~/my-solutions
 
@@ -249,81 +142,30 @@ scafctl catalog remote add corp --type oci --url oci://registry.example.com/arti
 # Add a solution-only catalog (skipped during plugin lookups)
 scafctl catalog remote add solutions --type oci --url oci://registry.example.com/solutions --artifact-kind solution
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Add a local filesystem catalog
-scafctl catalog remote add my-catalog --type filesystem --path ~/my-solutions
-
-# Add an OCI registry catalog
-scafctl catalog remote add company --type oci --url oci://ghcr.io/myorg/scafctl-catalog
-
-# Add and set as default
-scafctl catalog remote add primary --type filesystem --path ~/catalogs/main --default
-
-# Add with auth provider for automatic token injection
-scafctl catalog remote add corp --type oci --url oci://registry.example.com/artifacts --auth-provider github
-
-# Add a solution-only catalog (skipped during plugin lookups)
-scafctl catalog remote add solutions --type oci --url oci://registry.example.com/solutions --artifact-kind solution
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Remove a Catalog
 
-{{< tabs "config-tutorial-cmd-8" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl catalog remote remove my-catalog
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl catalog remote remove my-catalog
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Set Default Catalog
 
-{{< tabs "config-tutorial-cmd-9" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl catalog remote default my-catalog
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl catalog remote default my-catalog
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## Validation
 
 ### Validate Config File
 
-{{< tabs "config-tutorial-cmd-10" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Validate current config
 scafctl config validate
 
 # Validate a specific file
 scafctl config validate path/to/config.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Validate current config
-scafctl config validate
-
-# Validate a specific file
-scafctl config validate path/to/config.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### View Config Schema
 
@@ -331,8 +173,8 @@ Default output is pretty JSON so `scafctl config schema > file.json` feeds
 editor/IDE tooling directly. All standard kvx flags are supported so you can
 render as YAML, filter with CEL, or explore interactively.
 
-{{< tabs "config-tutorial-cmd-11" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Pretty-printed JSON Schema (default)
 scafctl config schema
@@ -352,8 +194,8 @@ scafctl config schema -e '_.properties.catalogs'
 # Explore the schema interactively
 scafctl config schema -i
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Pretty-printed JSON Schema (default)
 scafctl config schema
@@ -373,16 +215,14 @@ scafctl config schema -e '_.properties.catalogs'
 # Explore the schema interactively
 scafctl config schema -i
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ## View System Paths
 
 See where scafctl stores files on your system:
 
-{{< tabs "config-tutorial-cmd-12" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Show all XDG paths
 scafctl config paths
 
@@ -392,20 +232,6 @@ scafctl config paths -o json
 # Show paths for a different platform
 scafctl config paths --platform linux
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Show all XDG paths
-scafctl config paths
-
-# As JSON
-scafctl config paths -o json
-
-# Show paths for a different platform
-scafctl config paths --platform linux
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Typical output:
 
@@ -492,18 +318,9 @@ The config file is located at the XDG config path:
 
 Override with the `--config` flag on any command:
 
-{{< tabs "config-tutorial-cmd-13" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution my-solution --config ./custom-config.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution my-solution --config ./custom-config.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## Examples
 
@@ -531,9 +348,7 @@ See [examples/config/full-config.yaml](../../examples/config/full-config.yaml) f
 
 ### Initial Setup
 
-{{< tabs "config-tutorial-cmd-14" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # 1. Initialize config
 scafctl config init
 
@@ -544,27 +359,10 @@ scafctl catalog remote add local --type filesystem --path ~/scafctl-catalog --de
 scafctl config view
 scafctl config validate
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# 1. Initialize config
-scafctl config init
-
-# 2. Set up a catalog
-scafctl catalog remote add local --type filesystem --path ~/scafctl-catalog --default
-
-# 3. Verify
-scafctl config view
-scafctl config validate
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Switch Environments
 
-{{< tabs "config-tutorial-cmd-15" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Use staging catalog
 scafctl catalog remote default staging
 
@@ -574,20 +372,6 @@ scafctl config set logging.level debug
 # After debugging, reset
 scafctl config unset logging.level
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Use staging catalog
-scafctl catalog remote default staging
-
-# Increase logging for debugging
-scafctl config set logging.level debug
-
-# After debugging, reset
-scafctl config unset logging.level
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ## API Server: Token Delegation
 
@@ -617,9 +401,7 @@ apiServer:
 
 When no non-empty `config.d` fragments are present, you can also set the same fields from the CLI:
 
-{{< tabs "config-tutorial-cmd-16" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Warning: if non-empty config.d/*.yaml fragments are present, edit config.yaml directly instead (see above).
 # Set up Entra server-mode handler for token acquisition and delegation
 scafctl config set apiServer.auth.handlers.entra.tenantId "your-tenant-id"
@@ -634,25 +416,6 @@ scafctl config set apiServer.auth.handlers.entra.delegated.machine true
 # View the Entra server-mode handler config
 scafctl config get apiServer.auth.handlers.entra
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Warning: if non-empty config.d/*.yaml fragments are present, edit config.yaml directly instead (see above).
-# Set up Entra server-mode handler for token acquisition and delegation
-scafctl config set apiServer.auth.handlers.entra.tenantId "your-tenant-id"
-scafctl config set apiServer.auth.handlers.entra.clientId "your-client-id"
-scafctl config set apiServer.auth.handlers.entra.serverFlow "client_credentials"
-scafctl config set apiServer.auth.handlers.entra.credential.clientSecret "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
-
-# Configure delegated caller flows (optional; omit delegated to deny delegation)
-scafctl config set apiServer.auth.handlers.entra.delegated.userFlow "obo"
-scafctl config set apiServer.auth.handlers.entra.delegated.machine true
-
-# View the Entra server-mode handler config
-scafctl config get apiServer.auth.handlers.entra
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Credential fields (`credential.clientSecret` for `serverFlow: "client_credentials"`, or `credential.wifToken` for `serverFlow: "workload_identity"`) use `SecretRef` URI format:
 - `env://VAR_NAME` -- reads from an environment variable
@@ -672,20 +435,10 @@ apiServer:
 
 Inspect the effective token pass-through configuration from the CLI:
 
-{{< tabs "config-tutorial-cmd-17" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # View the token pass-through config
 scafctl config get apiServer.tokenPassThrough
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# View the token pass-through config
-scafctl config get apiServer.tokenPassThrough
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 When configured, callers send tokens via `X-Authorization-<Suffix>` headers (e.g., `X-Authorization-Github`). The server makes these available to providers via the `authProvider` input field. When `tokenPassThrough` is omitted entirely, only `Github` is allowed by default.
 

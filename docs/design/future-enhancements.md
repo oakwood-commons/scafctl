@@ -182,7 +182,7 @@ Source: [resolvers.md](resolvers.md)
 
 ## State
 
-Source: [state.md](state/state.md)
+Source: [state/_index.md](state/_index.md)
 
 ### [Done] Immutable Resolvers
 

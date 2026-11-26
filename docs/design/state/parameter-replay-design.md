@@ -5,13 +5,13 @@ weight: 18
 
 # Parameter-Based Replay Design
 
-Related: [state.md](state.md) (original state design),
+Related: [_index.md](_index.md) (original state design),
 [immutable-resolvers-plan.md](immutable-resolvers-plan.md)
 
 > **Note:** the state block this design builds on was later split into
 > `state.load` (read only) and `state.save` (the only write mechanism).
 > Configuration snippets below use the current syntax; see
-> [state.md](state.md) for the current model.
+> [_index.md](_index.md) for the current model.
 
 ---
 

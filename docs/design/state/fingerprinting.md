@@ -1,3 +1,7 @@
+---
+title: "File Fingerprinting"
+---
+
 # File Fingerprinting & Up-to-Date Checks for Actions
 
 Related: [#241](https://github.com/oakwood-commons/scafctl/issues/241) (state persistence),

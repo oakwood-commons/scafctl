@@ -121,18 +121,9 @@ spec:
 
 ### Step 2: Run the Solution
 
-{{< tabs "state-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 scafctl run resolver -f state-demo.yaml -r username=alice -r region=eu-west-1
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-scafctl run resolver -f state-demo.yaml -r username=alice -r region=eu-west-1
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 Output (stderr notices shown together with the resolved values):
 
@@ -163,18 +154,9 @@ On subsequent runs, saved parameters are automatically injected as if you had pa
 
 ### Step 1: Second Run (No Parameters Needed)
 
-{{< tabs "state-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 scafctl run resolver -f state-demo.yaml
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-scafctl run resolver -f state-demo.yaml
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -205,26 +187,13 @@ Parameters accumulate across runs. Existing keys are overwritten by CLI values, 
 
 ### Example: Overriding a Saved Parameter
 
-{{< tabs "state-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 # First run: set username and region
 scafctl run resolver -f state-demo.yaml -r username=alice -r region=eu-west-1
 
 # Second run: override region, keep username from state
 scafctl run resolver -f state-demo.yaml -r region=us-west-2
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-# First run: set username and region
-scafctl run resolver -f state-demo.yaml -r username=alice -r region=eu-west-1
-
-# Second run: override region, keep username from state
-scafctl run resolver -f state-demo.yaml -r region=us-west-2
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 After the second run, the state file contains:
 
@@ -244,20 +213,10 @@ After the second run, the state file contains:
 
 You can add a new parameter on a later run, as long as the solution declares it as a resolver parameter:
 
-{{< tabs "state-tutorial-cmd-3b" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 # Third run: add team (declared in the solution), keep username and region from state
 scafctl run resolver -f state-demo.yaml -r team=platform
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-# Third run: add team (declared in the solution), keep username and region from state
-scafctl run resolver -f state-demo.yaml -r team=platform
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 After the third run, the state file contains:
 
@@ -341,18 +300,9 @@ Immutable locks live only in a **full-format** document, and they only work if t
 
 ### Step 2: First Run
 
-{{< tabs "state-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 scafctl run resolver -f state-immutable.yaml -r project_id=proj-abc123 -r region=eu-west-1
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-scafctl run resolver -f state-immutable.yaml -r project_id=proj-abc123 -r region=eu-west-1
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -365,18 +315,9 @@ The value `proj-abc123` is now locked in the `resolvers` section of state (with 
 
 ### Step 3: Attempt to Change (Fails)
 
-{{< tabs "state-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 scafctl run resolver -f state-immutable.yaml -r project_id=proj-xyz789
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-scafctl run resolver -f state-immutable.yaml -r project_id=proj-xyz789
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 
@@ -388,22 +329,11 @@ Error: state save: cannot overwrite immutable state entry "project_id": resolved
 
 To change an immutable value, explicitly delete it from state first. The `--force` flag removes the key from both `parameters` and `resolvers` in a single call:
 
-{{< tabs "state-tutorial-cmd-6" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 # Delete from both parameters and locked immutable values in one call
 scafctl state delete --path state-immutable.json --key project_id --force
 scafctl run resolver -f state-immutable.yaml -r project_id=proj-xyz789
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-# Delete from both parameters and locked immutable values in one call
-scafctl state delete --path state-immutable.json --key project_id --force
-scafctl run resolver -f state-immutable.yaml -r project_id=proj-xyz789
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 ### State File Structure with Immutables
 
@@ -478,20 +408,10 @@ spec:
 
 ### Step 2: Run with Different Projects
 
-{{< tabs "state-tutorial-cmd-7" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 scafctl run resolver -f state-dynamic.yaml -r project=frontend -r region=us-west-2
 scafctl run resolver -f state-dynamic.yaml -r project=backend -r region=eu-west-1
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-scafctl run resolver -f state-dynamic.yaml -r project=frontend -r region=us-west-2
-scafctl run resolver -f state-dynamic.yaml -r project=backend -r region=eu-west-1
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 Each project gets its own state file with its own parameter history:
 
@@ -508,89 +428,66 @@ The `scafctl state` command group lets you inspect and modify state files direct
 
 ### List Keys
 
-{{< tabs "state-tutorial-cmd-8" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 scafctl state list --path state-demo.json
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-scafctl state list --path state-demo.json
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Get a Parameter Value
 
-{{< tabs "state-tutorial-cmd-9" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 scafctl state get --path state-demo.json --key username
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-scafctl state get --path state-demo.json --key username
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Set a Parameter Value Manually
 
-{{< tabs "state-tutorial-cmd-10" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 scafctl state set --path state-demo.json --key username --value bob
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-scafctl state set --path state-demo.json --key username --value bob
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Delete a Key
 
-{{< tabs "state-tutorial-cmd-11" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 # Delete a parameter
 scafctl state delete --path state-demo.json --key username
 
 # Delete an immutable value (requires --force)
 scafctl state delete --path state-demo.json --key project_id --force
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-# Delete a parameter
-scafctl state delete --path state-demo.json --key username
 
-# Delete an immutable value (requires --force)
-scafctl state delete --path state-demo.json --key project_id --force
+### Show the Full State Document
+
+Use `scafctl state show` to inspect every populated section of a state file (`metadata`, `command`, `parameters`, `resolvers`, and `fingerprints`) preceded by a compact summary header:
+
+~~~shell
+# Human-readable sectioned view
+scafctl state show --path state-demo.json
+
+# Structured JSON/YAML output or CEL filtering across the full document
+scafctl state show --path state-demo.json -o json
+scafctl state show --path state-demo.json -e "_.parameters"
 ~~~
-{{% /tab %}}
-{{< /tabs >}}
+
+### Inspect Action Fingerprints
+
+When actions declare file/input fingerprinting (`sources` / `generates`), use `scafctl state fingerprints` to list the cached fingerprint hashes stored in the state file, optionally filtered to a single action:
+
+~~~shell
+# List all cached action fingerprints
+scafctl state fingerprints --path state-demo.json
+
+# Filter to a single action or emit JSON
+scafctl state fingerprints --path state-demo.json --action build-assets
+scafctl state fingerprints --path state-demo.json -o json
+~~~
 
 ### Clear All Values
 
-{{< tabs "state-tutorial-cmd-12" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 scafctl state clear --path state-demo.json
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-scafctl state clear --path state-demo.json
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 > [!NOTE]
-> `scafctl state list` and `scafctl state get` support `-o json`, `-o yaml`, and `-o quiet` output formats. The `--path` flag is relative to the current working directory. Use an absolute path to reference files in other locations.
+> `scafctl state show`, `scafctl state list`, `scafctl state get`, and `scafctl state fingerprints` support `-o json`, `-o yaml`, `-o quiet`, interactive `-i`, and CEL `-e`/`-w` output flags. The `--path` flag is relative to the current working directory. Use an absolute path to reference files in other locations.
 
 ---
 
@@ -690,7 +587,7 @@ Two consequences to keep in mind:
 - Resolvers that read the `state` provider fall back to their defaults, since no prior values are loaded.
 - Immutability is **not enforced** while `--no-state` is active -- values that are normally locked can change freely. Use the flag deliberately.
 
-~~~bash
+~~~shell
 # Run without touching state at all
 scafctl run solution -f ./solution.yaml --no-state
 ~~~
@@ -707,7 +604,7 @@ Pass `--state-file <path>` to `run solution`, `run resolver`, or `run action` to
 - Relative paths resolve against the directory you ran the command from -- also for a bundled catalog solution, which runs from a temporary extraction directory.
 - It is **mutually exclusive with `--no-state`**.
 
-~~~bash
+~~~shell
 # Drive a run from a specific state file
 scafctl run solution -f ./solution.yaml --state-file ./intent/sandbox.json
 ~~~
@@ -851,20 +748,20 @@ spec:
 
 Run it:
 
-{{< tabs "state-tutorial-cmd-extends" >}}
-{{% tab "Bash" %}}
-~~~bash
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
+```bash
 scafctl run resolver -f ./pr-workflow.yaml \
   -r app_name=my-app -r branch_name=feat/my-feature
-~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+```
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ~~~powershell
 scafctl run resolver -f ./pr-workflow.yaml `
   -r app_name=my-app -r branch_name=feat/my-feature
 ~~~
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 At load time, state is read from `main` using the `ref` input. At save time,
 the `extends: load` target writes back through the load block's provider with
@@ -966,7 +863,7 @@ spec:
 
 Run it:
 
-~~~bash
+~~~shell
 scafctl run resolver -f ./deploy-app.yaml -r app_name=my-app
 ~~~
 
@@ -1151,7 +1048,7 @@ state:
 
 For the full old -> new mapping (including lint rule renames and the
 `<provider> backend` -> `<provider> provider` label), see
-[Migrating from `state.backend`](../design/state/state.md#migrating-from-statebackend)
+[Migrating from `state.backend`](../design/state/_index.md#migrating-from-statebackend)
 in the design reference.
 
 ---
@@ -1190,7 +1087,7 @@ state:
     - extends: load
 ~~~
 
-~~~bash
+~~~shell
 # Replay from the current working directory (parameters are loaded automatically from state)
 scafctl run solution -f app-registration.yaml
 ~~~

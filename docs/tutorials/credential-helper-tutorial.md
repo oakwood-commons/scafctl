@@ -38,7 +38,7 @@ The Docker credential helper protocol allows external programs to manage registr
 
 Install scafctl as the credential helper for Docker:
 
-```bash
+```shell
 scafctl credential-helper install --docker
 ```
 
@@ -46,7 +46,7 @@ This creates a `docker-credential-scafctl` symlink in `~/.local/bin` and updates
 
 For Podman:
 
-```bash
+```shell
 scafctl credential-helper install --podman
 ```
 
@@ -54,7 +54,7 @@ scafctl credential-helper install --podman
 
 ### 1. Create the Symlink
 
-```bash
+```shell
 scafctl credential-helper install
 ```
 
@@ -80,7 +80,7 @@ This tells Docker to use scafctl for all registry credential lookups.
 
 Instead of making scafctl the global credential store, you can configure it for specific registries only:
 
-```bash
+```shell
 scafctl credential-helper install --docker --registry ghcr.io
 ```
 
@@ -96,7 +96,7 @@ This adds a `credHelpers` entry to Docker's config:
 
 You can add multiple registries:
 
-```bash
+```shell
 scafctl credential-helper install --docker --registry ghcr.io
 scafctl credential-helper install --docker --registry quay.io
 ```
@@ -159,7 +159,7 @@ This means credentials from any source are available to Docker.
 
 Podman and Buildah use the same credential helper protocol:
 
-```bash
+```shell
 scafctl credential-helper install --podman
 ```
 
@@ -233,7 +233,7 @@ your configured binary name, so it names `your-binary auth login <handler>`.
 
 ## Uninstall
 
-```bash
+```shell
 # Remove symlink and Docker config entry
 scafctl credential-helper uninstall --docker
 
@@ -264,7 +264,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 The credential helper uses scafctl's encrypted secrets store. If the master key is not available, all operations will fail. Ensure:
 
-```bash
+```shell
 # Check if the secrets store is accessible
 scafctl secrets list
 ```

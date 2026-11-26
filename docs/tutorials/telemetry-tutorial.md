@@ -25,8 +25,8 @@ OTLP endpoint every signal is exported for backend analysis.
 
 ### Flags (per-invocation)
 
-{{< tabs "telemetry-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Point at a local OTel Collector
 scafctl run solution -f solution.yaml \
@@ -37,9 +37,9 @@ scafctl run solution -f solution.yaml \
 OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
   scafctl run solution -f solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 # Point at a local OTel Collector
 scafctl run solution -f solution.yaml `
   --otel-endpoint localhost:4317 `
@@ -48,9 +48,9 @@ scafctl run solution -f solution.yaml `
 # Override with environment variable instead
 $env:OTEL_EXPORTER_OTLP_ENDPOINT = 'localhost:4317'
 scafctl run solution -f solution.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 | Flag | Env override | Default | Description |
 |------|-------------|---------|-------------|
@@ -76,8 +76,8 @@ any extra code).
 
 Control verbosity:
 
-{{< tabs "telemetry-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run solution -f solution.yaml \
   --log-level debug \
@@ -85,17 +85,17 @@ scafctl run solution -f solution.yaml \
   --otel-endpoint localhost:4317 \
   --otel-insecure
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl run solution -f solution.yaml `
   --log-level debug `
   --log-format json `
   --otel-endpoint localhost:4317 `
   --otel-insecure
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 See the [Logging Tutorial](logging-tutorial.md) for full flag reference.
 
@@ -127,22 +127,22 @@ Without `--otel-endpoint`, tracing is disabled (noop). To inspect traces locally
 run a local collector such as [otel-desktop-viewer](https://github.com/CtrlSpice/otel-desktop-viewer)
 or Jaeger and point scafctl at it:
 
-{{< tabs "telemetry-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Start local Jaeger (see examples/telemetry/ for Docker Compose)
 OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
   scafctl run solution -f solution.yaml --otel-insecure
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Start local Jaeger (see examples/telemetry/ for Docker Compose)
 $env:OTEL_EXPORTER_OTLP_ENDPOINT = 'localhost:4317'
 scafctl run solution -f solution.yaml --otel-insecure
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### Metrics
 
@@ -191,24 +191,24 @@ Services started:
 
 ### Run a traced command
 
-{{< tabs "telemetry-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 \
   scafctl run solution -f examples/actions/hello-world.yaml \
   --otel-insecure \
   --log-level debug
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 $env:OTEL_EXPORTER_OTLP_ENDPOINT = 'localhost:4317'
 scafctl run solution -f examples/actions/hello-world.yaml `
   --otel-insecure `
   --log-level debug
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 ### View traces in Jaeger
 
@@ -231,22 +231,22 @@ docker compose down
 Point scafctl at your organisation's OTLP endpoint (no `--otel-insecure` flag
 for TLS-enabled collectors):
 
-{{< tabs "telemetry-tutorial-cmd-5" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 scafctl run solution -f solution.yaml \
   --otel-endpoint otel-collector.example.com:4317 \
   --log-level info
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
+~~~powershell
 scafctl run solution -f solution.yaml `
   --otel-endpoint otel-collector.example.com:4317 `
   --log-level info
-```
-{{% /tab %}}
-{{< /tabs >}}
+~~~
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 Use the environment variable in CI/CD pipelines instead of flags:
 

@@ -36,7 +36,7 @@ spec:
               expression: "'Hello, ' + 'world!'"
 ```
 
-```bash
+```shell
 scafctl run resolver -f hello.yaml -o yaml
 # greeting: Hello, world!
 ```
@@ -67,7 +67,7 @@ Runnable examples are located in the [`/examples`](https://github.com/oakwood-co
 
 Browse examples from the CLI:
 
-```bash
+```shell
 scafctl get examples
 scafctl get examples resolvers/hello-world.yaml
 ```

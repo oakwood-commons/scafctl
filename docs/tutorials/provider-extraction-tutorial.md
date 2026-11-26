@@ -329,7 +329,7 @@ scafctl package plugin \
 
 This stores the artifact in the local catalog. Verify:
 
-~~~bash
+~~~shell
 scafctl catalog list --kind provider
 ~~~
 
@@ -366,7 +366,7 @@ spec:
 The lock file pins exact versions and binary content digests for reproducible
 builds and supply chain security:
 
-~~~bash
+~~~shell
 scafctl package solution -f auto-fetch-test.yaml --ignore-preflight
 ~~~
 

@@ -73,7 +73,7 @@ inputs:
 
 Inspect both schemas from the CLI at any time:
 
-```bash
+```shell
 scafctl explain valueref
 scafctl explain tokenref
 ```
@@ -213,7 +213,7 @@ scafctl enforces defense-in-depth protections whenever `scrt:` or `tkn:` is used
 
 Run `scafctl lint rule <rule>` for examples and remediation steps:
 
-```bash
+```shell
 scafctl lint rule invalid-credential-ref
 scafctl lint rule unmarked-sensitive-credential-resolver
 ```

@@ -63,14 +63,14 @@ demand (for example, `scafctl run provider exec command='ls'`). See
 | [http](#http) | built-in | ✅ | ✅ | ❌ | ✅ |
 | [identity](#identity) | official | ✅ | ❌ | ❌ | ❌ |
 | [kubeconfig](#kubeconfig) | official | ❌ | ❌ | ❌ | ❌\* |
-| [message](#message) | built-in | ❌ | ✅ | ❌ | ✅ |
+| [message](#message) | built-in | ❌ | ❌ | ❌ | ✅ |
 | [metadata](#metadata) | official | ✅ | ❌ | ❌ | ❌ |
 | [parameter](#parameter) | built-in | ✅ | ❌ | ❌ | ❌ |
 | [secret](#secret) | official | ✅ | ❌ | ❌ | ❌ |
 | [sleep](#sleep) | official | ✅ | ✅ | ✅ | ✅ |
 | [solution](#solution) | built-in | ✅ | ❌ | ❌ | ✅ |
 | [state](#state) | built-in | ✅ | ❌ | ❌ | ❌ |
-| [static](#static) | built-in | ✅ | ✅ | ❌ | ❌ |
+| [static](#static) | built-in | ✅ | ✅ | ❌ | ✅ |
 | [validation](#validation) | built-in | ❌ | ✅ | ✅ | ❌ |
 
 \* `kubeconfig` declares its own dedicated `kubeconfig` capability, not one of the four generic capabilities in this matrix. It cannot be called from `resolve.with` or `workflow.actions`; see the [kubeconfig](#kubeconfig) section for how it's actually invoked.
@@ -2272,7 +2272,7 @@ resolvers:
 
 ## message
 
-Outputs styled terminal messages with built-in types, custom formatting via lipgloss, destination control, and respects `--quiet` and `--no-color` flags. For dynamic interpolation, use the framework's `tmpl:` or `expr:` ValueRef on the `message` input --- the provider does not handle templating internally. Use `type: raw` for machine-readable output that bypasses the 8192-character limit and writes content directly without formatting.
+Outputs styled terminal messages (text mode) or renders structured data via `kvx` (data mode), with destination control and full support for `--quiet` and `--no-color` flags. Exactly one of `message` or `data` must be provided. For dynamic text interpolation, use the framework's `tmpl:` or `expr:` ValueRef on `message` -- the provider does not evaluate templates internally. Use `type: raw` for machine-readable output that bypasses the 8192-character limit and writes content directly without formatting.
 
 ### Capabilities
 
@@ -2282,49 +2282,58 @@ Outputs styled terminal messages with built-in types, custom formatting via lipg
 
 | Field | Type | Required | Description |
 | ------- | ------ | :--------: | ------------- |
-| `message` | string | ✅ | Message text to output. Use `tmpl:` or `expr:` ValueRef for dynamic interpolation. Limited to 8192 characters unless `type: raw`. |
-| `type` | string | ❌ | Message type: `success`, `warning`, `error`, `info` (default), `debug`, `plain`, `raw` |
+| `message` | string | ❌\* | Message text to output (text mode; mutually exclusive with `data`). Use `tmpl:` or `expr:` ValueRef for dynamic interpolation. Limited to 8192 characters unless `type: raw`. |
+| `data` | any | ❌\* | Structured data to render via `kvx` (data mode; mutually exclusive with `message`). Arrays render as tables or card lists; objects render as key-value or sectioned detail views. |
+| `format` | string | ❌ | Data-mode output format: `auto` (default), `table`, `list`, `tree`, `mermaid`, `json`, `yaml`, `quiet`. Requires `data`. |
+| `display` | object | ❌ | `kvx` `DisplaySchema` for rich card-list and detail views (`list`, `detail`, `collectionTitle`, `icon`). Requires `data`. |
+| `columnHints` | object | ❌ | JSON Schema with `x-kvx-*` extensions (`x-kvx-header`, `x-kvx-maxWidth`, `x-kvx-visible`). Requires `data`. |
+| `columnOrder` | array | ❌ | Preferred column display order for table rendering (max 50 items). Requires `data`. |
+| `expand` | bool | ❌ | When `true`, returns raw `data` directly as the action output instead of `{success: true, data: ...}` (default: `false`). Requires `data`. |
+| `type` | string | ❌ | Message type (text mode): `success`, `warning`, `error`, `info` (default), `debug`, `plain`, `raw` |
 | `label` | string | ❌ | Contextual prefix rendered as dimmed `[label]` between icon and message (e.g., `step 2/5`). Not supported with `type: raw`. |
 | `style` | object | ❌ | Custom formatting that merges on top of type defaults: `color` (hex or named), `bold`, `italic`, `icon`. Not supported with `type: raw`. |
 | `destination` | string | ❌ | Output target: `stdout` (default) or `stderr` |
 | `newline` | bool | ❌ | Append trailing newline (default: `true`) |
 
+\* Exactly one of `message` (text mode) or `data` (data mode) must be provided; neither field is unconditionally required on its own.
+
 ### Output
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `success` | bool | Always `true` on success |
-| `message` | string | Rendered message text |
+| Mode | Field | Type | Description |
+|-------|-------|------|-------------|
+| Text mode | `success` | bool | Always `true` on success |
+| | `message` | string | Rendered plain-text message (no ANSI codes) |
+| Data mode (`expand: false`) | `success` | bool | Always `true` on success |
+| | `data` | any | Input data rendered by `kvx` |
+| Data mode (`expand: true`) | `<data>` | any | Raw `data` returned directly |
 
 ### Examples
 
 **Built-in type styling:**
 
 ```yaml
-resolvers:
-  step1:
-    resolve:
-      with:
-        - provider: message
-          inputs:
-            message: "Build succeeded"
-            type: success
+workflow:
+  actions:
+    step1:
+      provider: message
+      inputs:
+        message: "Build succeeded"
+        type: success
 ```
 
 **Custom style with icon:**
 
 ```yaml
-resolvers:
-  deploy:
-    resolve:
-      with:
-        - provider: message
-          inputs:
-            message: "Starting pipeline"
-            style:
-              color: "#FF5733"
-              bold: true
-              icon: "\U0001F680"
+workflow:
+  actions:
+    deploy:
+      provider: message
+      inputs:
+        message: "Starting pipeline"
+        style:
+          color: "#FF5733"
+          bold: true
+          icon: "\U0001F680"
 ```
 
 **Go template interpolation via `tmpl:` ValueRef:**
@@ -2339,48 +2348,43 @@ resolvers:
             value:
               appName: my-service
               version: 2.0.0
-  deploy-msg:
-    resolve:
-      with:
-        - provider: message
-          inputs:
-            message:
-              tmpl: "Deploying {{ .config.appName }} v{{ .config.version }}"
-            type: info
+
+workflow:
+  actions:
+    deploy-msg:
+      provider: message
+      inputs:
+        message:
+          tmpl: "Deploying {{ .config.appName }} v{{ .config.version }}"
+        type: info
 ```
 
-**CEL expression via `expr:` ValueRef:**
+**Structured data mode (`data`):**
 
 ```yaml
-resolvers:
-  items:
-    resolve:
-      with:
-        - provider: static
-          inputs:
-            value: [a, b, c]
-  status:
-    resolve:
-      with:
-        - provider: message
-          inputs:
-            message:
-              expr: "'Processed ' + string(size(_.items)) + ' items'"
-            type: success
+workflow:
+  actions:
+    show-summary:
+      provider: message
+      inputs:
+        data:
+          expr: "_.services"
+        format: table
+        columnOrder: ["name", "status", "port"]
 ```
 
 **Raw output (machine-readable, no length limit):**
 
 ```yaml
-actions:
-  emit-index:
-    steps:
-      - provider: message
-        inputs:
-          message:
-            rslvr: registry_index_json
-          type: raw
-          newline: false
+workflow:
+  actions:
+    emit-index:
+      provider: message
+      inputs:
+        message:
+          rslvr: registry_index_json
+        type: raw
+        newline: false
 ```
 
 ---
@@ -2522,22 +2526,9 @@ resolve:
 
 Usage:
 
-{{< tabs "provider-reference-cmd-1" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl run solution -f sol.yaml -r environment=production
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl run solution -f sol.yaml -r environment=production
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -2583,24 +2574,10 @@ resolve:
 
 Manage secrets via CLI:
 
-{{< tabs "provider-reference-cmd-2" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 scafctl secrets set api-key "my-secret-value"
 scafctl secrets list
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-scafctl secrets set api-key "my-secret-value"
-scafctl secrets list
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -2832,11 +2809,11 @@ while `_.db_password` returns the value produced by the current run.
 
 ## static
 
-Return a constant value. Useful for defaults and fallbacks.
+Return a constant value. Useful for defaults, fallbacks, and testing.
 
 ### Capabilities
 
-`from`, `transform`
+`from`, `transform`, `action`
 
 ### Inputs
 

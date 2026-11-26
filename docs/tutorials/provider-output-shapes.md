@@ -5,11 +5,11 @@ weight: 74
 
 # Provider Output Shapes
 
-Quick reference for what each built-in provider returns in resolver output — the data shape you can access via `_.resolverName` in CEL expressions and Go templates.
+Quick reference for what each built-in and official plugin provider returns in resolver and action output -- the data shape you can access via `_.resolverName` or `__actions.actionName.results` in CEL expressions and Go templates.
 
 ## How Provider Output Works
 
-When a resolver uses a provider, the resolved value becomes accessible to other resolvers. The **output shape** determines what fields are available:
+When a resolver uses a provider, the resolved value becomes accessible to downstream resolvers and actions. The **output shape** determines which fields are available:
 
 ```mermaid
 flowchart LR
@@ -24,21 +24,20 @@ flowchart LR
 ## Core Providers
 
 ### `static`
-Returns the literal value as-is.
+Returns the literal `inputs.value` directly across resolvers and actions (`from`, `transform`, and `action`).
 
-| Capability | Output | Type |
-|-----------|--------|------|
-| from | `<value>` | any |
-| transform | `<value>` | any |
+| Capability | Output | Type | Description |
+|-----------|--------|------|-------------|
+| from / transform / action | `<value>` | any | Literal value provided in `inputs.value` |
 
 ```yaml
-# Output is whatever you set as the value
+# Output is whatever you set as the value (in both resolvers and actions)
 resolve:
   with:
     - provider: static
       inputs:
         value: "hello"
-# _.my_resolver == "hello"
+# _.my_resolver == "hello" (or __actions.my_action.results == "hello")
 ```
 
 ### `cel`
@@ -46,12 +45,11 @@ Returns the result of evaluating a CEL expression.
 
 | Capability | Output | Type |
 |-----------|--------|------|
-| from | `<expression result>` | any |
-| transform | `<expression result>` | any |
+| transform / action | `<expression result>` | any |
 
 ```yaml
 # Output is the CEL evaluation result
-resolve:
+transform:
   with:
     - provider: cel
       inputs:
@@ -60,22 +58,97 @@ resolve:
 ```
 
 ### `parameter`
-Returns the value from CLI `-r key=value` flags.
+Returns the value from CLI `-r key=value` flags (or replayed state parameters).
 
 | Capability | Output | Type |
 |-----------|--------|------|
-| from | `<parameter value>` | string |
+| from | `<parameter value>` | any (coerced to resolver `type`) |
 
 ### `env`
-Returns the value of an environment variable.
+Returns environment variable data depending on `operation` (`get` returns `{value, exists}` or raw value; `list` returns a map of variables).
 
 | Capability | Output | Type |
 |-----------|--------|------|
-| from | `<env value>` | string |
+| from | `<env value / object>` | string or object |
+
+### `state`
+Reads previously persisted resolver values from the loaded state snapshot.
+
+| Capability | Output | Type | Description |
+|-----------|--------|------|-------------|
+| from (`key`) | `<persisted value>` | any | Stored resolver value for `key` (or `default` when absent) |
+| from (`keys` / `all: true`) | `map[string]any` | object | Map of persisted resolver values keyed by resolver name (absent keys omitted) |
 
 ---
 
-## Data Providers
+## Identity, Credentials & Runtime Providers
+
+### `identity`
+Returns authenticated identity status, claims, group memberships, or registered handler names without exposing raw tokens.
+
+| Capability | Fields | Type | Description |
+|-----------|--------|------|-------------|
+| from | `operation` | string | Executed operation (`status`, `claims`, `groups`, `list`) |
+| | `handler` | string | Auth handler queried (e.g., `entra`, `github`, `gcp`) |
+| | `authenticated` | bool | Whether the identity is currently authenticated |
+| | `identityType` | string | Identity type (`user` or `service-principal`) |
+| | `claims` | object | Parsed token claims (`email`, `name`, `subject`, `tenantId`, etc.) |
+| | `tenantId` | string | Tenant ID (when applicable) |
+| | `expiresAt` | string | Token expiration timestamp (RFC3339) |
+| | `expiresIn` | string | Human-readable time remaining until expiry |
+| | `groups` | array | Group display names (`groups` operation) |
+| | `handlers` | array | Registered auth handler names (`list` operation) |
+| | `count` | int | Number of items returned (`groups` / `list`) |
+| | `scopedToken` | bool | `true` when derived from an on-demand scoped access token |
+| | `tokenScope` | string | OAuth scope minted when `scope` input was set |
+| | `tokenType` | string | Token type, typically `Bearer` (when `scope` input was set) |
+
+### `secret`
+Reads encrypted secrets from the `scafctl` secrets store.
+
+| Capability | Operation | Output | Type | Description |
+|-----------|-----------|--------|------|-------------|
+| from | `get` | `<secret value>` | string | Decrypted secret value (or `default` when not found) |
+| from | `list` | `[<secret name>, ...]` | array | Matching secret names |
+
+### `metadata`
+Returns runtime metadata about the `scafctl` process, host platform, and currently executing solution.
+
+| Capability | Fields | Type | Description |
+|-----------|--------|------|-------------|
+| from | `version` | object | Build info: `{buildVersion, commit, buildTime}` |
+| | `args` | array | Command-line arguments passed to the binary |
+| | `cwd` | string | Current working directory |
+| | `entrypoint` | string | Host entrypoint: `"cli"`, `"api"`, `"mcp"`, or `"unknown"` |
+| | `command` | string | Command path (e.g., `"scafctl/run/solution"`) |
+| | `solution` | object | Solution metadata: `{name, version, displayName, description, category, tags, source}` |
+| | `os` | string | Operating system (`runtime.GOOS`, e.g., `darwin`, `linux`, `windows`) |
+| | `arch` | string | CPU architecture (`runtime.GOARCH`, e.g., `amd64`, `arm64`) |
+| | `shell` | string | Detected user shell (`bash`, `zsh`, `pwsh`, `powershell`, etc.) |
+
+### `kubeconfig`
+Manages kubeconfig exec-credential entries and probes Kubernetes cluster auth/reachability via its dedicated `kubeconfig` capability (invoked by `scafctl kube` or `scafctl run provider kubeconfig`).
+
+| Capability | Fields | Type | Description |
+|-----------|--------|------|-------------|
+| kubeconfig | `success` | bool | Whether the operation succeeded |
+| | `kubeconfig_path` | string | Path to the kubeconfig file read or written |
+| | `context_name` | string | Kubeconfig context name involved |
+| | `server` | string | Cluster API server URL |
+| | `reachable` | bool | Whether the cluster API server responded (`reachable` operation) |
+| | `removed` | bool | Whether an entry was removed (`kubeconfig_remove` operation) |
+| | `auth_type` | string | Detected cluster authentication type (`detect_auth_type` operation) |
+| | `oidc_issuer` | string | Detected OIDC issuer URL, when present |
+| | `oauth_endpoint` | string | Detected OAuth endpoint URL, when present |
+| | `username` | string | Resolved Kubernetes username (`whoami` operation) |
+| | `uid` | string | Resolved user UID (`whoami` operation) |
+| | `groups` | array | Resolved group memberships (`whoami` operation) |
+| | `status` | int | HTTP status code, where applicable |
+| | `error` | string | Error message if the operation failed |
+
+---
+
+## Data & Composition Providers
 
 ### `http`
 
@@ -110,7 +183,7 @@ Uses GitHub GraphQL API for reads and mutations, and REST API for releases.
 | | `result` | any | API response data |
 | | `error` | string | Error message if failed |
 
-**Read operations (`from` / `transform`) — `result` shapes:**
+**Read operations (`from` / `transform`) -- `result` shapes:**
 
 | Operation | `result` type | Key fields |
 |-----------|--------------|------------|
@@ -128,7 +201,7 @@ Uses GitHub GraphQL API for reads and mutations, and REST API for releases.
 | `list_tags` | array | Each: `name`, `target.oid` |
 | `get_head_oid` | object | `oid`, `branch` |
 
-**Write operations (`action`) — `result` shapes:**
+**Write operations (`action`) -- `result` shapes:**
 
 | Operation | `result` key fields |
 |-----------|--------------------|
@@ -153,6 +226,15 @@ transform:
       inputs:
         expression: "_.commit_result.success && _.commit_result.result.signature.isValid"
 ```
+
+### `git`
+Queries local or remote Git repositories and performs clone/checkout actions.
+
+| Capability | Fields | Type | Description |
+|-----------|--------|------|-------------|
+| from | `operation` | string | Git operation executed (`status`, `log`, `branch`, `remote`, etc.) |
+| | `result` / operation fields | any | Structured repository metadata (`branch`, `commit`, `clean`, `remotes`, etc.) |
+| action | `success` | bool | Whether the Git operation succeeded |
 
 ### `file`
 Returns file content, or for `write-tree`, information about written files.
@@ -179,9 +261,23 @@ Returns directory listings.
 
 Each entry: `{ name, path, isDir, size, modTime }`
 
+### `solution`
+Executes a sub-solution and returns its resolver values (plus workflow summary in `action` mode).
+
+| Capability | Fields | Type | Description |
+|-----------|--------|------|-------------|
+| from | `resolvers` | object | Child solution resolver outputs keyed by resolver name |
+| | `status` | string | Overall status: `"success"` or `"failed"` |
+| | `errors` | array | Resolver errors encountered (when `propagateErrors: false`) |
+| action | `resolvers` | object | Child solution resolver outputs keyed by resolver name |
+| | `workflow` | object | Child workflow summary (`finalStatus`, `failedActions`, `skippedActions`) |
+| | `status` | string | Overall status: `"success"` or `"failed"` |
+| | `errors` | array | Errors encountered during child execution |
+| | `success` | bool | Whether the sub-solution succeeded |
+
 ---
 
-## Processing Providers
+## Processing & Utility Providers
 
 ### `exec`
 
@@ -209,29 +305,50 @@ transform:
 ```
 
 ### `go-template`
-Returns rendered template output. For `render-tree`, returns an array of rendered entries.
+Returns rendered template output directly across `transform` and `action`. For `render-tree`, returns an array of rendered entries.
 
 | Capability | Fields | Type | Description |
 |-----------|--------|------|-------------|
-| transform (`render`) | `<rendered text>` | string | Template output as string |
-| transform (`render-tree`) | `[{path, content}]` | array | Array of rendered file entries. Each entry has `path` (string) and `content` (string). Input entries may include an optional `data` map (shallow-merged over the shared `data`) for per-entry fan-out. |
+| transform / action (`render`) | `<rendered text>` | string | Template output as string |
+| transform / action (`render-tree`) | `[{path, content}]` | array | Array of rendered file entries. Each entry has `path` (string) and `content` (string). Input entries may include an optional `data` map (shallow-merged over the shared `data`) for per-entry fan-out. |
 
 ### `hcl`
-Varies by operation — parse returns structured data, format/validate return strings.
+Varies by operation -- parse returns structured data, format/validate/generate return strings or structured diagnostics.
 
 ### `validation`
 
 | Capability | Fields | Type | Description |
 |-----------|--------|------|-------------|
-| validation | `valid` | bool | Always `true` on success |
+| transform / validation | `valid` | bool | Always `true` on success |
 | | `details` | string | `"all validations passed"` |
 
 ### `message`
 
 | Capability | Fields | Type | Description |
 |-----------|--------|------|-------------|
-| action | `success` | bool | Always `true` on success |
-| | `message` | string | Rendered message text |
+| action (text mode) | `success` | bool | Always `true` on success |
+| | `message` | string | Rendered plain-text message |
+| action (data mode) | `success` | bool | Always `true` on success (when `expand: false`) |
+| | `data` | any | Rendered data payload (returned unwrapped when `expand: true`) |
+
+### `debug`
+Outputs formatted resolver data to `stdout`, `stderr`, or a file while returning the inspected data and formatted representation. Returns the same runtime object across all capabilities.
+
+| Capability | Fields | Type | Description |
+|-----------|--------|------|-------------|
+| from / transform / validation / authentication / action | `success` | bool | Always `true` when the debug operation completes without error |
+| | `result` | any | CEL-filtered or full resolver data |
+| | `output` | string | Formatted debug output (`json`, `yaml`, or `pretty`) |
+| | `destination` | string | Where output was written (`stdout`, `stderr`, or file path) |
+
+### `sleep`
+Pauses execution for a requested Go duration (`duration`, e.g., `"500ms"`, `"2s"`). Returns the same runtime object across all capabilities.
+
+| Capability | Fields | Type | Description |
+|-----------|--------|------|-------------|
+| from / transform / validation / authentication / action | `success` | bool | Whether the sleep completed without cancellation |
+| | `duration` | string | Requested sleep duration |
+| | `elapsed` | string | Actual elapsed duration |
 
 ---
 
@@ -239,30 +356,17 @@ Varies by operation — parse returns structured data, format/validate return st
 
 ### CLI
 
-{{< tabs "provider-output-shapes-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # View full provider info including output schemas
 scafctl get provider http -o json
 
 # View all providers
 scafctl get providers
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# View full provider info including output schemas
-scafctl get provider http -o json
-
-# View all providers
-scafctl get providers
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### MCP Tools
 
-```
+```text
 # Get output shape for a specific provider
 get_provider_output_shape(name: "http", capability: "from")
 
@@ -275,13 +379,16 @@ get_provider_schema(name: "http")
 When writing CEL that references resolver output, the shape depends on the provider used:
 
 ```yaml
-# HTTP provider → access .body, .statusCode, .headers
+# HTTP provider -> access .body, .statusCode, .headers
 expression: "_.api_call.body.count > 0"
 
-# Exec provider → access .stdout, .exitCode
+# Exec provider -> access .stdout, .exitCode
 expression: "_.cmd_result.exitCode == 0"
 
-# Static/CEL provider → direct value
+# Solution provider -> access .resolvers.<childResolver>
+expression: "_.child.resolvers.endpoint"
+
+# Static/CEL provider -> direct value
 expression: "_.my_string == 'expected'"
 ```
 
@@ -289,6 +396,6 @@ expression: "_.my_string == 'expected'"
 
 ## Next Steps
 
-- [Provider Reference](provider-reference.md) — complete documentation for all providers
-- [CEL Expressions Tutorial](cel-tutorial.md) — use output fields in expressions
-- [Resolver Tutorial](resolver-tutorial.md) — chain resolvers using output data
+- [Provider Reference](provider-reference.md) -- complete documentation for all providers
+- [CEL Expressions Tutorial](cel-tutorial.md) -- use output fields in expressions
+- [Resolver Tutorial](resolver-tutorial.md) -- chain resolvers using output data

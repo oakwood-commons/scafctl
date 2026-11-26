@@ -1,0 +1,22 @@
+{{- $lang := .Get 0 | default "bash" -}}
+{{- $parentID := printf "bp-sh-%d" .Parent.Ordinal -}}
+{{- $raw := replaceRE "(\r?\n[ \t]*)+$" "" (trim .Inner "\r\n") -}}
+{{- $leading := index (findRE "^[ \t]*" $raw 1) 0 -}}
+{{- $code := $raw -}}
+{{- if ne $leading "" -}}
+  {{- $code = replaceRE (printf "(?m)^%s" $leading) "" $raw -}}
+{{- end -}}
+{{- $fence := "" -}}
+{{- with findRE "^(`{3,}|~{3,})" $code 1 -}}
+  {{- $fence = index . 0 -}}
+{{- end -}}
+{{- if ne $fence "" -}}
+  {{- $closePat := printf "(?:^|\r?\n)%s[ \t]*$" $fence -}}
+  {{- $fenceLines := findRE (printf "(?m)^%s" $fence) $code -}}
+  {{- if and (gt (len (findRE $closePat $code 1)) 0) (eq (len $fenceLines) 2) -}}
+    {{- $code = replaceRE (printf "^%s[^\r\n]*\r?\n?" $fence) "" $code -}}
+    {{- $code = replaceRE $closePat "" $code -}}
+  {{- end -}}
+{{- end -}}
+{{- $hl := replace (replace (highlight $code $lang "") "\r\n" "&#10;") "\n" "&#10;" -}}
+<div class="bp-shell-pane{{ if eq $lang "bash" }} is-active{{ end }}" id="{{ $parentID }}-pane-{{ $lang }}" role="tabpanel" aria-labelledby="{{ $parentID }}-tab-{{ $lang }}" data-shell-pane="{{ $lang }}"{{ if ne $lang "bash" }} hidden{{ end }}>{{- $hl | safeHTML -}}</div>

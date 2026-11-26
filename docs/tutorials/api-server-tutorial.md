@@ -9,7 +9,7 @@ scafctl includes a built-in REST API server that exposes all major CLI features 
 
 ## Starting the Server
 
-```bash
+```shell
 # Start with defaults (port 8080, host 127.0.0.1)
 scafctl serve
 
@@ -151,7 +151,7 @@ CLI flags override configuration file values.
 
 Export the full OpenAPI spec without starting the server:
 
-```bash
+```shell
 # JSON to stdout
 scafctl serve openapi
 

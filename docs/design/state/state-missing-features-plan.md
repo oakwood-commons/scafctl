@@ -5,7 +5,7 @@ weight: 15
 
 # State: Missing Features Implementation Plan
 
-This document tracks features described in the [state design doc](state.md) that are not yet
+This document tracks features described in the [state design doc](_index.md) that are not yet
 implemented in the codebase.
 
 ---

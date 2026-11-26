@@ -83,18 +83,9 @@ schema := schemahelper.ObjectSchema(
 
 When a resolver passes invalid input to this provider, the lint system catches it at analysis time:
 
-{{< tabs "validation-patterns-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl lint my-solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl lint my-solution.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ```
 ERROR [invalid-provider-input-type] resolver 'deploy': input 'replicas' expects integer, got string
@@ -163,7 +154,7 @@ spec:
 {{% details "▶ Try it" %}}
 Save the snippet above as `regex-patterns.yaml`, then run:
 
-```bash
+```shell
 scafctl run resolver -f regex-patterns.yaml
 ```
 {{% /details %}}
@@ -413,18 +404,9 @@ ERROR: action 'deploy' result does not match schema: property 'status' must be o
 
 `scafctl lint` catches issues without executing the solution:
 
-{{< tabs "validation-patterns-tutorial-cmd-2" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl lint my-solution.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl lint my-solution.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Key Validation Rules
 
@@ -440,26 +422,13 @@ scafctl lint my-solution.yaml
 | `permissive-result-schema` | info | `resultSchema` without `type` constraint |
 | `undefined-required-property` | error | Required property not defined in `properties` |
 
-{{< tabs "validation-patterns-tutorial-cmd-3" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Lint with auto-fix where possible
 scafctl lint --fix my-solution.yaml
 
 # Lint all solutions in a directory
 scafctl lint ./solutions/
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Lint with auto-fix where possible
-scafctl lint --fix my-solution.yaml
-
-# Lint all solutions in a directory
-scafctl lint ./solutions/
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 ---
 
@@ -476,26 +445,13 @@ pre-commit checks.
 Loads a solution and runs lint. Lint errors (including schema violations) fail;
 lint warnings are surfaced but do not fail unless `--strict` is passed:
 
-{{< tabs "validation-patterns-tutorial-validate-solution" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Errors fail, warnings surface (exit 0 if only warnings)
 scafctl validate solution -f my-solution.yaml
 
 # Treat warnings as fatal too
 scafctl validate solution -f my-solution.yaml --strict
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Errors fail, warnings surface (exit 0 if only warnings)
-scafctl validate solution -f my-solution.yaml
-
-# Treat warnings as fatal too
-scafctl validate solution -f my-solution.yaml --strict
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 `scafctl validate resolver` behaves the same way but first executes the resolver
 phases (resolve, transform, validate) and then runs lint as part of the gate;
@@ -508,8 +464,8 @@ Schema. Unlike `validate solution`, it does NOT run lint -- it checks raw data
 conformance only, so it works for config files, API payloads, or any document.
 Pass `--data -` to read the data from stdin:
 
-{{< tabs "validation-patterns-tutorial-validate-schema" >}}
-{{% tab "Bash" %}}
+{{< shell-toggle >}}
+{{< shell-pane "bash" >}}
 ```bash
 # Validate a data file against a schema (both JSON or YAML)
 scafctl validate schema --schema schema.json --data data.json
@@ -517,8 +473,8 @@ scafctl validate schema --schema schema.json --data data.json
 # Read the data from stdin
 cat data.yaml | scafctl validate schema --schema schema.json --data -
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
+{{< /shell-pane >}}
+{{< shell-pane "powershell" >}}
 ```powershell
 # Validate a data file against a schema (both JSON or YAML)
 scafctl validate schema --schema schema.json --data data.json
@@ -526,8 +482,8 @@ scafctl validate schema --schema schema.json --data data.json
 # Read the data from stdin
 Get-Content data.yaml | scafctl validate schema --schema schema.json --data -
 ```
-{{% /tab %}}
-{{< /tabs >}}
+{{< /shell-pane >}}
+{{< /shell-toggle >}}
 
 Exit codes: `0` conforms, `2` violates the schema, `3` the schema itself is
 invalid, `4` a file was not found.
@@ -693,20 +649,10 @@ validate:
 
 When validation fails, scafctl provides structured error messages. Use the MCP `explain_error` tool or inspect the output directly:
 
-{{< tabs "validation-patterns-tutorial-cmd-4" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Run with verbose output to see validation details
 scafctl run solution -f my-solution.yaml -v 2
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Run with verbose output to see validation details
-scafctl run solution -f my-solution.yaml -v 2
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Common validation error patterns and their meaning:
 
@@ -774,24 +720,12 @@ spec:
 
 Run it -- equal regions fail, differing regions pass:
 
-{{< tabs "validation-patterns-tutorial-cmd-cross" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 # Fails: regions equal
 scafctl run resolver -f my-solution.yaml -r region=us-east1 -r backupRegion=us-east1
 # Passes: regions differ
 scafctl run resolver -f my-solution.yaml -r region=us-east1 -r backupRegion=us-west1
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-# Fails: regions equal
-scafctl run resolver -f my-solution.yaml -r region=us-east1 -r backupRegion=us-east1
-# Passes: regions differ
-scafctl run resolver -f my-solution.yaml -r region=us-east1 -r backupRegion=us-west1
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 In `run resolver` (non-fatal) mode, a failing deferred rule still shows the
 resolved values, reports the failure on stderr, and skips state persistence. Add

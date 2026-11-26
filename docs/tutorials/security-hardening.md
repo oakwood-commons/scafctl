@@ -275,24 +275,10 @@ The minimum accepted iteration count for decryption is 600,000 to prevent KDF do
 
 If the OS keychain is cleared or reset (e.g., OS reinstall), existing encrypted secrets become orphaned and are automatically deleted on next startup. To prevent data loss:
 
-{{< tabs "security-hardening-cmd-1" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Before clearing the keychain, export your secrets
 scafctl secrets export --encrypt --output-file secrets-backup.enc
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Before clearing the keychain, export your secrets
-scafctl secrets export --encrypt --output-file secrets-backup.enc
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Credential Injection and Output Redaction (`scrt:` and `tkn:`)
 
@@ -317,30 +303,13 @@ run 'scafctl package solution' to generate a lock file with pinned digests
 
 Always use lock files in production:
 
-{{< tabs "security-hardening-cmd-2" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Generate a lock file with pinned versions and digests
 scafctl package solution -f solution.yaml
 
 # The lock file pins exact versions and digests
 cat .scafctl.lock.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Generate a lock file with pinned versions and digests
-scafctl package solution -f solution.yaml
-
-# The lock file pins exact versions and digests
-cat .scafctl.lock.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ### Supply Chain Best Practices
 
@@ -359,24 +328,10 @@ provider auto-resolution to guard against. The `--strict` flag extends the same
 requirement to official **auth handlers** (fetched via the `identity` provider),
 which would otherwise be auto-resolved at runtime:
 
-{{< tabs "security-hardening-cmd-strict" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # CI pipeline: also require official auth handlers to be declared
 scafctl run solution -f ./solution.yaml --strict
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# CI pipeline: also require official auth handlers to be declared
-scafctl run solution -f ./solution.yaml --strict
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 Without `--strict`, official auth handlers are auto-fetched at runtime. While
 convenient for development, this introduces network dependencies and potential
@@ -406,24 +361,10 @@ auth:
     privateKeySecretName: "github-app-private-key"
 ```
 
-{{< tabs "security-hardening-cmd-3" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Store the key in the secret store first
 scafctl secrets set github-app-private-key < private-key.pem
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Store the key in the secret store first
-scafctl secrets set github-app-private-key < private-key.pem
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 ## Template and Expression Security
 

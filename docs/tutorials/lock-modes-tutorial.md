@@ -65,10 +65,7 @@ never fails just because you have not packaged a lock yet.
 
 Both `scafctl run` and `scafctl render` accept `--lock-mode`:
 
-{{< tabs "lock-modes-flag" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Pin exact versions from the lock (deterministic)
 scafctl run solution -f ./solution.yaml --lock-mode strict
 
@@ -78,23 +75,6 @@ scafctl run resolver -f ./solution.yaml --lock-mode constrained
 # Use the lock when present, fall back when absent
 scafctl render solution -f ./solution.yaml --lock-mode bestEffort
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Pin exact versions from the lock (deterministic)
-scafctl run solution -f ./solution.yaml --lock-mode strict
-
-# Resolve within the locked constraint range
-scafctl run resolver -f ./solution.yaml --lock-mode constrained
-
-# Use the lock when present, fall back when absent
-scafctl render solution -f ./solution.yaml --lock-mode bestEffort
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 When you omit `--lock-mode`, scafctl picks a **source-based default** (below).
 
@@ -125,26 +105,11 @@ re-package to embed a lock if it uses external providers
 
 Strict and constrained modes need a lock file. Generate one with:
 
-{{< tabs "lock-modes-package" >}}
-{{% tab "Bash" %}}
-
-```bash
+```shell
 # Resolve every bundle.plugins entry and write a lock file with pinned
 # versions, digests, and source catalogs
 scafctl package solution -f ./solution.yaml
 ```
-
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-
-```powershell
-# Resolve every bundle.plugins entry and write a lock file with pinned
-# versions, digests, and source catalogs
-scafctl package solution -f ./solution.yaml
-```
-
-{{% /tab %}}
-{{< /tabs >}}
 
 For catalog/remote solutions, the lock is embedded as a dedicated layer in the
 packaged artifact, so a consumer that pulls the artifact gets strict pinning

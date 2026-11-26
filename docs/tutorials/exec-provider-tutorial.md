@@ -66,18 +66,9 @@ spec:
 
 Run it:
 
-{{< tabs "exec-provider-tutorial-cmd-1" >}}
-{{% tab "Bash" %}}
-```bash
+```shell
 scafctl run solution -f simple-exec.yaml
 ```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl run solution -f simple-exec.yaml
-```
-{{% /tab %}}
-{{< /tabs >}}
 
 Output:
 

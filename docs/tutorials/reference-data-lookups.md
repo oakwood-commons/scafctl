@@ -238,26 +238,13 @@ In every case the lookup half is the same: `json.unmarshal` (or
 A complete, runnable version covering the inline and local-file patterns lives
 at `examples/solutions/reference-data-lookup/`:
 
-{{< tabs "reference-data-lookups-run" >}}
-{{% tab "Bash" %}}
-~~~bash
+~~~shell
 # Default key (us-east)
 scafctl run resolver -f examples/solutions/reference-data-lookup/solution.yaml -o json
 
 # Override the key
 scafctl run resolver -f examples/solutions/reference-data-lookup/solution.yaml -r region=eu-west -o json
 ~~~
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-~~~powershell
-# Default key (us-east)
-scafctl run resolver -f examples/solutions/reference-data-lookup/solution.yaml -o json
-
-# Override the key
-scafctl run resolver -f examples/solutions/reference-data-lookup/solution.yaml -r region=eu-west -o json
-~~~
-{{% /tab %}}
-{{< /tabs >}}
 
 Selected output for the default key:
 

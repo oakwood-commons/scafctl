@@ -1,3 +1,7 @@
+---
+title: "celexp Extraction Blueprint"
+---
+
 # Blueprint: Extract celexp Package to github.com/oakwood-commons/celexp
 
 ## 1. Summary
