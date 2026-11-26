@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -200,11 +201,11 @@ func mergeNoMatchingVersionErrors(errs []*NoMatchingVersionError) *NoMatchingVer
 	}
 
 	sort.Sort(sort.Reverse(semver.Collection(parsed)))
-	available := make([]string, 0, len(parsed)+len(unparsed))
-	for _, sv := range parsed {
-		available = append(available, sv.String())
+	parsedStrs := make([]string, len(parsed))
+	for i, sv := range parsed {
+		parsedStrs[i] = sv.String()
 	}
-	available = append(available, unparsed...)
+	available := slices.Concat(parsedStrs, unparsed)
 
 	return &NoMatchingVersionError{
 		Reference:  errs[0].Reference,
