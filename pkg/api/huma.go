@@ -47,7 +47,7 @@ func configureOpenAPIInfo(cfg *huma.Config) {
 	cfg.Info = &huma.Info{
 		Title:       "scafctl API",
 		Version:     settings.VersionInformation.BuildVersion,
-		Description: "REST API for scafctl configuration discovery and scaffolding",
+		Description: "REST API to declaratively discover data, shape configuration, and run portable workflows",
 		Contact: &huma.Contact{
 			Name: "scafctl maintainers",
 		},

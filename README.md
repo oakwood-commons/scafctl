@@ -15,21 +15,21 @@
   <a href="https://scafctl.oakwood-commons.org/"><img src="https://img.shields.io/badge/docs-scafctl.oakwood--commons.org-blue" alt="Documentation"></a>
 </p>
 
-> **Alpha** -- scafctl is under active development. APIs and CLI commands may
+> **Alpha**: `scafctl` is under active development. APIs and CLI commands may
 > change between releases. Breaking changes are documented in release notes.
 > Questions? Open an issue or start a
 > [Discussion](https://github.com/oakwood-commons/scafctl/discussions).
 
-Define, discover, and deliver configuration as code using CEL-powered solutions.
+**Declaratively discover data, shape configuration, and run portable workflows for humans and AI agents.**
 
-scafctl is a CLI tool that lets you declaratively gather data from any source (APIs, files, environment, Git, and more), transform it with [CEL](https://cel.dev/) expressions, and execute side-effect workflows -- all defined in a single **Solution** file.
+`scafctl` is a cross-platform CLI and workflow engine that turns project setup, configuration, and automation into testable, reusable **Solutions**. Gather live data from APIs, files, Git, and environments, transform and merge configuration safely with [CEL](https://cel.dev/), execute parallel action graphs identically across Linux, macOS, Windows, and CI, distribute versioned bundles through OCI registries, and let AI coding assistants inspect schemas, lint, and preview changes deterministically via `scafctl mcp serve`.
 
 ### Core Concepts
 
-- **Solution** -- A YAML file that declares what data to gather and what work to do. Solutions are versionable, composable, and shareable via OCI registries.
-- **Resolver** -- A named unit that gathers or computes a value using one or more providers. Resolvers can depend on each other and execute in parallel when possible.
-- **Action** -- A side-effect operation (run a command, call an API, write a file) organized into a dependency graph with support for parallelism, retries, conditions, and forEach loops.
-- **Provider** -- A pluggable backend that does the actual work (e.g. `http`, `exec`, `file`, `cel`). scafctl ships with 11 built-in providers and 11 official plugin providers that auto-resolve from OCI catalogs.
+- **Solution**: A YAML file that declares what data to gather and what work to do. Solutions are versionable, composable, and shareable via OCI registries.
+- **Resolver**: A named unit that gathers or computes a value using one or more providers. Resolvers can depend on each other and execute in parallel when possible.
+- **Action**: A side-effect operation (run a command, call an API, write a file) organized into a dependency graph with support for parallelism, retries, conditions, and `forEach` loops.
+- **Provider**: A pluggable backend that does the actual work (for example `http`, `exec`, `file`, `cel`). `scafctl` ships with 11 built-in providers and 11 official plugin providers that auto-resolve from OCI catalogs.
 
 ## Installation
 
@@ -100,6 +100,9 @@ Zsh users must have `compinit` loaded before the completion file is sourced.
 
 - **Resolvers**: Gather and transform configuration data from multiple sources
 - **Actions**: Execute side-effect operations as a declarative action graph
+- **Cross-Platform Shell**: Run shell actions identically on Linux, macOS, and Windows using an embedded POSIX shell with zero WSL or Git Bash dependency
+- **AI Agent Integration (`MCP`)**: Expose live schemas, CEL/template evaluation, linting, refactoring, and dry-run previews to AI coding tools via `scafctl mcp serve`
+- **Functional Testing**: Verify resolvers, validation rules, and workflows deterministically with `scafctl test functional`
 - **CEL Integration**: Use Common Expression Language for dynamic evaluation
 - **Providers**: 11 built-in + 11 official plugin providers (HTTP, exec, file, directory, git, github, hcl, kubeconfig, CEL, and more)
 - **Catalog**: Publish, version, and share reusable solutions via OCI registries

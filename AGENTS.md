@@ -7,8 +7,9 @@ task before deep work in that area.
 
 ## Overview
 
-Go-based CLI tool using CEL (Common Expression Language) for dynamic
-configuration evaluation and template processing. Pre-production: breaking
+Go-based CLI and workflow engine to declaratively discover data, shape
+configuration, and run portable workflows for humans and AI agents (powered by
+CEL, OCI solution bundles, and built-in MCP tooling). Pre-production: breaking
 changes are allowed (note them in the commit/PR); do not add backward
 compatibility for removed behavior.
 

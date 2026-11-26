@@ -4,7 +4,7 @@ version: "3"
 
 vars:
   NAME: "scafctl"
-  DESCRIPTION: "A configuration discovery and scaffolding tool written in go"
+  DESCRIPTION: "Declaratively discover data, shape configuration, and run portable workflows for humans and AI agents"
   DEFAULT_GO_VERSION: "1.26.0"
   GOIMPORTS_VERSION: "v0.42.0"
   GOFUMPT_VERSION: "v0.9.2"
