@@ -6,6 +6,7 @@ package builder
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
@@ -284,9 +285,7 @@ func collectBundleWarnings(ctx context.Context, sol *solution.Solution, pkgRes *
 		}
 	}
 
-	all := make([]string, 0, len(completeness)+len(dynamicWarnings))
-	all = append(all, completeness...)
-	all = append(all, dynamicWarnings...)
+	all := slices.Concat(completeness, dynamicWarnings)
 
 	return completeness, all
 }
