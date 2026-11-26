@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -42,7 +43,7 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 
 	cmd := &cobra.Command{
 		Use:     "solution [name[@version]]",
-		Aliases: []string{"sol"},
+		Aliases: []string{"sol", "s", "solutions"},
 		Short:   "Inspect a solution's structure (or --usage for how to run it)",
 		Long: heredoc.Doc(`
 			Inspect a specific solution's structure and metadata with full kvx
@@ -58,9 +59,8 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 			consume a solution you did not write.
 
 			Solutions can be loaded from:
-			  - Catalog name or remote registry ref: positional argument
-			  - URL: positional argument or -f/--file
-			  - Local file: -f/--file flag
+			  - Catalog name, remote registry ref, or URL: positional argument
+			  - Local file or stdin ('-'): -f/--file flag
 			  - Auto-discovery: if no source is specified, searches for solution.yaml
 		`),
 		Example: heredoc.Docf(`
@@ -96,10 +96,27 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 			opts.BinaryName = binaryName
 
 			w := writer.FromContext(ctx)
+			if w == nil && ioStreams != nil {
+				w = writer.New(ioStreams, cliParams)
+			}
+
+			bin := binaryName
+			if bin == "" {
+				bin = settings.CliBinaryName
+			}
+			cmdUsage := bin + " inspect solution"
+			if _, err := source.ValidateFileFlagPositional(opts.File, cmdUsage); err != nil {
+				if w != nil {
+					w.Errorf("%v", err)
+				}
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
 
 			if len(args) > 0 {
-				if _, err := source.ValidatePositionalRef(args[0], opts.File, binaryName+" inspect solution"); err != nil {
-					w.Errorf("%v", err)
+				if _, err := source.ValidatePositionalRef(args[0], opts.File, cmdUsage); err != nil {
+					if w != nil {
+						w.Errorf("%v", err)
+					}
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 				opts.File = args[0]
@@ -110,7 +127,7 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 		SilenceUsage: true,
 	}
 
-	cmd.Flags().StringVarP(&opts.File, "file", "f", "", "Path to the solution file (local file, URL, or '-' for stdin)")
+	cmd.Flags().StringVarP(&opts.File, "file", "f", "", "Local solution file path (or '-' for stdin)")
 	cmd.Flags().BoolVar(&opts.Usage, "usage", false, "Show the user-facing usage view (synopsis, parameters, and how to run each action)")
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
 
@@ -121,7 +138,11 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 func (o *SolutionOptions) Run(ctx context.Context) error {
 	w := writer.FromContext(ctx)
 
-	sol, err := inspect.LoadSolution(ctx, o.File)
+	var routerOpts []load.RouterOption
+	if o.IOStreams != nil && o.IOStreams.In != nil {
+		routerOpts = append(routerOpts, load.WithStdin(o.IOStreams.In))
+	}
+	sol, err := inspect.LoadSolution(ctx, o.File, routerOpts...)
 	if err != nil {
 		// Surface the error to the user before returning the coded error;
 		// otherwise a non-GeneralError exit code exits silently.

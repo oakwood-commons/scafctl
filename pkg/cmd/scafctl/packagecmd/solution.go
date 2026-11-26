@@ -70,7 +70,7 @@ func CommandPackageSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 
 	cmd := &cobra.Command{
 		Use:          "solution",
-		Aliases:      []string{"sol", "s"},
+		Aliases:      []string{"sol", "s", "solutions"},
 		Short:        "Package a solution into the local catalog",
 		SilenceUsage: true,
 		Long: strings.ReplaceAll(heredoc.Doc(`

@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
+	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -656,6 +657,106 @@ func TestValidateLockMode(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestResolveExplicitSource(t *testing.T) {
+	t.Parallel()
+
+	const usage = "mycli run action"
+	tests := []struct {
+		name    string
+		opts    sharedResolverOptions
+		names   []string
+		want    string
+		wantErr string
+		wantIs  error
+	}{
+		{
+			name: "neither set returns empty",
+			opts: sharedResolverOptions{},
+			want: "",
+		},
+		{
+			name: "local file allowed on -f",
+			opts: sharedResolverOptions{File: "./actions.yaml"},
+			want: "./actions.yaml",
+		},
+		{
+			name: "stdin allowed on -f",
+			opts: sharedResolverOptions{File: "-"},
+			want: "-",
+		},
+		{
+			name:    "catalog name on -f rejected with -s hint",
+			opts:    sharedResolverOptions{File: "my-app"},
+			wantErr: "mycli run action -s my-app",
+		},
+		{
+			name:  "catalog name on -s allowed with unversioned action name",
+			opts:  sharedResolverOptions{Solution: "my-app"},
+			names: []string{"lint"},
+			want:  "my-app",
+		},
+		{
+			name:   "both -f and -s rejected",
+			opts:   sharedResolverOptions{File: "./actions.yaml", Solution: "my-app"},
+			wantIs: source.ErrFileAndSolution,
+		},
+		{
+			name: "explicit empty -f with -s rejected",
+			opts: sharedResolverOptions{
+				Solution:     "my-app",
+				flagsChanged: map[string]bool{"file": true, "solution": true},
+			},
+			wantIs: source.ErrFileAndSolution,
+		},
+		{
+			name: "explicit empty -s rejected",
+			opts: sharedResolverOptions{
+				flagsChanged: map[string]bool{"solution": true},
+			},
+			wantErr: "-s/--solution accepts catalog names",
+		},
+		{
+			name:    "local path on -s rejected with -f hint",
+			opts:    sharedResolverOptions{Solution: "./solution.yaml"},
+			wantErr: "mycli run action -f ./solution.yaml",
+		},
+		{
+			name:   "-s conflicts with positional versioned ref",
+			opts:   sharedResolverOptions{Solution: "my-app"},
+			names:  []string{"other@1.0.0"},
+			wantIs: source.ErrSolutionAndPositional,
+		},
+		{
+			name:   "-s conflicts with positional URL",
+			opts:   sharedResolverOptions{Solution: "my-app"},
+			names:  []string{"https://example.com/sol.yaml"},
+			wantIs: source.ErrSolutionAndPositional,
+		},
+		{
+			name:   "-s surfaces malformed positional ref",
+			opts:   sharedResolverOptions{Solution: "my-app"},
+			names:  []string{"bad@"},
+			wantIs: source.ErrInvalidRef,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := tt.opts.resolveExplicitSource(usage, tt.names)
+			switch {
+			case tt.wantIs != nil:
+				require.ErrorIs(t, err, tt.wantIs)
+			case tt.wantErr != "":
+				require.ErrorContains(t, err, tt.wantErr)
+			default:
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			}
 		})
 	}
 }

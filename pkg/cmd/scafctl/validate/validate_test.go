@@ -4,6 +4,10 @@
 package validate
 
 import (
+	"bytes"
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -20,8 +24,11 @@ func TestCommandValidate(t *testing.T) {
 
 	cmd := CommandValidate(cliParams, streams, "scafctl")
 
-	assert.Equal(t, "validate", cmd.Use)
+	assert.Equal(t, "validate [name[@version]]", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
+	assert.NotNil(t, cmd.Flags().Lookup("file"))
+	assert.NotNil(t, cmd.Flags().Lookup("strict"))
+	assert.NotNil(t, cmd.Flags().Lookup("output"))
 
 	// The subcommands must be wired up.
 	subs := map[string]bool{}
@@ -42,27 +49,30 @@ func TestCommandValidate_EmbedderBinaryName(t *testing.T) {
 
 	cmd := CommandValidate(cliParams, streams, "mycli")
 	assert.Contains(t, cmd.Short, "mycli")
-}
 
-// TestCommandValidate_UnknownSubcommandErrors verifies that an unknown
-// subcommand errors (non-zero) while a bare invocation shows help and exits 0.
-func TestCommandValidate_UnknownSubcommandErrors(t *testing.T) {
-	t.Parallel()
-
-	cliParams := settings.NewCliParams()
-	streams, _, _ := terminal.NewTestIOStreams()
-
-	cmd := CommandValidate(cliParams, streams, "scafctl")
-	cmd.SetArgs([]string{"bogus-xyz"})
-	cmd.SilenceErrors = true
-	cmd.SilenceUsage = true
+	cmd.SetArgs([]string{"-f", "my-app"})
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown command")
+	assert.Contains(t, err.Error(), "mycli validate my-app")
+}
 
-	cmd2 := CommandValidate(cliParams, streams, "scafctl")
-	cmd2.SetArgs([]string{})
-	cmd2.SilenceErrors = true
-	cmd2.SilenceUsage = true
-	assert.NoError(t, cmd2.Execute())
+func TestCommandValidate_DefaultsToValidateSolution(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(p, []byte(cleanSolution), 0o600))
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandValidate(cliParams, streams, "scafctl")
+	cmd.SetArgs([]string{"-f", p, "-o", "quiet"})
+	require.NoError(t, cmd.Execute())
+
+	// Also supports -f - stdin on root validate
+	stdinStreams := terminal.NewIOStreams(io.NopCloser(bytes.NewBufferString(cleanSolution)), &bytes.Buffer{}, &bytes.Buffer{}, false)
+	cmdStdin := CommandValidate(cliParams, stdinStreams, "scafctl")
+	cmdStdin.SetArgs([]string{"-f", "-", "-o", "quiet"})
+	require.NoError(t, cmdStdin.Execute())
 }

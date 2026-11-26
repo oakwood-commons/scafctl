@@ -188,9 +188,19 @@ Examples:
 			options.IOStreams = ioStreams
 			options.CliParams = cliParams
 
+			bin := settings.CliBinaryName
+			if cliParams != nil && cliParams.BinaryName != "" {
+				bin = cliParams.BinaryName
+			}
+			cmdUsage := bin + " render solution"
+			if _, err := source.ValidateFileFlagPositional(options.File, cmdUsage); err != nil {
+				writeSolutionError(options, err.Error())
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
 			// Handle positional catalog name argument
 			if len(args) > 0 {
-				if _, err := source.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" render solution"); err != nil {
+				if _, err := source.ValidatePositionalRef(args[0], options.File, cmdUsage); err != nil {
 					writeSolutionError(options, err.Error())
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}

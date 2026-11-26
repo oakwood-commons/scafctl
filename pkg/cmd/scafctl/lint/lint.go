@@ -86,6 +86,11 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 		IOStreams: ioStreams,
 	}
 
+	bin := settings.CliBinaryName
+	if cliParams != nil && cliParams.BinaryName != "" {
+		bin = cliParams.BinaryName
+	}
+
 	cmd := &cobra.Command{
 		Use:     "lint [name[@version]]",
 		Aliases: []string{"l", "check"},
@@ -106,7 +111,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			  Use -o to select a format, -i for interactive exploration,
 			  -e for CEL expression filtering, -w for per-finding filters.
-		`, pkglint.RuleSummaryText()), settings.CliBinaryName, cliParams.BinaryName),
+		`, pkglint.RuleSummaryText()), settings.CliBinaryName, bin),
 		Example: strings.ReplaceAll(heredoc.Doc(`
 			# Lint a solution file
 			scafctl lint -f ./solution.yaml
@@ -122,46 +127,125 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			# Preview the fixes as a unified diff without writing
 			scafctl lint -f ./solution.yaml --fix-dry-run --diff
-		`), settings.CliBinaryName, cliParams.BinaryName),
-		Args: cobra.MaximumNArgs(1),
-		PreRunE: func(_ *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				if _, err := source.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" lint"); err != nil {
-					return err
-				}
-				options.File = args[0]
-			}
-			return nil
-		},
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Name())
-			ctx := settings.IntoContext(cmd.Context(), cliParams)
-			lgr := logger.FromContext(cmd.Context())
-			ctx = logger.WithLogger(ctx, lgr)
-
-			options.BinaryName = cliParams.BinaryName
-
-			if options.Fix || options.FixDryRun || options.Diff {
-				return runLintFix(ctx, options)
-			}
-			return runLint(ctx, options)
-		},
+		`), settings.CliBinaryName, bin),
+		Args:         cobra.MaximumNArgs(1),
+		PreRunE:      newLintPreRunE(options, cliParams, ioStreams, "lint"),
+		RunE:         newLintRunE(options, cliParams, path),
 		SilenceUsage: true,
 	}
 
+	registerLintFlags(cmd, options)
+
+	lintPath := fmt.Sprintf("%s/%s", path, cmd.Name())
+	cmd.AddCommand(CommandLintSolution(cliParams, ioStreams, lintPath))
+	cmd.AddCommand(CommandRules(cliParams, ioStreams, lintPath))
+	cmd.AddCommand(CommandRule(cliParams, ioStreams, lintPath))
+	cmd.AddCommand(CommandExplainRuleDeprecated(cliParams, ioStreams, lintPath))
+
+	return cmd
+}
+
+// CommandLintSolution creates the 'lint solution' subcommand so 'lint solution'
+// works symmetrically alongside bare 'lint'.
+func CommandLintSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+	options := &Options{
+		CliParams: cliParams,
+		IOStreams: ioStreams,
+	}
+
+	bin := settings.CliBinaryName
+	if cliParams != nil && cliParams.BinaryName != "" {
+		bin = cliParams.BinaryName
+	}
+
+	cmd := &cobra.Command{
+		Use:     "solution [name[@version]]",
+		Aliases: []string{"sol", "s", "solutions"},
+		Short:   fmt.Sprintf("Lint a %s solution for potential issues and best practices", bin),
+		Long: strings.ReplaceAll(heredoc.Docf(`
+			Analyze a solution file or catalog reference for potential issues, anti-patterns, and best practices.
+
+			%s
+
+			  Run 'scafctl lint rules' for the full rule list with descriptions,
+			  or 'scafctl lint rule <name>' to explain a single rule.
+		`, pkglint.RuleSummaryText()), settings.CliBinaryName, bin),
+		Example: strings.ReplaceAll(heredoc.Doc(`
+			# Lint the auto-discovered solution
+			scafctl lint solution
+
+			# Lint a local solution file
+			scafctl lint solution -f ./solution.yaml
+
+			# Lint a catalog solution by name
+			scafctl lint solution my-app@1.0.0
+		`), settings.CliBinaryName, bin),
+		Args:         cobra.MaximumNArgs(1),
+		PreRunE:      newLintPreRunE(options, cliParams, ioStreams, "lint solution"),
+		RunE:         newLintRunE(options, cliParams, path),
+		SilenceUsage: true,
+	}
+
+	registerLintFlags(cmd, options)
+	return cmd
+}
+
+func registerLintFlags(cmd *cobra.Command, options *Options) {
 	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path (auto-discovered if not provided, use '-' for stdin)")
 	cmd.Flags().StringVar(&options.Severity, "severity", "info", "Minimum severity to report: error, warning, info")
 	cmd.Flags().BoolVar(&options.Fix, "fix", false, "Automatically fix fixable findings (e.g. rename hyphenated resolvers to camelCase) and write the result")
 	cmd.Flags().BoolVar(&options.FixDryRun, "fix-dry-run", false, "Report which findings would be fixed without writing any changes")
 	cmd.Flags().BoolVar(&options.Diff, "diff", false, "With --fix or --fix-dry-run, print a unified diff of the fixes instead of writing (implies no write)")
 	flags.AddKvxOutputFlagsToStruct(cmd, &options.KvxOutputFlags)
+}
 
-	lintPath := fmt.Sprintf("%s/%s", path, cmd.Use)
-	cmd.AddCommand(CommandRules(cliParams, ioStreams, lintPath))
-	cmd.AddCommand(CommandRule(cliParams, ioStreams, lintPath))
-	cmd.AddCommand(CommandExplainRuleDeprecated(cliParams, ioStreams, lintPath))
+func newLintPreRunE(options *Options, cliParams *settings.Run, ioStreams *terminal.IOStreams, subcmd string) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		fail := func(err error) error {
+			var w *writer.Writer
+			if cmd != nil && cmd.Context() != nil {
+				w = writer.FromContext(cmd.Context())
+			}
+			if w == nil && ioStreams != nil {
+				w = writer.New(ioStreams, cliParams)
+			}
+			if w != nil {
+				w.Errorf("%v", err)
+			}
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		bin := settings.CliBinaryName
+		if cliParams != nil && cliParams.BinaryName != "" {
+			bin = cliParams.BinaryName
+		}
+		cmdUsage := bin + " " + subcmd
+		if _, err := source.ValidateFileFlagPositional(options.File, cmdUsage); err != nil {
+			return fail(err)
+		}
+		if len(args) > 0 {
+			if _, err := source.ValidatePositionalRef(args[0], options.File, cmdUsage); err != nil {
+				return fail(err)
+			}
+			options.File = args[0]
+		}
+		return nil
+	}
+}
 
-	return cmd
+func newLintRunE(options *Options, cliParams *settings.Run, path string) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, _ []string) error {
+		cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Name())
+		ctx := settings.IntoContext(cmd.Context(), cliParams)
+		lgr := logger.FromContext(cmd.Context())
+		ctx = logger.WithLogger(ctx, lgr)
+
+		options.BinaryName = cliParams.BinaryName
+
+		if options.Fix || options.FixDryRun || options.Diff {
+			return runLintFix(ctx, options)
+		}
+		return runLint(ctx, options)
+	}
 }
 
 // findingsColumnHints returns column display hints for the findings table.

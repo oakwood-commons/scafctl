@@ -153,9 +153,10 @@ Auto-discovery works with every command that accepts `-f`:
 | `scafctl run action` | Yes | Searches `actions.yaml`/`actions.yml` first, then solution files (including `--list` / `-l`) |
 | `scafctl run resolver` | Yes | Searches solution files first, falls back to `actions.yaml`/`actions.yml`, then valid catalog bare names |
 | `scafctl validate resolver` | Yes | Same discovery and catalog fallback as `run resolver` |
-| `scafctl lint` | Yes | Discovers and lints the local solution |
+| `scafctl lint` / `scafctl lint solution` | Yes | Discovers and lints the local solution |
+| `scafctl validate` / `scafctl validate solution` | Yes | Discovers and validates the local solution |
 | `scafctl render solution` | Yes | Discovers solution for rendering |
-| `scafctl test functional` | Yes | Discovers solution to run functional tests |
+| `scafctl test` / `scafctl test functional` | Yes | Discovers solution to run functional tests |
 | `scafctl test list` | Yes | Discovers solution to list test cases |
 | `scafctl test init` | Yes | Discovers solution to generate test scaffold |
 | `scafctl plugins install` | Yes | Discovers solution to install referenced plugins |
@@ -257,39 +258,41 @@ scafctl lint                  # discovers ./.scafctl/solution.yaml
 {{% /tab %}}
 {{< /tabs >}}
 
-### Explicit `-f` Overrides Discovery
+### Explicit Sources Override Discovery
 
-When you specify `-f`, auto-discovery is skipped entirely:
+When you specify `-f`/`--file` (for a local path or `-` stdin), `-s`/`--solution`, or a positional catalog/URL reference, auto-discovery is skipped entirely:
 
 {{< tabs "auto-discovery-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
 ```bash
-# Use a specific file regardless of what's in the current directory
+# Use a specific local file regardless of what's in the current directory
 scafctl run solution -f path/to/other-solution.yaml
 
 # Use stdin
 cat solution.yaml | scafctl lint -f -
 
-# Use a URL
-scafctl run solution -f https://example.com/solution.yaml
+# Use a URL (positional reference)
+scafctl run solution https://example.com/solution.yaml
 
-# Use a catalog name
-scafctl run solution -f my-solution@1.0.0
+# Use a catalog name (positional on solution commands, -s on action/resolver commands)
+scafctl run solution my-solution@1.0.0
+scafctl run action build -s my-solution@1.0.0
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-# Use a specific file regardless of what's in the current directory
+# Use a specific local file regardless of what's in the current directory
 scafctl run solution -f path/to/other-solution.yaml
 
 # Use stdin
 cat solution.yaml | scafctl lint -f -
 
-# Use a URL
-scafctl run solution -f https://example.com/solution.yaml
+# Use a URL (positional reference)
+scafctl run solution https://example.com/solution.yaml
 
-# Use a catalog name
-scafctl run solution -f my-solution@1.0.0
+# Use a catalog name (positional on solution commands, -s on action/resolver commands)
+scafctl run solution my-solution@1.0.0
+scafctl run action build -s my-solution@1.0.0
 ```
 {{% /tab %}}
 {{< /tabs >}}

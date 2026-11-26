@@ -1550,6 +1550,12 @@ scafctl run resolver -f solution.yaml
 # Named resolvers (with dependencies)
 scafctl run resolver db config -f solution.yaml
 
+# Named resolvers from a catalog solution (-s/--solution)
+scafctl run resolver db config -s my-app@1.0.0
+
+# Resolvers consumed by a specific action (-a/--action)
+scafctl run resolver -a deploy -f solution.yaml
+
 # JSON output (resolver values only, no execution metadata)
 scafctl run resolver -f solution.yaml -o json
 
@@ -1593,6 +1599,12 @@ scafctl run resolver -f solution.yaml
 
 # Named resolvers (with dependencies)
 scafctl run resolver db config -f solution.yaml
+
+# Named resolvers from a catalog solution (-s/--solution)
+scafctl run resolver db config -s my-app@1.0.0
+
+# Resolvers consumed by a specific action (-a/--action)
+scafctl run resolver -a deploy -f solution.yaml
 
 # JSON output (resolver values only, no execution metadata)
 scafctl run resolver -f solution.yaml -o json

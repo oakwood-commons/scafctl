@@ -288,7 +288,7 @@ spec:
 		var got []inspect.ActionListEntry
 		require.NoError(t, yaml.Unmarshal(stdout.Bytes(), &got))
 		require.Len(t, got, 3)
-		assert.Equal(t, "scafctl run action build -f "+srv.URL+"/actions.yaml", got[0].Command)
+		assert.Equal(t, "scafctl run action build -s "+srv.URL+"/actions.yaml", got[0].Command)
 	})
 
 	t.Run("empty action list emits [] in structured output and stderr notice in human mode", func(t *testing.T) {
@@ -716,7 +716,7 @@ spec:
 		sharedResolverOptions: sharedResolverOptions{
 			IOStreams:         streams,
 			CliParams:         cliParams,
-			File:              "scoped-tasks",
+			Solution:          "scoped-tasks",
 			Catalog:           "local",
 			VersionConstraint: "^1.0.0-0",
 			PreRelease:        true,
@@ -734,7 +734,7 @@ spec:
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &got))
 	require.Len(t, got, 2)
 	assert.Equal(t, "scafctl run solution scoped-tasks --catalog local --version '^1.0.0-0' --pre-release", got[0].Command)
-	assert.Equal(t, "scafctl run action release -f scoped-tasks --catalog local --version '^1.0.0-0' --pre-release", got[1].Command)
+	assert.Equal(t, "scafctl run action release -s scoped-tasks --catalog local --version '^1.0.0-0' --pre-release", got[1].Command)
 }
 
 func TestActionOptions_RunList_QuotesFilePathWithSpaces(t *testing.T) {

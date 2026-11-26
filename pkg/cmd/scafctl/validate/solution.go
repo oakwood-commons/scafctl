@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/load"
 	"github.com/oakwood-commons/scafctl/pkg/solution/source"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -39,14 +40,14 @@ type solutionOptions struct {
 func CommandValidateSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	opts := &solutionOptions{}
 
-	binaryName := cliParams.BinaryName
-	if binaryName == "" {
-		binaryName = settings.CliBinaryName
+	binaryName := settings.CliBinaryName
+	if cliParams != nil && cliParams.BinaryName != "" {
+		binaryName = cliParams.BinaryName
 	}
 
 	cCmd := &cobra.Command{
 		Use:     "solution [name[@version]]",
-		Aliases: []string{"sol"},
+		Aliases: []string{"sol", "s", "solutions"},
 		Short:   fmt.Sprintf("Validate that a %s solution is correct and ready (runs lint)", binaryName),
 		Long: strings.ReplaceAll(`Validate a solution and fail on any error. This is the primary gate: it loads
 the solution and runs lint, which includes a JSON Schema conformance check.
@@ -69,38 +70,67 @@ Examples:
 
   # Treat warnings as fatal
   scafctl validate solution -f ./my-solution.yaml --strict`, settings.CliBinaryName, binaryName),
-		Args: cobra.MaximumNArgs(1),
-		PreRunE: func(_ *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				if _, err := source.ValidatePositionalRef(args[0], opts.File, binaryName+" validate solution"); err != nil {
-					return err
-				}
-				opts.File = args[0]
-			}
-			return nil
-		},
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Name())
-			ctx := settings.IntoContext(cmd.Context(), cliParams)
-			if lgr := logger.FromContext(cmd.Context()); lgr != nil {
-				ctx = logger.WithLogger(ctx, lgr)
-			}
-			w := writer.FromContext(cmd.Context())
-			if w == nil {
-				w = writer.New(ioStreams, cliParams)
-			}
-			ctx = writer.WithWriter(ctx, w)
-
-			return runValidateSolution(ctx, opts, cliParams, ioStreams)
-		},
+		Args:         cobra.MaximumNArgs(1),
+		PreRunE:      newValidateSolutionPreRunE(opts, cliParams, ioStreams, binaryName, "validate solution"),
+		RunE:         newValidateSolutionRunE(opts, cliParams, ioStreams, path),
 		SilenceUsage: true,
 	}
 
-	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Solution file path (auto-discovered if not provided)")
-	cCmd.Flags().BoolVar(&opts.Strict, "strict", false, "Treat lint warnings as fatal (errors and schema violations are always fatal)")
-	flags.AddKvxOutputFlagsToStruct(cCmd, &opts.KvxOutputFlags)
+	registerValidateSolutionFlags(cCmd, opts)
 
 	return cCmd
+}
+
+func registerValidateSolutionFlags(cCmd *cobra.Command, opts *solutionOptions) {
+	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Solution file path (auto-discovered if not provided, use '-' for stdin)")
+	cCmd.Flags().BoolVar(&opts.Strict, "strict", false, "Treat lint warnings as fatal (errors and schema violations are always fatal)")
+	flags.AddKvxOutputFlagsToStruct(cCmd, &opts.KvxOutputFlags)
+}
+
+func newValidateSolutionPreRunE(opts *solutionOptions, cliParams *settings.Run, ioStreams *terminal.IOStreams, binaryName, subcmd string) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		fail := func(err error) error {
+			var w *writer.Writer
+			if cmd != nil && cmd.Context() != nil {
+				w = writer.FromContext(cmd.Context())
+			}
+			if w == nil && ioStreams != nil {
+				w = writer.New(ioStreams, cliParams)
+			}
+			if w != nil {
+				w.Errorf("%v", err)
+			}
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		cmdUsage := binaryName + " " + subcmd
+		if _, err := source.ValidateFileFlagPositional(opts.File, cmdUsage); err != nil {
+			return fail(err)
+		}
+		if len(args) > 0 {
+			if _, err := source.ValidatePositionalRef(args[0], opts.File, cmdUsage); err != nil {
+				return fail(err)
+			}
+			opts.File = args[0]
+		}
+		return nil
+	}
+}
+
+func newValidateSolutionRunE(opts *solutionOptions, cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, _ []string) error {
+		cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Name())
+		ctx := settings.IntoContext(cmd.Context(), cliParams)
+		if lgr := logger.FromContext(cmd.Context()); lgr != nil {
+			ctx = logger.WithLogger(ctx, lgr)
+		}
+		w := writer.FromContext(cmd.Context())
+		if w == nil {
+			w = writer.New(ioStreams, cliParams)
+		}
+		ctx = writer.WithWriter(ctx, w)
+
+		return runValidateSolution(ctx, opts, cliParams, ioStreams)
+	}
 }
 
 // runValidateSolution orchestrates loading + linting via the domain helper,
@@ -113,7 +143,11 @@ Examples:
 func runValidateSolution(ctx context.Context, opts *solutionOptions, cliParams *settings.Run, ioStreams *terminal.IOStreams) error {
 	registry := defaultRegistry(ctx)
 
-	res, err := pkgvalidate.Solution(ctx, opts.File, registry)
+	var routerOpts []load.RouterOption
+	if ioStreams != nil && ioStreams.In != nil {
+		routerOpts = append(routerOpts, load.WithStdin(ioStreams.In))
+	}
+	res, err := pkgvalidate.Solution(ctx, opts.File, registry, routerOpts...)
 	if err != nil {
 		if w := writer.FromContext(ctx); w != nil {
 			w.Errorf("%v", err)

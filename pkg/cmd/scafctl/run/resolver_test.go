@@ -7,12 +7,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
+	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -2134,6 +2138,13 @@ spec:
 		assert.Equal(t, "/custom.yaml", extractSolutionPathWithArgs(cmd, []string{"-f", "/custom.yaml"}))
 		assert.Equal(t, "/custom.yaml", extractSolutionPathWithArgs(cmd, []string{"-f=/custom.yaml"}))
 		assert.Equal(t, "/custom.yaml", extractSolutionPathWithArgs(cmd, []string{"--file=/custom.yaml"}))
+		assert.Equal(t, "my-app@1.0.0", extractSolutionPathWithArgs(cmd, []string{"-s", "my-app@1.0.0"}))
+		assert.Equal(t, "my-app", extractSolutionPathWithArgs(cmd, []string{"-s=my-app"}))
+		assert.Equal(t, "https://example.com/sol.yaml", extractSolutionPathWithArgs(cmd, []string{"--solution=https://example.com/sol.yaml"}))
+		// Invalid/conflicting explicit flags do not fall back to local solution.yaml
+		assert.Equal(t, "", extractSolutionPathWithArgs(cmd, []string{"-f", "my-app"}))
+		assert.Equal(t, "", extractSolutionPathWithArgs(cmd, []string{"-s", "./local.yaml"}))
+		assert.Equal(t, "", extractSolutionPathWithArgs(cmd, []string{"-f", "/custom.yaml", "-s", "my-app"}))
 	})
 }
 
@@ -2148,10 +2159,15 @@ func TestHasActionFlagInArgs(t *testing.T) {
 		{name: "empty", args: nil, want: false},
 		{name: "separate value", args: []string{"run", "resolver", "--action", "release"}, want: true},
 		{name: "equals value", args: []string{"run", "resolver", "--action=release"}, want: true},
+		{name: "short separate value", args: []string{"run", "resolver", "-a", "release"}, want: true},
+		{name: "short equals value", args: []string{"run", "resolver", "-a=release"}, want: true},
 		{name: "trailing flag without value", args: []string{"run", "resolver", "--action"}, want: false},
+		{name: "trailing short flag without value", args: []string{"run", "resolver", "-a"}, want: false},
 		{name: "empty separate value", args: []string{"run", "resolver", "--action", ""}, want: false},
 		{name: "empty equals value", args: []string{"run", "resolver", "--action="}, want: false},
+		{name: "empty short equals value", args: []string{"run", "resolver", "-a="}, want: false},
 		{name: "after double dash terminator", args: []string{"run", "resolver", "--", "--action", "release"}, want: false},
+		{name: "short after double dash terminator", args: []string{"run", "resolver", "--", "-a", "release"}, want: false},
 	}
 
 	for _, tt := range tests {
@@ -3870,4 +3886,128 @@ spec:
 			assert.Equal(t, map[string]any{"target": "clean"}, out)
 		}
 	})
+}
+
+func TestCommandResolver_SolutionAndActionShorthand(t *testing.T) {
+	t.Parallel()
+
+	t.Run("run resolver registers -s and -a and rejects -f catalog ref", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		cliParams.ExitOnError = false
+		streams, _, errBuf := terminal.NewTestIOStreams()
+		cmd := CommandResolver(cliParams, streams, "mycli/run")
+
+		require.NotNil(t, cmd.Flags().ShorthandLookup("s"))
+		assert.Equal(t, "solution", cmd.Flags().ShorthandLookup("s").Name)
+		require.NotNil(t, cmd.Flags().ShorthandLookup("a"))
+		assert.Equal(t, "action", cmd.Flags().ShorthandLookup("a").Name)
+
+		cmd.SetArgs([]string{"db", "-f", "my-app"})
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error()+errBuf.String(), "mycli run resolver -s my-app")
+	})
+
+	t.Run("validate resolver registers -s and -a and rejects -f catalog ref", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		cliParams.ExitOnError = false
+		streams, _, errBuf := terminal.NewTestIOStreams()
+		cmd := CommandValidateResolver(cliParams, streams, "mycli/validate")
+
+		require.NotNil(t, cmd.Flags().ShorthandLookup("s"))
+		assert.Equal(t, "solution", cmd.Flags().ShorthandLookup("s").Name)
+		require.NotNil(t, cmd.Flags().ShorthandLookup("a"))
+		assert.Equal(t, "action", cmd.Flags().ShorthandLookup("a").Name)
+
+		cmd.SetArgs([]string{"-f", "my-app"})
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error()+errBuf.String(), "mycli validate resolver -s my-app")
+	})
+}
+
+func TestCommandResolver_DynamicHelp_CatalogAndVersionSelectors(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+
+	localCat, err := catalog.NewLocalCatalogAt(filepath.Join(tmpDir, "scafctl", "catalog"), logr.Discard())
+	require.NoError(t, err)
+
+	storeVersion := func(ver, paramKey, desc string) {
+		solYAML := []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: versioned-help\n  version: " + ver + "\nspec:\n  resolvers:\n    " + paramKey + ":\n      description: " + desc + "\n      type: string\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              key: " + paramKey + "\n")
+		ref := catalog.Reference{
+			Kind:    catalog.ArtifactKindSolution,
+			Name:    "versioned-help",
+			Version: semver.MustParse(ver),
+		}
+		_, storeErr := localCat.Store(context.Background(), ref, solYAML, nil, nil, false)
+		require.NoError(t, storeErr)
+	}
+
+	storeVersion("1.0.0", "v1_param", "version one parameter")
+	storeVersion("2.0.0", "v2_param", "version two parameter")
+	storeVersion("3.0.0-beta.1", "v3_pre_param", "prerelease three parameter")
+
+	emptyDir := t.TempDir()
+
+	// 1. -s with --catalog local and --version '^1.0.0' selects 1.0.0 (not 2.0.0)
+	streams1, _, _ := terminal.NewTestIOStreams()
+	var out1 bytes.Buffer
+	cmd1 := CommandResolver(settings.NewCliParams(), streams1, "scafctl/run")
+	cmd1.SetOut(&out1)
+	cmd1.SetArgs([]string{"-s", "versioned-help", "--catalog", "local", "--version", "^1.0.0", "--help"})
+	require.NoError(t, cmd1.ExecuteContext(provider.WithWorkingDirectory(t.Context(), emptyDir)))
+	assert.Contains(t, out1.String(), "v1_param")
+	assert.Contains(t, out1.String(), "version one parameter")
+	assert.NotContains(t, out1.String(), "v2_param")
+	assert.NotContains(t, out1.String(), "v3_pre_param")
+
+	// 2. -s with --pre-release selects 3.0.0-beta.1 when unconstrained
+	streams2, _, _ := terminal.NewTestIOStreams()
+	var out2 bytes.Buffer
+	cmd2 := CommandResolver(settings.NewCliParams(), streams2, "scafctl/run")
+	cmd2.SetOut(&out2)
+	cmd2.SetArgs([]string{"-s", "versioned-help", "-c", "local", "--pre-release", "--help"})
+	require.NoError(t, cmd2.ExecuteContext(provider.WithWorkingDirectory(t.Context(), emptyDir)))
+	assert.Contains(t, out2.String(), "v3_pre_param")
+	assert.NotContains(t, out2.String(), "v2_param")
+
+	// 3. validate resolver also honors -s, -c, and --version at help time
+	streams3, _, _ := terminal.NewTestIOStreams()
+	var out3 bytes.Buffer
+	cmd3 := CommandValidateResolver(settings.NewCliParams(), streams3, "scafctl/validate")
+	cmd3.SetOut(&out3)
+	cmd3.SetArgs([]string{"-s", "versioned-help", "-c", "local", "--version", "^1.0.0", "--help"})
+	require.NoError(t, cmd3.ExecuteContext(provider.WithWorkingDirectory(t.Context(), emptyDir)))
+	assert.Contains(t, out3.String(), "v1_param")
+	assert.NotContains(t, out3.String(), "v2_param")
+
+	// 4. Positional catalog name with -c and --version selects 1.0.0 at help time
+	streams4, _, _ := terminal.NewTestIOStreams()
+	var out4 bytes.Buffer
+	cmd4 := CommandResolver(settings.NewCliParams(), streams4, "scafctl/run")
+	cmd4.SetOut(&out4)
+	cmd4.SetArgs([]string{"versioned-help", "-c", "local", "--version", "^1.0.0", "--help"})
+	require.NoError(t, cmd4.ExecuteContext(provider.WithWorkingDirectory(t.Context(), emptyDir)))
+	assert.Contains(t, out4.String(), "v1_param")
+	assert.NotContains(t, out4.String(), "v2_param")
+
+	// 5. -f - --help reads solution from IOStreams.In
+	stdinSol := []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: stdin-help\n  version: 1.0.0\nspec:\n  resolvers:\n    stdin_only_param:\n      description: parameter from stdin\n      type: string\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              key: stdin_only_param\n")
+	var out5 bytes.Buffer
+	streams5 := &terminal.IOStreams{
+		In:     io.NopCloser(bytes.NewReader(stdinSol)),
+		Out:    &out5,
+		ErrOut: &bytes.Buffer{},
+	}
+	cmd5 := CommandResolver(settings.NewCliParams(), streams5, "scafctl/run")
+	cmd5.SetOut(&out5)
+	cmd5.SetArgs([]string{"-f", "-", "--help"})
+	require.NoError(t, cmd5.ExecuteContext(provider.WithWorkingDirectory(t.Context(), emptyDir)))
+	assert.Contains(t, out5.String(), "stdin_only_param")
+	assert.Contains(t, out5.String(), "parameter from stdin")
 }

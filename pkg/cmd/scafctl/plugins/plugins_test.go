@@ -14,11 +14,14 @@ import (
 
 func TestCommandPlugins(t *testing.T) {
 	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandPlugins(cliParams, ioStreams, "scafctl")
+	cmd := CommandPlugins(cliParams, ioStreams, "mycli")
 	require.NotNil(t, cmd)
 	assert.Equal(t, "plugins", cmd.Use)
-	assert.NotEmpty(t, cmd.Short)
+	assert.Equal(t, []string{"plugin"}, cmd.Aliases)
+	assert.Contains(t, cmd.Short, "mycli")
+	assert.Contains(t, cmd.Long, "mycli")
 	assert.True(t, cmd.SilenceUsage)
 	assert.NotNil(t, cmd.RunE, "parent plugins command needs a help-only RunE so NoArgs rejects unknown subcommands")
 	subCmds := cmd.Commands()

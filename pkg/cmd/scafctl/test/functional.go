@@ -104,8 +104,18 @@ Examples:
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
 		PreRun: func(_ *cobra.Command, args []string) {
+			opts.positionalPathErr = nil
+			bin := settings.CliBinaryName
+			if cliParams != nil && cliParams.BinaryName != "" {
+				bin = cliParams.BinaryName
+			}
+			cmdUsage := bin + " test functional"
+			if _, err := source.ValidateFileFlagPositional(opts.File, cmdUsage); err != nil {
+				opts.positionalPathErr = err
+				return
+			}
 			if len(args) > 0 {
-				if _, err := source.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test functional"); err != nil {
+				if _, err := source.ValidatePositionalRef(args[0], opts.File, cmdUsage); err != nil {
 					opts.positionalPathErr = err
 				} else {
 					opts.File = args[0]
@@ -125,7 +135,14 @@ Examples:
 		},
 	}
 
-	// Register flags
+	registerFunctionalFlags(cCmd, opts)
+
+	return cCmd
+}
+
+// registerFunctionalFlags wires all FunctionalOptions flags onto cCmd so root
+// 'test' and 'test functional' expose identical flag sets.
+func registerFunctionalFlags(cCmd *cobra.Command, opts *FunctionalOptions) {
 	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Solution file path (auto-discovered if not provided)")
 	cCmd.Flags().StringVar(&opts.TestsPath, "tests-path", "", "Path to directory containing solution files with tests")
 	// Add kvx output flags (-o, -i, -e) but not -w (conflicts with --watch)
@@ -147,8 +164,6 @@ Examples:
 	cCmd.Flags().BoolVar(&opts.KeepSandbox, "keep-sandbox", false, "Keep sandbox directories after test execution")
 	cCmd.Flags().BoolVar(&opts.NoProgress, "no-progress", false, "Disable live progress output during test execution")
 	cCmd.Flags().BoolVarP(&opts.Watch, "watch", "w", false, "Watch solution files for changes and re-run affected tests")
-
-	return cCmd
 }
 
 // runFunctional implements the test functional command logic.

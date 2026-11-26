@@ -24,8 +24,9 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 
 | Command | Status | Notes |
 |---------|--------|-------|
-| `run solution` | ✅ Implemented | Requires workflow (errors if no workflow defined; use `run resolver` for resolver-only) |
-| `run resolver` | ✅ Implemented | Resolver-only execution for debugging and inspection |
+| `run solution` | Implemented | Executes resolvers + workflow actions (`-a/--action` filters actions; accepts positional `key=value` params) |
+| `run action` | Implemented | Executes named workflow actions (`-s/--solution` for catalog/remote/URL, `-f/--file` for local files) |
+| `run resolver` | Implemented | Resolver-only execution for debugging and inspection (`-s/--solution` for catalog/remote/URL, `-a/--action` scope) |
 | `render solution` | ✅ Implemented | Includes action-graph and snapshot modes |
 | `get solution/provider/resolver` | ✅ Implemented | |
 | `explain <kind>` | ✅ Implemented | Schema docs for resource kinds (provider, action, resolver) |
@@ -42,13 +43,14 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | `eval cel` | ✅ Implemented | Evaluate CEL expressions from CLI |
 | `eval template` | ✅ Implemented | Evaluate Go templates from CLI |
 | `eval validate` | ✅ Implemented | Validate solution files from CLI |
-| `validate solution` | ✅ Implemented | Primary gate: loads a solution and runs lint (errors fail, warnings surface, `--strict` makes warnings fatal) |
-| `validate resolver` | ✅ Implemented | Validates resolvers, then runs lint as a gate (`--strict` makes lint warnings fatal) |
-| `validate schema` | ✅ Implemented | Validate arbitrary data (JSON/YAML, `--data -` for stdin) against a JSON Schema |
-| `new solution` | ✅ Implemented | Scaffold a new solution from template |
-| `lint rules` | ✅ Implemented | List all available lint rules |
-| `lint rule` | ✅ Implemented | Explain a specific lint rule |
-| `lint` | ✅ Implemented | Advisory subset of `validate`: reports authoring warnings/findings without being the pass/fail gate |
+| `validate` / `validate solution` | Implemented | Primary gate: loads a solution (`-f -` supported) and runs lint (errors fail, warnings surface, `--strict` makes warnings fatal) |
+| `validate resolver` | Implemented | Validates resolvers (`-s/--solution` for catalog/remote/URL, `-a/--action` scope), then runs lint as a gate (`--strict` makes lint warnings fatal) |
+| `validate schema` | Implemented | Validate arbitrary data (JSON/YAML, `--data -` for stdin) against a JSON Schema |
+| `new solution` | Implemented | Scaffold a new solution from template |
+| `lint rules` | Implemented | List all available lint rules |
+| `lint rule` | Implemented | Explain a specific lint rule |
+| `lint` / `lint solution` | Implemented | Advisory subset of `validate`: reports authoring warnings/findings without being the pass/fail gate |
+| `test` / `test functional` | Implemented | Functional test execution (`test` without subcommand runs `test functional` with full flag parity) |
 | `examples list` | ✅ Implemented | List available example configurations |
 | `examples get` | ✅ Implemented | Get/download an example file |
 | `push solution/plugin` | 📋 Planned | Remote catalog feature |
@@ -113,9 +115,25 @@ scafctl run solution my-app@1.0.0
 
 # Error: local file path as positional arg
 scafctl run solution solution.yaml   # rejected with helpful error
+
+# Error: catalog reference passed to -f/--file
+scafctl run solution -f my-app       # rejected with helpful error
 ~~~
 
-This separation keeps the CLI unambiguous — positional arguments are always catalog/registry lookups while `-f` is always a file path.
+This separation keeps the CLI unambiguous -- positional arguments are catalog/registry/URL lookups while `-f/--file` is strictly a local file path (or `-` for stdin). On commands whose positional arguments name actions or resolvers (`run action`, `run resolver`, `validate resolver`), pass catalog, OCI registry, or URL solution references via `-s`/`--solution`:
+
+~~~bash
+# Run a specific action from a catalog solution
+scafctl run action init-repo -s my-app
+scafctl run solution my-app -a init-repo
+
+# Run specific resolvers from a catalog solution
+scafctl run resolver db config -s my-app@1.0.0
+~~~
+
+### Resource Subcommand Aliases
+
+Every `solution` subcommand (`run`, `render`, `inspect`, `validate`, `lint`, `get`, `package`, `diff`, `catalog`) supports the aliases `sol`, `s`, and `solutions`. Top-level `plugins` also aliases `plugin` (matching `secrets` / `secret`).
 
 ---
 
@@ -218,9 +236,10 @@ Typical uses:
 
 ## Passing Resolver Parameters
 
-Resolver parameters are passed using `-r` or `--resolver`.
+Resolver parameters can be passed positionally (`key=value`, `@file`, `@-`) after the target name on `run solution`, `run action`, `run resolver`, and `validate resolver`, or explicitly using `-r` / `--resolver`:
 
 ~~~bash
+scafctl run solution example env=prod
 scafctl run solution example -r env=prod
 ~~~
 
@@ -1003,10 +1022,12 @@ lint warnings are surfaced but do not fail unless `--strict` is passed:
 
 ~~~bash
 # Validate the auto-discovered solution (errors fail, warnings surface)
+scafctl validate
 scafctl validate solution
 
-# Validate a specific file
-scafctl validate solution -f ./my-solution.yaml
+# Validate a specific file or stdin
+scafctl validate -f ./my-solution.yaml
+cat ./my-solution.yaml | scafctl validate -f -
 
 # Treat warnings as fatal too
 scafctl validate solution -f ./my-solution.yaml --strict

@@ -53,8 +53,9 @@ func (r *SolutionResult) Passed(strict bool) bool {
 // callers must NOT additionally invoke the standalone schema validator.
 //
 // The registry is used for provider-aware lint rules; when nil, lint falls
-// back to a default registry.
-func Solution(ctx context.Context, filePath string, registry *provider.Registry) (*SolutionResult, error) {
+// back to a default registry. Optional routerOpts (such as load.WithStdin)
+// extend the router configuration.
+func Solution(ctx context.Context, filePath string, registry *provider.Registry, routerOpts ...load.RouterOption) (*SolutionResult, error) {
 	c, err := source.Classify(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("resolving solution path: %w", err)
@@ -63,7 +64,8 @@ func Solution(ctx context.Context, filePath string, registry *provider.Registry)
 	// Load leniently so structural problems (e.g. an undefined dependsOn
 	// target) surface as lint findings rather than aborting the load; the
 	// error severity of those findings still drives a non-zero result.
-	ms, err := load.NewRouterFromContext(ctx, *logger.FromContext(ctx), load.WithLenient()).Load(ctx, c)
+	opts := append([]load.RouterOption{load.WithLenient()}, routerOpts...)
+	ms, err := load.NewRouterFromContext(ctx, *logger.FromContext(ctx), opts...).Load(ctx, c)
 	if err != nil {
 		return nil, fmt.Errorf("loading solution: %w", err)
 	}

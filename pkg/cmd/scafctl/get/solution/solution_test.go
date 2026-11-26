@@ -329,6 +329,16 @@ func TestCommandSolution_Validation(t *testing.T) {
 			args:    []string{"-f", "solution.yaml", "-o", "xml"},
 			wantErr: "xml",
 		},
+		{
+			name:    "rejects catalog ref in -f",
+			args:    []string{"-f", "my-catalog"},
+			wantErr: "mycli get solution my-catalog",
+		},
+		{
+			name:    "rejects url in -f",
+			args:    []string{"-f", "https://example.com/solution.yaml"},
+			wantErr: "mycli get solution https://example.com/solution.yaml",
+		},
 	}
 
 	for _, tc := range tests {
@@ -337,8 +347,9 @@ func TestCommandSolution_Validation(t *testing.T) {
 			outBuf := &bytes.Buffer{}
 			errBuf := &bytes.Buffer{}
 			ioStreams := &terminal.IOStreams{Out: outBuf, ErrOut: errBuf}
-			cliParams := &settings.Run{NoColor: true}
+			cliParams := &settings.Run{NoColor: true, BinaryName: "mycli"}
 			cmd := CommandSolution(cliParams, ioStreams, "get")
+			assert.Equal(t, []string{"sol", "s", "solutions"}, cmd.Aliases)
 			cmd.SetArgs(tc.args)
 
 			err := cmd.Execute()

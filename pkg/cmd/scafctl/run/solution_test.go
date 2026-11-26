@@ -56,12 +56,14 @@ func TestCommandSolution(t *testing.T) {
 
 	cmd := CommandSolution(cliParams, streams, "")
 
-	assert.Equal(t, "solution [name[@version]]", cmd.Use)
+	assert.Equal(t, "solution [name[@version]] [key=value...]", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 
 	// Verify flags exist
 	flags := cmd.Flags()
 	assert.NotNil(t, flags.Lookup("file"))
+	assert.NotNil(t, flags.ShorthandLookup("a"))
+	assert.Equal(t, "action", flags.ShorthandLookup("a").Name)
 	assert.NotNil(t, flags.Lookup("resolver"))
 	assert.NotNil(t, flags.Lookup("output"))
 	assert.NotNil(t, flags.Lookup("resolve-all"))
@@ -1454,4 +1456,162 @@ func TestSolutionOptions_getEffectiveActionConfig_CIOutputPrecedence(t *testing.
 	optsFallback := &SolutionOptions{CIOutput: "auto"}
 	optsFallback.flagsChanged = map[string]bool{}
 	assert.Equal(t, "auto", optsFallback.getEffectiveActionConfig(badCfgCtx).CIOutput)
+}
+
+func TestCommandSolution_PositionalParamsActionShorthandAndValidation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("executes with positional key=value and -a shorthand", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		solPath := filepath.Join(dir, "solution.yaml")
+		solYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: param-sol
+  version: 1.0.0
+spec:
+  resolvers:
+    env:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: env
+              default: dev
+  workflow:
+    actions:
+      greet:
+        provider: static
+        inputs:
+          value:
+            rslvr: env
+      other:
+        provider: static
+        inputs:
+          value: skipped
+`
+		require.NoError(t, os.WriteFile(solPath, []byte(solYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.ExitOnError = false
+
+		cmd := CommandSolution(cliParams, streams, "scafctl/run")
+		cmd.SetArgs([]string{"-f", solPath, "-a", "greet", "env=production", "-o", "json"})
+		ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(streams, cliParams))
+		cmd.SetContext(ctx)
+
+		require.NoError(t, cmd.Execute(), stderr.String())
+		assert.Contains(t, stdout.String(), "greet")
+		assert.NotContains(t, stdout.String(), `"other"`)
+	})
+
+	t.Run("rejects multiple positional bare names with -a hint and embedder name", func(t *testing.T) {
+		t.Parallel()
+		streams, _, errBuf := terminal.NewTestIOStreams()
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		cliParams.ExitOnError = false
+
+		cmd := CommandSolution(cliParams, streams, "mycli/run")
+		cmd.SetArgs([]string{"my-app", "init-repo"})
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+		assert.Contains(t, err.Error()+errBuf.String(), "mycli run solution my-app -a init-repo")
+	})
+
+	t.Run("rejects -f with multiple bare positional words without bogus catalog hint", func(t *testing.T) {
+		t.Parallel()
+		streams, _, errBuf := terminal.NewTestIOStreams()
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		cliParams.ExitOnError = false
+
+		cmd := CommandSolution(cliParams, streams, "mycli/run")
+		cmd.SetArgs([]string{"-f", "./solution.yaml", "lint", "test"})
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+		assert.Contains(t, err.Error()+errBuf.String(), "cannot use both -f/--file and a positional argument")
+		assert.NotContains(t, err.Error()+errBuf.String(), "run solution lint -a test")
+	})
+
+	t.Run("rejects local path positional before -a hint", func(t *testing.T) {
+		t.Parallel()
+		streams, _, errBuf := terminal.NewTestIOStreams()
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		cliParams.ExitOnError = false
+
+		cmd := CommandSolution(cliParams, streams, "mycli/run")
+		cmd.SetArgs([]string{"./solution.yaml", "deploy"})
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+		assert.Contains(t, err.Error()+errBuf.String(), "mycli run solution -f ./solution.yaml")
+		assert.NotContains(t, err.Error()+errBuf.String(), "./solution.yaml -a deploy")
+	})
+
+	t.Run("rejects catalog ref passed via -f", func(t *testing.T) {
+		t.Parallel()
+		streams, _, errBuf := terminal.NewTestIOStreams()
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		cliParams.ExitOnError = false
+
+		cmd := CommandSolution(cliParams, streams, "mycli/run")
+		cmd.SetArgs([]string{"-f", "my-app"})
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+		assert.Contains(t, err.Error()+errBuf.String(), "mycli run solution my-app")
+	})
+
+	t.Run("rejects -f - combined with positional @-", func(t *testing.T) {
+		t.Parallel()
+		streams, _, _ := terminal.NewTestIOStreams()
+		cliParams := settings.NewCliParams()
+		cliParams.ExitOnError = false
+
+		cmd := CommandSolution(cliParams, streams, "scafctl/run")
+		cmd.SetArgs([]string{"-f", "-", "@-"})
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot use both -f - and @-")
+	})
+
+	t.Run("writeActionTestOutput includes DynamicArgs", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		solPath := filepath.Join(dir, "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte("apiVersion: scafctl.io/v1\n"), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		opts := &SolutionOptions{
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams:      streams,
+				CliParams:      cliParams,
+				File:           solPath,
+				ResolverParams: []string{"region=us-east1"},
+			},
+			DynamicArgs: []string{"--env=prod"},
+		}
+		ctx := writer.WithWriter(context.Background(), writer.New(streams, cliParams))
+		res := &action.ExecutionResult{
+			Actions: map[string]*action.ActionResult{
+				"greet": {Status: action.StatusSucceeded},
+			},
+			FinalStatus: action.ExecutionSucceeded,
+		}
+		require.NoError(t, opts.writeActionTestOutput(ctx, res, nil))
+		assert.Contains(t, stdout.String(), "region=us-east1")
+		assert.Contains(t, stdout.String(), "env=prod")
+		assert.NotContains(t, stdout.String(), "--env=prod")
+	})
 }

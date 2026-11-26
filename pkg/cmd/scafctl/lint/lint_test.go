@@ -39,11 +39,12 @@ func TestCommandLint(t *testing.T) {
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE, "lint command should have RunE")
 	subCmds := cmd.Commands()
-	require.Len(t, subCmds, 3, "should have 3 subcommands: rules, rule, explain")
+	require.Len(t, subCmds, 4, "should have 4 subcommands: solution, rules, rule, explain")
 	cmdNames := make([]string, len(subCmds))
 	for i, c := range subCmds {
 		cmdNames[i] = c.Name()
 	}
+	assert.Contains(t, cmdNames, "solution")
 	assert.Contains(t, cmdNames, "rules")
 	assert.Contains(t, cmdNames, "rule")
 	assert.Contains(t, cmdNames, "explain")
@@ -1156,4 +1157,41 @@ func TestLintExplainSchemaJSON_ParsesWithDisplay(t *testing.T) {
 	require.NoError(t, err, "lint_explain_schema.json must parse without error")
 	assert.NotNil(t, hints, "should produce column hints")
 	assert.NotNil(t, ds, "should produce display schema")
+}
+
+func TestCommandLintSolution(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandLintSolution(cliParams, ioStreams, "mycli/lint")
+	assert.Equal(t, "solution [name[@version]]", cmd.Use)
+	assert.Equal(t, []string{"sol", "s", "solutions"}, cmd.Aliases)
+	assert.Contains(t, cmd.Short, "mycli")
+	assert.Contains(t, cmd.Example, "mycli lint solution")
+
+	// Rejects catalog ref in -f with positional hint using embedder name
+	cmd.SetArgs([]string{"-f", "my-app"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	assert.Contains(t, err.Error(), "mycli lint solution my-app")
+
+	// Root lint also rejects catalog ref in -f
+	rootLint := CommandLint(cliParams, ioStreams, "mycli")
+	rootLint.SetArgs([]string{"-f", "my-app"})
+	err2 := rootLint.Execute()
+	require.Error(t, err2)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err2))
+	assert.Contains(t, err2.Error(), "mycli lint my-app")
+
+	// Happy-path execution on a valid local solution file
+	solFile := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(solFile, []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: demo\n  version: 1.0.0\n  description: Demo solution\nspec:\n  resolvers:\n    env:\n      description: Target env\n      resolve:\n        with:\n          - provider: static\n            inputs:\n              value: dev\n"), 0o600))
+	okStreams, _, _ := terminal.NewTestIOStreams()
+	okCmd := CommandLintSolution(cliParams, okStreams, "mycli/lint")
+	okCmd.SetArgs([]string{"-f", solFile, "-o", "quiet"})
+	require.NoError(t, okCmd.Execute())
 }

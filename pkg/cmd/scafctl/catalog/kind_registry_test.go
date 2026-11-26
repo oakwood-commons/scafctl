@@ -19,6 +19,10 @@ func TestCatalogKindSpecs(t *testing.T) {
 	require.True(t, seen[catalog.ArtifactKindSolution])
 	require.True(t, seen[catalog.ArtifactKindProvider])
 	require.True(t, seen[catalog.ArtifactKindAuthHandler])
+	require.Equal(t, []string{"sol", "s", "solutions"}, specs[0].Aliases)
+	require.True(t, isCatalogKind("s"))
+	require.True(t, isCatalogKind("sol"))
+	require.True(t, isCatalogKind("solutions"))
 }
 
 func TestCatalogKindUse(t *testing.T) {

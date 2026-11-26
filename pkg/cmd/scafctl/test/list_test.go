@@ -161,6 +161,21 @@ func TestCommandList_PreRunE_NoArgs(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestCommandList_PreRunE_FileFlagRejectsCatalogRef(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandList(cliParams, ioStreams, "mycli/test")
+	require.NoError(t, cmd.Flags().Set("file", "my-app@1.0.0"))
+
+	err := cmd.PreRunE(cmd, []string{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mycli test list my-app@1.0.0")
+}
+
 func BenchmarkCommandList(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()

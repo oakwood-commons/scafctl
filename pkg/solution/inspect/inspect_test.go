@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -490,6 +491,21 @@ func TestLoadSolution_StdinNotEnabled(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, load.ErrSourceNotEnabled)
 	assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
+}
+
+func TestLoadSolution_StdinEnabled(t *testing.T) {
+	const solYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: stdin-inspect
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+	sol, err := LoadSolution(context.Background(), "-", load.WithStdin(strings.NewReader(solYAML)))
+	require.NoError(t, err)
+	require.NotNil(t, sol)
+	assert.Equal(t, "stdin-inspect", sol.Metadata.Name)
 }
 
 func TestLoadSolution_StrictValidation(t *testing.T) {

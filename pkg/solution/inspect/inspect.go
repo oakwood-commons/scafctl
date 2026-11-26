@@ -123,10 +123,10 @@ type FileDependencyInfo struct {
 	Source string `json:"source" yaml:"source" doc:"How the dependency was discovered (static-analysis, explicit-include, test-include)" maxLength:"64" example:"static-analysis"`
 }
 
-// LoadSolution loads a solution from a path (local file, URL, catalog or
-// registry reference; empty auto-discovers) with strict validation. This
-// function is reusable by CLI, MCP, and future API.
-func LoadSolution(ctx context.Context, path string) (*solution.Solution, error) {
+// LoadSolution loads a solution from a path (local file, stdin when enabled via
+// routerOpts, URL, catalog or registry reference; empty auto-discovers) with
+// strict validation. This function is reusable by CLI, MCP, and future API.
+func LoadSolution(ctx context.Context, path string, routerOpts ...load.RouterOption) (*solution.Solution, error) {
 	c, err := source.Classify(path)
 	if err != nil {
 		return nil, exitcode.WithCode(
@@ -136,7 +136,7 @@ func LoadSolution(ctx context.Context, path string) (*solution.Solution, error) 
 	}
 
 	lgr := logger.FromContext(ctx)
-	ms, err := load.NewRouterFromContext(ctx, *lgr).Load(ctx, c)
+	ms, err := load.NewRouterFromContext(ctx, *lgr, routerOpts...).Load(ctx, c)
 	if err != nil {
 		return nil, exitcode.WithCode(
 			fmt.Errorf("failed to load solution: %w", err),

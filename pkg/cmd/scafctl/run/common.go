@@ -136,24 +136,33 @@ const ResolverParametersHelp = `RESOLVER PARAMETERS:
   Note: @- cannot be combined with -f - (both read from stdin).
 
   Bare words (without '=') are treated as resolver names (or the solution
-  reference if -f is not provided — see SOLUTION SOURCE above).
+  reference if -f/-s is not provided — see SOLUTION SOURCE above).
   Words containing '=' or starting with '@' are treated as parameters.`
 
-// ResolverParametersFlagHelp is the flag-only help text block for resolver
-// parameter passing, used by run solution (which does not accept positional
-// key=value parameters).
+// ResolverParametersFlagHelp is the help text block for resolver parameter
+// passing on run solution, supporting both positional key=value/@file/@-
+// arguments after [name[@version]] and explicit -r/--resolver flags.
 const ResolverParametersFlagHelp = `RESOLVER PARAMETERS:
-  Parameters are passed using the -r/--resolver flag:
-    -r key=value      Repeatable flag
-    -r key=val1,val2  Multiple values become an array
-    -r key=@-         Read raw stdin as value for key
-    -r key=@file      Read raw file content as value for key
-    -r @file.yaml     Load parameters from a YAML file
-    -r @file.json     Load parameters from a JSON file
-    -r @-             Read parameters from stdin (YAML or JSON)
+  Parameters can be passed in two equivalent ways:
 
-  When the same key appears multiple times, values are merged
-  into an array rather than replaced.
+  1. Positional key=value (recommended):
+       key=value         After [name[@version]] or on its own
+       key=@-            Read raw stdin as value for key
+       key=@file         Read raw file content as value for key
+       @file.yaml        Load parameters from a file (parsed as YAML/JSON)
+       @-                Read parameters from stdin (parsed as YAML/JSON)
+
+  2. Explicit -r/--resolver flag:
+       -r key=value      Repeatable flag
+       -r key=val1,val2  Multiple values become an array
+       -r key=@-         Read raw stdin as value for key
+       -r key=@file      Read raw file content as value for key
+       -r @file.yaml     Load parameters from a YAML file
+       -r @file.json     Load parameters from a JSON file
+       -r @-             Read parameters from stdin (YAML or JSON)
+
+  Both forms can be mixed. When the same key appears multiple
+  times, values are merged into an array rather than replaced.
 
   Note: @- cannot be combined with -f - (both read from stdin).`
 
@@ -163,6 +172,7 @@ type sharedResolverOptions struct {
 	IOStreams       *terminal.IOStreams
 	CliParams       *settings.Run
 	File            string
+	Solution        string
 	ResolverParams  []string
 	ResolveAll      bool
 	Progress        bool
@@ -904,9 +914,44 @@ func (o *sharedResolverOptions) validateLockMode() error {
 	return err
 }
 
+// resolveExplicitSource validates -f/--file and -s/--solution for commands
+// whose positional arguments name actions or resolvers (run action, run
+// resolver, validate resolver) and returns the explicit solution source to pass
+// to load.Router.Select.
+func (o *sharedResolverOptions) resolveExplicitSource(cmdUsage string, positionalNames []string) (string, error) {
+	if o.Solution != "" || (o.flagsChanged != nil && o.flagsChanged["solution"]) {
+		if o.flagsChanged != nil && o.flagsChanged["file"] && o.File == "" {
+			return "", source.ErrFileAndSolution
+		}
+		if _, err := source.ValidateSolutionFlag(o.Solution, o.File, cmdUsage); err != nil {
+			return "", err
+		}
+		if len(positionalNames) > 0 {
+			c, err := source.Classify(positionalNames[0])
+			if err != nil {
+				return "", err
+			}
+			if c.Kind.IsReference() && !c.IsUnversionedName() {
+				return "", source.ErrSolutionAndPositional
+			}
+		}
+		return o.Solution, nil
+	}
+	if _, err := source.ValidateFileFlagSolution(o.File, cmdUsage); err != nil {
+		return "", err
+	}
+	return o.File, nil
+}
+
+// addSolutionRefFlag registers -s/--solution on commands whose positional
+// arguments name actions or resolvers rather than the solution itself.
+func addSolutionRefFlag(cCmd *cobra.Command, o *sharedResolverOptions) {
+	cCmd.Flags().StringVarP(&o.Solution, "solution", "s", "", "Catalog solution name[@version], OCI registry reference, or HTTP(S) URL")
+}
+
 // addSharedResolverFlags adds common resolver flags to a cobra command.
 func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
-	cCmd.Flags().StringVarP(&o.File, "file", "f", "", "Solution file path or catalog name (auto-discovered if not provided, use '-' for stdin)")
+	cCmd.Flags().StringVarP(&o.File, "file", "f", "", "Local solution file path (auto-discovered if not provided, use '-' for stdin)")
 	cCmd.Flags().StringArrayVarP(&o.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value, key=@- for raw stdin, @file.yaml, or @- for stdin). Available as __params in state configuration expressions")
 	flags.AddKvxOutputFlagsToStruct(cCmd, &o.KvxOutputFlags)
 

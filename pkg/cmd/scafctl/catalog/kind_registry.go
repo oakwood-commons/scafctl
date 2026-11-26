@@ -19,7 +19,7 @@ func catalogKindSpecs() []catalogKindSpec {
 	return []catalogKindSpec{
 		{
 			Kind:    catalog.ArtifactKindSolution,
-			Aliases: []string{"solutions", "sol"},
+			Aliases: []string{"sol", "s", "solutions"},
 		},
 		{
 			Kind:    catalog.ArtifactKindProvider,

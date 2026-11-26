@@ -34,8 +34,7 @@ func TestCommandPackageSolution_Structure(t *testing.T) {
 	cmd := CommandPackageSolution(cliParams, ioStreams, "build")
 
 	assert.Equal(t, "solution", cmd.Use)
-	assert.Contains(t, cmd.Aliases, "sol")
-	assert.Contains(t, cmd.Aliases, "s")
+	assert.Equal(t, []string{"sol", "s", "solutions"}, cmd.Aliases)
 	assert.Contains(t, cmd.Short, "Package a solution")
 }
 
