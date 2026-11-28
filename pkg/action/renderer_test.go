@@ -312,6 +312,8 @@ func TestRender_WithRetryConfig(t *testing.T) {
 						Backoff:      BackoffExponential,
 						InitialDelay: durationPtr(1 * time.Second),
 						MaxDelay:     durationPtr(30 * time.Second),
+						RetryIf:      rendererCelExpr("__error.statusCode == 429"),
+						Until:        rendererCelExpr("__result.status == 'completed'"),
 					},
 				},
 				ExpandedName: "deploy",
@@ -330,6 +332,8 @@ func TestRender_WithRetryConfig(t *testing.T) {
 	assert.Equal(t, "exponential", action.Retry.Backoff)
 	assert.Equal(t, "1s", action.Retry.InitialDelay)
 	assert.Equal(t, "30s", action.Retry.MaxDelay)
+	assert.Equal(t, "__error.statusCode == 429", action.Retry.RetryIf)
+	assert.Equal(t, "__result.status == 'completed'", action.Retry.Until)
 }
 
 func TestRender_WithOnError(t *testing.T) {

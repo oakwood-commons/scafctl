@@ -126,8 +126,8 @@ func FilterWorkflowActions(w *Workflow, targetNames []string) (*Workflow, error)
 }
 
 // inferredActionDeps returns sorted same-section action names referenced via
-// __actions.<name> in inputs, call args, or when conditions, matching
-// computeEffectiveDependencies in BuildGraph.
+// __actions.<name> in inputs, call args, when conditions, or retry conditions
+// (retryIf and until), matching computeEffectiveDependencies in BuildGraph.
 func inferredActionDeps(a *Action, selfName string, sectionActions map[string]*Action) []string {
 	if a == nil {
 		return nil
@@ -163,6 +163,19 @@ func inferredActionDeps(a *Action, selfName string, sectionActions map[string]*A
 	if a.When != nil && a.When.Expr != nil {
 		for _, ref := range parseActionsRefsForGraph(string(*a.When.Expr)) {
 			addCandidate(ref)
+		}
+	}
+
+	if a.Retry != nil {
+		if a.Retry.RetryIf != nil {
+			for _, ref := range parseActionsRefsForGraph(string(*a.Retry.RetryIf)) {
+				addCandidate(ref)
+			}
+		}
+		if a.Retry.Until != nil {
+			for _, ref := range parseActionsRefsForGraph(string(*a.Retry.Until)) {
+				addCandidate(ref)
+			}
 		}
 	}
 

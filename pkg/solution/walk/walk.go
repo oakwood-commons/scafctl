@@ -333,9 +333,16 @@ func walkActions(v *Visitor, basePath, section string, actions map[string]*actio
 			}
 		}
 
-		if act.Retry != nil && act.Retry.RetryIf != nil {
-			if err := visitCondition(v, path+".retry.retryIf", "when", act.Retry.RetryIf); err != nil {
-				return err
+		if act.Retry != nil {
+			if act.Retry.RetryIf != nil {
+				if err := visitCondition(v, path+".retry.retryIf", "when", act.Retry.RetryIf); err != nil {
+					return err
+				}
+			}
+			if act.Retry.Until != nil {
+				if err := visitCondition(v, path+".retry.until", "until", act.Retry.Until); err != nil {
+					return err
+				}
 			}
 		}
 

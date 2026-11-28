@@ -872,4 +872,482 @@ func TestRetryExecutor_ExecuteWithRetry_WithRetryIf(t *testing.T) {
 		require.NotNil(t, detailed.Output)
 		assert.Equal(t, map[string]any{"stdout": "detailed failure\n"}, detailed.Output.Data)
 	})
+
+	t.Run("retryIf accesses rootData and additionalVars", func(t *testing.T) {
+		retryIfExpr := celexp.Expression("_.allowRetry && __actions.setup.status == 'succeeded' && __error.statusCode == 503")
+		zeroDelay := duration.New(0)
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  3,
+			InitialDelay: &zeroDelay,
+			RetryIf:      &retryIfExpr,
+		}).WithRootData(map[string]any{
+			"allowRetry": true,
+		}).WithAdditionalVars(map[string]any{
+			"__actions": map[string]any{
+				"setup": map[string]any{"status": "succeeded"},
+			},
+		})
+
+		calls := 0
+		output, attempts, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"test-action",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				if calls == 1 {
+					return nil, &HTTPError{StatusCode: 503, Message: "unavailable"}
+				}
+				return &provider.Output{Data: "ok"}, nil
+			},
+			nil,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, "ok", output.Data)
+		assert.Equal(t, 2, attempts)
+	})
+}
+
+func TestRetryExecutor_Until(t *testing.T) {
+	twoSeconds := duration.New(2 * time.Second)
+
+	t.Run("match on first try does not sleep or invoke retry callback", func(t *testing.T) {
+		untilExpr := celexp.Expression(`__result.result.check_runs.all(c, c.status == "completed")`)
+		slept := 0
+		retries := 0
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  5,
+			InitialDelay: &twoSeconds,
+			Backoff:      BackoffFixed,
+			Until:        &untilExpr,
+		}).WithSleep(func(_ context.Context, _ time.Duration) error {
+			slept++
+			return nil
+		})
+
+		cb := &mockRetryCallback{
+			onRetryAttempt: func(_ string, _, _ int, _ error) {
+				retries++
+			},
+		}
+
+		calls := 0
+		output, attempts, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"wait-checks",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				return &provider.Output{
+					Data: map[string]any{
+						"result": map[string]any{
+							"check_runs": []any{
+								map[string]any{"name": "build", "status": "completed"},
+								map[string]any{"name": "test", "status": "completed"},
+							},
+						},
+					},
+				}, nil
+			},
+			cb,
+		)
+
+		require.NoError(t, err)
+		require.NotNil(t, output)
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, 1, attempts)
+		assert.Equal(t, 0, slept)
+		assert.Equal(t, 0, retries)
+	})
+
+	t.Run("match on third try waits with configured backoff and supports __self and rootData", func(t *testing.T) {
+		untilExpr := celexp.Expression(`__self.status == _.desiredStatus && __result.readyCount == _.expectedReady`)
+		var recordedDelays []time.Duration
+		var callbackErrors []string
+
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  5,
+			InitialDelay: &twoSeconds,
+			Backoff:      BackoffLinear,
+			Until:        &untilExpr,
+		}).WithRootData(map[string]any{
+			"desiredStatus": "completed",
+			"expectedReady": 2,
+		}).WithSleep(func(_ context.Context, d time.Duration) error {
+			recordedDelays = append(recordedDelays, d)
+			return nil
+		})
+
+		cb := &mockRetryCallback{
+			onRetryAttempt: func(_ string, _, _ int, err error) {
+				callbackErrors = append(callbackErrors, err.Error())
+			},
+		}
+
+		calls := 0
+		output, attempts, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"poll-deploy",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				switch calls {
+				case 1:
+					return &provider.Output{Data: map[string]any{"status": "queued", "readyCount": 0}}, nil
+				case 2:
+					return &provider.Output{Data: map[string]any{"status": "in_progress", "readyCount": 1}}, nil
+				default:
+					return &provider.Output{Data: map[string]any{"status": "completed", "readyCount": 2}}, nil
+				}
+			},
+			cb,
+		)
+
+		require.NoError(t, err)
+		require.NotNil(t, output)
+		assert.Equal(t, 3, calls)
+		assert.Equal(t, 3, attempts)
+		assert.Equal(t, []time.Duration{2 * time.Second, 4 * time.Second}, recordedDelays)
+		assert.Equal(t, []string{
+			"condition 'until' not met (attempt 1/5)",
+			"condition 'until' not met (attempt 2/5)",
+		}, callbackErrors)
+		assert.Equal(t, map[string]any{"status": "completed", "readyCount": 2}, output.Data)
+	})
+
+	t.Run("exhaustion returns clear error and preserves final candidate output", func(t *testing.T) {
+		untilExpr := celexp.Expression(`__result.result.check_runs.all(c, c.status == "completed")`)
+		var delays []time.Duration
+
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  5,
+			InitialDelay: &twoSeconds,
+			Backoff:      BackoffFixed,
+			Until:        &untilExpr,
+		}).WithSleep(func(_ context.Context, d time.Duration) error {
+			delays = append(delays, d)
+			return nil
+		})
+
+		calls := 0
+		output, attempts, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"wait-checks",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				return &provider.Output{
+					Data: map[string]any{
+						"poll": calls,
+						"result": map[string]any{
+							"check_runs": []any{
+								map[string]any{"name": "ci", "status": "in_progress"},
+							},
+						},
+					},
+				}, nil
+			},
+			nil,
+		)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "condition 'until' not met after 5 attempt(s)")
+		assert.Equal(t, 5, calls)
+		assert.Equal(t, 5, attempts)
+		assert.Len(t, delays, 4)
+		require.NotNil(t, output)
+		dataMap, ok := output.Data.(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, 5, dataMap["poll"])
+	})
+
+	t.Run("non-boolean until expression fails immediately without retrying", func(t *testing.T) {
+		untilExpr := celexp.Expression(`__result.status`)
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  5,
+			InitialDelay: &twoSeconds,
+			Until:        &untilExpr,
+		}).WithSleep(func(_ context.Context, _ time.Duration) error {
+			t.Fatal("sleep should not be called on non-boolean until error")
+			return nil
+		})
+
+		calls := 0
+		output, attempts, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"bad-until",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				return &provider.Output{Data: map[string]any{"status": "pending"}}, nil
+			},
+			nil,
+		)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "retry until expression must return boolean")
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, 1, attempts)
+		require.NotNil(t, output)
+	})
+
+	t.Run("until evaluation error fails immediately without retrying", func(t *testing.T) {
+		untilExpr := celexp.Expression(`__result.missingField == "ready"`)
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  5,
+			InitialDelay: &twoSeconds,
+			Until:        &untilExpr,
+		}).WithSleep(func(_ context.Context, _ time.Duration) error {
+			t.Fatal("sleep should not be called on until evaluation error")
+			return nil
+		})
+
+		calls := 0
+		_, attempts, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"eval-err-until",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				return &provider.Output{Data: map[string]any{"status": "pending"}}, nil
+			},
+			nil,
+		)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to evaluate retry until expression")
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, 1, attempts)
+	})
+
+	t.Run("context cancellation during backoff stops polling and preserves last candidate", func(t *testing.T) {
+		untilExpr := celexp.Expression(`__result.status == "ready"`)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  5,
+			InitialDelay: &twoSeconds,
+			Until:        &untilExpr,
+		}).WithSleep(func(sleepCtx context.Context, _ time.Duration) error {
+			cancel()
+			return sleepCtx.Err()
+		})
+
+		calls := 0
+		output, attempts, err := executor.ExecuteWithRetry(
+			ctx,
+			"cancel-poll",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				return &provider.Output{Data: map[string]any{"status": "pending", "call": calls}}, nil
+			},
+			nil,
+		)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Contains(t, err.Error(), "cancelled during retry delay")
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, 1, attempts)
+		require.NotNil(t, output)
+		assert.Equal(t, map[string]any{"status": "pending", "call": 1}, output.Data)
+	})
+
+	t.Run("combined until and retryIf handles transient error then pending then ready", func(t *testing.T) {
+		retryIfExpr := celexp.Expression(`__error.statusCode == 429 || __error.statusCode >= 500`)
+		untilExpr := celexp.Expression(`__result.status == "ready"`)
+
+		var retryReasons []string
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  5,
+			InitialDelay: &twoSeconds,
+			Backoff:      BackoffExponential,
+			RetryIf:      &retryIfExpr,
+			Until:        &untilExpr,
+		}).WithSleep(func(_ context.Context, _ time.Duration) error {
+			return nil
+		})
+
+		cb := &mockRetryCallback{
+			onRetryAttempt: func(_ string, _, _ int, err error) {
+				retryReasons = append(retryReasons, err.Error())
+			},
+		}
+
+		calls := 0
+		output, attempts, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"poll-with-retryif",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				switch calls {
+				case 1:
+					return nil, &HTTPError{StatusCode: 503, Message: "gateway unavailable"}
+				case 2:
+					return &provider.Output{Data: map[string]any{"status": "pending"}}, nil
+				default:
+					return &provider.Output{Data: map[string]any{"status": "ready"}}, nil
+				}
+			},
+			cb,
+		)
+
+		require.NoError(t, err)
+		assert.Equal(t, 3, calls)
+		assert.Equal(t, 3, attempts)
+		require.NotNil(t, output)
+		assert.Equal(t, map[string]any{"status": "ready"}, output.Data)
+		assert.Equal(t, []string{
+			"gateway unavailable",
+			"condition 'until' not met (attempt 2/5)",
+		}, retryReasons)
+	})
+
+	t.Run("combined until and retryIf aborts immediately on non-retryable error", func(t *testing.T) {
+		retryIfExpr := celexp.Expression(`__error.statusCode >= 500`)
+		untilExpr := celexp.Expression(`__result.status == "ready"`)
+
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  5,
+			InitialDelay: &twoSeconds,
+			RetryIf:      &retryIfExpr,
+			Until:        &untilExpr,
+		}).WithSleep(func(_ context.Context, _ time.Duration) error {
+			t.Fatal("sleep should not run on non-retryable error")
+			return nil
+		})
+
+		calls := 0
+		_, attempts, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"auth-fail",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				return nil, &HTTPError{StatusCode: 401, Message: "unauthorized"}
+			},
+			nil,
+		)
+
+		require.Error(t, err)
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, 1, attempts)
+	})
+
+	t.Run("ExecuteWithRetryDetailed supports until match and exhaustion", func(t *testing.T) {
+		untilExpr := celexp.Expression(`__result.done == true`)
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  3,
+			InitialDelay: &twoSeconds,
+			Until:        &untilExpr,
+		}).WithSleep(func(_ context.Context, _ time.Duration) error {
+			return nil
+		})
+
+		calls := 0
+		res := executor.ExecuteWithRetryDetailed(
+			context.Background(),
+			"detailed-until",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				return &provider.Output{Data: map[string]any{"done": calls == 2, "call": calls}}, nil
+			},
+			nil,
+		)
+		require.NoError(t, res.FinalError)
+		assert.Equal(t, 2, res.Attempts)
+		assert.Len(t, res.AttemptErrors, 1)
+		assert.Equal(t, map[string]any{"done": true, "call": 2}, res.Output.Data)
+
+		exhausted := executor.ExecuteWithRetryDetailed(
+			context.Background(),
+			"detailed-exhaust",
+			func(_ context.Context) (*provider.Output, error) {
+				return &provider.Output{Data: map[string]any{"done": false}}, nil
+			},
+			nil,
+		)
+		require.Error(t, exhausted.FinalError)
+		assert.Contains(t, exhausted.FinalError.Error(), "condition 'until' not met after 3 attempt(s)")
+		assert.Equal(t, 3, exhausted.Attempts)
+		require.NotNil(t, exhausted.Output)
+		assert.Equal(t, map[string]any{"done": false}, exhausted.Output.Data)
+	})
+
+	t.Run("guarded HTTP until expression polls cleanly across non-2xx responses", func(t *testing.T) {
+		untilExpr := celexp.Expression(`__result.success && type(__result.body) == map && has(__result.body.check_runs) && __result.body.check_runs.all(c, c.status == 'completed')`)
+		executor := NewRetryExecutor(&RetryConfig{
+			MaxAttempts:  4,
+			InitialDelay: &twoSeconds,
+			Until:        &untilExpr,
+		}).WithSleep(func(_ context.Context, _ time.Duration) error {
+			return nil
+		})
+
+		calls := 0
+		output, attempts, err := executor.ExecuteWithRetry(
+			context.Background(),
+			"poll-http-guarded",
+			func(_ context.Context) (*provider.Output, error) {
+				calls++
+				switch calls {
+				case 1:
+					return &provider.Output{Data: map[string]any{
+						"success":    false,
+						"statusCode": 429,
+						"body":       map[string]any{"message": "rate limit exceeded"},
+					}}, nil
+				case 2:
+					return &provider.Output{Data: map[string]any{
+						"success":    false,
+						"statusCode": 502,
+						"body":       "Bad Gateway",
+					}}, nil
+				default:
+					return &provider.Output{Data: map[string]any{
+						"success":    true,
+						"statusCode": 200,
+						"body": map[string]any{
+							"check_runs": []any{
+								map[string]any{"status": "completed"},
+							},
+						},
+					}}, nil
+				}
+			},
+			nil,
+		)
+
+		require.NoError(t, err)
+		assert.Equal(t, 3, calls)
+		assert.Equal(t, 3, attempts)
+		require.NotNil(t, output)
+	})
+}
+
+func BenchmarkRetryExecutor_ExecuteWithRetry_Until(b *testing.B) {
+	untilExpr := celexp.Expression(`__result.status == "completed"`)
+	stepDelay := duration.New(time.Second)
+	executor := NewRetryExecutor(&RetryConfig{
+		MaxAttempts:  3,
+		InitialDelay: &stepDelay,
+		Backoff:      BackoffFixed,
+		Until:        &untilExpr,
+	}).WithSleep(func(_ context.Context, _ time.Duration) error {
+		return nil
+	})
+
+	ctx := context.Background()
+	pendingOut := &provider.Output{Data: map[string]any{"status": "pending"}}
+	readyOut := &provider.Output{Data: map[string]any{"status": "completed"}}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		call := 0
+		_, _, err := executor.ExecuteWithRetry(ctx, "bench-poll", func(_ context.Context) (*provider.Output, error) {
+			call++
+			if call < 3 {
+				return pendingOut, nil
+			}
+			return readyOut, nil
+		}, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }

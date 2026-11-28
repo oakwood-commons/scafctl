@@ -1411,6 +1411,33 @@ func TestBuildGraph_WhenSkipped_ForEachAction(t *testing.T) {
 	}
 }
 
+func TestBuildGraph_RetryUntilImplicitDependencies(t *testing.T) {
+	ctx := context.Background()
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"gate": {
+				Provider: "http",
+			},
+			"startJob": {
+				Provider: "http",
+			},
+			"waitJob": {
+				Provider: "http",
+				Retry: &RetryConfig{
+					MaxAttempts: 5,
+					RetryIf:     graphCelExpr(`__error.statusCode == 429 && __actions.gate.status == "succeeded"`),
+					Until:       graphCelExpr(`__result.jobId == __actions.startJob.results.id && __result.status == "done"`),
+				},
+			},
+		},
+	}
+
+	graph, err := BuildGraph(ctx, w, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, [][]string{{"gate", "startJob"}, {"waitJob"}}, graph.ExecutionOrder)
+	assert.Equal(t, []string{"gate", "startJob"}, graph.Actions["waitJob"].Dependencies)
+}
+
 // BenchmarkParseActionsRefsForGraph measures the cost of the string-scanner
 // reference extractor on a realistic multi-reference expression.
 func BenchmarkParseActionsRefsForGraph(b *testing.B) {

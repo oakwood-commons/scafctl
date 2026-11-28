@@ -213,7 +213,7 @@ func TestActionResolverRefs_AllLocations(t *testing.T) {
 			want: []string{"forEachSrc"},
 		},
 		{
-			name: "when, continueOnError, and retry.retryIf conditions",
+			name: "when, continueOnError, retry.retryIf, and retry.until conditions",
 			action: &action.Action{
 				Provider:        "exec",
 				When:            &spec.Condition{Expr: testExprPtr("_.whenFlag")},
@@ -221,12 +221,13 @@ func TestActionResolverRefs_AllLocations(t *testing.T) {
 				Retry: &action.RetryConfig{
 					MaxAttempts: 3,
 					RetryIf:     testExprPtr("_.retryFlag"),
+					Until:       testExprPtr("__result.status == 'ok' && _.directInput != ''"),
 				},
 				Inputs: map[string]*spec.ValueRef{
 					"cmd": {Literal: "echo ok"},
 				},
 			},
-			want: []string{"errFlag", "retryFlag", "whenFlag"},
+			want: []string{"directInput", "errFlag", "retryFlag", "whenFlag"},
 		},
 		{
 			name: "workflow action aliases excluded from bare template refs",
@@ -371,6 +372,14 @@ func TestActionResolverRefs_AllLocations(t *testing.T) {
 				Retry:    &action.RetryConfig{MaxAttempts: 2, RetryIf: testExprPtr("&&& invalid")},
 			},
 			expectErr: `failed to parse retryIf condition for action "deploy"`,
+		},
+		{
+			name: "malformed until condition returns error in strict mode",
+			action: &action.Action{
+				Provider: "exec",
+				Retry:    &action.RetryConfig{MaxAttempts: 2, Until: testExprPtr("&&& invalid")},
+			},
+			expectErr: `failed to parse until condition for action "deploy"`,
 		},
 	}
 

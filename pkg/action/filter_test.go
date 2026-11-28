@@ -288,3 +288,52 @@ func TestFilterWorkflowActions_InferredActionReferences(t *testing.T) {
 	assert.NotNil(t, bare.Actions["unrelated"])
 	assert.Nil(t, bare.Actions["deploy"])
 }
+
+func TestFilterWorkflowActions_InferredRetryReferences(t *testing.T) {
+	t.Parallel()
+
+	retryIfExpr := celexp.Expression(`__error.statusCode == 429 && __actions.ratePolicy.results.retry == true`)
+	untilExpr := celexp.Expression(`__result.jobId == __actions.startJob.results.id && __result.status == "done"`)
+
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"ratePolicy": {
+				Name:     "ratePolicy",
+				Explicit: true,
+			},
+			"startJob": {
+				Name:     "startJob",
+				Explicit: true,
+			},
+			"waitJob": {
+				Name: "waitJob",
+				Retry: &RetryConfig{
+					MaxAttempts: 5,
+					RetryIf:     &retryIfExpr,
+					Until:       &untilExpr,
+				},
+			},
+			"otherExplicit": {
+				Name:     "otherExplicit",
+				Explicit: true,
+			},
+		},
+	}
+
+	targeted, err := FilterWorkflowActions(w, []string{"waitJob"})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"ratePolicy", "startJob", "waitJob"}, func() []string {
+		names := make([]string, 0, len(targeted.Actions))
+		for k := range targeted.Actions {
+			names = append(names, k)
+		}
+		return names
+	}())
+
+	bare, err := FilterWorkflowActions(w, nil)
+	require.NoError(t, err)
+	assert.NotNil(t, bare.Actions["ratePolicy"])
+	assert.NotNil(t, bare.Actions["startJob"])
+	assert.NotNil(t, bare.Actions["waitJob"])
+	assert.Nil(t, bare.Actions["otherExplicit"])
+}

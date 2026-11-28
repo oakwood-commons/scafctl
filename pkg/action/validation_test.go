@@ -832,6 +832,139 @@ func TestValidateWorkflow_RetryValidation(t *testing.T) {
 			assert.NoError(t, err, "backoff type %s should be valid", bt)
 		}
 	})
+
+	t.Run("retry valid until and retryIf expressions", func(t *testing.T) {
+		w := &Workflow{
+			Actions: map[string]*Action{
+				"seed": {
+					Provider: "shell",
+				},
+				"deploy": {
+					Provider: "shell",
+					Retry: &RetryConfig{
+						MaxAttempts: 5,
+						RetryIf:     celExpr("__error.statusCode == 429"),
+						Until:       celExpr("__result.status == __actions.seed.results.expected"),
+					},
+				},
+			},
+		}
+		assert.NoError(t, ValidateWorkflow(w, nil))
+	})
+
+	t.Run("retry invalid until CEL syntax", func(t *testing.T) {
+		w := &Workflow{
+			Actions: map[string]*Action{
+				"deploy": {
+					Provider: "shell",
+					Retry: &RetryConfig{
+						MaxAttempts: 3,
+						Until:       celExpr("&&& invalid"),
+					},
+				},
+			},
+		}
+		err := ValidateWorkflow(w, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "retry.until")
+	})
+
+	t.Run("retry empty until expression", func(t *testing.T) {
+		w := &Workflow{
+			Actions: map[string]*Action{
+				"deploy": {
+					Provider: "shell",
+					Retry: &RetryConfig{
+						MaxAttempts: 3,
+						Until:       celExpr("   "),
+					},
+				},
+			},
+		}
+		err := ValidateWorkflow(w, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "retry.until cannot be empty")
+	})
+
+	t.Run("retry until references missing action", func(t *testing.T) {
+		w := &Workflow{
+			Actions: map[string]*Action{
+				"deploy": {
+					Provider: "shell",
+					Retry: &RetryConfig{
+						MaxAttempts: 3,
+						Until:       celExpr("__result.id == __actions.missing.results.id"),
+					},
+				},
+			},
+		}
+		err := ValidateWorkflow(w, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "retry.until")
+		assert.Contains(t, err.Error(), `action not found`)
+	})
+
+	t.Run("retry empty and invalid retryIf expressions", func(t *testing.T) {
+		emptyW := &Workflow{
+			Actions: map[string]*Action{
+				"deploy": {
+					Provider: "shell",
+					Retry: &RetryConfig{
+						MaxAttempts: 3,
+						RetryIf:     celExpr(" "),
+					},
+				},
+			},
+		}
+		err := ValidateWorkflow(emptyW, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "retry.retryIf cannot be empty")
+
+		badSyntaxW := &Workflow{
+			Actions: map[string]*Action{
+				"deploy": {
+					Provider: "shell",
+					Retry: &RetryConfig{
+						MaxAttempts: 3,
+						RetryIf:     celExpr("&&& invalid"),
+					},
+				},
+			},
+		}
+		err = ValidateWorkflow(badSyntaxW, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "retry.retryIf")
+
+		missingActW := &Workflow{
+			Actions: map[string]*Action{
+				"deploy": {
+					Provider: "shell",
+					Retry: &RetryConfig{
+						MaxAttempts: 3,
+						RetryIf:     celExpr("__actions.missing.status == 'succeeded'"),
+					},
+				},
+			},
+		}
+		err = ValidateWorkflow(missingActW, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "retry.retryIf")
+		assert.Contains(t, err.Error(), "action not found")
+	})
+
+	t.Run("reserved __result alias is rejected", func(t *testing.T) {
+		w := &Workflow{
+			Actions: map[string]*Action{
+				"deploy": {
+					Provider: "shell",
+					Alias:    "__result",
+				},
+			},
+		}
+		err := ValidateWorkflow(w, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "alias")
+	})
 }
 
 func TestValidateWorkflow_OnErrorValidation(t *testing.T) {
