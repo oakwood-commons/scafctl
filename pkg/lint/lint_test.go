@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
@@ -4472,6 +4473,7 @@ func TestLintWorkflow_NoDefaultAction(t *testing.T) {
 	tests := []struct {
 		name       string
 		filePath   string
+		solPath    string
 		bundle     solution.Bundle
 		actions    map[string]*action.Action
 		expectRule bool
@@ -4495,7 +4497,7 @@ func TestLintWorkflow_NoDefaultAction(t *testing.T) {
 			expectRule: true,
 		},
 		{
-			name:     "flagged on bundled actions.yaml when bundle is non-empty",
+			name:     "flagged on bundled actions.yaml when bundle.include is non-empty",
 			filePath: "actions.yaml",
 			bundle:   solution.Bundle{Include: []string{"scripts/**"}},
 			actions: map[string]*action.Action{
@@ -4504,15 +4506,45 @@ func TestLintWorkflow_NoDefaultAction(t *testing.T) {
 			expectRule: true,
 		},
 		{
-			name:     "flagged when bundle.plugins is declared and all actions are explicit",
-			filePath: "actions.yaml",
+			name:     "flagged on solution.yaml when only bundle.plugins is declared and all actions are explicit",
+			filePath: "solution.yaml",
 			bundle: solution.Bundle{
-				Plugins: []solution.PluginDependency{{Name: "exec", Kind: solution.PluginKindProvider, Version: "latest"}},
+				Plugins: []solution.PluginDependency{{Name: "github", Kind: solution.PluginKindProvider, Version: "^1.0.0"}},
 			},
 			actions: map[string]*action.Action{
 				"build": {Name: "build", Description: "Build", Explicit: true},
 			},
 			expectRule: true,
+		},
+		{
+			name:     "not flagged on actions.yaml when only bundle.plugins is declared",
+			filePath: "actions.yaml",
+			bundle: solution.Bundle{
+				Plugins: []solution.PluginDependency{{Name: "github", Kind: solution.PluginKindProvider, Version: "^1.0.0"}},
+			},
+			actions: map[string]*action.Action{
+				"build": {Name: "build", Description: "Build", Explicit: true},
+			},
+			expectRule: false,
+		},
+		{
+			name:     "not flagged on taskfile.yaml when only bundle.plugins is declared",
+			filePath: "taskfile.yaml",
+			bundle: solution.Bundle{
+				Plugins: []solution.PluginDependency{{Name: "github", Kind: solution.PluginKindProvider, Version: "^1.0.0"}},
+			},
+			actions: map[string]*action.Action{
+				"check": {Name: "check", Description: "Check", Explicit: true},
+			},
+			expectRule: false,
+		},
+		{
+			name:     "not flagged on backslash-separated path to actions.yaml",
+			filePath: `C:\repo\actions.yaml`,
+			actions: map[string]*action.Action{
+				"build": {Name: "build", Description: "Build", Explicit: true},
+			},
+			expectRule: false,
 		},
 		{
 			name:     "not flagged on actions.yaml task runner without bundle",
@@ -4556,6 +4588,27 @@ func TestLintWorkflow_NoDefaultAction(t *testing.T) {
 			expectRule: false,
 		},
 		{
+			name:     "flagged when sol.GetPath is solution.yaml and filePath is empty",
+			filePath: "",
+			solPath:  "solution.yaml",
+			actions: map[string]*action.Action{
+				"deploy": {Name: "deploy", Description: "Deploy", Explicit: true},
+			},
+			expectRule: true,
+		},
+		{
+			name:     "not flagged when sol.GetPath is actions.yaml with bundle.plugins and filePath is empty",
+			filePath: "",
+			solPath:  "actions.yaml",
+			bundle: solution.Bundle{
+				Plugins: []solution.PluginDependency{{Name: "github", Kind: solution.PluginKindProvider, Version: "^1.0.0"}},
+			},
+			actions: map[string]*action.Action{
+				"build": {Name: "build", Description: "Build", Explicit: true},
+			},
+			expectRule: false,
+		},
+		{
 			name:     "not flagged when at least one action is default",
 			filePath: "solution.yaml",
 			bundle:   solution.Bundle{Include: []string{"templates/**"}},
@@ -4578,15 +4631,269 @@ func TestLintWorkflow_NoDefaultAction(t *testing.T) {
 					},
 				},
 			}
+			if tt.solPath != "" {
+				sol.SetPath(tt.solPath)
+			}
 			res := Solution(sol, tt.filePath, reg)
 			findings := filterFindingsByRule(res, "no-default-action")
 			if tt.expectRule {
 				require.Len(t, findings, 1)
 				assert.Equal(t, SeverityWarning, findings[0].Severity)
 				assert.Equal(t, "workflow.actions", findings[0].Location)
+				assert.NotContains(t, findings[0].Message, "scafctl")
+				assert.NotContains(t, findings[0].Suggestion, "scafctl")
 			} else {
 				assert.Empty(t, findings)
 			}
 		})
 	}
+}
+
+func TestLintTests_UnbundledTestFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "testdata"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "testdata", "fixture.json"), []byte(`{"ok":true}`), 0o600))
+
+	tests := []struct {
+		name       string
+		fileName   string
+		bundle     solution.Bundle
+		cases      map[string]*soltesting.TestCase
+		expectRule bool
+	}{
+		{
+			name:     "not flagged on actions.yaml with bundle.plugins and no bundle.include",
+			fileName: "actions.yaml",
+			bundle: solution.Bundle{
+				Plugins: []solution.PluginDependency{{Name: "github", Kind: solution.PluginKindProvider, Version: "^1.0.0"}},
+			},
+			cases: map[string]*soltesting.TestCase{
+				"smoke-test": {Files: []string{"testdata/fixture.json"}},
+			},
+			expectRule: false,
+		},
+		{
+			name:     "not flagged on solution.yaml with bundle.plugins and no bundle.include",
+			fileName: "solution.yaml",
+			bundle: solution.Bundle{
+				Plugins: []solution.PluginDependency{{Name: "github", Kind: solution.PluginKindProvider, Version: "^1.0.0"}},
+			},
+			cases: map[string]*soltesting.TestCase{
+				"smoke-test": {Files: []string{"testdata/fixture.json"}},
+			},
+			expectRule: false,
+		},
+		{
+			name:     "not flagged when bundle is empty",
+			fileName: "solution.yaml",
+			cases: map[string]*soltesting.TestCase{
+				"smoke-test": {Files: []string{"testdata/fixture.json"}},
+			},
+			expectRule: false,
+		},
+		{
+			name:     "flagged when bundle.include is set and test file is not covered",
+			fileName: "solution.yaml",
+			bundle:   solution.Bundle{Include: []string{"templates/**"}},
+			cases: map[string]*soltesting.TestCase{
+				"smoke-test": {Files: []string{"testdata/fixture.json"}},
+			},
+			expectRule: true,
+		},
+		{
+			name:     "not flagged when bundle.include covers test file",
+			fileName: "solution.yaml",
+			bundle: solution.Bundle{
+				Include: []string{"templates/**", "testdata/**"},
+				Plugins: []solution.PluginDependency{{Name: "github", Kind: solution.PluginKindProvider, Version: "^1.0.0"}},
+			},
+			cases: map[string]*soltesting.TestCase{
+				"smoke-test": {Files: []string{"testdata/fixture.json"}},
+			},
+			expectRule: false,
+		},
+		{
+			name:     "nil test case entry does not panic",
+			fileName: "actions.yaml",
+			bundle:   solution.Bundle{Include: []string{"templates/**"}},
+			cases: map[string]*soltesting.TestCase{
+				"empty-case": nil,
+			},
+			expectRule: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sol := &solution.Solution{
+				Bundle: tt.bundle,
+				Spec: solution.Spec{
+					Workflow: &action.Workflow{
+						Actions: map[string]*action.Action{
+							"run": {Name: "run", Description: "Run task"},
+						},
+					},
+					Testing: &soltesting.TestSuite{
+						Cases: tt.cases,
+					},
+				},
+			}
+			res := Solution(sol, filepath.Join(dir, tt.fileName), provider.NewRegistry())
+			findings := filterFindingsByRule(res, "unbundled-test-file")
+			if tt.expectRule {
+				require.Len(t, findings, 1)
+				assert.Equal(t, SeverityError, findings[0].Severity)
+				assert.Equal(t, "testing.cases.smoke-test.files[0]", findings[0].Location)
+			} else {
+				assert.Empty(t, findings)
+			}
+		})
+	}
+}
+
+func TestSolution_ToolboxActionsAndHybridResolvers(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "testdata"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "testdata", "repo.json"), []byte(`{"number":1}`), 0o600))
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})))
+
+	t.Run("toolbox actions.yaml with bundle.plugins, test files, explicit actions, and public query resolvers has zero warnings or errors", func(t *testing.T) {
+		t.Parallel()
+		rawYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: pr-toolbox
+  version: 1.0.0
+  description: Repo toolbox combining public query resolvers with opt-in actions
+bundle:
+  plugins:
+    - name: github-helper
+      kind: provider
+      version: "^1.0.0"
+spec:
+  resolvers:
+    repoSlug:
+      description: Internal helper consumed by queries and actions
+      internal: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: org/repo
+    prSnapshot:
+      description: Public read-only query resolver invoked via run resolver
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: _.repoSlug
+  workflow:
+    actions:
+      create-pr:
+        description: Create pull request on demand
+        explicit: true
+        provider: github-helper
+        inputs:
+          repo:
+            rslvr: repoSlug
+      sync-pr:
+        description: Synchronize pull request body on demand
+        explicit: true
+        provider: github-helper
+        inputs:
+          repo:
+            rslvr: repoSlug
+  testing:
+    cases:
+      snapshot-query:
+        description: Exercises prSnapshot against local test fixture
+        command: [run, resolver]
+        files:
+          - testdata/repo.json
+        assertions:
+          - expression: __exitCode == 0
+`
+		var sol solution.Solution
+		require.NoError(t, sol.UnmarshalFromBytes([]byte(rawYAML)))
+
+		actionsPath := filepath.Join(dir, "actions.yaml")
+		res := Solution(&sol, actionsPath, reg)
+
+		assert.Equal(t, 0, res.ErrorCount, "expected zero errors, got %+v", res.Findings)
+		assert.Equal(t, 0, res.WarnCount, "expected zero warnings, got %+v", res.Findings)
+		assert.Empty(t, filterFindingsByRule(res, "unbundled-test-file"))
+		assert.Empty(t, filterFindingsByRule(res, "no-default-action"))
+
+		unusedFindings := filterFindingsByRule(res, "unused-resolver")
+		require.Len(t, unusedFindings, 1, "public terminal resolver should be recorded at info")
+		assert.Equal(t, "resolvers.prSnapshot", unusedFindings[0].Location)
+		assert.Equal(t, SeverityInfo, unusedFindings[0].Severity)
+		assert.Contains(t, unusedFindings[0].Suggestion, "run resolver")
+		assert.NotContains(t, unusedFindings[0].Suggestion, "scafctl")
+	})
+
+	t.Run("unreferenced internal resolver in toolbox actions.yaml still triggers warning", func(t *testing.T) {
+		t.Parallel()
+		rawYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: pr-toolbox-dead-internal
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: github-helper
+      kind: provider
+      version: "^1.0.0"
+spec:
+  resolvers:
+    deadInternal:
+      description: Dead internal plumbing referenced nowhere
+      internal: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: unused
+    publicQuery:
+      description: Public query resolver
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ok
+  workflow:
+    actions:
+      create-pr:
+        description: Create pull request on demand
+        explicit: true
+        provider: github-helper
+`
+		var sol solution.Solution
+		require.NoError(t, sol.UnmarshalFromBytes([]byte(rawYAML)))
+
+		res := Solution(&sol, filepath.Join(dir, "actions.yaml"), reg)
+		assert.Equal(t, 0, res.ErrorCount)
+		assert.Equal(t, 1, res.WarnCount)
+
+		unusedFindings := filterFindingsByRule(res, "unused-resolver")
+		require.Len(t, unusedFindings, 2)
+		byLoc := make(map[string]*Finding, len(unusedFindings))
+		for _, f := range unusedFindings {
+			byLoc[f.Location] = f
+		}
+		require.Contains(t, byLoc, "resolvers.deadInternal")
+		assert.Equal(t, SeverityWarning, byLoc["resolvers.deadInternal"].Severity)
+		require.Contains(t, byLoc, "resolvers.publicQuery")
+		assert.Equal(t, SeverityInfo, byLoc["resolvers.publicQuery"].Severity)
+	})
 }
