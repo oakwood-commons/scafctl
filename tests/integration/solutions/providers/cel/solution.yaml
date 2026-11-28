@@ -144,6 +144,108 @@ spec:
             inputs:
               expression: '__self.replace(" ", "-")'
 
+    # JSONC, frontmatter, and math.sum extensions
+    jsoncInput:
+      description: JSONC document input with comments and trailing comma
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: jsoncInput
+          - provider: static
+            inputs:
+              value: "{\n  // service port\n  \"name\": \"api\",\n  /* inline note */\n  \"port\": 8080,\n}"
+
+    parsedJsonc:
+      description: Parse JSONC document via json.unmarshalJSONC
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "json.unmarshalJSONC(_.jsoncInput)"
+
+    strippedJsonc:
+      description: Strip JSONC comments and trailing commas via json.stripComments
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "json.stripComments(_.jsoncInput)"
+
+    frontmatterInput:
+      description: Markdown document with YAML frontmatter for CEL tests
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: frontmatterInput
+          - provider: static
+            inputs:
+              value: "---\ntitle: Guide\norder: 2\n---\n# Welcome\n"
+
+    parsedFrontmatter:
+      description: Parse YAML frontmatter document via frontmatter.parse
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "frontmatter.parse(_.frontmatterInput)"
+
+    parsedPlainFrontmatter:
+      description: Parse plain Markdown without frontmatter via frontmatter.parse
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'frontmatter.parse("# Plain Heading\n")'
+
+    formattedFrontmatter:
+      description: Format frontmatter metadata and body via frontmatter.format
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'frontmatter.format(map.add(_.parsedFrontmatter.meta, "published", true), _.parsedFrontmatter.body)'
+
+    sumInts:
+      description: Sum integer list via math.sum
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "math.sum([10, 20, 12])"
+
+    sumDoubles:
+      description: Sum floating-point list via math.sum
+      type: float
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "math.sum([1.5, 2.25])"
+
+    sumEmptyList:
+      description: Sum empty list via math.sum
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "math.sum([])"
+
+    sumEmptyDoubleList:
+      description: Sum empty typed double list via math.sum
+      type: float
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "math.sum([1.5].filter(x, x < 0.0))"
+
   testing:
     cases:
       _base:
@@ -224,3 +326,86 @@ spec:
         assertions:
           - expression: __output.transformed == "mixed-case-input"
             message: "Chained transforms should trim, lowercase, and replace spaces"
+
+      jsonc-unmarshal:
+        description: Verify json.unmarshalJSONC parses comments and trailing commas
+        extends: [_base]
+        assertions:
+          - expression: __output.parsedJsonc.name == "api"
+          - expression: __output.parsedJsonc.port == 8080
+
+      jsonc-strip-comments:
+        description: Verify json.stripComments yields valid standard JSON text
+        extends: [_base]
+        assertions:
+          - expression: '!__output.strippedJsonc.contains("service port")'
+          - expression: '!__output.strippedJsonc.contains("inline note")'
+          - expression: json.unmarshal(__output.strippedJsonc).name == "api"
+          - expression: json.unmarshal(__output.strippedJsonc).port == 8080
+
+      jsonc-malformed-error:
+        description: Verify json.unmarshalJSONC fails on malformed JSONC input
+        command: [run, resolver]
+        tags: [provider, cel]
+        args: ["parsedJsonc", "-o", "json", "-r", 'jsoncInput={"port": }']
+        assertions:
+          - expression: __exitCode != 0
+          - expression: __stderr.contains("parsedJsonc")
+
+      jsonc-unterminated-comment-error:
+        description: Verify json.stripComments fails on an unterminated block comment
+        command: [run, resolver]
+        tags: [provider, cel]
+        args: ["strippedJsonc", "-o", "json", "-r", 'jsoncInput={"port": 8080 /* unterminated}']
+        assertions:
+          - expression: __exitCode != 0
+          - expression: __stderr.contains("unterminated block comment")
+
+      frontmatter-parse:
+        description: Verify frontmatter.parse extracts YAML metadata and body
+        extends: [_base]
+        assertions:
+          - expression: __output.parsedFrontmatter.hasFrontmatter == true
+          - expression: __output.parsedFrontmatter.meta.title == "Guide"
+          - expression: __output.parsedFrontmatter.meta.order == 2
+          - expression: __output.parsedFrontmatter.body == "# Welcome\n"
+          - expression: __output.parsedPlainFrontmatter.hasFrontmatter == false
+          - expression: size(__output.parsedPlainFrontmatter.meta) == 0
+          - expression: __output.parsedPlainFrontmatter.body == "# Plain Heading\n"
+
+      frontmatter-format:
+        description: Verify frontmatter.format serializes metadata and body round-trip
+        extends: [_base]
+        assertions:
+          - expression: __output.formattedFrontmatter.startsWith("---\n")
+          - expression: frontmatter.parse(__output.formattedFrontmatter).hasFrontmatter == true
+          - expression: frontmatter.parse(__output.formattedFrontmatter).meta.title == "Guide"
+          - expression: frontmatter.parse(__output.formattedFrontmatter).meta.published == true
+          - expression: frontmatter.parse(__output.formattedFrontmatter).body == "# Welcome\n"
+
+      frontmatter-malformed-yaml-error:
+        description: Verify frontmatter.parse fails on malformed YAML frontmatter
+        command: [run, resolver]
+        tags: [provider, cel]
+        args: ["parsedFrontmatter", "-o", "json", "-r", "frontmatterInput=---\ntitle: [unterminated\n---\n# Body\n"]
+        assertions:
+          - expression: __exitCode != 0
+          - expression: __stderr.contains("parsedFrontmatter")
+
+      frontmatter-non-mapping-error:
+        description: Verify frontmatter.parse rejects non-mapping YAML frontmatter
+        command: [run, resolver]
+        tags: [provider, cel]
+        args: ["parsedFrontmatter", "-o", "json", "-r", "frontmatterInput=---\n- item1\n- item2\n---\n# Body\n"]
+        assertions:
+          - expression: __exitCode != 0
+          - expression: __stderr.contains("frontmatter must be a YAML mapping")
+
+      math-sum:
+        description: Verify math.sum over int, double, and empty lists
+        extends: [_base]
+        assertions:
+          - expression: __output.sumInts == 42
+          - expression: __output.sumDoubles == 3.75
+          - expression: __output.sumEmptyList == 0
+          - expression: __output.sumEmptyDoubleList == 0.0

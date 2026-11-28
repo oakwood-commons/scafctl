@@ -242,3 +242,59 @@ func TestAuthHandlerClient_ActivateServerMode_NotGRPCClient(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "plugin does not support server mode")
 }
+
+func TestDebugLoggingEnabled(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, DebugLoggingEnabled())
+	assert.False(t, DebugLoggingEnabled(WithHostDeps(&HostServiceDeps{}), WithSecretScope("github")))
+	assert.True(t, DebugLoggingEnabled(WithDebugLogging()))
+	assert.True(t, DebugLoggingEnabled(WithHostDeps(&HostServiceDeps{}), WithDebugLogging(), WithSecretScope("github")))
+}
+
+func TestNewAuthHandlerClientWithConnector_DebugLogging(t *testing.T) {
+	t.Parallel()
+
+	authPlugin := &MockAuthHandlerPlugin{}
+
+	var withoutDebugCfg pluginConfig
+	_, err := newAuthHandlerClientWithConnector(
+		"/tmp/auth-plugin",
+		func(_ string, cfg pluginConfig) (any, *hplugin.Client, error) {
+			withoutDebugCfg = cfg
+			return authPlugin, &hplugin.Client{}, nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Nil(t, withoutDebugCfg.logger, "logger must be nil when WithDebugLogging is omitted")
+
+	var withDebugCfg pluginConfig
+	_, err = newAuthHandlerClientWithConnector(
+		"/tmp/auth-plugin",
+		func(_ string, cfg pluginConfig) (any, *hplugin.Client, error) {
+			withDebugCfg = cfg
+			return authPlugin, &hplugin.Client{}, nil
+		},
+		WithDebugLogging(),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, withDebugCfg.logger, "logger must be populated when WithDebugLogging is provided")
+	assert.True(t, withDebugCfg.logger.IsDebug(), "plugin hclogger must run at debug level")
+}
+
+func TestLazyAuthHandlerWrapper_DebugLoggingEnabled(t *testing.T) {
+	t.Parallel()
+
+	withoutDebug := NewLazyAuthHandlerWrapper(LazyAuthHandlerConfig{
+		Name:    "github",
+		BinPath: "/bin/fake",
+	})
+	assert.False(t, withoutDebug.DebugLoggingEnabled())
+
+	withDebug := NewLazyAuthHandlerWrapper(LazyAuthHandlerConfig{
+		Name:       "github",
+		BinPath:    "/bin/fake",
+		ClientOpts: []ClientOption{WithDebugLogging()},
+	})
+	assert.True(t, withDebug.DebugLoggingEnabled())
+}

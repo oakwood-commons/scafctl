@@ -683,7 +683,23 @@ json.marshalPretty({"users": [{"name": "Alice"}, {"name": "Bob"}]})
 
 // Parse JSON string into data
 json.unmarshal('{"user": {"name": "John"}}').user.name
-// → "John"
+// -> "John"
+
+// Parse JSONC (comments and trailing commas allowed)
+json.unmarshalJSONC('{\n  // service port\n  "port": 8080,\n}').port
+// -> 8080
+
+// Strip JSONC comments and trailing commas to standard JSON text
+json.stripComments('{"name": "app", /* inline */ "port": 8080,}')
+// -> '{"name": "app",              "port": 8080 }'
+
+// Parse Markdown/text document with optional YAML --- frontmatter
+frontmatter.parse("---\ntitle: Guide\n---\n# Welcome")
+// -> {"hasFrontmatter": true, "meta": {"title": "Guide"}, "body": "# Welcome"}
+
+// Format metadata map and body as YAML --- frontmatter document
+frontmatter.format({"title": "Guide"}, "# Welcome\n")
+// -> "---\ntitle: Guide\n---\n# Welcome\n"
 
 // Serialize to YAML
 yaml.marshal({"name": "John", "items": ["a", "b"]})
@@ -808,6 +824,7 @@ math.sqrt(81)        // 9.0
 math.least(5, 10)    // 5
 math.greatest(5, 10) // 10
 math.sign(-42)       // -1
+math.sum([1, 2, 3])  // 6 (custom extension: sums int or double list; [] -> 0)
 ```
 
 ## Optional Types
@@ -1008,12 +1025,16 @@ scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o json
 | `filepath.normalize(path)` | Clean path separators |
 | `filepath.exists(path)` | Check if path exists |
 | `filepath.join(a, b, ...)` | Join path segments (2-10 args) |
+| `frontmatter.format(meta, body)` | Format metadata map as YAML `---` frontmatter followed by body |
+| `frontmatter.parse(doc)` | Parse optional YAML `---` frontmatter and body (`hasFrontmatter`, `meta`, `body`) |
 | `guid.new()` | Generate UUID v4 |
 | `host.configDir()` | Branding-aware host XDG configuration directory |
 | `hostConfigDir()` | Portable alias for `host.configDir()` (matches Go template `hostConfigDir`) |
 | `json.marshal(val)` | Serialize to compact JSON |
 | `json.marshalPretty(val)` | Serialize to pretty JSON |
+| `json.stripComments(str)` | Strip JSONC comments, trailing commas, and UTF-8 BOM |
 | `json.unmarshal(str)` | Parse JSON string |
+| `json.unmarshalJSONC(str)` | Parse JSONC string (comments and trailing commas supported) |
 | `yaml.marshal(val)` | Serialize to YAML |
 | `yaml.unmarshal(str)` | Parse YAML string |
 | `map.add(m, key, val)` | Add/overwrite key |
@@ -1023,6 +1044,7 @@ scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o json
 | `map.omit(m, keys)` | Remove specified keys |
 | `map.merge(a, b)` | Merge maps (b wins) |
 | `map.recurse(list, ids, idField, depsField)` | Resolve transitive deps |
+| `math.sum(list)` | Sum numbers in an int or double list (`0` or `0.0` when empty) |
 | `out.nil(val)` | Discard value, return null |
 | `regex.match(pattern, input)` | Test if input matches regex pattern (RE2) |
 | `regex.replace(input, pattern, replacement)` | Replace all regex matches |

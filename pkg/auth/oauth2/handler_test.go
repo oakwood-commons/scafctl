@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	oauth "github.com/oakwood-commons/oauth-helpers"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -4794,6 +4795,285 @@ func TestHandler_ProfileNormalization_SharesSessionLocksAndMemCache(t *testing.T
 		require.NoError(t, err)
 		assert.Equal(t, tok3.AccessToken, tok4.AccessToken)
 		assert.Equal(t, int32(2), mintCount.Load())
+	})
+}
+
+func TestHandler_PollDeviceCode(t *testing.T) {
+	t.Parallel()
+
+	t.Run("post-response spacing waits full interval after each HTTP round-trip", func(t *testing.T) {
+		t.Parallel()
+
+		const roundTripLatency = 250 * time.Millisecond
+		var (
+			virtualNow   time.Duration
+			sleeps       []time.Duration
+			pollStartsAt []time.Duration
+			attempts     int
+		)
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, r.ParseForm())
+			assert.Equal(t, deviceCodeGrantType, r.FormValue("grant_type"))
+			assert.Equal(t, "dev-123", r.FormValue("device_code"))
+			assert.Equal(t, "test-client-id", r.FormValue("client_id"))
+			assert.Equal(t, "read write", r.FormValue("scope"))
+
+			pollStartsAt = append(pollStartsAt, virtualNow)
+			virtualNow += roundTripLatency
+			attempts++
+			if attempts < 3 {
+				w.WriteHeader(http.StatusBadRequest)
+				writeJSON(w, map[string]any{"error": "authorization_pending"})
+				return
+			}
+			writeJSON(w, tokenResponse{
+				AccessToken: "issued-device-token",
+				TokenType:   "Bearer",
+				ExpiresIn:   3600,
+			})
+		}))
+		defer srv.Close()
+
+		h, _ := newTestHandler(t, srv, nil)
+		h.devicePollSleep = func(ctx context.Context, d time.Duration) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			sleeps = append(sleeps, d)
+			virtualNow += d
+			return nil
+		}
+
+		tok, err := h.pollDeviceCode(context.Background(), "dev-123", 5, []string{"read", "write"})
+		require.NoError(t, err)
+		require.NotNil(t, tok)
+		assert.Equal(t, "issued-device-token", tok.AccessToken)
+		assert.Equal(t, []time.Duration{
+			6 * time.Second,
+			6 * time.Second,
+			6 * time.Second,
+		}, sleeps)
+		assert.Equal(t, []time.Duration{
+			6 * time.Second,
+			12*time.Second + 250*time.Millisecond,
+			18*time.Second + 500*time.Millisecond,
+		}, pollStartsAt)
+	})
+
+	type serverStep struct {
+		status int
+		body   map[string]any
+		cancel bool
+	}
+
+	tests := []struct {
+		name            string
+		interval        int
+		scopes          []string
+		steps           []serverStep
+		cancelOnSleep   int
+		wantToken       string
+		wantScope       string
+		wantSleeps      []time.Duration
+		wantErrContains string
+		wantErrIs       error
+		wantEndpointErr string
+	}{
+		{
+			name:     "slow_down increments polling interval by 5 seconds",
+			interval: 5,
+			steps: []serverStep{
+				{status: http.StatusBadRequest, body: map[string]any{"error": "slow_down"}},
+				{status: http.StatusBadRequest, body: map[string]any{"error": "authorization_pending"}},
+				{status: http.StatusOK, body: map[string]any{"access_token": "slowdown-ok", "token_type": "Bearer", "expires_in": 3600}},
+			},
+			wantToken:  "slowdown-ok",
+			wantSleeps: []time.Duration{6 * time.Second, 11 * time.Second, 11 * time.Second},
+		},
+		{
+			name:     "slow_down honors larger server interval",
+			interval: 5,
+			steps: []serverStep{
+				{status: http.StatusBadRequest, body: map[string]any{"error": "slow_down", "interval": 20}},
+				{status: http.StatusOK, body: map[string]any{"access_token": "server-interval-ok", "token_type": "Bearer", "expires_in": 3600}},
+			},
+			wantToken:  "server-interval-ok",
+			wantSleeps: []time.Duration{6 * time.Second, 21 * time.Second},
+		},
+		{
+			name:     "slow_down clamps smaller server interval up to +5s increment",
+			interval: 5,
+			steps: []serverStep{
+				{status: http.StatusBadRequest, body: map[string]any{"error": "slow_down", "interval": 7}},
+				{status: http.StatusOK, body: map[string]any{"access_token": "clamped-slowdown-ok", "token_type": "Bearer", "expires_in": 3600}},
+			},
+			wantToken:  "clamped-slowdown-ok",
+			wantSleeps: []time.Duration{6 * time.Second, 11 * time.Second},
+		},
+		{
+			name:     "non-positive interval falls back to default 5s interval",
+			interval: 0,
+			scopes:   []string{"repo", "user"},
+			steps: []serverStep{
+				{status: http.StatusOK, body: map[string]any{"access_token": "default-interval-ok", "token_type": "Bearer", "expires_in": 3600}},
+			},
+			wantToken:  "default-interval-ok",
+			wantScope:  "repo user",
+			wantSleeps: []time.Duration{6 * time.Second},
+		},
+		{
+			name:     "expired_token wraps ErrDeviceCodeExpired",
+			interval: 5,
+			steps: []serverStep{
+				{status: http.StatusBadRequest, body: map[string]any{"error": "expired_token", "error_description": "code timed out"}},
+			},
+			wantSleeps:      []time.Duration{6 * time.Second},
+			wantErrContains: "device code expired -- please try again: device code expired: code timed out",
+			wantErrIs:       oauth.ErrDeviceCodeExpired,
+		},
+		{
+			name:     "access_denied wraps ErrDeviceAccessDenied",
+			interval: 5,
+			steps: []serverStep{
+				{status: http.StatusBadRequest, body: map[string]any{"error": "access_denied"}},
+			},
+			wantSleeps:      []time.Duration{6 * time.Second},
+			wantErrContains: "access denied by user: device authorization denied (access_denied)",
+			wantErrIs:       oauth.ErrDeviceAccessDenied,
+		},
+		{
+			name:     "authorization_declined wraps ErrDeviceAccessDenied",
+			interval: 5,
+			steps: []serverStep{
+				{status: http.StatusBadRequest, body: map[string]any{"error": "authorization_declined"}},
+			},
+			wantSleeps:      []time.Duration{6 * time.Second},
+			wantErrContains: "access denied by user: device authorization denied (authorization_declined)",
+			wantErrIs:       oauth.ErrDeviceAccessDenied,
+		},
+		{
+			name:     "non-polling OAuth error returns tokenEndpointError immediately",
+			interval: 5,
+			steps: []serverStep{
+				{status: http.StatusBadRequest, body: map[string]any{"error": "invalid_client", "error_description": "unknown client"}},
+			},
+			wantSleeps:      []time.Duration{6 * time.Second},
+			wantEndpointErr: "invalid_client",
+		},
+		{
+			name:          "context cancellation during sleep returns ErrTimeout",
+			interval:      5,
+			cancelOnSleep: 1,
+			wantErrIs:     auth.ErrTimeout,
+		},
+		{
+			name:     "context cancellation during token exchange returns ErrTimeout",
+			interval: 5,
+			steps: []serverStep{
+				{status: http.StatusInternalServerError, body: map[string]any{"message": "aborted"}, cancel: true},
+			},
+			wantSleeps: []time.Duration{6 * time.Second},
+			wantErrIs:  auth.ErrTimeout,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			var (
+				stepIdx     int
+				sleeps      []time.Duration
+				gotScopeStr string
+			)
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.NoError(t, r.ParseForm())
+				gotScopeStr = r.FormValue("scope")
+				require.Less(t, stepIdx, len(tc.steps), "unexpected extra poll attempt")
+				st := tc.steps[stepIdx]
+				stepIdx++
+				if st.cancel {
+					cancel()
+				}
+				w.WriteHeader(st.status)
+				writeJSON(w, st.body)
+			}))
+			defer srv.Close()
+
+			h, _ := newTestHandler(t, srv, nil)
+			h.devicePollSleep = func(sleepCtx context.Context, d time.Duration) error {
+				if tc.cancelOnSleep > 0 && len(sleeps)+1 == tc.cancelOnSleep {
+					cancel()
+					return sleepCtx.Err()
+				}
+				sleeps = append(sleeps, d)
+				return sleepCtx.Err()
+			}
+
+			tok, err := h.pollDeviceCode(ctx, "dev-code", tc.interval, tc.scopes)
+			assert.Equal(t, tc.wantSleeps, sleeps)
+			if tc.wantToken != "" {
+				require.NoError(t, err)
+				require.NotNil(t, tok)
+				assert.Equal(t, tc.wantToken, tok.AccessToken)
+				if tc.wantScope != "" {
+					assert.Equal(t, tc.wantScope, gotScopeStr)
+				}
+				return
+			}
+
+			require.Error(t, err)
+			if tc.wantErrContains != "" {
+				assert.Contains(t, err.Error(), tc.wantErrContains)
+			}
+			if tc.wantErrIs != nil {
+				assert.ErrorIs(t, err, tc.wantErrIs)
+			}
+			if tc.wantEndpointErr != "" {
+				var te *tokenEndpointError
+				require.ErrorAs(t, err, &te)
+				assert.Equal(t, tc.wantEndpointErr, te.ErrorCode)
+			}
+		})
+	}
+
+	t.Run("per-request httpClient timeout preserves transport diagnostic when login ctx is active", func(t *testing.T) {
+		t.Parallel()
+
+		unblock := make(chan struct{})
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			<-unblock
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer func() {
+			close(unblock)
+			srv.Close()
+		}()
+
+		shortClient := srv.Client()
+		shortClient.Timeout = 25 * time.Millisecond
+
+		h, err := New(config.CustomOAuth2Config{
+			Name:     "timeout-provider",
+			TokenURL: srv.URL + "/token",
+			ClientID: "test-client-id",
+		}, WithSecretStore(secrets.NewMockStore()), WithHTTPClient(shortClient), WithLogger(logr.Discard()))
+		require.NoError(t, err)
+		h.devicePollSleep = func(sleepCtx context.Context, _ time.Duration) error {
+			return sleepCtx.Err()
+		}
+
+		ctx := context.Background()
+		_, pollErr := h.pollDeviceCode(ctx, "dev-timeout", 5, nil)
+		require.Error(t, pollErr)
+		assert.NoError(t, ctx.Err())
+		assert.NotErrorIs(t, pollErr, auth.ErrTimeout, "per-request httpClient timeout must not be masked as auth.ErrTimeout when ctx is active")
+		assert.Contains(t, pollErr.Error(), "token request failed")
 	})
 }
 

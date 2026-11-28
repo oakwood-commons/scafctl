@@ -31,6 +31,12 @@ func main() {
 	statusLine := "STATUS:SCRIPT_ERROR\n"
 	bodyOut := ""
 
+	if len(os.Args) >= 2 && strings.HasPrefix(os.Args[1], "-") {
+		// Simulate macOS "open -a <missing-app> <url>" failing when invoked via
+		// a PATH shim so browser fallback exercises the default launcher.
+		os.Exit(1)
+	}
+
 	if len(os.Args) >= 2 {
 		if cbURL, ok := buildLoopbackCallbackURL(os.Args[1], code); ok {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

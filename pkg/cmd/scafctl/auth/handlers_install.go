@@ -11,6 +11,7 @@ import (
 	authpkg "github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/handlerdep"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -125,7 +126,7 @@ func commandHandlersInstall(cliParams *settings.Run, ioStreams *terminal.IOStrea
 			// Register the handler so we can report its capabilities.
 			authReg := authpkg.RegistryFromContext(ctx)
 			if authReg != nil {
-				clients, regErr := plugin.RegisterFetchedAuthHandlerPlugins(ctx, authReg, results, nil)
+				clients, regErr := plugin.RegisterFetchedAuthHandlerPlugins(ctx, authReg, results, nil, authInstallClientOpts(cliParams)...)
 				// Kill plugin processes — we only needed to inspect capabilities.
 				for _, c := range clients {
 					c.Kill()
@@ -155,4 +156,11 @@ func commandHandlersInstall(cliParams *settings.Run, ioStreams *terminal.IOStrea
 	cmd.Flags().BoolVar(&force, "force", false, "Bypass cache and fetch the latest version from catalog")
 
 	return cmd
+}
+
+func authInstallClientOpts(cliParams *settings.Run) []plugin.ClientOption {
+	if cliParams != nil && logger.IsDebugLevel(cliParams.MinLogLevel) {
+		return []plugin.ClientOption{plugin.WithDebugLogging()}
+	}
+	return nil
 }

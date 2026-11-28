@@ -160,6 +160,7 @@ type Handler struct {
 	customConfigSource    bool
 	pageRenderer          authpage.Renderer
 	openBrowser           func(context.Context, string) error
+	devicePollSleep       func(context.Context, time.Duration) error
 
 	mu              sync.RWMutex
 	dcrClients      map[string]*dynamicClient
@@ -2295,6 +2296,7 @@ type exchangeResult struct {
 type tokenEndpointError struct {
 	ErrorCode   string `json:"error"`
 	Description string `json:"error_description"`
+	Interval    int    `json:"interval,omitempty"`
 }
 
 func (e *tokenEndpointError) Error() string {
@@ -3067,48 +3069,61 @@ func (h *Handler) deviceCodeLogin(ctx context.Context, opts auth.LoginOptions, s
 }
 
 func (h *Handler) pollDeviceCode(ctx context.Context, deviceCode string, interval int, scopes []string) (*tokenResponse, error) {
-	ticker := time.NewTicker(time.Duration(interval) * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, auth.ErrTimeout
-		case <-ticker.C:
-			data := url.Values{
-				"grant_type":  {deviceCodeGrantType},
-				"device_code": {deviceCode},
-				"client_id":   {h.effectiveClientID(ctx)},
-			}
-			if len(scopes) > 0 {
-				data.Set("scope", strings.Join(scopes, " "))
-			}
-
-			tokenResp, err := h.postTokenEndpoint(ctx, data)
-			if err == nil {
-				return tokenResp, nil
-			}
-
-			var errMsg string
-			if e, ok := err.(*tokenEndpointError); ok { //nolint:errorlint // concrete type assertion
-				errMsg = e.ErrorCode
-			}
-			switch errMsg {
-			case "authorization_pending":
-				continue
-			case "slow_down":
-				interval++
-				ticker.Reset(time.Duration(interval) * time.Second)
-				continue
-			case "expired_token":
-				return nil, fmt.Errorf("device code expired — please try again")
-			case "access_denied":
-				return nil, fmt.Errorf("access denied by user")
-			default:
-				return nil, err
-			}
-		}
+	if interval <= 0 {
+		interval = defaultPollInterval
 	}
+	baseInterval := time.Duration(interval) * time.Second
+
+	tokenResp, err := oauth.PollDeviceToken(ctx, oauth.DevicePollConfig{
+		Interval:             baseInterval,
+		MinInterval:          time.Second,
+		RetryTransientErrors: false,
+		Sleep:                h.devicePollSleep,
+	}, func(pollCtx context.Context) (*tokenResponse, *oauth.DevicePollError, error) {
+		data := url.Values{
+			"grant_type":  {deviceCodeGrantType},
+			"device_code": {deviceCode},
+			"client_id":   {h.effectiveClientID(pollCtx)},
+		}
+		if len(scopes) > 0 {
+			data.Set("scope", strings.Join(scopes, " "))
+		}
+
+		resp, postErr := h.postTokenEndpoint(pollCtx, data)
+		if postErr == nil {
+			return resp, nil, nil
+		}
+
+		var te *tokenEndpointError
+		if errors.As(postErr, &te) {
+			var cause error
+			switch strings.TrimSpace(te.ErrorCode) {
+			case "authorization_pending", "slow_down", "expired_token", "access_denied", "authorization_declined":
+			default:
+				cause = te
+			}
+			return nil, &oauth.DevicePollError{
+				Code:        te.ErrorCode,
+				Description: te.Description,
+				Interval:    te.Interval,
+				Cause:       cause,
+			}, nil
+		}
+		return nil, nil, postErr
+	})
+	if err == nil {
+		return tokenResp, nil
+	}
+	if ctx.Err() != nil {
+		return nil, auth.ErrTimeout
+	}
+	if errors.Is(err, oauth.ErrDeviceCodeExpired) {
+		return nil, fmt.Errorf("device code expired -- please try again: %w", err)
+	}
+	if errors.Is(err, oauth.ErrDeviceAccessDenied) {
+		return nil, fmt.Errorf("access denied by user: %w", err)
+	}
+	return nil, err
 }
 
 // ---------- flow: client credentials ----------
