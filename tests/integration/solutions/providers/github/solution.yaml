@@ -46,6 +46,7 @@ spec:
               repo: test-repo
               api_base:
                 expr: "_.mockBaseUrl"
+              token: mock-test-token
 
     fileContent:
       description: Get file content from repository via GraphQL
@@ -60,6 +61,7 @@ spec:
               ref: main
               api_base:
                 expr: "_.mockBaseUrl"
+              token: mock-test-token
 
     latestRelease:
       description: Get latest release via GraphQL
@@ -72,6 +74,7 @@ spec:
               repo: test-repo
               api_base:
                 expr: "_.mockBaseUrl"
+              token: mock-test-token
 
     listPullRequests:
       description: List open pull requests via GraphQL
@@ -86,6 +89,7 @@ spec:
               per_page: 10
               api_base:
                 expr: "_.mockBaseUrl"
+              token: mock-test-token
 
     pullRequestDetail:
       description: Get a single pull request via GraphQL
@@ -99,6 +103,7 @@ spec:
               number: 42
               api_base:
                 expr: "_.mockBaseUrl"
+              token: mock-test-token
 
     listReleases:
       description: List releases via GraphQL
@@ -112,6 +117,7 @@ spec:
               per_page: 5
               api_base:
                 expr: "_.mockBaseUrl"
+              token: mock-test-token
 
     listBranches:
       description: List branches via GraphQL
@@ -124,6 +130,7 @@ spec:
               repo: test-repo
               api_base:
                 expr: "_.mockBaseUrl"
+              token: mock-test-token
 
     headOid:
       description: Get HEAD OID for a branch via GraphQL
@@ -137,6 +144,7 @@ spec:
               branch: main
               api_base:
                 expr: "_.mockBaseUrl"
+              token: mock-test-token
 
   testing:
     config:
