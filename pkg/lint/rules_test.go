@@ -166,6 +166,20 @@ func TestRuleSummaryTextRegressionPins(t *testing.T) {
 		"finally-with-foreach is an error, not a warning")
 	assert.False(t, tiers["Warnings"]["finally-with-foreach"],
 		"finally-with-foreach must not be listed under Warnings")
+
+	unusedRule, ok := GetRule("unused-resolver")
+	require.True(t, ok)
+	assert.Contains(t, unusedRule.Why, "internal: true")
+	assert.Contains(t, unusedRule.Why, "explicit: true")
+
+	unbundledRule, ok := GetRule("unbundled-test-file")
+	require.True(t, ok)
+	assert.Contains(t, unbundledRule.Why, "bundle.include")
+	assert.Contains(t, unbundledRule.Why, "bundle.plugins")
+
+	noDefaultRule, ok := GetRule("no-default-action")
+	require.True(t, ok)
+	assert.Contains(t, noDefaultRule.Why, "bundle.plugins")
 }
 
 func BenchmarkRuleSummaryText(b *testing.B) {

@@ -527,26 +527,93 @@ var reservedNames = map[string]bool{
 	"_":         true,
 }
 
+// solutionFilePath returns the effective file path for sol, preferring the
+// caller-supplied filePath and falling back to sol.GetPath().
+func solutionFilePath(sol *solution.Solution, filePath string) string {
+	if filePath != "" {
+		return filePath
+	}
+	if sol != nil {
+		return sol.GetPath()
+	}
+	return ""
+}
+
+// isTaskActionFile reports whether filePath names an action or task file
+// (actions.yaml, actions.yml, taskfile.yaml, or taskfile.yml). Both slash and
+// backslash path separators are normalized so path checks behave identically
+// across platforms.
+func isTaskActionFile(filePath string) bool {
+	if filePath == "" || filePath == "-" {
+		return false
+	}
+	normalized := strings.ReplaceAll(filePath, "\\", "/")
+	base := strings.ToLower(filepath.Base(normalized))
+	return settings.IsActionFile(base) || settings.IsTaskFile(base)
+}
+
+// workflowHasNonNilAction reports whether workflow defines at least one
+// non-nil regular action in workflow.actions.
+func workflowHasNonNilAction(workflow *action.Workflow) bool {
+	if workflow == nil {
+		return false
+	}
+	for _, act := range workflow.Actions {
+		if act != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// workflowAllActionsExplicit reports whether workflow defines at least one
+// non-nil regular action and every non-nil action in workflow.actions sets
+// explicit: true.
+func workflowAllActionsExplicit(workflow *action.Workflow) bool {
+	if workflow == nil {
+		return false
+	}
+	hasNonNilAction := false
+	for _, act := range workflow.Actions {
+		if act == nil {
+			continue
+		}
+		hasNonNilAction = true
+		if !act.Explicit {
+			return false
+		}
+	}
+	return hasNonNilAction
+}
+
 // unusedResolverSeverity returns the severity for an unused-resolver finding
-// based on the shape of the solution.
+// based on the resolver's visibility and the shape of the solution.
 //
-// In a workflow-less solution every graph-terminal resolver IS the intended
-// output -- such solutions are reference/demo material meant to be run directly
-// with `run resolver <name>`, so "nothing references it" is the expected state
-// rather than a smell. Reporting those at WARNING drowns the warning tier in
-// benign findings, so they are reported at INFO instead (the finding is still
-// recorded, just not escalated).
+// An internal resolver (internal: true) is excluded from default resolver
+// output and exists only as internal plumbing for other resolvers or workflow
+// steps, so an unreferenced internal resolver is always a WARNING.
 //
-// When a workflow exists it could have consumed the resolver, so an
-// unreferenced resolver is a genuine orphan (dead config or a typo'd
-// reference) and stays a WARNING.
-//
-// The boundary is deliberately `HasWorkflow()` (i.e. `spec.workflow` present at
-// all) rather than "has actions": an explicit but empty `workflow: {}` opts the
-// solution back into WARNING. That keeps the rule predictable -- omit the
-// workflow block entirely to get INFO.
-func unusedResolverSeverity(sol *solution.Solution) SeverityLevel {
+// For public resolvers (internal: false):
+//   - Workflow-less solutions treat every graph-terminal resolver as an
+//     intended 'run resolver <name>' output and report at INFO.
+//   - Toolbox workflows where every action in workflow.actions sets
+//     explicit: true (with no finally actions) and unbundled task/action files
+//     (actions.yaml, actions.yml, taskfile.yaml, taskfile.yml without
+//     bundle.include) likewise treat public unreferenced resolvers as
+//     queryable 'run resolver <name>' entry points and report at INFO.
+//   - Standard solutions with a default workflow (or an explicit empty
+//     'workflow: {}') report unreferenced resolvers at WARNING.
+func unusedResolverSeverity(sol *solution.Solution, res *resolver.Resolver, filePath string) SeverityLevel {
+	if res != nil && res.Internal {
+		return SeverityWarning
+	}
 	if sol == nil || !sol.Spec.HasWorkflow() {
+		return SeverityInfo
+	}
+	if workflowAllActionsExplicit(sol.Spec.Workflow) && len(sol.Spec.Workflow.Finally) == 0 {
+		return SeverityInfo
+	}
+	if isTaskActionFile(solutionFilePath(sol, filePath)) && len(sol.Bundle.Include) == 0 && workflowHasNonNilAction(sol.Spec.Workflow) {
 		return SeverityInfo
 	}
 	return SeverityWarning
@@ -593,15 +660,24 @@ func lintResolvers(sol *solution.Solution, result *Result, registry providerLook
 		// resolver or action references it.
 		hasValidation := res.Validate != nil && len(res.Validate.With) > 0
 		if !referencedResolvers[name] && !hasValidation {
-			// Severity depends on solution shape: a terminal resolver in a
-			// workflow-less solution is the intended output, not an orphan.
-			severity := unusedResolverSeverity(sol)
+			// Severity depends on resolver visibility and solution shape: internal
+			// resolvers are always orphans when unreferenced, while public terminal
+			// resolvers in workflow-less or toolbox/task files are query outputs.
+			severity := unusedResolverSeverity(sol, res, result.File)
 			suggestion := "Remove unused resolver or reference it in actions/other resolvers"
-			if severity == SeverityInfo {
+			switch {
+			case severity == SeverityInfo && (sol == nil || !sol.Spec.HasWorkflow()):
 				suggestion = fmt.Sprintf(
-					"This solution has no workflow, so a terminal resolver is expected to be run directly via the 'run resolver' command (resolver %q). Add a workflow or reference it elsewhere if it should be consumed.",
+					"This solution has no workflow, so a terminal resolver is expected to be run directly via the 'run resolver' command (resolver %q). Add a workflow, mark it 'internal: true' if internal, or reference it elsewhere if it should be consumed.",
 					name,
 				)
+			case severity == SeverityInfo:
+				suggestion = fmt.Sprintf(
+					"Public resolver %q is not consumed by any workflow action and is treated as a query entry point for the 'run resolver' command. Mark it 'internal: true' if it is internal plumbing, or remove it if unused.",
+					name,
+				)
+			case res.Internal:
+				suggestion = "Remove unused resolver, clear 'internal: true' if it is meant for 'run resolver' output, or reference it in actions/other resolvers"
 			}
 			result.addFinding(severity, "usage", location,
 				fmt.Sprintf("resolver '%s' is defined but never referenced", name),
@@ -1255,23 +1331,9 @@ func lintWorkflow(sol *solution.Solution, result *Result, registry providerLooku
 			"unused-finally")
 	}
 
-	hasNonNilAction := false
-	allExplicit := true
-	for _, act := range workflow.Actions {
-		if act == nil {
-			continue
-		}
-		hasNonNilAction = true
-		if !act.Explicit {
-			allExplicit = false
-			break
-		}
-	}
-	if hasNonNilAction && allExplicit {
-		filePath := result.File
-		base := strings.ToLower(filepath.Base(filePath))
-		isTaskActionFile := settings.IsActionFile(base) || settings.IsTaskFile(base)
-		if !sol.Bundle.IsEmpty() || (filePath != "" && filePath != "-" && !isTaskActionFile) {
+	if workflowAllActionsExplicit(workflow) {
+		filePath := solutionFilePath(sol, result.File)
+		if len(sol.Bundle.Include) > 0 || (filePath != "" && filePath != "-" && !isTaskActionFile(filePath)) {
 			result.addFinding(SeverityWarning, "workflow", "workflow.actions",
 				"every action in workflow.actions sets explicit: true; a bare 'run solution' invocation will execute zero actions",
 				"Omit explicit: true on at least one default workflow action, or name repo task-runner files actions.yaml",
@@ -2669,6 +2731,9 @@ func lintTests(sol *solution.Solution, solutionPath string, result *Result) {
 	// Collect all extends references to detect unused templates.
 	extendsRefs := make(map[string]bool)
 	for _, tc := range sol.Spec.Testing.Cases {
+		if tc == nil {
+			continue
+		}
 		for _, ext := range tc.Extends {
 			extendsRefs[ext] = true
 		}
@@ -2696,8 +2761,11 @@ func lintTests(sol *solution.Solution, solutionPath string, result *Result) {
 			}
 		}
 
-		// Rule: unbundled-test-file — check files are covered by bundle.include.
-		if !sol.Bundle.IsEmpty() && len(tc.Files) > 0 {
+		// Rule: unbundled-test-file — check files are covered by bundle.include
+		// when explicit static file bundling (bundle.include) is configured.
+		// Declaring runtime plugin dependencies in bundle.plugins alone does not
+		// configure static file bundling globs.
+		if len(sol.Bundle.Include) > 0 && tc != nil && len(tc.Files) > 0 {
 			for i, file := range tc.Files {
 				fileLoc := fmt.Sprintf("%s.files[%d]", location, i)
 				if !isCoveredByBundleInclude(file, sol.Bundle.Include) {
@@ -2710,7 +2778,7 @@ func lintTests(sol *solution.Solution, solutionPath string, result *Result) {
 		}
 
 		// Rule: unreachable-test-path — warn when a files entry doesn't resolve to anything on disk.
-		if solutionDir != "" && len(tc.Files) > 0 {
+		if solutionDir != "" && tc != nil && len(tc.Files) > 0 {
 			for i, file := range tc.Files {
 				fileLoc := fmt.Sprintf("%s.files[%d]", location, i)
 				if !testFileReachable(solutionDir, file) {

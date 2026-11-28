@@ -696,9 +696,9 @@ func TestLintResolvers_NoValidateBlockFlaggedUnused(t *testing.T) {
 	assert.Contains(t, rules, "unused-resolver")
 }
 
-// TestUnusedResolverSeverity covers the workflow-shape heuristic that decides
-// whether an unused-resolver finding is a WARNING (real orphan) or INFO
-// (expected terminal output of a resolver-only solution).
+// TestUnusedResolverSeverity covers the visibility and workflow-shape rules
+// that decide whether an unused-resolver finding is a WARNING (genuine orphan)
+// or INFO (expected query output).
 func TestUnusedResolverSeverity(t *testing.T) {
 	t.Parallel()
 
@@ -713,36 +713,101 @@ func TestUnusedResolverSeverity(t *testing.T) {
 	emptyWorkflow := &solution.Solution{}
 	emptyWorkflow.Spec.Workflow = &action.Workflow{}
 
+	toolboxWorkflow := &solution.Solution{}
+	toolboxWorkflow.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"create-pr": {Provider: "static", Explicit: true},
+			"sync-pr":   {Provider: "static", Explicit: true},
+		},
+	}
+
+	toolboxWithFinally := &solution.Solution{}
+	toolboxWithFinally.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"create-pr": {Provider: "static", Explicit: true},
+		},
+		Finally: map[string]*action.Action{
+			"cleanup": {Provider: "static"},
+		},
+	}
+
+	bundledTaskWithDefault := &solution.Solution{
+		Bundle: solution.Bundle{Include: []string{"scripts/**"}},
+	}
+	bundledTaskWithDefault.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{"build": {Provider: "static"}},
+	}
+
+	pluginTaskWithDefault := &solution.Solution{
+		Bundle: solution.Bundle{
+			Plugins: []solution.PluginDependency{{Name: "github", Kind: solution.PluginKindProvider, Version: "^1.0.0"}},
+		},
+	}
+	pluginTaskWithDefault.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{"build": {Provider: "static"}},
+	}
+
+	pathFromSolTask := &solution.Solution{}
+	pathFromSolTask.SetPath("/repo/actions.yaml")
+	pathFromSolTask.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{"build": {Provider: "static"}},
+	}
+
+	nilActionMapWorkflow := &solution.Solution{}
+	nilActionMapWorkflow.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{"dangling": nil},
+	}
+
+	publicRes := &resolver.Resolver{}
+	internalRes := &resolver.Resolver{Internal: true}
+
+	assert.Equal(t, "", solutionFilePath(nil, ""))
+	assert.False(t, workflowHasNonNilAction(nil))
+	assert.False(t, workflowAllActionsExplicit(nil))
+	assert.False(t, workflowAllActionsExplicit(nilActionMapWorkflow.Spec.Workflow))
+
 	tests := []struct {
-		name string
-		sol  *solution.Solution
-		want SeverityLevel
+		name     string
+		sol      *solution.Solution
+		res      *resolver.Resolver
+		filePath string
+		want     SeverityLevel
 	}{
-		{name: "workflow with actions is warning", sol: withWorkflow, want: SeverityWarning},
-		{name: "empty workflow is warning", sol: emptyWorkflow, want: SeverityWarning},
-		{name: "workflow-less is info", sol: &solution.Solution{}, want: SeverityInfo},
-		{name: "nil solution is info", sol: nil, want: SeverityInfo},
+		{name: "workflow with actions is warning", sol: withWorkflow, res: publicRes, filePath: "solution.yaml", want: SeverityWarning},
+		{name: "empty workflow is warning", sol: emptyWorkflow, res: publicRes, filePath: "solution.yaml", want: SeverityWarning},
+		{name: "empty workflow on actions.yaml is warning", sol: emptyWorkflow, res: publicRes, filePath: "actions.yaml", want: SeverityWarning},
+		{name: "nil action map entry on actions.yaml is warning", sol: nilActionMapWorkflow, res: publicRes, filePath: "actions.yaml", want: SeverityWarning},
+		{name: "workflow-less is info", sol: &solution.Solution{}, res: publicRes, want: SeverityInfo},
+		{name: "nil solution is info", sol: nil, res: nil, want: SeverityInfo},
+		{name: "workflow-less internal resolver is warning", sol: &solution.Solution{}, res: internalRes, want: SeverityWarning},
+		{name: "toolbox all-explicit workflow is info", sol: toolboxWorkflow, res: publicRes, filePath: "solution.yaml", want: SeverityInfo},
+		{name: "toolbox all-explicit workflow internal resolver is warning", sol: toolboxWorkflow, res: internalRes, filePath: "actions.yaml", want: SeverityWarning},
+		{name: "toolbox with finally on solution.yaml is warning", sol: toolboxWithFinally, res: publicRes, filePath: "solution.yaml", want: SeverityWarning},
+		{name: "toolbox with finally on unbundled actions.yaml is info", sol: toolboxWithFinally, res: publicRes, filePath: "actions.yaml", want: SeverityInfo},
+		{name: "unbundled actions.yaml with default action is info for public resolver", sol: pluginTaskWithDefault, res: publicRes, filePath: "actions.yaml", want: SeverityInfo},
+		{name: "sol.GetPath fallback to actions.yaml is info for public resolver", sol: pathFromSolTask, res: publicRes, filePath: "", want: SeverityInfo},
+		{name: "unbundled actions.yaml with default action is warning for internal resolver", sol: pluginTaskWithDefault, res: internalRes, filePath: "actions.yaml", want: SeverityWarning},
+		{name: "bundled actions.yaml with default action is warning", sol: bundledTaskWithDefault, res: publicRes, filePath: "actions.yaml", want: SeverityWarning},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.want, unusedResolverSeverity(tt.sol))
+			assert.Equal(t, tt.want, unusedResolverSeverity(tt.sol, tt.res, tt.filePath))
 		})
 	}
 }
 
 // TestLintResolvers_UnusedResolverSeverityByWorkflow asserts the emission site
-// honors the heuristic end-to-end: the same unreferenced resolver is INFO in a
-// workflow-less solution and WARNING once a workflow exists that could have
-// consumed it.
+// honors resolver visibility and workflow shape end-to-end.
 func TestLintResolvers_UnusedResolverSeverityByWorkflow(t *testing.T) {
 	t.Parallel()
 
-	newSol := func(withWorkflow bool) *solution.Solution {
+	newSol := func(withWorkflow, allExplicit, internal bool) *solution.Solution {
 		sol := &solution.Solution{}
 		sol.Spec.Resolvers = map[string]*resolver.Resolver{
 			"terminal": {
+				Internal: internal,
 				Resolve: &resolver.ResolvePhase{
 					With: []resolver.ProviderSource{{Provider: "static"}},
 				},
@@ -752,23 +817,25 @@ func TestLintResolvers_UnusedResolverSeverityByWorkflow(t *testing.T) {
 			sol.Spec.Workflow = &action.Workflow{
 				Actions: map[string]*action.Action{
 					// Deliberately does NOT reference the terminal resolver.
-					"noop": {Provider: "static"},
+					"noop": {Provider: "static", Explicit: allExplicit},
 				},
 			}
 		}
 		return sol
 	}
 
-	findUnused := func(t *testing.T, sol *solution.Solution) *Finding {
+	findUnused := func(t *testing.T, sol *solution.Solution, filePath string) *Finding {
 		t.Helper()
 		reg := provider.NewRegistry()
 		require.NoError(t, reg.Register(newFakeProvider("static", nil)))
 
-		result := &Result{}
+		result := &Result{File: filePath}
 		lintResolvers(sol, result, reg, collectReferencedResolvers(sol))
 
 		for _, f := range result.Findings {
 			if f.RuleName == "unused-resolver" {
+				assert.NotContains(t, f.Message, "scafctl", "message must not hardcode binary name")
+				assert.NotContains(t, f.Suggestion, "scafctl", "suggestion must not hardcode binary name")
 				return f
 			}
 		}
@@ -778,7 +845,7 @@ func TestLintResolvers_UnusedResolverSeverityByWorkflow(t *testing.T) {
 
 	t.Run("workflow-less is info with run-resolver guidance", func(t *testing.T) {
 		t.Parallel()
-		f := findUnused(t, newSol(false))
+		f := findUnused(t, newSol(false, false, false), "solution.yaml")
 		assert.Equal(t, SeverityInfo, f.Severity)
 		assert.Contains(t, f.Suggestion, "run resolver",
 			"info-tier suggestion should point at running the resolver directly")
@@ -786,9 +853,32 @@ func TestLintResolvers_UnusedResolverSeverityByWorkflow(t *testing.T) {
 			"info-tier suggestion should name the resolver")
 	})
 
-	t.Run("workflow present is warning", func(t *testing.T) {
+	t.Run("workflow present with default action on solution.yaml is warning", func(t *testing.T) {
 		t.Parallel()
-		f := findUnused(t, newSol(true))
+		f := findUnused(t, newSol(true, false, false), "solution.yaml")
+		assert.Equal(t, SeverityWarning, f.Severity)
+		assert.Contains(t, f.Suggestion, "Remove unused resolver")
+	})
+
+	t.Run("all-explicit toolbox workflow is info with run-resolver guidance", func(t *testing.T) {
+		t.Parallel()
+		f := findUnused(t, newSol(true, true, false), "actions.yaml")
+		assert.Equal(t, SeverityInfo, f.Severity)
+		assert.Contains(t, f.Suggestion, "run resolver")
+		assert.Contains(t, f.Suggestion, `"terminal"`)
+	})
+
+	t.Run("internal resolver in toolbox workflow stays warning", func(t *testing.T) {
+		t.Parallel()
+		f := findUnused(t, newSol(true, true, true), "actions.yaml")
+		assert.Equal(t, SeverityWarning, f.Severity)
+		assert.Contains(t, f.Suggestion, "Remove unused resolver")
+		assert.Contains(t, f.Suggestion, "internal: true")
+	})
+
+	t.Run("internal resolver in workflow-less solution stays warning", func(t *testing.T) {
+		t.Parallel()
+		f := findUnused(t, newSol(false, false, true), "solution.yaml")
 		assert.Equal(t, SeverityWarning, f.Severity)
 		assert.Contains(t, f.Suggestion, "Remove unused resolver")
 	})
