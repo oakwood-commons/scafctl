@@ -302,6 +302,14 @@ type sharedResolverOptions struct {
 
 	// discoveryMode controls which file names auto-discovery searches for.
 	discoveryMode settings.DiscoveryMode
+
+	// outputCompletionFn optionally overrides the shell completion candidates
+	// registered on the -o/--output flag by addSharedResolverFlags.
+	outputCompletionFn func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective)
+
+	// sensitiveValues caches resolved outputs of sensitive/credential-backed
+	// resolvers for display-only masking in human tree output.
+	sensitiveValues []any
 }
 
 // getEffectiveResolverConfig returns resolver config values, using app config
@@ -721,14 +729,14 @@ func (o *sharedResolverOptions) executeResolvers(
 	ctx = provider.WithSolutionMetadata(ctx, solutionMetaFromSolution(sol))
 
 	// Inject IOStreams so streaming providers (message, exec, etc.) can write to the terminal
-	// during resolver execution. For structured output modes (json/yaml), route provider
-	// stdout to stderr to avoid corrupting the data envelope on stdout.
+	// during resolver execution. For formatted envelope modes (json/yaml/tree), route provider
+	// stdout to stderr to avoid corrupting the rendered document on stdout.
 	// For quiet mode, discard all provider output to honour the --quiet contract.
 	if o.IOStreams != nil {
 		providerOut := o.IOStreams.Out
 		providerErr := o.IOStreams.ErrOut
 		switch strings.ToLower(o.Output) {
-		case "json", "yaml":
+		case "json", "yaml", "tree":
 			providerOut = o.IOStreams.ErrOut
 		case "quiet":
 			providerOut = io.Discard
@@ -774,6 +782,14 @@ func (o *sharedResolverOptions) executeResolvers(
 	// Wait for progress bars to complete
 	if progress != nil {
 		progress.Wait()
+	}
+
+	if len(resolverData) > 0 {
+		for name := range execute.SensitiveResolverNames(sol, resolverCtx) {
+			if val, ok := resolverData[name]; ok && val != nil {
+				o.sensitiveValues = append(o.sensitiveValues, val)
+			}
+		}
 	}
 
 	if err != nil {
@@ -949,11 +965,29 @@ func addSolutionRefFlag(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().StringVarP(&o.Solution, "solution", "s", "", "Catalog solution name[@version], OCI registry reference, or HTTP(S) URL")
 }
 
+// filterOutputFormatCompletions filters candidate output format names by prefix for shell completion.
+func filterOutputFormatCompletions(formats []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	matches := make([]string, 0, len(formats))
+	for _, f := range formats {
+		if strings.HasPrefix(f, toComplete) {
+			matches = append(matches, f)
+		}
+	}
+	return matches, cobra.ShellCompDirectiveNoFileComp
+}
+
 // addSharedResolverFlags adds common resolver flags to a cobra command.
 func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().StringVarP(&o.File, "file", "f", "", "Local solution file path (auto-discovered if not provided, use '-' for stdin)")
 	cCmd.Flags().StringArrayVarP(&o.ResolverParams, "resolver", "r", nil, "Resolver parameters (key=value, key=@- for raw stdin, @file.yaml, or @- for stdin). Available as __params in state configuration expressions")
 	flags.AddKvxOutputFlagsToStruct(cCmd, &o.KvxOutputFlags)
+	compFn := o.outputCompletionFn
+	if compFn == nil {
+		compFn = func(_ *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			return filterOutputFormatCompletions(ValidOutputTypes, toComplete)
+		}
+	}
+	_ = cCmd.RegisterFlagCompletionFunc("output", compFn)
 
 	cCmd.Flags().BoolVar(&o.ResolveAll, "resolve-all", false, "Execute all resolvers regardless of action requirements")
 	cCmd.Flags().BoolVar(&o.Progress, "progress", false, "Show resolver phase progress bars (requires TTY)")

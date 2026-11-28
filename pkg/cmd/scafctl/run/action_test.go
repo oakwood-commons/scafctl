@@ -30,6 +30,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -335,7 +336,7 @@ func TestActionOptions_getActionIOStreams(t *testing.T) {
 	t.Run("structured output suppresses IOStreams", func(t *testing.T) {
 		t.Parallel()
 
-		for _, format := range []string{"json", "yaml", "quiet", "test"} {
+		for _, format := range []string{"json", "yaml", "tree", "quiet", "test"} {
 			var stdout, stderr bytes.Buffer
 			opts := &ActionOptions{}
 			opts.IOStreams = &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
@@ -1362,4 +1363,228 @@ func TestCommandAction_SolutionFlagAndStrictFile(t *testing.T) {
 	err2 := cmd2.Execute()
 	require.Error(t, err2)
 	assert.Contains(t, err2.Error(), "cannot use both -f - and @-")
+}
+
+func TestCommandAction_HelpAndCompletion_TreeOutput(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+
+	cmd := CommandAction(cliParams, streams, "mycli/run")
+	assert.Contains(t, cmd.Long, "OUTPUT FORMATS:")
+	assert.Contains(t, cmd.Long, "tree")
+	assert.Contains(t, cmd.Long, "mycli run action lint -o tree")
+	assert.NotContains(t, cmd.Long, settings.CliBinaryName)
+
+	outFlag := cmd.Flags().Lookup("output")
+	require.NotNil(t, outFlag)
+	assert.Contains(t, outFlag.Usage, "tree")
+
+	compFn, ok := cmd.GetFlagCompletionFunc("output")
+	require.True(t, ok, "output flag should register a shell completion function")
+
+	matches, directive := compFn(cmd, nil, "")
+	assert.Equal(t, cobra.ShellCompDirectiveNoFileComp, directive)
+	assert.Contains(t, matches, "tree")
+
+	prefixMatches, _ := compFn(cmd, nil, "tr")
+	assert.Equal(t, []string{"tree"}, prefixMatches)
+
+	// With --list set, completion still includes tree and omits test.
+	require.NoError(t, cmd.Flags().Set("list", "true"))
+	listMatches, listDirective := compFn(cmd, nil, "")
+	assert.Equal(t, cobra.ShellCompDirectiveNoFileComp, listDirective)
+	assert.Contains(t, listMatches, "tree")
+	assert.NotContains(t, listMatches, "test")
+}
+
+func TestActionOptions_Run_TreeOutput(t *testing.T) {
+	t.Parallel()
+
+	const actionsYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: tree-actions
+  version: 1.0.0
+spec:
+  resolvers:
+    tree_data:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                pkg:
+                  cmd:
+                    - solution.go
+                    - action.go
+  workflow:
+    actions:
+      announce:
+        provider: message
+        inputs:
+          message: "ACTION_BANNER"
+          type: info
+      list-files:
+        dependsOn: [announce]
+        provider: static
+        inputs:
+          value:
+            rslvr: tree_data
+      unused:
+        provider: static
+        inputs:
+          value: should-not-run
+`
+
+	t.Run("renders selected action results as tree with --no-color", func(t *testing.T) {
+		t.Parallel()
+		actPath := filepath.Join(t.TempDir(), "actions.yaml")
+		require.NoError(t, os.WriteFile(actPath, []byte(actionsYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+
+		cmd := CommandAction(cliParams, streams, "mycli/run")
+		cmd.SetArgs([]string{"list-files", "-f", actPath, "-o", "tree"})
+		ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(streams, cliParams))
+		cmd.SetContext(ctx)
+
+		require.NoError(t, cmd.Execute(), stderr.String())
+		out := stdout.String()
+		assert.NotContains(t, out, "\x1b[")
+		assert.Contains(t, out, "actions")
+		assert.Contains(t, out, "list-files")
+		assert.Contains(t, out, "solution.go")
+		assert.Contains(t, out, "action.go")
+		assert.NotContains(t, out, "unused")
+		assert.True(t, bytes.Contains(stdout.Bytes(), []byte("├──")) || bytes.Contains(stdout.Bytes(), []byte("└──")),
+			"expected tree branch connectors in output:\n%s", out)
+		assert.Contains(t, stderr.String(), "==> list-files")
+		assert.NotContains(t, out, "==> list-files")
+	})
+
+	t.Run("filters action tree output with -e expression", func(t *testing.T) {
+		t.Parallel()
+		actPath := filepath.Join(t.TempDir(), "actions.yaml")
+		require.NoError(t, os.WriteFile(actPath, []byte(actionsYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+
+		cmd := CommandAction(cliParams, streams, "scafctl/run")
+		cmd.SetArgs([]string{"list-files", "-f", actPath, "-o", "tree", "-e", `_.actions["list-files"].results.pkg`})
+		ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(streams, cliParams))
+		cmd.SetContext(ctx)
+
+		require.NoError(t, cmd.Execute(), stderr.String())
+		out := stdout.String()
+		assert.Contains(t, out, "cmd")
+		assert.Contains(t, out, "solution.go")
+		assert.NotContains(t, out, "startTime")
+	})
+
+	t.Run("renders dry-run plan as tree with --dry-run -o tree", func(t *testing.T) {
+		t.Parallel()
+		actPath := filepath.Join(t.TempDir(), "actions.yaml")
+		require.NoError(t, os.WriteFile(actPath, []byte(actionsYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+
+		cmd := CommandAction(cliParams, streams, "mycli/run")
+		cmd.SetArgs([]string{"list-files", "-f", actPath, "--dry-run", "-o", "tree"})
+		ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(streams, cliParams))
+		cmd.SetContext(ctx)
+
+		require.NoError(t, cmd.Execute(), stderr.String())
+		out := stdout.String()
+		assert.NotContains(t, out, "\x1b[")
+		assert.Contains(t, out, "tree-actions")
+		assert.Contains(t, out, "actionPlan")
+		assert.Contains(t, out, "list-files")
+		assert.NotContains(t, out, "unused")
+	})
+
+	t.Run("action failure under -o tree emits failed tree and returns ActionFailed", func(t *testing.T) {
+		t.Parallel()
+		const failingActionsYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: tree-action-fail
+  version: 1.0.0
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      broken:
+        provider: go-template
+        inputs:
+          template: "{{ undefinedFunc .x }}"
+          data:
+            x: 1
+`
+		actPath := filepath.Join(t.TempDir(), "actions.yaml")
+		require.NoError(t, os.WriteFile(actPath, []byte(failingActionsYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+
+		cmd := CommandAction(cliParams, streams, "scafctl/run")
+		cmd.SetArgs([]string{"broken", "-f", actPath, "-o", "tree"})
+		cmd.SetContext(writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(streams, cliParams)))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, stdout.String(), "broken")
+		assert.Contains(t, stdout.String(), "failed")
+	})
+
+	t.Run("invalid -e expression with -o tree returns error", func(t *testing.T) {
+		t.Parallel()
+		actPath := filepath.Join(t.TempDir(), "actions.yaml")
+		require.NoError(t, os.WriteFile(actPath, []byte(actionsYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+
+		cmd := CommandAction(cliParams, streams, "scafctl/run")
+		cmd.SetArgs([]string{"list-files", "-f", actPath, "-o", "tree", "-e", "_.missing_field"})
+		cmd.SetContext(writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(streams, cliParams)))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expression evaluation failed")
+	})
+
+	t.Run("actionAppName resolves explicit AppName, CliParams BinaryName, and default fallback", func(t *testing.T) {
+		t.Parallel()
+		explicit := &ActionOptions{sharedResolverOptions: sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{AppName: "custom title"}}}
+		assert.Equal(t, "custom title", explicit.actionAppName())
+
+		fromCli := &ActionOptions{sharedResolverOptions: sharedResolverOptions{CliParams: &settings.Run{BinaryName: "embedcli"}}}
+		assert.Equal(t, "embedcli run action", fromCli.actionAppName())
+
+		fallback := &ActionOptions{}
+		assert.Equal(t, settings.CliBinaryName+" run action", fallback.actionAppName())
+	})
 }

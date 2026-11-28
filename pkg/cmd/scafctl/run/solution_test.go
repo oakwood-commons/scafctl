@@ -19,12 +19,15 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/messageprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
+	"github.com/oakwood-commons/scafctl/pkg/redact"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -438,6 +441,7 @@ func TestCalculateValueSize(t *testing.T) {
 func TestValidOutputTypes(t *testing.T) {
 	t.Parallel()
 
+	assert.Contains(t, ValidOutputTypes, "tree")
 	assert.Contains(t, ValidOutputTypes, "json")
 	assert.Contains(t, ValidOutputTypes, "yaml")
 	assert.Contains(t, ValidOutputTypes, "quiet")
@@ -1613,5 +1617,431 @@ spec:
 		assert.Contains(t, stdout.String(), "region=us-east1")
 		assert.Contains(t, stdout.String(), "env=prod")
 		assert.NotContains(t, stdout.String(), "--env=prod")
+	})
+}
+
+func TestCommandSolution_HelpAndCompletion_TreeOutput(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+
+	cmd := CommandSolution(cliParams, streams, "mycli/run")
+	assert.Contains(t, cmd.Long, "OUTPUT FORMATS:")
+	assert.Contains(t, cmd.Long, "tree")
+	assert.Contains(t, cmd.Long, "mycli run solution -f ./my-solution.yaml -o tree")
+	assert.NotContains(t, cmd.Long, settings.CliBinaryName)
+
+	outFlag := cmd.Flags().Lookup("output")
+	require.NotNil(t, outFlag)
+	assert.Contains(t, outFlag.Usage, "tree")
+
+	compFn, ok := cmd.GetFlagCompletionFunc("output")
+	require.True(t, ok, "output flag should register a shell completion function")
+
+	allMatches, directive := compFn(cmd, nil, "")
+	assert.Equal(t, cobra.ShellCompDirectiveNoFileComp, directive)
+	assert.Equal(t, solutionOutputFormats, allMatches)
+
+	prefixMatches, prefixDirective := compFn(cmd, nil, "tr")
+	assert.Equal(t, cobra.ShellCompDirectiveNoFileComp, prefixDirective)
+	assert.Equal(t, []string{"tree"}, prefixMatches)
+
+	// Verify default outputCompletionFn fallback when unset (e.g. CommandResolver).
+	resCmd := CommandResolver(cliParams, streams, "mycli/run")
+	resCompFn, resOK := resCmd.GetFlagCompletionFunc("output")
+	require.True(t, resOK)
+	resMatches, resDir := resCompFn(resCmd, nil, "")
+	assert.Equal(t, cobra.ShellCompDirectiveNoFileComp, resDir)
+	assert.Equal(t, ValidOutputTypes, resMatches)
+}
+
+func TestSolutionOptions_Run_TreeOutput(t *testing.T) {
+	t.Parallel()
+
+	const treeSolYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: tree-sol
+  version: 1.0.0
+spec:
+  resolvers:
+    files:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                src:
+                  - main.go
+                  - helper.go
+                docs:
+                  - README.md
+  workflow:
+    actions:
+      announce:
+        provider: message
+        inputs:
+          message: "STREAMED_BANNER"
+          type: info
+      list-files:
+        dependsOn: [announce]
+        provider: static
+        inputs:
+          value:
+            rslvr: files
+`
+
+	t.Run("renders nested action results as tree with --no-color and suppresses direct stdout streaming", func(t *testing.T) {
+		t.Parallel()
+		solPath := filepath.Join(t.TempDir(), "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte(treeSolYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+
+		cmd := CommandSolution(cliParams, streams, "scafctl/run")
+		cmd.SetArgs([]string{"-f", solPath, "-a", "list-files", "-o", "tree"})
+		ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(streams, cliParams))
+		cmd.SetContext(ctx)
+
+		require.NoError(t, cmd.Execute(), stderr.String())
+		out := stdout.String()
+		assert.NotContains(t, out, "\x1b[", "tree output with --no-color must not contain ANSI escape codes")
+		assert.Contains(t, out, "actions")
+		assert.Contains(t, out, "list-files")
+		assert.Contains(t, out, "main.go")
+		assert.Contains(t, out, "README.md")
+		assert.Contains(t, out, "succeeded")
+		assert.True(t, bytes.Contains(stdout.Bytes(), []byte("├──")) || bytes.Contains(stdout.Bytes(), []byte("└──")),
+			"expected ASCII/UTF-8 tree branch connectors in output:\n%s", out)
+		assert.Contains(t, stderr.String(), "==> list-files", "progress banners must stay on stderr")
+		assert.NotContains(t, out, "==> list-files", "progress banners must not corrupt tree stdout")
+	})
+
+	t.Run("filters tree output with -e expression", func(t *testing.T) {
+		t.Parallel()
+		solPath := filepath.Join(t.TempDir(), "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte(treeSolYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+
+		cmd := CommandSolution(cliParams, streams, "scafctl/run")
+		cmd.SetArgs([]string{"-f", solPath, "-a", "list-files", "-o", "tree", "-e", `_.actions["list-files"].results`})
+		ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(streams, cliParams))
+		cmd.SetContext(ctx)
+
+		require.NoError(t, cmd.Execute(), stderr.String())
+		out := stdout.String()
+		assert.Contains(t, out, "src")
+		assert.Contains(t, out, "main.go")
+		assert.NotContains(t, out, "startTime", "expression filter should project only the selected subtree")
+	})
+
+	t.Run("renders dry-run report as tree with --dry-run -o tree", func(t *testing.T) {
+		t.Parallel()
+		solPath := filepath.Join(t.TempDir(), "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte(treeSolYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+
+		cmd := CommandSolution(cliParams, streams, "mycli/run")
+		cmd.SetArgs([]string{"-f", solPath, "--dry-run", "-o", "tree"})
+		ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(streams, cliParams))
+		cmd.SetContext(ctx)
+
+		require.NoError(t, cmd.Execute(), stderr.String())
+		out := stdout.String()
+		assert.NotContains(t, out, "\x1b[")
+		assert.Contains(t, out, "tree-sol")
+		assert.Contains(t, out, "actionPlan")
+		assert.Contains(t, out, "list-files")
+	})
+
+	t.Run("writeTreeData handles nil streams without panicking", func(t *testing.T) {
+		t.Parallel()
+		opts := &SolutionOptions{}
+		opts.Output = "tree"
+		require.NoError(t, opts.writeActionOutput(context.Background(), &action.ExecutionResult{}, nil))
+	})
+
+	t.Run("redirects resolver streaming provider stdout to stderr and injects validation warnings under -o tree", func(t *testing.T) {
+		t.Parallel()
+		const resolverStreamWarnYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: tree-warn-sol
+  version: 1.0.0
+spec:
+  resolvers:
+    notice:
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: "RESOLVER_STREAM_TEXT"
+              type: info
+    bad:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "x"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^longer-than-one$"
+              message: "bad must be longer"
+  workflow:
+    actions:
+      done:
+        provider: static
+        inputs:
+          value:
+            ok: true
+`
+		solPath := filepath.Join(t.TempDir(), "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte(resolverStreamWarnYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+
+		reg := testRegistryWithValidation(t)
+		require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
+
+		opts := &SolutionOptions{
+			ActionTimeout: 10 * time.Second,
+			sharedResolverOptions: sharedResolverOptions{
+				IOStreams:         streams,
+				CliParams:         cliParams,
+				File:              solPath,
+				OnValidationError: "warn",
+				KvxOutputFlags:    flags.KvxOutputFlags{Output: "tree"},
+				ResolverTimeout:   10 * time.Second,
+				PhaseTimeout:      30 * time.Second,
+				registry:          reg,
+			},
+		}
+		ctx := writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(streams, cliParams))
+
+		require.NoError(t, opts.Run(ctx), stderr.String())
+		out := stdout.String()
+		assert.True(t, bytes.HasPrefix(stdout.Bytes(), []byte(".\n")),
+			"resolver streaming output must be routed to stderr so stdout starts cleanly with the tree root:\n%s", out)
+		assert.Contains(t, stderr.String(), "RESOLVER_STREAM_TEXT")
+		assert.Contains(t, out, "diagnostics", "validation warning diagnostics must be included in tree output")
+		assert.Contains(t, out, "bad must be longer")
+	})
+
+	t.Run("resolver failure is stderr-only while action failure renders failed action tree", func(t *testing.T) {
+		t.Parallel()
+		const resolverFailYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: tree-res-fail
+  version: 1.0.0
+spec:
+  resolvers:
+    bad:
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: "1 / 0"
+  workflow:
+    actions:
+      noop:
+        provider: static
+        inputs:
+          value: ok
+`
+		resSolPath := filepath.Join(t.TempDir(), "res-fail.yaml")
+		require.NoError(t, os.WriteFile(resSolPath, []byte(resolverFailYAML), 0o600))
+
+		var resOut, resErr bytes.Buffer
+		resStreams := &terminal.IOStreams{Out: &resOut, ErrOut: &resErr}
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+
+		resCmd := CommandSolution(cliParams, resStreams, "scafctl/run")
+		resCmd.SetArgs([]string{"-f", resSolPath, "-o", "tree"})
+		resCmd.SetContext(writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(resStreams, cliParams)))
+		err := resCmd.Execute()
+		require.Error(t, err)
+		assert.Empty(t, resOut.String(), "resolver-phase failure under -o tree must keep stdout empty")
+		assert.NotEmpty(t, resErr.String())
+
+		const actionFailYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: tree-act-fail
+  version: 1.0.0
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      explode:
+        provider: go-template
+        inputs:
+          template: "{{ undefinedFunc .x }}"
+          data:
+            x: val
+`
+		actSolPath := filepath.Join(t.TempDir(), "act-fail.yaml")
+		require.NoError(t, os.WriteFile(actSolPath, []byte(actionFailYAML), 0o600))
+
+		var actOut, actErr bytes.Buffer
+		actStreams := &terminal.IOStreams{Out: &actOut, ErrOut: &actErr}
+		actCmd := CommandSolution(cliParams, actStreams, "scafctl/run")
+		actCmd.SetArgs([]string{"-f", actSolPath, "-o", "tree"})
+		actCmd.SetContext(writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(actStreams, cliParams)))
+		actExecErr := actCmd.Execute()
+		require.Error(t, actExecErr)
+		assert.Equal(t, exitcode.ActionFailed, exitcode.GetCode(actExecErr))
+		assert.Contains(t, actOut.String(), "failed")
+		assert.Contains(t, actOut.String(), "explode")
+	})
+
+	t.Run("invalid -e expression with -o tree returns error", func(t *testing.T) {
+		t.Parallel()
+		solPath := filepath.Join(t.TempDir(), "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte(treeSolYAML), 0o600))
+
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+
+		cmd := CommandSolution(cliParams, streams, "scafctl/run")
+		cmd.SetArgs([]string{"-f", solPath, "-a", "list-files", "-o", "tree", "-e", "_.nonexistent_key"})
+		cmd.SetContext(writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(streams, cliParams)))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "expression evaluation failed")
+	})
+}
+
+func TestRunTree_SensitiveResolverAndQuiet(t *testing.T) {
+	t.Parallel()
+
+	const sensitiveSolYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: sensitive-tree-test
+  version: 1.0.0
+spec:
+  resolvers:
+    secretToken:
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: super-secret-resolver-token
+    shortPin:
+      sensitive: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: xy
+  workflow:
+    actions:
+      echoSecret:
+        provider: static
+        inputs:
+          value:
+            token:
+              rslvr: secretToken
+            pin:
+              rslvr: shortPin
+            public: visible-value
+`
+
+	t.Run("run solution and run action mask sensitive resolver values in -o tree unless --show-sensitive or json", func(t *testing.T) {
+		t.Parallel()
+		solPath := filepath.Join(t.TempDir(), "solution.yaml")
+		require.NoError(t, os.WriteFile(solPath, []byte(sensitiveSolYAML), 0o600))
+
+		// 1. run solution -o tree masks both long and short sensitive resolver outputs
+		var solOut, solErr bytes.Buffer
+		solStreams := &terminal.IOStreams{Out: &solOut, ErrOut: &solErr}
+		cliParams := settings.NewCliParams()
+		cliParams.NoColor = true
+		cliParams.ExitOnError = false
+		solCmd := CommandSolution(cliParams, solStreams, "scafctl/run")
+		solCmd.SetArgs([]string{"-f", solPath, "-o", "tree"})
+		solCmd.SetContext(writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(solStreams, cliParams)))
+		require.NoError(t, solCmd.Execute())
+		assert.NotContains(t, solOut.String(), "super-secret-resolver-token")
+		assert.NotContains(t, solOut.String(), ": xy")
+		assert.Contains(t, solOut.String(), redact.RedactedPlaceholder)
+		assert.Contains(t, solOut.String(), "visible-value")
+
+		// 2. run action echoSecret -o tree also masks sensitive resolver outputs
+		var actOut, actErr bytes.Buffer
+		actStreams := &terminal.IOStreams{Out: &actOut, ErrOut: &actErr}
+		actCmd := CommandAction(cliParams, actStreams, "scafctl/run")
+		actCmd.SetArgs([]string{"echoSecret", "-f", solPath, "-o", "tree"})
+		actCmd.SetContext(writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(actStreams, cliParams)))
+		require.NoError(t, actCmd.Execute())
+		assert.NotContains(t, actOut.String(), "super-secret-resolver-token")
+		assert.Contains(t, actOut.String(), redact.RedactedPlaceholder)
+
+		// 3. --show-sensitive reveals in -o tree, and -o json preserves raw values
+		var revealOut bytes.Buffer
+		revealStreams := &terminal.IOStreams{Out: &revealOut, ErrOut: &solErr}
+		revealCmd := CommandSolution(cliParams, revealStreams, "scafctl/run")
+		revealCmd.SetArgs([]string{"-f", solPath, "-o", "tree", "--show-sensitive"})
+		revealCmd.SetContext(writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(revealStreams, cliParams)))
+		require.NoError(t, revealCmd.Execute())
+		assert.Contains(t, revealOut.String(), "super-secret-resolver-token")
+
+		var jsonOut bytes.Buffer
+		jsonStreams := &terminal.IOStreams{Out: &jsonOut, ErrOut: &solErr}
+		jsonCmd := CommandSolution(cliParams, jsonStreams, "scafctl/run")
+		jsonCmd.SetArgs([]string{"-f", solPath, "-o", "json"})
+		jsonCmd.SetContext(writer.WithWriter(logger.WithLogger(context.Background(), logger.Get(0)), writer.New(jsonStreams, cliParams)))
+		require.NoError(t, jsonCmd.Execute())
+		assert.Contains(t, jsonOut.String(), "super-secret-resolver-token")
+	})
+
+	t.Run("global --quiet suppresses tree stdout", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		streams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+		cliParams := settings.NewCliParams()
+		cliParams.IsQuiet = true
+		ctx := writer.WithWriter(context.Background(), writer.New(streams, cliParams))
+
+		opts := &SolutionOptions{}
+		opts.IOStreams = streams
+		opts.CliParams = cliParams
+		opts.Output = "tree"
+
+		require.NoError(t, opts.writeTreeData(ctx, map[string]any{"status": "succeeded"}))
+		assert.Empty(t, stdout.String())
 	})
 }
