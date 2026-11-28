@@ -19,6 +19,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	cmdflags "github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/dryrun"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -49,6 +50,19 @@ import (
 
 // ValidOutputTypes defines the supported output formats
 var ValidOutputTypes = kvx.BaseOutputFormats()
+
+// solutionOutputFormats lists the output formats accepted by run solution and
+// non-list run action invocations for shell completion.
+var solutionOutputFormats = []string{
+	string(kvx.OutputFormatAuto),
+	string(kvx.OutputFormatTable),
+	string(kvx.OutputFormatList),
+	string(kvx.OutputFormatTree),
+	string(kvx.OutputFormatJSON),
+	string(kvx.OutputFormatYAML),
+	string(kvx.OutputFormatQuiet),
+	string(kvx.OutputFormatTest),
+}
 
 // SolutionOptions holds configuration for the run solution command
 type SolutionOptions struct {
@@ -179,6 +193,7 @@ EXECUTION ORDER:
 
 OUTPUT FORMATS:
   table    Bordered table view (default when terminal)
+  tree     ASCII tree structure
   json     JSON output (for piping/scripting)
   yaml     YAML output (for piping/scripting)
   quiet    Suppress output (exit code only)
@@ -187,9 +202,11 @@ FAILURE OUTPUT (json/yaml):
   On failure the structured output still emits a parseable document so callers
   piping to jq/yq can detect and inspect the failure programmatically instead of
   receiving empty stdout. Setup and resolver-phase failures emit a
-  {status: "failed", diagnostics: [...]} envelope; an action-execution failure
-  emits the full action result envelope (status: "failed" with per-action error
-  detail). Human formats (table/quiet) keep the prior stderr-only behavior.
+  {status: "failed", diagnostics: [...]} envelope in json/yaml (table/tree/quiet
+  keep stderr-only behavior); an action-execution failure emits the full action
+  result envelope in json/yaml/tree (status: "failed" with per-action error
+  detail), flushes buffered action output in table mode, and suppresses stdout
+  under --quiet.
 
 INTERACTIVE MODE:
   Use -i/--interactive to launch a TUI for exploring results:
@@ -255,6 +272,9 @@ Examples:
   # JSON output for piping
   scafctl run solution -f ./my-solution.yaml -o json | jq .
 
+  # Tree output for inspecting nested action results
+  scafctl run solution -f ./my-solution.yaml -o tree
+
   # Limit concurrent actions
   scafctl run solution --max-action-concurrency=2
 
@@ -303,6 +323,9 @@ Examples:
 	}
 
 	// Shared resolver flags
+	options.outputCompletionFn = func(_ *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return filterOutputFormatCompletions(solutionOutputFormats, toComplete)
+	}
 	addSharedResolverFlags(cCmd, &options.sharedResolverOptions)
 
 	// Action execution flags
@@ -915,6 +938,12 @@ func (o *SolutionOptions) writeDryRunOutput(ctx context.Context, report *dryrun.
 			w.Plain(string(data))
 		}
 		return nil
+	case "tree":
+		reportMap, err := kvx.StructToMap(report)
+		if err != nil {
+			return fmt.Errorf("failed to normalize dry-run report: %w", err)
+		}
+		return o.writeTreeData(ctx, reportMap)
 	case "quiet":
 		return nil
 	default:
@@ -991,15 +1020,15 @@ func (o *SolutionOptions) writeDryRunTable(ctx context.Context, report *dryrun.R
 
 // getActionIOStreams returns the provider IO streams for action execution.
 // For the default/table output format, IO streams are provided so providers can
-// stream output directly to the terminal. For json/yaml/quiet/test, no streams are
-// provided so all output is captured and serialized.
+// stream output directly to the terminal. For json/yaml/tree/quiet/test, no streams are
+// provided so all output is captured and rendered in the output document.
 func (o *SolutionOptions) getActionIOStreams() *provider.IOStreams {
 	if o.IOStreams == nil {
 		return nil
 	}
 	switch o.Output {
-	case "json", "yaml", "quiet", "test":
-		// Structured output modes: don't stream, capture everything for serialization
+	case "json", "yaml", "tree", "quiet", "test":
+		// Structured/formatted envelope modes: don't stream, capture everything for rendering
 		return nil
 	default:
 		// Default/table: stream output directly to terminal
@@ -1036,7 +1065,7 @@ func (o *SolutionOptions) resolveOutputDir(ctx context.Context, dryRun bool) (st
 // writeActionOutput writes the action execution results.
 // For the default/table output format, output is minimal since providers that support
 // streaming (e.g., exec) already wrote their output directly to the terminal.
-// For json/yaml, the full execution envelope is serialized.
+// For json/yaml/tree, the full execution envelope is rendered.
 func (o *SolutionOptions) writeActionOutput(ctx context.Context, result *action.ExecutionResult, executionData map[string]any) error {
 	if o.Output == "quiet" {
 		return nil
@@ -1049,6 +1078,8 @@ func (o *SolutionOptions) writeActionOutput(ctx context.Context, result *action.
 		return o.writeActionOutputStructured(ctx, result, executionData, "json")
 	case "yaml":
 		return o.writeActionOutputStructured(ctx, result, executionData, "yaml")
+	case "tree":
+		return o.writeTreeData(ctx, o.buildStructuredActionOutput(result, executionData))
 	case "test":
 		return o.writeActionTestOutput(ctx, result, executionData)
 	default:
@@ -1170,16 +1201,65 @@ func (o *SolutionOptions) writeVerboseActionStatus(w *writer.Writer, name string
 	}
 }
 
-// writeActionOutputStructured writes action results as JSON or YAML (the full execution envelope).
-func (o *SolutionOptions) writeActionOutputStructured(ctx context.Context, result *action.ExecutionResult, executionData map[string]any, format string) error {
+// buildStructuredActionOutput builds the action execution output map, embedding
+// non-fatal validation diagnostics and resolved values when present.
+func (o *SolutionOptions) buildStructuredActionOutput(result *action.ExecutionResult, executionData map[string]any) map[string]any {
 	outputData := action.BuildOutputData(result, executionData)
 	// Under the "warn" validation policy a validation-only failure did not abort
 	// the run: embed its diagnostics and the resolved values so the warning is
-	// visible in structured output alongside the successful action results.
+	// visible alongside the successful action results.
 	if o.validationWarn != nil {
 		outputData = execute.InjectSolutionDiagnostics(outputData, o.validationWarn, o.validationWarnResolvers)
 	}
-	return o.writeStructuredData(ctx, outputData, format)
+	return outputData
+}
+
+// writeActionOutputStructured writes action results as JSON or YAML (the full execution envelope).
+func (o *SolutionOptions) writeActionOutputStructured(ctx context.Context, result *action.ExecutionResult, executionData map[string]any, format string) error {
+	return o.writeStructuredData(ctx, o.buildStructuredActionOutput(result, executionData), format)
+}
+
+// writeTreeData renders structured data as an ASCII tree through kvx, honoring
+// --no-color, -e/--expression, -w/--where, and the configured binary name.
+func (o *SolutionOptions) writeTreeData(ctx context.Context, data any) error {
+	w := writer.FromContext(ctx)
+	if w != nil && w.IsQuiet() {
+		return nil
+	}
+	if o.shouldRedactSensitive() {
+		data = o.redactTreeDisplayData(ctx, data)
+	}
+	ioStreams := o.IOStreams
+	if ioStreams == nil && w != nil {
+		ioStreams = w.IOStreams()
+	}
+	if ioStreams == nil || ioStreams.Out == nil {
+		return nil
+	}
+
+	noColor := (o.CliParams != nil && o.CliParams.NoColor) || (w != nil && w.NoColor())
+	binName := o.BinaryName
+	if binName == "" {
+		if o.CliParams != nil && o.CliParams.BinaryName != "" {
+			binName = o.CliParams.BinaryName
+		} else {
+			binName = settings.CliBinaryName
+		}
+	}
+	appName := o.AppName
+	if appName == "" {
+		appName = binName + " run solution"
+	}
+
+	kvxOpts := cmdflags.ToKvxOutputOptions(
+		&o.KvxOutputFlags,
+		kvx.WithIOStreams(ioStreams),
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputFormat(kvx.OutputFormatTree),
+		kvx.WithOutputNoColor(noColor),
+		kvx.WithOutputAppName(appName),
+	)
+	return kvxOpts.Write(data)
 }
 
 // writeStructuredData marshals a structured map to JSON or YAML and writes it to
@@ -1218,7 +1298,7 @@ func (o *SolutionOptions) writeStructuredData(ctx context.Context, outputData ma
 // full action envelope via writeActionOutput. When resolverOut (an
 // already-redacted resolver output map) is non-empty its values are embedded
 // under "resolvers" so successfully-resolved values are never dropped. For human
-// formats (table/quiet) it falls back to the stderr-only exitWithCode behavior.
+// formats (table/tree/quiet) it falls back to the stderr-only exitWithCode behavior.
 func (o *SolutionOptions) failStructured(ctx context.Context, resolverOut map[string]any, err error, code int) error {
 	if !o.isStructuredOutput() {
 		return o.exitWithCode(ctx, err, code)
@@ -1581,4 +1661,53 @@ func formatElapsed(d time.Duration) string {
 		return fmt.Sprintf("%dms", d.Milliseconds())
 	}
 	return fmt.Sprintf("%.1fs", d.Seconds())
+}
+
+// redactTreeDisplayData returns a display-only copy of data with tracked
+// credentials and sensitive resolver outputs masked by redact.RedactedPlaceholder.
+func (o *SolutionOptions) redactTreeDisplayData(ctx context.Context, data any) any {
+	var sensitiveTracker *redact.Tracker
+	if len(o.sensitiveValues) > 0 {
+		sensitiveTracker = redact.NewTracker()
+		for _, sv := range o.sensitiveValues {
+			sensitiveTracker.TrackValue(sv)
+		}
+	}
+	masked := maskTreeSensitiveValues(data, o.sensitiveValues, 0)
+	if ctxTracker := redact.FromContext(ctx); ctxTracker != nil {
+		masked = ctxTracker.RedactAny(masked)
+	}
+	if sensitiveTracker != nil {
+		masked = sensitiveTracker.RedactAny(masked)
+	}
+	return masked
+}
+
+func maskTreeSensitiveValues(v any, sensitiveValues []any, depth int) any {
+	if v == nil || len(sensitiveValues) == 0 || depth > 32 {
+		return v
+	}
+	if _, isBool := v.(bool); !isBool {
+		for _, sv := range sensitiveValues {
+			if sv != nil && reflect.DeepEqual(v, sv) {
+				return redact.RedactedPlaceholder
+			}
+		}
+	}
+	switch typed := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for k, elem := range typed {
+			out[k] = maskTreeSensitiveValues(elem, sensitiveValues, depth+1)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, elem := range typed {
+			out[i] = maskTreeSensitiveValues(elem, sensitiveValues, depth+1)
+		}
+		return out
+	default:
+		return v
+	}
 }

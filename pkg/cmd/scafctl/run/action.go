@@ -33,6 +33,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -149,12 +150,20 @@ ACTION SELECTION:
 
 `+ResolverParametersHelp+`
 
+OUTPUT FORMATS:
+  table    Bordered table view (default when terminal)
+  tree     ASCII tree structure
+  json     JSON output (for piping/scripting)
+  yaml     YAML output (for piping/scripting)
+  quiet    Suppress output (exit code only)
+
 FAILURE OUTPUT (json/yaml):
   On failure the structured output still emits a parseable document so callers
   piping to jq/yq can detect and inspect the failure programmatically instead of
   receiving empty stdout. Setup and resolver-phase failures emit a
-  {status: "failed", diagnostics: [...]} envelope; an action-execution failure
-  emits the full action result envelope (status: "failed" with per-action error
+  {status: "failed", diagnostics: [...]} envelope in json/yaml (table/tree/quiet
+  keep stderr-only behavior); an action-execution failure emits the full action
+  result envelope in json/yaml/tree (status: "failed" with per-action error
   detail). In default human output, buffered stdout/stderr from a failing action
   is flushed before the failure diagnostic on stderr; --quiet suppresses stdout.
 
@@ -192,6 +201,9 @@ Examples:
   # Run with resolver parameters
   scafctl run action build -f ./solution.yaml version=1.0.0
 
+  # Render action results as a tree
+  scafctl run action lint -o tree
+
   # Dry run
   scafctl run action lint --dry-run`, settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.ArbitraryArgs,
@@ -207,6 +219,18 @@ Examples:
 	}
 
 	// Shared resolver flags
+	options.outputCompletionFn = func(_ *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		if options.List {
+			listFormats := make([]string, 0, len(ValidOutputTypes))
+			for _, f := range ValidOutputTypes {
+				if f != string(kvx.OutputFormatTest) {
+					listFormats = append(listFormats, f)
+				}
+			}
+			return filterOutputFormatCompletions(listFormats, toComplete)
+		}
+		return filterOutputFormatCompletions(solutionOutputFormats, toComplete)
+	}
 	addSharedResolverFlags(cCmd, &options.sharedResolverOptions)
 	addSolutionRefFlag(cCmd, &options.sharedResolverOptions)
 
@@ -770,12 +794,29 @@ func (o *ActionOptions) failNoDefaultActions(ctx context.Context, sol *solution.
 	return o.failStructured(ctx, nil, err, exitcode.InvalidInput)
 }
 
+// actionAppName returns the effective CLI command title for kvx rendering.
+func (o *ActionOptions) actionAppName() string {
+	if o.AppName != "" {
+		return o.AppName
+	}
+	binName := o.BinaryName
+	if binName == "" {
+		if o.CliParams != nil && o.CliParams.BinaryName != "" {
+			binName = o.CliParams.BinaryName
+		} else {
+			binName = settings.CliBinaryName
+		}
+	}
+	return binName + " run action"
+}
+
 // failStructured delegates to SolutionOptions.failStructured so setup and
 // resolver-phase failures emit a parseable {status, diagnostics, resolvers}
 // document in json/yaml instead of an empty stdout. resolverOut is an
 // already-redacted resolver output map embedded under "resolvers".
 func (o *ActionOptions) failStructured(ctx context.Context, resolverOut map[string]any, err error, code int) error {
 	s := &SolutionOptions{
+		BinaryName:            o.BinaryName,
 		sharedResolverOptions: o.sharedResolverOptions,
 		Verbose:               o.Verbose,
 		ShowExecution:         o.ShowExecution,
@@ -787,10 +828,12 @@ func (o *ActionOptions) failStructured(ctx context.Context, resolverOut map[stri
 // resolvers (side-effect-free) and produces a structured WhatIf report.
 func (o *ActionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg providerLookup, params map[string]any, workflow *action.Workflow, resolvers []*resolver.Resolver, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
 	s := &SolutionOptions{
+		BinaryName:            o.BinaryName,
 		sharedResolverOptions: o.sharedResolverOptions,
 		Verbose:               o.Verbose,
 		ShowExecution:         o.ShowExecution,
 	}
+	s.AppName = o.actionAppName()
 	return s.executeDryRun(resolverCtx, actionCtx, sol, reg, params, workflow, resolvers, stateData, cwd, stateSeed)
 }
 
@@ -804,6 +847,7 @@ func (o *ActionOptions) resolveOutputDir(ctx context.Context, dryRun bool) (stri
 // writeActionOutput writes the action execution results using the shared implementation.
 func (o *ActionOptions) writeActionOutput(ctx context.Context, result *action.ExecutionResult, executionData map[string]any) error {
 	s := &SolutionOptions{
+		BinaryName:              o.BinaryName,
 		sharedResolverOptions:   o.sharedResolverOptions,
 		Verbose:                 o.Verbose,
 		ShowExecution:           o.ShowExecution,
@@ -813,6 +857,7 @@ func (o *ActionOptions) writeActionOutput(ctx context.Context, result *action.Ex
 		hasProgressCallback:     o.hasProgressCallback,
 		ciDialect:               o.ciDialect,
 	}
+	s.AppName = o.actionAppName()
 	return s.writeActionOutput(ctx, result, executionData)
 }
 
