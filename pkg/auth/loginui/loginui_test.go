@@ -1318,3 +1318,91 @@ func TestInteractiveTerminal_DevNullIsNotTTY(t *testing.T) {
 	assert.False(t, interactiveTerminal(&terminal.IOStreams{In: devNull, Out: devNull, ErrOut: devNull}))
 	assert.False(t, isTTY(&bytes.Buffer{}))
 }
+
+func TestRunLogin_NonInteractiveFlowsBypassInteractiveTUIOnTTY(t *testing.T) {
+	// Not parallel: mutates package-level isInteractiveTerminal and runStatusScreen seams.
+	prevTTY := isInteractiveTerminal
+	prevScreen := runStatusScreen
+	t.Cleanup(func() {
+		isInteractiveTerminal = prevTTY
+		runStatusScreen = prevScreen
+	})
+
+	isInteractiveTerminal = func(_ *terminal.IOStreams) bool { return true }
+
+	nonInteractiveFlows := []auth.Flow{
+		auth.FlowGcloudADC,
+		auth.FlowServicePrincipal,
+		auth.FlowWorkloadIdentity,
+		auth.FlowPAT,
+		auth.FlowMetadata,
+		auth.FlowClientCredentials,
+		auth.FlowOnBehalfOf,
+	}
+
+	for _, flow := range nonInteractiveFlows {
+		t.Run(string(flow), func(t *testing.T) {
+			tuiEntered := false
+			runStatusScreen = func(_ any, _ tui.Config, _ ...tea.ProgramOption) error {
+				tuiEntered = true
+				return errors.New("unexpected interactive status TUI invocation")
+			}
+
+			pasteBackInjected := false
+			handler := &mockHandler{
+				name:        "gcp",
+				displayName: "Google Cloud Platform",
+				loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+					if auth.PasteBackFromContext(ctx) != nil {
+						pasteBackInjected = true
+					}
+					if opts.DeviceCodeCallback != nil {
+						opts.DeviceCodeCallback("", "https://accounts.example.com/o/oauth2/auth", "")
+					}
+					return &auth.Result{Claims: &auth.Claims{Email: "adc@example.com"}}, nil
+				},
+			}
+
+			w := newTestWriter(t)
+			res, err := RunLogin(context.Background(), w, "mycli", handler, auth.LoginOptions{Flow: flow})
+			require.NoError(t, err)
+			require.NotNil(t, res)
+			assert.Equal(t, "adc@example.com", res.Claims.DisplayIdentity())
+			assert.False(t, tuiEntered, "flow %s must not enter runInteractiveTUI", flow)
+			assert.False(t, pasteBackInjected, "flow %s must not install an interactive paste-back prompt", flow)
+		})
+	}
+
+	t.Run("interactive_flow_still_enters_interactive_TUI_when_TTY", func(t *testing.T) {
+		tuiEntered := false
+		outcomeGate := make(chan struct{})
+		runStatusScreen = func(_ any, cfg tui.Config, _ ...tea.ProgramOption) error {
+			tuiEntered = true
+			close(outcomeGate)
+			r := <-cfg.Done
+			require.NoError(t, r.Err)
+			return nil
+		}
+
+		pasteBackInjected := false
+		handler := &mockHandler{
+			name:        "gcp",
+			displayName: "Google Cloud Platform",
+			loginFunc: func(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+				if auth.PasteBackFromContext(ctx) != nil {
+					pasteBackInjected = true
+				}
+				opts.DeviceCodeCallback("", "https://accounts.example.com/o/oauth2/auth", "")
+				<-outcomeGate
+				return &auth.Result{Claims: &auth.Claims{Email: "interactive@example.com"}}, nil
+			},
+		}
+
+		w := newTestWriter(t)
+		res, err := RunLogin(context.Background(), w, "mycli", handler, auth.LoginOptions{Flow: auth.FlowInteractive})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.True(t, tuiEntered, "FlowInteractive on a TTY must enter runInteractiveTUI")
+		assert.True(t, pasteBackInjected, "FlowInteractive on a TTY must wire PasteBackFunc")
+	})
+}

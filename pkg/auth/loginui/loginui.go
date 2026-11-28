@@ -122,18 +122,18 @@ func RunLogin(ctx context.Context, w *writer.Writer, binaryName string, handler 
 
 	var interactiveFlow bool
 	switch opts.Flow {
-	case auth.FlowInteractive, auth.FlowGcloudADC, auth.FlowGitHubApp, "":
+	case auth.FlowInteractive, auth.FlowGitHubApp, "":
 		interactiveFlow = true
 	case auth.FlowDeviceCode:
 		if skvx.IsTerminal(ioStreams.Out) {
 			return runStatusTUI(ctx, w, binaryName, handler, opts, ioStreams)
 		}
 	case auth.FlowServicePrincipal, auth.FlowWorkloadIdentity, auth.FlowPAT,
-		auth.FlowMetadata, auth.FlowClientCredentials, auth.FlowOnBehalfOf:
+		auth.FlowMetadata, auth.FlowGcloudADC, auth.FlowClientCredentials, auth.FlowOnBehalfOf:
 		// Non-interactive flows fall through to the plain-text path below.
 	}
 
-	if interactiveFlow && !w.IsQuiet() && interactiveTerminal(ioStreams) {
+	if interactiveFlow && !w.IsQuiet() && isInteractiveTerminal(ioStreams) {
 		return runInteractiveTUI(ctx, w, binaryName, handler, opts, ioStreams)
 	}
 
@@ -997,6 +997,11 @@ func hasOAuthRedirectPayload(parsed *url.URL) bool {
 	}
 	return false
 }
+
+// isInteractiveTerminal is interactiveTerminal as a test seam so RunLogin flow
+// routing tests can simulate a terminal session without requiring a PTY.
+// Production code never reassigns it.
+var isInteractiveTerminal = interactiveTerminal
 
 // interactiveTerminal reports whether stdin, stdout, and stderr are all
 // terminals, i.e. the session can render prompts and read answers from a

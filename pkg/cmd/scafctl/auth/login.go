@@ -562,9 +562,9 @@ func loginWithFlowDetection(ctx context.Context, w *writer.Writer, binaryName st
 		}
 	}
 
-	// Pre-login check; skip for non-interactive flows.
+	// Pre-login check; non-interactive/ambient flows skip the status check unless --skip-if-authenticated is set.
 	preLogin, err := auth.PreLoginCheck(ctx, handler, flow, force, skipIfAuthenticated, hostname,
-		auth.FlowServicePrincipal, auth.FlowWorkloadIdentity, auth.FlowPAT, auth.FlowClientCredentials, auth.FlowMetadata)
+		auth.FlowServicePrincipal, auth.FlowWorkloadIdentity, auth.FlowPAT, auth.FlowClientCredentials, auth.FlowMetadata, auth.FlowGcloudADC)
 	if err != nil {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
