@@ -997,6 +997,127 @@ func TestCommandLogin_HybridHandlerPreservesExplicitInteractiveAndDeviceCodeDefa
 	})
 }
 
+func TestCommandLogin_GCPAmbientGcloudADC(t *testing.T) {
+	newGCPDetector := func(status *auth.Status) *auth.MockFlowDetectorHandler {
+		h := auth.NewMockFlowDetectorHandler("gcp")
+		h.DisplayNameValue = "Google Cloud Platform"
+		h.FlowsValue = []auth.Flow{auth.FlowInteractive, auth.FlowDeviceCode, auth.FlowGcloudADC}
+		h.CapabilitiesValue = []auth.Capability{auth.CapScopesOnLogin}
+		h.StatusResult = status
+		h.DetectFlowsResult = []auth.FlowAvailability{
+			{Flow: auth.FlowInteractive, Available: true, Reason: "workstation browser flow"},
+			{Flow: auth.FlowGcloudADC, Available: true, Reason: "application_default_credentials.json present"},
+		}
+		h.LoginResult = &auth.Result{
+			Claims:    &auth.Claims{Email: "user@example.com"},
+			ExpiresAt: time.Now().Add(time.Hour),
+		}
+		return h
+	}
+
+	t.Run("ambient gcloud_adc proceeds with interactive login without --force", func(t *testing.T) {
+		ctx, buf := newTestContext(t)
+		mock := newGCPDetector(&auth.Status{
+			Authenticated: true,
+			Flow:          auth.FlowGcloudADC,
+			Claims:        &auth.Claims{Name: "gcloud ADC (application default credentials)"},
+		})
+		ctx = withTestHandler(ctx, mock)
+
+		cliParams := settings.NewCliParams()
+		cliParams.BinaryName = "mycli"
+		cmd := CommandLogin(cliParams, terminal.NewIOStreams(nil, buf, buf, false), "mycli/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"gcp"})
+
+		require.NoError(t, cmd.Execute())
+		require.Len(t, mock.LoginCalls, 1)
+		assert.Equal(t, auth.FlowInteractive, mock.LoginCalls[0].Flow)
+		assert.Contains(t, buf.String(), "Logged in to Google Cloud Platform as user@example.com")
+		assert.NotContains(t, buf.String(), "Already authenticated")
+	})
+
+	t.Run("ambient gcloud_adc with --skip-if-authenticated skips cleanly", func(t *testing.T) {
+		ctx, buf := newTestContext(t)
+		mock := newGCPDetector(&auth.Status{
+			Authenticated: true,
+			Flow:          auth.FlowGcloudADC,
+			Claims:        &auth.Claims{Name: "gcloud ADC (application default credentials)"},
+		})
+		ctx = withTestHandler(ctx, mock)
+
+		cmd := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"gcp", "--skip-if-authenticated"})
+
+		require.NoError(t, cmd.Execute())
+		assert.Empty(t, mock.LoginCalls)
+		assert.Contains(t, buf.String(), "Already authenticated as gcloud ADC (application default credentials)")
+		assert.Contains(t, buf.String(), "skipping login")
+	})
+
+	t.Run("explicit --flow gcloud-adc runs without --force and honors --skip-if-authenticated", func(t *testing.T) {
+		ctx, buf := newTestContext(t)
+		mock := newGCPDetector(&auth.Status{
+			Authenticated: true,
+			Flow:          auth.FlowInteractive,
+			Claims:        &auth.Claims{Email: "existing@example.com"},
+		})
+		ctx = withTestHandler(ctx, mock)
+
+		cmd := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"gcp", "--flow", "gcloud-adc"})
+
+		require.NoError(t, cmd.Execute())
+		require.Len(t, mock.LoginCalls, 1)
+		assert.Equal(t, auth.FlowGcloudADC, mock.LoginCalls[0].Flow)
+		assert.Equal(t, 0, mock.StatusCalls, "explicit --flow gcloud-adc without --skip-if-authenticated should skip Status()")
+		assert.NotContains(t, buf.String(), "Already authenticated")
+
+		// With --skip-if-authenticated, already-authenticated handler skips cleanly.
+		ctxSkip, bufSkip := newTestContext(t)
+		mockSkip := newGCPDetector(&auth.Status{
+			Authenticated: true,
+			Flow:          auth.FlowGcloudADC,
+			Claims:        &auth.Claims{Name: "gcloud ADC (application default credentials)"},
+		})
+		ctxSkip = withTestHandler(ctxSkip, mockSkip)
+
+		cmdSkip := CommandLogin(settings.NewCliParams(), terminal.NewIOStreams(nil, bufSkip, bufSkip, false), "scafctl/auth")
+		cmdSkip.SetContext(ctxSkip)
+		cmdSkip.SetArgs([]string{"gcp", "--flow", "gcloud-adc", "--skip-if-authenticated"})
+
+		require.NoError(t, cmdSkip.Execute())
+		assert.Empty(t, mockSkip.LoginCalls)
+		assert.Equal(t, 1, mockSkip.StatusCalls)
+		assert.Contains(t, bufSkip.String(), "skipping login")
+	})
+
+	t.Run("stored interactive and device_code sessions still warn with embedder binary name", func(t *testing.T) {
+		for _, storedFlow := range []auth.Flow{auth.FlowInteractive, auth.FlowDeviceCode} {
+			ctx, buf := newTestContext(t)
+			mock := newGCPDetector(&auth.Status{
+				Authenticated: true,
+				Flow:          storedFlow,
+				Claims:        &auth.Claims{Email: "stored@example.com"},
+			})
+			ctx = withTestHandler(ctx, mock)
+
+			cliParams := settings.NewCliParams()
+			cliParams.BinaryName = "mycli"
+			cmd := CommandLogin(cliParams, terminal.NewIOStreams(nil, buf, buf, false), "mycli/auth")
+			cmd.SetContext(ctx)
+			cmd.SetArgs([]string{"gcp"})
+
+			require.NoError(t, cmd.Execute())
+			assert.Empty(t, mock.LoginCalls)
+			assert.Contains(t, buf.String(), "Already authenticated as stored@example.com.")
+			assert.Contains(t, buf.String(), "Use 'mycli auth logout gcp' to sign out first, or use --force to re-authenticate.")
+		}
+	})
+}
+
 type recordingCustomFlowHandler struct {
 	*oauth2.Handler
 	loginFlows []auth.Flow

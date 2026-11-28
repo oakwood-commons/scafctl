@@ -72,9 +72,26 @@ type PreLoginResult struct {
 	Identity string
 }
 
+// isAmbientFlow reports whether f is an ambient or non-logout-managed
+// credential flow (such as local ADC files, environment variables, or metadata
+// endpoints) that 'auth logout' does not clear.
+func isAmbientFlow(f Flow) bool {
+	switch f {
+	case FlowGcloudADC, FlowMetadata, FlowPAT, FlowServicePrincipal, FlowWorkloadIdentity, FlowClientCredentials:
+		return true
+	case FlowInteractive, FlowDeviceCode, FlowGitHubApp, FlowOnBehalfOf:
+		return false
+	default:
+		return false
+	}
+}
+
 // PreLoginCheck checks whether a handler is already authenticated and determines
 // the appropriate action. If force is true, the handler is logged out first and
-// PreLoginProceed is returned. If the flow is in skipCheckFlows, no check is performed.
+// PreLoginProceed is returned. When skipIfAuthenticated is false and flow is in
+// skipCheckFlows, no status check is performed and PreLoginProceed is returned.
+// When skipIfAuthenticated is true, Status is checked (except on explicit
+// host-aware overrides) so already-authenticated handlers return PreLoginSkip.
 //
 // Parameters:
 //   - handler: the auth handler to check
@@ -84,7 +101,8 @@ type PreLoginResult struct {
 //   - hostname: the explicitly requested host (empty if none). For host-aware
 //     handlers, a non-empty hostname bypasses the already-authenticated check so
 //     the user can log in to a different host without --force.
-//   - skipCheckFlows: flows for which no auth-status check is needed (e.g., FlowPAT)
+//   - skipCheckFlows: non-interactive/ambient flows for which no status check is
+//     performed unless skipIfAuthenticated is true (e.g., FlowPAT, FlowGcloudADC)
 func PreLoginCheck(ctx context.Context, handler Handler, flow Flow, force, skipIfAuthenticated bool, hostname string, skipCheckFlows ...Flow) (*PreLoginResult, error) {
 	// Force re-auth: log out first.
 	if force {
@@ -92,11 +110,10 @@ func PreLoginCheck(ctx context.Context, handler Handler, flow Flow, force, skipI
 		return &PreLoginResult{Action: PreLoginProceed}, nil
 	}
 
-	// Skip check for certain flows
-	for _, skipFlow := range skipCheckFlows {
-		if flow == skipFlow {
-			return &PreLoginResult{Action: PreLoginProceed}, nil
-		}
+	// Skip status check for non-interactive/ambient flows unless idempotent
+	// skip-if-authenticated behavior was requested.
+	if !skipIfAuthenticated && slices.Contains(skipCheckFlows, flow) {
+		return &PreLoginResult{Action: PreLoginProceed}, nil
 	}
 
 	// When an explicit hostname is requested for a host-aware handler, the
@@ -113,7 +130,7 @@ func PreLoginCheck(ctx context.Context, handler Handler, flow Flow, force, skipI
 		return nil, fmt.Errorf("failed to check auth status: %w", err)
 	}
 
-	if !status.Authenticated {
+	if status == nil || !status.Authenticated {
 		return &PreLoginResult{Action: PreLoginProceed}, nil
 	}
 
@@ -129,12 +146,19 @@ func PreLoginCheck(ctx context.Context, handler Handler, flow Flow, force, skipI
 		}, nil
 	}
 
-	// If Status is reporting a non-interactive/ambient credential (such as a PAT
-	// or workload identity fallback on a hybrid handler) while the caller is
-	// initiating an ordinary login for a different flow (e.g. defaultFlow:
-	// interactive without --skip-if-authenticated), proceed rather than blocking
-	// interactive login behind ambient credentials.
-	if status.Flow != "" && status.Flow != flow && slices.Contains(skipCheckFlows, status.Flow) {
+	activeFlow := status.Flow
+	if activeFlow == "" {
+		if reporter, ok := handler.(FlowReporter); ok {
+			activeFlow = reporter.ActiveFlow(ctx)
+		}
+	}
+
+	// When authentication is backed only by an ambient or non-logout-managed
+	// flow (such as gcloud ADC, metadata, PAT, service principal, workload
+	// identity, or client credentials), proceed so an explicit login can
+	// establish a managed session instead of instructing the user to run a
+	// logout command that does not clear external credentials.
+	if activeFlow != "" && (isAmbientFlow(activeFlow) || slices.Contains(skipCheckFlows, activeFlow)) {
 		return &PreLoginResult{Action: PreLoginProceed}, nil
 	}
 

@@ -167,33 +167,119 @@ func TestPreLoginCheck_HostnameIgnoredWithoutCapability(t *testing.T) {
 	assert.Equal(t, 1, handler.StatusCalls) // non-host-aware handler still checks status
 }
 
+type mockFlowReporterHandler struct {
+	*MockHandler
+	activeFlow Flow
+}
+
+func (m *mockFlowReporterHandler) ActiveFlow(_ context.Context) Flow {
+	return m.activeFlow
+}
+
 func TestPreLoginCheck_AmbientHeadlessFlowDoesNotBlockInteractiveLogin(t *testing.T) {
-	handler := NewMockHandler("hybrid")
-	handler.StatusResult = &Status{
-		Authenticated: true,
-		Flow:          FlowPAT,
-		Claims:        &Claims{Username: "acme+ci_robot"},
+	skipFlows := []Flow{
+		FlowServicePrincipal,
+		FlowWorkloadIdentity,
+		FlowPAT,
+		FlowClientCredentials,
+		FlowMetadata,
+		FlowGcloudADC,
 	}
 
-	// Interactive login proceeds even when ambient PAT credentials report authenticated.
-	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "",
-		FlowServicePrincipal, FlowWorkloadIdentity, FlowPAT, FlowClientCredentials, FlowMetadata)
-	require.NoError(t, err)
-	assert.Equal(t, PreLoginProceed, result.Action)
+	for _, ambientFlow := range skipFlows {
+		t.Run("ambient_"+string(ambientFlow), func(t *testing.T) {
+			handler := NewMockHandler("gcp")
+			handler.StatusResult = &Status{
+				Authenticated: true,
+				Flow:          ambientFlow,
+				Claims:        &Claims{Name: "gcloud ADC (application default credentials)"},
+			}
 
-	// Explicit --skip-if-authenticated is honored even on hybrid handlers with ambient PAT/WIF sessions.
-	resultSkip, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, true, "",
-		FlowServicePrincipal, FlowWorkloadIdentity, FlowPAT, FlowClientCredentials, FlowMetadata)
-	require.NoError(t, err)
-	assert.Equal(t, PreLoginSkip, resultSkip.Action)
-	assert.Equal(t, "acme+ci_robot", resultSkip.Identity)
+			// Interactive login proceeds when only an ambient/non-logout-managed flow is active.
+			result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "", skipFlows...)
+			require.NoError(t, err)
+			assert.Equal(t, PreLoginProceed, result.Action)
 
-	// Matching interactive session still reports already authenticated.
-	handler.StatusResult.Flow = FlowInteractive
-	resultSame, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "",
-		FlowServicePrincipal, FlowWorkloadIdentity, FlowPAT, FlowClientCredentials, FlowMetadata)
-	require.NoError(t, err)
-	assert.Equal(t, PreLoginAlreadyAuthenticated, resultSame.Action)
+			// Direct callers that omit skipCheckFlows still recognize ambient flows.
+			resultNoSkipList, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "")
+			require.NoError(t, err)
+			assert.Equal(t, PreLoginProceed, resultNoSkipList.Action)
+
+			// Explicit --skip-if-authenticated skips cleanly even when backed by an ambient flow.
+			resultSkip, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, true, "", skipFlows...)
+			require.NoError(t, err)
+			assert.Equal(t, PreLoginSkip, resultSkip.Action)
+			assert.Equal(t, "gcloud ADC (application default credentials)", resultSkip.Identity)
+		})
+	}
+
+	t.Run("explicit_skipCheckFlow_honors_skipIfAuthenticated", func(t *testing.T) {
+		handler := NewMockHandler("gcp")
+		handler.StatusResult = &Status{
+			Authenticated: true,
+			Flow:          FlowGcloudADC,
+			Claims:        &Claims{Name: "gcloud ADC (application default credentials)"},
+		}
+
+		// Without --skip-if-authenticated, explicit --flow gcloud-adc skips Status() and proceeds.
+		resProceed, err := PreLoginCheck(context.Background(), handler, FlowGcloudADC, false, false, "", skipFlows...)
+		require.NoError(t, err)
+		assert.Equal(t, PreLoginProceed, resProceed.Action)
+		assert.Equal(t, 0, handler.StatusCalls)
+
+		// With --skip-if-authenticated, explicit --flow gcloud-adc checks Status() and skips when authenticated.
+		resSkip, err := PreLoginCheck(context.Background(), handler, FlowGcloudADC, false, true, "", skipFlows...)
+		require.NoError(t, err)
+		assert.Equal(t, PreLoginSkip, resSkip.Action)
+		assert.Equal(t, "gcloud ADC (application default credentials)", resSkip.Identity)
+		assert.Equal(t, 1, handler.StatusCalls)
+
+		// With --skip-if-authenticated and unauthenticated status, explicit --flow gcloud-adc proceeds.
+		handler.StatusResult = &Status{Authenticated: false}
+		resUnauth, err := PreLoginCheck(context.Background(), handler, FlowGcloudADC, false, true, "", skipFlows...)
+		require.NoError(t, err)
+		assert.Equal(t, PreLoginProceed, resUnauth.Action)
+		assert.Equal(t, 2, handler.StatusCalls)
+	})
+
+	t.Run("stored_interactive_and_device_code_sessions_still_report_already_authenticated", func(t *testing.T) {
+		for _, storedFlow := range []Flow{FlowInteractive, FlowDeviceCode, FlowGitHubApp, FlowOnBehalfOf, Flow("custom_session")} {
+			handler := NewMockHandler("gcp")
+			handler.StatusResult = &Status{
+				Authenticated: true,
+				Flow:          storedFlow,
+				Claims:        &Claims{Email: "user@example.com"},
+			}
+
+			res, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "", skipFlows...)
+			require.NoError(t, err)
+			assert.Equal(t, PreLoginAlreadyAuthenticated, res.Action, "flow %s should require logout or --force", storedFlow)
+			assert.Equal(t, "user@example.com", res.Identity)
+		}
+	})
+
+	t.Run("flow_reporter_fallback_and_nil_status", func(t *testing.T) {
+		base := NewMockHandler("gcp")
+		base.StatusResult = &Status{
+			Authenticated: true,
+			Claims:        &Claims{Name: "ADC User"},
+		}
+		reporter := &mockFlowReporterHandler{MockHandler: base, activeFlow: FlowGcloudADC}
+
+		resAmbient, err := PreLoginCheck(context.Background(), reporter, FlowInteractive, false, false, "", skipFlows...)
+		require.NoError(t, err)
+		assert.Equal(t, PreLoginProceed, resAmbient.Action)
+
+		reporter.activeFlow = FlowInteractive
+		resStored, err := PreLoginCheck(context.Background(), reporter, FlowInteractive, false, false, "", skipFlows...)
+		require.NoError(t, err)
+		assert.Equal(t, PreLoginAlreadyAuthenticated, resStored.Action)
+
+		base.StatusResult = nil
+		resNil, err := PreLoginCheck(context.Background(), base, FlowInteractive, false, false, "", skipFlows...)
+		require.NoError(t, err)
+		assert.Equal(t, PreLoginProceed, resNil.Action)
+	})
 }
 
 func BenchmarkDetectFlow(b *testing.B) {
