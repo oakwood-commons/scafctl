@@ -32,6 +32,7 @@ var reservedNames = map[string]bool{
 	"__index":   true,
 	"__error":   true,
 	"__self":    true,
+	"__result":  true,
 	"true":      true,
 	"false":     true,
 	"null":      true,
@@ -573,6 +574,28 @@ func validateActionsReferences(action *Action, section string, workflow *Workflo
 		}
 	}
 
+	// Collect refs from retry conditions so __actions references in retryIf/until are validated.
+	if action.Retry != nil {
+		if action.Retry.RetryIf != nil {
+			retryRefs := make(map[string]struct{})
+			extractRefsFromExpression(action.Retry.RetryIf, retryRefs)
+			for ref := range retryRefs {
+				if _, exists := refField[ref]; !exists {
+					refField[ref] = "retry.retryIf"
+				}
+			}
+		}
+		if action.Retry.Until != nil {
+			untilRefs := make(map[string]struct{})
+			extractRefsFromExpression(action.Retry.Until, untilRefs)
+			for ref := range untilRefs {
+				if _, exists := refField[ref]; !exists {
+					refField[ref] = "retry.until"
+				}
+			}
+		}
+	}
+
 	// Sort ref names for deterministic validation error ordering.
 	refs := make([]string, 0, len(refField))
 	for ref := range refField {
@@ -872,6 +895,46 @@ func validateRetry(action *Action, section string, errs *AggregatedValidationErr
 			Field:      "retry.backoff",
 			Message:    fmt.Sprintf("retry.backoff must be 'fixed', 'linear', or 'exponential', got %q", retry.Backoff),
 		})
+	}
+
+	// Validate retryIf CEL syntax when configured
+	if retry.RetryIf != nil {
+		expr := strings.TrimSpace(string(*retry.RetryIf))
+		if expr == "" {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      "retry.retryIf",
+				Message:    "retry.retryIf cannot be empty",
+			})
+		} else if err := celexp.ValidateSyntax(context.Background(), expr); err != nil {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      "retry.retryIf",
+				Message:    fmt.Sprintf("invalid CEL expression in retry.retryIf: %v", err),
+			})
+		}
+	}
+
+	// Validate until CEL syntax when configured
+	if retry.Until != nil {
+		expr := strings.TrimSpace(string(*retry.Until))
+		if expr == "" {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      "retry.until",
+				Message:    "retry.until cannot be empty",
+			})
+		} else if err := celexp.ValidateSyntax(context.Background(), expr); err != nil {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      "retry.until",
+				Message:    fmt.Sprintf("invalid CEL expression in retry.until: %v", err),
+			})
+		}
 	}
 }
 

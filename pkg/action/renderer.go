@@ -137,6 +137,12 @@ type RenderedRetryConfig struct {
 
 	// MaxDelay caps the maximum delay between retries.
 	MaxDelay string `json:"maxDelay,omitempty" yaml:"maxDelay,omitempty" doc:"Max delay cap" example:"30s"`
+
+	// RetryIf is the CEL expression that gates retries on error.
+	RetryIf string `json:"retryIf,omitempty" yaml:"retryIf,omitempty" doc:"Conditional retry CEL expression" maxLength:"4096" example:"__error.statusCode == 429"`
+
+	// Until is the CEL expression that stops polling when true.
+	Until string `json:"until,omitempty" yaml:"until,omitempty" doc:"Polling completion CEL expression" maxLength:"4096" example:"__result.status == 'completed'"`
 }
 
 // RenderedForEachMetadata tracks forEach expansion information in rendered output.
@@ -370,6 +376,14 @@ func renderRetryConfig(retry *RetryConfig) *RenderedRetryConfig {
 
 	if retry.MaxDelay != nil {
 		rendered.MaxDelay = retry.MaxDelay.String()
+	}
+
+	if retry.RetryIf != nil {
+		rendered.RetryIf = string(*retry.RetryIf)
+	}
+
+	if retry.Until != nil {
+		rendered.Until = string(*retry.Until)
 	}
 
 	return rendered

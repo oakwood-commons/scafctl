@@ -860,8 +860,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	actionCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Create retry executor
-	retryExecutor := NewRetryExecutor(action.Retry)
+	pollingUntil := action.Retry != nil && action.Retry.Until != nil
 
 	// Create the execution function
 	callFn := func(execCtx context.Context) (*provider.Output, provider.CapturedStreamLogs, error) {
@@ -894,7 +893,9 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	}
 
 	// Opt-in de-duplication: identical call args within a run run the provider once.
-	if callPlan != nil && callPlan.Dedup && e.dedupMemo != nil {
+	// Actions with retry.until poll live external state across attempts, so they
+	// always execute the provider directly rather than replaying a memoized first poll.
+	if callPlan != nil && callPlan.Dedup && e.dedupMemo != nil && !pollingUntil {
 		inner := callFn
 		callFn = func(execCtx context.Context) (*provider.Output, provider.CapturedStreamLogs, error) {
 			val, dedupErr := e.dedupMemo.Do(callPlan.DedupKey, func() (any, error) {
@@ -913,16 +914,73 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		}
 	}
 
-	var lastCapturedLogs provider.CapturedStreamLogs
+	var (
+		lastCapturedLogs     provider.CapturedStreamLogs
+		currentCandidateLogs provider.CapturedStreamLogs
+		lastAttemptCapture   *attemptStreamCapture
+		lastOrigStreamed     bool
+	)
 	execFunc := func(execCtx context.Context) (*provider.Output, error) {
+		var capture *attemptStreamCapture
+		if pollingUntil {
+			capture = &attemptStreamCapture{}
+			execCtx = redact.WithSuppressGitHubActionsMasks(execCtx)
+			execCtx = provider.WithIOStreams(execCtx, capture.providerStreams())
+			inheritedCfg, ok := InheritedExecutorConfigFromContext(execCtx)
+			if !ok {
+				inheritedCfg = InheritedExecutorConfig{
+					DefaultTimeout:   e.defaultTimeout,
+					GracePeriod:      e.gracePeriod,
+					MaxConcurrency:   e.maxConcurrency,
+					ProgressCallback: e.activeProgress,
+					Cwd:              e.cwd,
+				}
+			}
+			inheritedCfg.IOStreams = capture.childStreams()
+			execCtx = WithInheritedExecutorConfig(execCtx, inheritedCfg)
+		}
+
 		out, logs, callErr := callFn(execCtx)
-		if out == nil && !logs.Empty() {
+		origStreamed := out != nil && out.Streamed
+		if pollingUntil && origStreamed {
+			cp := *out
+			cp.Streamed = false
+			out = &cp
+		}
+		provLogs := capture.providerLogs(actionTracker)
+		candidateLogs := mergeCapturedStreamLogs(logs, provLogs)
+		resultLogs := logs
+		if shouldMergeAttemptLogsIntoResults(out, e.streams() != nil, providerName) {
+			resultLogs = candidateLogs
+		}
+		if out == nil && (!resultLogs.Empty() || (capture != nil && !capture.empty())) {
 			out = &provider.Output{}
 		}
+		currentCandidateLogs = candidateLogs
+		lastAttemptCapture = capture
+		lastOrigStreamed = origStreamed
 		if callErr == nil || out != nil {
-			lastCapturedLogs = logs
+			lastCapturedLogs = resultLogs
 		}
 		return out, callErr
+	}
+
+	// Create retry executor; build action CEL scope only when retryIf or until
+	// is configured so ordinary actions avoid unnecessary namespace copies.
+	retryExecutor := NewRetryExecutor(action.Retry)
+	if action.Retry != nil && (action.Retry.RetryIf != nil || action.Retry.Until != nil) {
+		retryExecutor.
+			WithRootData(e.resolverData).
+			WithAdditionalVars(e.buildActionEvalVars(action, graph.AliasMap))
+	}
+	if pollingUntil {
+		retryExecutor.WithCandidateExtractor(func(out *provider.Output) any {
+			var data any
+			if out != nil && out.Data != nil {
+				data = actionTracker.RedactAny(out.Data)
+			}
+			return currentCandidateLogs.MergeIntoData(data)
+		})
 	}
 
 	// Execute with retry
@@ -938,7 +996,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Handle results
 	if actionCtx.Err() == context.DeadlineExceeded {
-		failedResults, streamed := e.flushBufferedActionOutput(ctx, output, lastCapturedLogs, actionTracker)
+		failedResults, streamed := e.flushFinalActionOutput(ctx, output, lastCapturedLogs, lastAttemptCapture, lastOrigStreamed, actionTracker)
 		e.actionContext.RecordOutput(actionName, failedResults, streamed)
 		e.actionContext.MarkTimeout(actionName)
 		if cb != nil {
@@ -951,7 +1009,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	}
 
 	if err != nil {
-		failedResults, streamed := e.flushBufferedActionOutput(ctx, output, lastCapturedLogs, actionTracker)
+		failedResults, streamed := e.flushFinalActionOutput(ctx, output, lastCapturedLogs, lastAttemptCapture, lastOrigStreamed, actionTracker)
 		e.actionContext.RecordOutput(actionName, failedResults, streamed)
 
 		// Evaluate continueOnError before recording/reporting the failure so any
@@ -996,7 +1054,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 				validationErr = actionTracker.RedactError(validationErr)
 				switch mode {
 				case ResultSchemaModeError:
-					failedResults, streamed := e.flushBufferedActionOutput(ctx, output, lastCapturedLogs, actionTracker)
+					failedResults, streamed := e.flushFinalActionOutput(ctx, output, lastCapturedLogs, lastAttemptCapture, lastOrigStreamed, actionTracker)
 					e.actionContext.RecordOutput(actionName, failedResults, streamed)
 					cont, decideErr := e.actionShouldContinue(ctx, action, validationErr, attempts, maxAttempts)
 					reportErr := validationErr
@@ -1027,7 +1085,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		}
 	}
 
-	results, streamed := e.flushBufferedActionOutput(ctx, output, lastCapturedLogs, actionTracker)
+	results, streamed := e.flushFinalActionOutput(ctx, output, lastCapturedLogs, lastAttemptCapture, lastOrigStreamed, actionTracker)
 
 	e.actionContext.MarkSucceeded(actionName, results)
 
@@ -1061,6 +1119,231 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 type dedupProviderResult struct {
 	output *provider.Output
 	logs   provider.CapturedStreamLogs
+}
+
+type streamChunkRecord struct {
+	stderr bool
+	data   string
+}
+
+// attemptStreamCapture buffers direct provider IOStreams writes and inherited
+// child-executor IOStreams writes for a single retry.until attempt so pending
+// polls do not write prematurely to live terminal streams or process stdio.
+type attemptStreamCapture struct {
+	mu         sync.Mutex
+	chunks     []streamChunkRecord
+	provStdout strings.Builder
+	provStderr strings.Builder
+}
+
+type attemptStreamWriter struct {
+	capture *attemptStreamCapture
+	stderr  bool
+	direct  bool
+}
+
+func (w *attemptStreamWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	s := string(p)
+	w.capture.mu.Lock()
+	w.capture.chunks = append(w.capture.chunks, streamChunkRecord{stderr: w.stderr, data: s})
+	if w.direct {
+		if w.stderr {
+			w.capture.provStderr.WriteString(s)
+		} else {
+			w.capture.provStdout.WriteString(s)
+		}
+	}
+	w.capture.mu.Unlock()
+	return len(p), nil
+}
+
+func (c *attemptStreamCapture) providerStreams() *provider.IOStreams {
+	return &provider.IOStreams{
+		Out:    redact.NewStreamWriter(&attemptStreamWriter{capture: c, direct: true}, nil),
+		ErrOut: redact.NewStreamWriter(&attemptStreamWriter{capture: c, stderr: true, direct: true}, nil),
+	}
+}
+
+func (c *attemptStreamCapture) childStreams() *provider.IOStreams {
+	return &provider.IOStreams{
+		Out:    redact.NewStreamWriter(&attemptStreamWriter{capture: c}, nil),
+		ErrOut: redact.NewStreamWriter(&attemptStreamWriter{capture: c, stderr: true}, nil),
+	}
+}
+
+func (c *attemptStreamCapture) empty() bool {
+	if c == nil {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.chunks) == 0
+}
+
+func (c *attemptStreamCapture) providerLogs(tracker *redact.Tracker) provider.CapturedStreamLogs {
+	if c == nil {
+		return provider.CapturedStreamLogs{}
+	}
+	c.mu.Lock()
+	stdout := c.provStdout.String()
+	stderr := c.provStderr.String()
+	c.mu.Unlock()
+	if tracker != nil {
+		stdout = tracker.RedactString(stdout)
+		stderr = tracker.RedactString(stderr)
+	}
+	return provider.CapturedStreamLogs{
+		Stdout: stdout,
+		Stderr: stderr,
+	}
+}
+
+func (c *attemptStreamCapture) snapshotChunks() []streamChunkRecord {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.chunks) == 0 {
+		return nil
+	}
+	chunks := make([]streamChunkRecord, len(c.chunks))
+	copy(chunks, c.chunks)
+	return chunks
+}
+
+func mergeCapturedStreamLogs(primary, fallback provider.CapturedStreamLogs) provider.CapturedStreamLogs {
+	out := primary.Stdout
+	if out == "" {
+		out = fallback.Stdout
+	}
+	errOut := primary.Stderr
+	if errOut == "" {
+		errOut = fallback.Stderr
+	}
+	return provider.CapturedStreamLogs{
+		Stdout: out,
+		Stderr: errOut,
+	}
+}
+
+func shouldMergeAttemptLogsIntoResults(out *provider.Output, hasLiveStreams bool, providerName string) bool {
+	if providerName == "message" || providerName == "debug" {
+		return false
+	}
+	if !hasLiveStreams {
+		return true
+	}
+	if out == nil || out.Data == nil {
+		return true
+	}
+	if m, ok := out.Data.(map[string]any); ok {
+		_, hasOut := m["stdout"]
+		_, hasErr := m["stderr"]
+		return hasOut || hasErr
+	}
+	return false
+}
+
+func (e *Executor) flushFinalActionOutput(
+	ctx context.Context,
+	output *provider.Output,
+	capturedLogs provider.CapturedStreamLogs,
+	attemptCapture *attemptStreamCapture,
+	origStreamed bool,
+	actionTracker *redact.Tracker,
+) (any, bool) {
+	if attemptCapture == nil || attemptCapture.empty() {
+		return e.flushBufferedActionOutput(ctx, output, capturedLogs, actionTracker)
+	}
+	if cliParams, ok := settings.FromContext(ctx); ok && cliParams != nil && cliParams.IsQuiet {
+		return e.flushBufferedActionOutput(ctx, output, capturedLogs, actionTracker)
+	}
+
+	streams := e.streams()
+	if streams == nil {
+		return e.flushBufferedActionOutput(ctx, output, capturedLogs, actionTracker)
+	}
+
+	chunks := attemptCapture.snapshotChunks()
+	if len(chunks) == 0 {
+		return e.flushBufferedActionOutput(ctx, output, capturedLogs, actionTracker)
+	}
+
+	var explicitStdout, explicitStderr string
+	if !origStreamed && output != nil {
+		if rawMap, ok := output.Data.(map[string]any); ok {
+			explicitStdout, _ = rawMap["stdout"].(string)
+			explicitStderr, _ = rawMap["stderr"].(string)
+		}
+	}
+
+	// Share one boundary-safe redacting writer per channel across captured chunks
+	// and trailing buffered stdout/stderr, flushing only after both sources write.
+	flushCtx, flushRedacting := provider.WrapDirectiveAlignedRedactingIOStreams(
+		provider.WithIOStreams(ctx, streams),
+		actionTracker,
+		nil,
+	)
+	wrappedStreams, _ := provider.IOStreamsFromContext(flushCtx)
+	if wrappedStreams == nil {
+		wrappedStreams = streams
+	}
+
+	var flushedOut, flushedErr bool
+	for _, ch := range chunks {
+		if ch.data == "" {
+			continue
+		}
+		if ch.stderr {
+			if streams.ErrOut != nil && wrappedStreams.ErrOut != nil {
+				_, _ = io.WriteString(wrappedStreams.ErrOut, ch.data)
+				flushedErr = true
+			}
+			continue
+		}
+		if streams.Out != nil && wrappedStreams.Out != nil {
+			_, _ = io.WriteString(wrappedStreams.Out, ch.data)
+			flushedOut = true
+		}
+	}
+
+	if !origStreamed {
+		tailOut := explicitStdout
+		if !flushedOut && tailOut == "" {
+			tailOut = capturedLogs.Stdout
+		}
+		if tailOut != "" && streams.Out != nil && wrappedStreams.Out != nil {
+			_, _ = io.WriteString(wrappedStreams.Out, tailOut)
+			flushedOut = true
+		}
+
+		tailErr := explicitStderr
+		if !flushedErr && tailErr == "" {
+			tailErr = capturedLogs.Stderr
+		}
+		if tailErr != "" && streams.ErrOut != nil && wrappedStreams.ErrOut != nil {
+			_, _ = io.WriteString(wrappedStreams.ErrOut, tailErr)
+			flushedErr = true
+		}
+	}
+
+	flushRedacting()
+
+	if !flushedOut && !flushedErr {
+		return e.flushBufferedActionOutput(ctx, output, capturedLogs, actionTracker)
+	}
+
+	var marked provider.Output
+	if output != nil {
+		marked = *output
+	}
+	marked.Streamed = true
+	results, _ := e.flushBufferedActionOutput(ctx, &marked, capturedLogs, actionTracker)
+	return results, true
 }
 
 // flushBufferedActionOutput scrubs output.Data via actionTracker, merges any
@@ -1235,6 +1518,27 @@ func (e *Executor) buildAdditionalVars(aliasMap map[string]string) map[string]an
 	}
 
 	return additionalVars
+}
+
+// buildActionEvalVars returns the CEL variables available to an action's runtime
+// retry conditions (retryIf and until), combining buildAdditionalVars with any
+// forEach iteration bindings when the action is an expanded forEach iteration.
+func (e *Executor) buildActionEvalVars(action *ExpandedAction, aliasMap map[string]string) map[string]any {
+	vars := e.buildAdditionalVars(aliasMap)
+	if action != nil && action.IsForEachIteration() && action.ForEachMetadata != nil {
+		meta := action.ForEachMetadata
+		vars[celexp.VarItem] = meta.Item
+		vars[celexp.VarIndex] = meta.Index
+		if action.ForEach != nil {
+			if action.ForEach.Item != "" {
+				vars[action.ForEach.Item] = meta.Item
+			}
+			if action.ForEach.Index != "" {
+				vars[action.ForEach.Index] = meta.Index
+			}
+		}
+	}
+	return vars
 }
 
 // callProvider executes the provider for an action. providerName is the

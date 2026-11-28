@@ -468,6 +468,21 @@ func computeEffectiveDependencies(
 		}
 	}
 
+	// Add implicit dependencies from __actions references in retry conditions (retryIf/until),
+	// which are also evaluated at runtime against completed upstream actions.
+	if expanded.Action != nil && expanded.Retry != nil {
+		if expanded.Retry.RetryIf != nil {
+			for _, ref := range parseActionsRefsForGraph(string(*expanded.Retry.RetryIf)) {
+				insertRefs(ref)
+			}
+		}
+		if expanded.Retry.Until != nil {
+			for _, ref := range parseActionsRefsForGraph(string(*expanded.Retry.Until)) {
+				insertRefs(ref)
+			}
+		}
+	}
+
 	// Add implicit dependencies from __actions references in call-site args.
 	// Call args are resolved at runtime (not materialized via DeferredInputs), so
 	// extract their __actions references here to schedule referenced actions first.
@@ -599,7 +614,8 @@ func splitPhaseForExclusive(phase []string, actions map[string]*ExpandedAction) 
 	}
 
 	// Group actions by color to form sub-phases
-	subPhases := make([][]string, maxColor+1)
+	subPhaseCount := maxColor + 1
+	subPhases := make([][]string, subPhaseCount)
 	for _, name := range phase {
 		c := color[name]
 		subPhases[c] = append(subPhases[c], name)

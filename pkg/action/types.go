@@ -158,8 +158,8 @@ type Action struct {
 	// If exceeded, the action fails with StatusTimeout.
 	Timeout *duration.Duration `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Maximum execution duration" example:"30s"`
 
-	// Retry configures automatic retry on failure.
-	Retry *RetryConfig `json:"retry,omitempty" yaml:"retry,omitempty" doc:"Retry configuration for transient failures"`
+	// Retry configures automatic retry on failure and declarative until polling.
+	Retry *RetryConfig `json:"retry,omitempty" yaml:"retry,omitempty" doc:"Retry and polling configuration for transient failures or asynchronous conditions"`
 
 	// ForEach enables iteration, executing the action once per array element.
 	// Only allowed in workflow.actions, not workflow.finally.
@@ -247,7 +247,7 @@ type FingerprintConfig struct {
 	Scope FingerprintScope `json:"scope,omitempty" yaml:"scope,omitempty" doc:"Fingerprint scope: all (files+inputs) or files (files only)" maxLength:"16" example:"files" default:"all"`
 }
 
-// RetryConfig defines automatic retry behavior for failed actions.
+// RetryConfig defines automatic retry and polling behavior for actions.
 type RetryConfig struct {
 	// MaxAttempts is the total number of execution attempts (including initial).
 	// Must be >= 1.
@@ -265,8 +265,8 @@ type RetryConfig struct {
 	// Only meaningful for linear and exponential backoff.
 	MaxDelay *duration.Duration `json:"maxDelay,omitempty" yaml:"maxDelay,omitempty" doc:"Maximum delay between retries" example:"30s"`
 
-	// RetryIf is a CEL expression that determines whether a retry should occur.
-	// The expression has access to __error context with error details:
+	// RetryIf is a CEL expression that determines whether a retry should occur on error.
+	// The expression has access to __error as a structured map with error details:
 	//   - __error.message: Error message string
 	//   - __error.type: Error type ("http", "exec", "timeout", "validation", "unknown")
 	//   - __error.statusCode: HTTP status code (0 if not HTTP)
@@ -275,8 +275,17 @@ type RetryConfig struct {
 	//   - __error.maxAttempts: Maximum configured attempts
 	// If not specified, all errors are retried (default behavior).
 	// If specified and evaluates to false, no retry occurs.
-	// Example: "${ __error.statusCode == 429 || __error.statusCode >= 500 }"
-	RetryIf *celexp.Expression `json:"retryIf,omitempty" yaml:"retryIf,omitempty" doc:"CEL expression to determine if retry should occur"`
+	// Example: __error.message.contains('rate limit') || __error.statusCode == 429
+	RetryIf *celexp.Expression `json:"retryIf,omitempty" yaml:"retryIf,omitempty" doc:"CEL expression evaluated on failure to determine if retry should occur. Binds __error as a map with keys: __error.message (string), __error.type ('http'|'exec'|'timeout'|'validation'|'unknown'), __error.statusCode (int), __error.exitCode (int), __error.attempt (int, 1-based), and __error.maxAttempts (int). Use __error.message.contains(...) rather than __error.contains(...)." maxLength:"4096" example:"__error.message.contains('rate limit') || __error.statusCode == 429"`
+
+	// Until is a CEL expression evaluated after each non-error execution to
+	// determine when asynchronous polling is complete. The candidate provider
+	// output is bound to both __result and __self (alongside _, __actions,
+	// __execution, and __cwd). While false and attempt < maxAttempts,
+	// RetryExecutor waits according to backoff, initialDelay, and maxDelay and
+	// re-executes the action; when maxAttempts is exhausted with until still
+	// false, the action fails and preserves the final candidate output.
+	Until *celexp.Expression `json:"until,omitempty" yaml:"until,omitempty" doc:"CEL expression evaluated after each non-error execution to determine when polling is complete. Binds the candidate provider output to both __result and __self (alongside _, __actions, __execution, and __cwd). Repeats per backoff/initialDelay/maxDelay while false until maxAttempts is reached." maxLength:"4096" example:"__result.status == 'completed'"`
 }
 
 // BackoffType defines the backoff strategy for retries.

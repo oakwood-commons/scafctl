@@ -858,7 +858,7 @@ Exponential retry attempt succeeded
 Retry + timeout succeeded
 ```
 
-Since all commands succeed on the first try, no retries occur. Retries only trigger on failures.
+Since all commands succeed on the first try and no `until` condition is set, no retries occur. Retries trigger on failures or while `retry.until` evaluates to `false`.
 
 ### Backoff Strategies
 
@@ -880,7 +880,7 @@ retry:
   retryIf: "__error.statusCode == 429 || __error.statusCode >= 500"
 ```
 
-The `__error` variable provides context about the failure:
+The `__error` variable is a structured map providing context about the failure (use `__error.message.contains(...)` in actions, rather than `__error.contains(...)`):
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -897,8 +897,8 @@ Common patterns:
 # Only retry on timeouts
 retryIf: "__error.type == 'timeout'"
 
-# Retry on rate limits or server errors
-retryIf: "__error.statusCode == 429 || __error.statusCode >= 500"
+# Retry on rate-limit messages or HTTP 429/5xx status codes
+retryIf: "__error.message.contains('rate limit') || __error.statusCode == 429 || __error.statusCode >= 500"
 
 # Limit effective retries regardless of maxAttempts
 retryIf: "__error.attempt < 3"
@@ -906,6 +906,29 @@ retryIf: "__error.attempt < 3"
 # Disable retry entirely (even with retry config present)
 retryIf: "false"
 ```
+
+### Polling Asynchronous State (until)
+
+Use `retry.until` to poll an external endpoint or status command without forcing non-zero errors on intermediate attempts. After each non-error execution, `until` evaluates against the candidate provider output bound as both `__result` and `__self` (alongside `_`, `__actions`, `__execution`, and `__cwd`):
+
+```yaml
+actions:
+  wait-checks:
+    description: Poll check runs until all checks finish
+    provider: http
+    retry:
+      maxAttempts: 10
+      backoff: fixed
+      initialDelay: 5s
+      retryIf: "__error.type == 'timeout' || __error.message.contains('connection')"
+      until: "__result.success && type(__result.body) == map && has(__result.body.check_runs) && __result.body.check_runs.all(c, c.status == 'completed')"
+    inputs:
+      url: "https://api.example.com/repos/acme/service/commits/main/check-runs"
+      method: GET
+      autoParseJson: true
+```
+
+While `until` evaluates to `false` and `attempt < maxAttempts`, the executor waits according to `backoff`, `initialDelay`, and `maxDelay` before polling again. Because `http` returns non-2xx responses with `__result.success == false` unless `acceptableStatusCodes` is set, guarding `__result.success`, `type(__result.body) == map`, and `has(__result.body.check_runs)` keeps polling across 429/5xx error payloads while `retryIf` handles transport and timeout errors. If `maxAttempts` is reached with `until` still `false`, the action fails with `condition 'until' not met after N attempt(s)` and preserves the final candidate output in the action result envelope.
 
 ---
 

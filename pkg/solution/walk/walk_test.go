@@ -476,3 +476,55 @@ func TestWalk_ArgsAndContinueOnError(t *testing.T) {
 	assert.Contains(t, condPaths, "spec.workflow.actions.deploy.continueOnError")
 	assert.Contains(t, condPaths, "spec.workflow.actions.deploy.forEach.continueOnError")
 }
+
+func TestWalk_ActionRetryConditions(t *testing.T) {
+	t.Parallel()
+
+	retryIf := celexp.Expression("__error.statusCode == 429")
+	until := celexp.Expression("__result.status == _.expectedStatus")
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"poll": {
+						Name:     "poll",
+						Provider: "http",
+						Retry: &action.RetryConfig{
+							MaxAttempts: 5,
+							RetryIf:     &retryIf,
+							Until:       &until,
+						},
+					},
+				},
+				Finally: map[string]*action.Action{
+					"verifyCleanup": {
+						Name:     "verifyCleanup",
+						Provider: "http",
+						Retry: &action.RetryConfig{
+							MaxAttempts: 3,
+							Until:       &until,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	type visitedCond struct {
+		path string
+		kind string
+	}
+	var got []visitedCond
+	err := Walk(sol, &Visitor{
+		Condition: func(path, kind string, _ *celexp.Expression) error {
+			got = append(got, visitedCond{path: path, kind: kind})
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []visitedCond{
+		{path: "spec.workflow.actions.poll.retry.retryIf", kind: "when"},
+		{path: "spec.workflow.actions.poll.retry.until", kind: "until"},
+		{path: "spec.workflow.finally.verifyCleanup.retry.until", kind: "until"},
+	}, got)
+}

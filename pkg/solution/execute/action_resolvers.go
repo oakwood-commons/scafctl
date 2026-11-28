@@ -161,8 +161,8 @@ func WorkflowResolverRefs(
 
 // ActionResolverRefs returns the sorted, deduplicated resolver names
 // referenced directly by act across inputs, spec.calls args, spec.functions
-// call sites, forEach, when, continueOnError, and retry.retryIf. Condition
-// expressions are parsed strictly and return an error when malformed.
+// call sites, forEach, when, continueOnError, retry.retryIf, and retry.until.
+// Condition expressions are parsed strictly and return an error when malformed.
 func ActionResolverRefs(
 	sol *solution.Solution,
 	actionName string,
@@ -373,9 +373,16 @@ func extractActionRefs(
 		}
 	}
 
-	if act.Retry != nil && act.Retry.RetryIf != nil {
-		if err := scanActionCondition(string(*act.Retry.RetryIf), "retryIf", actionName, strictConditions, col); err != nil {
-			return err
+	if act.Retry != nil {
+		if act.Retry.RetryIf != nil {
+			if err := scanActionCondition(string(*act.Retry.RetryIf), "retryIf", actionName, strictConditions, col); err != nil {
+				return err
+			}
+		}
+		if act.Retry.Until != nil {
+			if err := scanActionCondition(string(*act.Retry.Until), "until", actionName, strictConditions, col); err != nil {
+				return err
+			}
 		}
 	}
 

@@ -6,6 +6,7 @@ package action
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"time"
 
@@ -13,15 +14,31 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
-// RetryExecutor wraps action execution with retry logic and backoff strategies.
-// It handles transient failures by retrying the action up to maxAttempts times
-// with configurable delays between attempts.
+// VarResult is the CEL variable name bound to the candidate provider output
+// in action retry.until expressions (alongside __self).
+const VarResult = "__result"
+
+// RetryExecutor wraps action execution with retry logic, polling, and backoff strategies.
+// It handles transient failures and asynchronous polling conditions up to maxAttempts
+// times with configurable delays between attempts.
 type RetryExecutor struct {
 	// config is the retry configuration
 	config *RetryConfig
 
 	// jitterFn optionally adds jitter to delays (for testing)
 	jitterFn func(time.Duration) time.Duration
+
+	// sleepFn optionally overrides delay waiting (for testing)
+	sleepFn func(ctx context.Context, d time.Duration) error
+
+	// rootData holds resolved resolver values (_) for CEL evaluation
+	rootData map[string]any
+
+	// additionalVars holds action-level CEL context variables (__actions, __cwd, __execution, aliases, forEach vars)
+	additionalVars map[string]any
+
+	// candidateFn optionally extracts the candidate value from a non-error provider output
+	candidateFn func(*provider.Output) any
 }
 
 // NewRetryExecutor creates a new retry executor with the given configuration.
@@ -37,6 +54,52 @@ func NewRetryExecutor(config *RetryConfig) *RetryExecutor {
 func (r *RetryExecutor) WithJitter(fn func(time.Duration) time.Duration) *RetryExecutor {
 	r.jitterFn = fn
 	return r
+}
+
+// WithSleep sets a custom sleep function for waiting between retry attempts.
+// When nil, RetryExecutor uses a cancellable timer backed by time.NewTimer.
+func (r *RetryExecutor) WithSleep(fn func(ctx context.Context, d time.Duration) error) *RetryExecutor {
+	r.sleepFn = fn
+	return r
+}
+
+// WithRootData sets the base resolver data (_) available during retryIf and until CEL evaluation.
+func (r *RetryExecutor) WithRootData(data map[string]any) *RetryExecutor {
+	r.rootData = data
+	return r
+}
+
+// WithAdditionalVars sets action-level CEL variables (such as __actions, __cwd, __execution,
+// action aliases, and forEach iteration variables) available during retryIf and until evaluation.
+func (r *RetryExecutor) WithAdditionalVars(vars map[string]any) *RetryExecutor {
+	r.additionalVars = vars
+	return r
+}
+
+// WithCandidateExtractor sets an optional extractor that maps a non-error *provider.Output
+// to the candidate value bound as __result and __self during until evaluation.
+// When unset, output.Data is used directly (or nil if output is nil).
+func (r *RetryExecutor) WithCandidateExtractor(fn func(*provider.Output) any) *RetryExecutor {
+	r.candidateFn = fn
+	return r
+}
+
+// sleep waits for delay or until ctx is cancelled without leaking timers.
+func (r *RetryExecutor) sleep(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	if r.sleepFn != nil {
+		return r.sleepFn(ctx, delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // CalculateDelay computes the delay before a retry attempt based on the backoff strategy.
@@ -148,13 +211,13 @@ func (r *RetryExecutor) ShouldRetry(ctx context.Context, err error, attempt int)
 func (r *RetryExecutor) evaluateRetryCondition(ctx context.Context, err error, attempt int) (bool, error) {
 	errCtx := NewErrorContext(err, attempt, r.MaxAttempts())
 
-	// Build additional variables with __error context
-	additionalVars := map[string]any{
-		"__error": errCtx.ToMap(),
-	}
+	// Build additional variables with action scope plus __error context
+	additionalVars := make(map[string]any, len(r.additionalVars)+1)
+	maps.Copy(additionalVars, r.additionalVars)
+	additionalVars[celexp.VarError] = errCtx.ToMap()
 
 	// Evaluate the expression
-	result, evalErr := celexp.EvaluateExpression(ctx, string(*r.config.RetryIf), nil, additionalVars)
+	result, evalErr := celexp.EvaluateExpression(ctx, string(*r.config.RetryIf), r.rootData, additionalVars)
 	if evalErr != nil {
 		return false, fmt.Errorf("failed to evaluate retryIf expression: %w", evalErr)
 	}
@@ -166,6 +229,34 @@ func (r *RetryExecutor) evaluateRetryCondition(ctx context.Context, err error, a
 	}
 
 	return shouldRetry, nil
+}
+
+// evaluateUntilCondition evaluates the until CEL expression against a non-error
+// candidate output, binding both __result and __self to the candidate value.
+func (r *RetryExecutor) evaluateUntilCondition(ctx context.Context, output *provider.Output) (bool, error) {
+	var candidateData any
+	if r.candidateFn != nil {
+		candidateData = r.candidateFn(output)
+	} else if output != nil {
+		candidateData = output.Data
+	}
+
+	evalVars := make(map[string]any, len(r.additionalVars)+2)
+	maps.Copy(evalVars, r.additionalVars)
+	evalVars[VarResult] = candidateData
+	evalVars[celexp.VarSelf] = candidateData
+
+	result, evalErr := celexp.EvaluateExpression(ctx, string(*r.config.Until), r.rootData, evalVars)
+	if evalErr != nil {
+		return false, fmt.Errorf("failed to evaluate retry until expression: %w", evalErr)
+	}
+
+	matched, ok := result.(bool)
+	if !ok {
+		return false, fmt.Errorf("retry until expression must return boolean, got %T", result)
+	}
+
+	return matched, nil
 }
 
 // ExecuteFunc is the function signature for action execution.
@@ -221,11 +312,8 @@ func (r *RetryExecutor) ExecuteWithRetry(
 
 			// Wait for the delay or context cancellation
 			if delay > 0 {
-				select {
-				case <-ctx.Done():
-					return lastOutput, attempt - 1, fmt.Errorf("execution cancelled during retry delay: %w", ctx.Err())
-				case <-time.After(delay):
-					// Continue with retry
+				if sleepErr := r.sleep(ctx, delay); sleepErr != nil {
+					return lastOutput, attempt - 1, fmt.Errorf("execution cancelled during retry delay: %w", sleepErr)
 				}
 			}
 		}
@@ -233,7 +321,29 @@ func (r *RetryExecutor) ExecuteWithRetry(
 		// Execute the action
 		output, err := execute(ctx)
 		if err == nil {
-			return output, attempt, nil
+			if r.config == nil || r.config.Until == nil {
+				return output, attempt, nil
+			}
+			if output != nil {
+				lastOutput = output
+			}
+
+			matched, untilErr := r.evaluateUntilCondition(ctx, output)
+			if untilErr != nil {
+				return lastOutput, attempt, untilErr
+			}
+			if matched {
+				return output, attempt, nil
+			}
+
+			if attempt >= maxAttempts {
+				return lastOutput, attempt, fmt.Errorf("condition 'until' not met after %d attempt(s)", attempt)
+			}
+			if ctx.Err() != nil {
+				return lastOutput, attempt, fmt.Errorf("execution cancelled: %w", ctx.Err())
+			}
+			lastErr = fmt.Errorf("condition 'until' not met (attempt %d/%d)", attempt, maxAttempts)
+			continue
 		}
 		if output != nil {
 			lastOutput = output
@@ -311,13 +421,10 @@ func (r *RetryExecutor) ExecuteWithRetryDetailed(
 
 			// Wait for the delay or context cancellation
 			if delay > 0 {
-				select {
-				case <-ctx.Done():
-					result.FinalError = fmt.Errorf("execution cancelled during retry delay: %w", ctx.Err())
+				if sleepErr := r.sleep(ctx, delay); sleepErr != nil {
+					result.FinalError = fmt.Errorf("execution cancelled during retry delay: %w", sleepErr)
 					result.Attempts = attempt
 					return result
-				case <-time.After(delay):
-					// Continue with retry
 				}
 			}
 		}
@@ -327,9 +434,41 @@ func (r *RetryExecutor) ExecuteWithRetryDetailed(
 		result.Attempts = attempt
 
 		if err == nil {
-			result.Output = output
-			result.FinalError = nil
-			return result
+			if r.config == nil || r.config.Until == nil {
+				result.Output = output
+				result.FinalError = nil
+				return result
+			}
+			if output != nil {
+				result.Output = output
+			}
+
+			matched, untilErr := r.evaluateUntilCondition(ctx, output)
+			if untilErr != nil {
+				result.AttemptErrors = append(result.AttemptErrors, untilErr)
+				result.FinalError = untilErr
+				return result
+			}
+			if matched {
+				result.Output = output
+				result.FinalError = nil
+				return result
+			}
+
+			if attempt >= maxAttempts {
+				exhaustErr := fmt.Errorf("condition 'until' not met after %d attempt(s)", attempt)
+				result.AttemptErrors = append(result.AttemptErrors, exhaustErr)
+				result.FinalError = exhaustErr
+				return result
+			}
+			if ctx.Err() != nil {
+				result.FinalError = fmt.Errorf("execution cancelled: %w", ctx.Err())
+				return result
+			}
+			pendingErr := fmt.Errorf("condition 'until' not met (attempt %d/%d)", attempt, maxAttempts)
+			result.AttemptErrors = append(result.AttemptErrors, pendingErr)
+			result.FinalError = pendingErr
+			continue
 		}
 		if output != nil {
 			result.Output = output

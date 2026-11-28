@@ -114,9 +114,16 @@ var builtinVariables = []ContextVariable{
 	{
 		Name:        celexp.VarSelf, // "__self"
 		Languages:   langBoth,
-		Phases:      []string{PhaseResolve, PhaseTransform, PhaseValidate, PhaseForEach},
-		Description: "The current resolver's in-progress value. In transform it is the resolved value; in validate it is the final value; in a resolve-phase 'until' condition it is the current candidate value; and it is also bound during forEach iterations. Available in CEL (__self) and Go templates ({{ .__self }}). Not available in a plain resolve provider input (only in that step's 'until' condition).",
+		Phases:      []string{PhaseResolve, PhaseTransform, PhaseValidate, PhaseForEach, PhaseAction},
+		Description: "The current step's in-progress value. In transform it is the resolved value; in validate it is the final value; in a resolve-phase 'until' condition it is the current candidate value; in an action 'retry.until' condition (CEL) it is bound to the candidate provider output alongside __result; and it is also bound during forEach iterations. Available in CEL (__self) and Go templates ({{ .__self }}). Not available in plain resolve or action provider inputs (only in 'until' / 'retry.until' conditions).",
 		Example:     "__self.trim()",
+	},
+	{
+		Name:        "__result",
+		Languages:   langCELOnly,
+		Phases:      []string{PhaseAction},
+		Description: "Candidate output data from an action's most recent non-error provider execution, bound in action retry.until CEL expressions (alongside __self as a synonym). Use it to inspect fields of the provider result when polling asynchronous external state; not bound in normal action inputs or when conditions.",
+		Example:     "__result.status == 'completed'",
 	},
 	{
 		Name:        celexp.VarItem, // "__item"

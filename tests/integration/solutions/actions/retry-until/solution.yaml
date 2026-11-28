@@ -1,0 +1,161 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-retry-until
+  version: 1.0.0
+  description: |
+    Functional tests for declarative action polling (retry.until).
+    Verifies HTTP check-run polling, multi-attempt stateful polling,
+    render output, and maxAttempts exhaustion handling.
+
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+    - name: exec
+      kind: provider
+      version: latest
+
+spec:
+  resolvers:
+    mockBaseUrl:
+      description: Base URL of mock HTTP server from environment
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: MOCK_BASE_URL
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+    targetStatus:
+      description: Desired terminal check-run status
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "completed"
+
+  workflow:
+    actions:
+      pollHttpChecks:
+        description: Poll HTTP check-runs endpoint until all checks are completed
+        provider: http
+        retry:
+          maxAttempts: 5
+          backoff: fixed
+          initialDelay: 20ms
+          until: "__result.body.result.check_runs.all(c, c.status == _.targetStatus)"
+        inputs:
+          url:
+            expr: "_.mockBaseUrl + '/api/checks'"
+          method: GET
+          autoParseJson: true
+
+      pollCounterUntilReady:
+        description: Poll stateful command across three attempts until status reaches completed
+        provider: exec
+        retry:
+          maxAttempts: 5
+          backoff: fixed
+          initialDelay: 20ms
+          until: "__self.stdout.trim() == _.targetStatus"
+        inputs:
+          command: "count=$(cat poll_count.txt 2>/dev/null || echo 0); count=$((count + 1)); printf '%s' \"$count\" > poll_count.txt; if [ \"$count\" -lt 3 ]; then echo \"pending-$count\"; else echo \"completed\"; fi"
+
+      exhaustPendingChecks:
+        description: Opt-in action that exhausts maxAttempts against perpetually pending check runs
+        explicit: true
+        provider: http
+        retry:
+          maxAttempts: 3
+          backoff: fixed
+          initialDelay: 20ms
+          until: "__result.body.result.check_runs.all(c, c.status == _.targetStatus)"
+        inputs:
+          url:
+            expr: "_.mockBaseUrl + '/api/pending-checks'"
+          method: GET
+          autoParseJson: true
+
+  testing:
+    config:
+      skipBuiltins: [resolve-defaults]
+      services:
+        - name: mock-api
+          type: http
+          baseUrlEnv: MOCK_BASE_URL
+          routes:
+            - path: /api/checks
+              method: GET
+              status: 200
+              headers:
+                Content-Type: application/json
+              body: '{"result":{"check_runs":[{"name":"build","status":"completed"},{"name":"lint","status":"completed"}]}}'
+            - path: /api/pending-checks
+              method: GET
+              status: 200
+              headers:
+                Content-Type: application/json
+              body: '{"result":{"check_runs":[{"name":"build","status":"in_progress"}]}}'
+
+    cases:
+      _base:
+        description: Base setup allowing loopback mock server connections
+        args: ["-o", "json", "--config", "config.yaml"]
+        tags: [action, retry]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
+
+      poll-until-succeeds:
+        description: Verify HTTP check-run polling and multi-attempt stateful polling succeed
+        extends: [_base]
+        command: [run, solution]
+        tags: [smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["pollHttpChecks"].status == "succeeded"
+          - expression: '!__stderr.contains("pollHttpChecks: condition")'
+          - expression: __output.actions["pollCounterUntilReady"].status == "succeeded"
+          - expression: __output.actions["pollCounterUntilReady"].results.stdout.trim() == "completed"
+          - expression: '__stderr.contains("retry 2/5: pollCounterUntilReady")'
+          - expression: '__stderr.contains("retry 3/5: pollCounterUntilReady")'
+          - expression: '!__stderr.contains("retry 4/5: pollCounterUntilReady")'
+
+      poll-until-human-mode:
+        description: Verify chunk-streamed polling succeeds in default human output mode
+        command: [run, solution]
+        args: ["--config", "config.yaml"]
+        tags: [action, retry]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__stdout.contains("completed")'
+          - expression: '!__stdout.contains("pending-")'
+
+      poll-until-exhausted:
+        description: Verify action fails with clear exhaustion error when until remains false
+        extends: [_base]
+        command: [run, action, exhaustPendingChecks]
+        tags: [negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+          - expression: __stderr.contains("condition 'until' not met after 3 attempt(s)")
+
+      render-retry-until:
+        description: Verify retry.until expression appears in rendered action graph
+        extends: [_base]
+        command: [render, solution]
+        tags: [render]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.actions["pollHttpChecks"].retry.until.contains("check_runs")

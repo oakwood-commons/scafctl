@@ -237,6 +237,8 @@ maxAttempts: 5
 backoff: linear
 initialDelay: 2s
 maxDelay: 1m
+retryIf: "__error.statusCode == 429"
+until: "__result.status == 'completed'"
 `
 	var r RetryConfig
 	err := yaml.Unmarshal([]byte(yamlData), &r)
@@ -248,6 +250,10 @@ maxDelay: 1m
 	assert.Equal(t, duration.New(2*time.Second), *r.InitialDelay)
 	assert.NotNil(t, r.MaxDelay)
 	assert.Equal(t, duration.New(time.Minute), *r.MaxDelay)
+	require.NotNil(t, r.RetryIf)
+	assert.Equal(t, "__error.statusCode == 429", string(*r.RetryIf))
+	require.NotNil(t, r.Until)
+	assert.Equal(t, "__result.status == 'completed'", string(*r.Until))
 }
 
 func TestActionResult_JSONRoundTrip(t *testing.T) {
