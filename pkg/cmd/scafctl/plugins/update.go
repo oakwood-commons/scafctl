@@ -6,6 +6,7 @@ package plugins
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -58,10 +59,15 @@ var updateColumnHints = map[string]tui.ColumnHint{
 
 // CommandUpdate creates the update subcommand.
 func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+	binaryName := settings.CliBinaryName
+	if cliParams != nil && cliParams.BinaryName != "" {
+		binaryName = cliParams.BinaryName
+	}
+
 	opts := &UpdateOptions{
 		CliParams:      cliParams,
 		IOStreams:      ioStreams,
-		KvxOutputFlags: flags.KvxOutputFlags{AppName: cliParams.BinaryName},
+		KvxOutputFlags: flags.KvxOutputFlags{AppName: binaryName},
 	}
 
 	cmd := &cobra.Command{
@@ -93,7 +99,7 @@ func CommandUpdate(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 
 			  # Constrain to same minor version
 			  scafctl plugins update github --target patch
-		`), settings.CliBinaryName, cliParams.BinaryName),
+		`), settings.CliBinaryName, binaryName),
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			w := writer.FromContext(cmd.Context())
@@ -167,14 +173,15 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 
 	cacheDir := opts.CacheDir
 	if cacheDir == "" {
-		binaryName := opts.CliParams.BinaryName
-		if binaryName == "" {
-			binaryName = settings.CliBinaryName
+		var binaryName string
+		if opts.CliParams != nil {
+			binaryName = opts.CliParams.BinaryName
 		}
 		cacheDir = settings.PluginCacheDirFor(binaryName)
 	}
 
 	cache := plugin.NewCache(cacheDir)
+	quietOutput := kvxOpts != nil && kvx.IsQuietFormat(kvxOpts.Format)
 
 	// Build catalog chain.
 	appCfg := config.FromContext(ctx)
@@ -191,7 +198,9 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 		auth.RegistryFromContext(ctx),
 		chainLogger,
 		catalog.WithPluginWarningHandler(func(msg string) {
-			w.WarnStderrf("%s", msg)
+			if !quietOutput {
+				w.WarnStderrf("%s", msg)
+			}
 		}),
 	)
 	if err != nil {
@@ -227,6 +236,10 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 
 	// Apply pinned versions — override plan entries.
 	for name, ver := range pinned {
+		// Pinned versions bypass catalog lookup; drop any catalog-resolution
+		// failure recorded for this plugin before evaluating the pin against cache.
+		plan.Failed = removeFailedByName(plan.Failed, name)
+
 		found := false
 		for i := range plan.Updates {
 			if plan.Updates[i].Name == name {
@@ -258,13 +271,23 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 	}
 
 	// Report failures.
-	for _, f := range plan.Failed {
-		w.WarnStderrf("%s: %s", f.Name, f.Error)
+	if !quietOutput {
+		for _, f := range plan.Failed {
+			w.WarnStderrf("%s: %s", f.Name, f.Error)
+		}
 	}
 
 	if len(plan.Updates) == 0 {
-		w.PlainStderrf("All plugins are up to date.")
-		return kvxOpts.Write([]updateResultItem{})
+		if err := writeEmptyUpdateResults(kvxOpts); err != nil {
+			return err
+		}
+		if len(plan.Failed) > 0 {
+			return failedPlanError(plan.Failed)
+		}
+		if !quietOutput {
+			w.PlainStderrf("All plugins are up to date.")
+		}
+		return nil
 	}
 
 	// Build display items.
@@ -280,8 +303,13 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 	}
 
 	if opts.DryRun {
-		w.PlainStderrf("Dry run: %d plugin(s) would be updated:", len(plan.Updates))
-		return kvxOpts.Write(items)
+		if !quietOutput {
+			w.PlainStderrf("Dry run: %d plugin(s) would be updated:", len(plan.Updates))
+		}
+		if err := kvxOpts.Write(items); err != nil {
+			return err
+		}
+		return failedPlanError(plan.Failed)
 	}
 
 	// Guard: downloading requires a remote catalog chain.
@@ -291,13 +319,15 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	// Perform the updates by fetching new versions.
-	w.PlainStderrf("Updating %d plugin(s)...", len(plan.Updates))
-
 	sigPolicy, sigErr := prepare.ResolveSignaturePolicy(ctx, appCfg, nil, chainLogger)
 	if sigErr != nil {
 		w.Errorf("%v", sigErr)
 		return exitcode.WithCode(sigErr, exitcode.ConfigError)
+	}
+
+	// Perform the updates by fetching new versions.
+	if !quietOutput {
+		w.PlainStderrf("Updating %d plugin(s)...", len(plan.Updates))
 	}
 
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
@@ -349,6 +379,56 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 	descCache := plugin.NewDescriptorCache("", 0)
 	descCache.InvalidateAll()
 
-	w.PlainStderrf("Updated %d plugin(s).", len(results))
-	return nil
+	if !quietOutput {
+		w.PlainStderrf("Updated %d plugin(s).", len(results))
+	}
+	return failedPlanError(plan.Failed)
+}
+
+func removeFailedByName(failed []plugin.UpdateError, name string) []plugin.UpdateError {
+	if len(failed) == 0 {
+		return failed
+	}
+	out := failed[:0]
+	for _, f := range failed {
+		if f.Name != name {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func failedPlanError(failed []plugin.UpdateError) error {
+	if len(failed) == 0 {
+		return nil
+	}
+	if len(failed) == 1 {
+		return exitcode.WithCode(fmt.Errorf("%s: %s", failed[0].Name, failed[0].Error), exitcode.CatalogError)
+	}
+	return exitcode.WithCode(
+		fmt.Errorf("failed to resolve %d plugins (first: %s: %s)", len(failed), failed[0].Name, failed[0].Error),
+		exitcode.CatalogError,
+	)
+}
+
+// writeEmptyUpdateResults writes [] to real stdout for structured, interactive,
+// and expression modes, and routes human/quiet modes through an io.Discard stream
+// so unsupported formats (-o test) and malformed --where filters still fail validation
+// without rendering an empty kvx box on stdout.
+func writeEmptyUpdateResults(kvxOpts *kvx.OutputOptions) error {
+	if kvxOpts == nil {
+		return nil
+	}
+	if kvx.IsStructuredFormat(kvxOpts.Format) || kvxOpts.Interactive || kvxOpts.Expression != "" {
+		return kvxOpts.Write([]updateResultItem{})
+	}
+	discardOpts := *kvxOpts
+	discardStreams := &terminal.IOStreams{Out: io.Discard, ErrOut: io.Discard}
+	if kvxOpts.IOStreams != nil {
+		cp := *kvxOpts.IOStreams
+		cp.Out = io.Discard
+		discardStreams = &cp
+	}
+	discardOpts.IOStreams = discardStreams
+	return discardOpts.Write([]updateResultItem{})
 }
