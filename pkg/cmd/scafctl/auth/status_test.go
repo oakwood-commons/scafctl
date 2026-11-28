@@ -5,7 +5,10 @@ package auth
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestCommandStatus_UnknownHandler(t *testing.T) {
@@ -641,4 +645,348 @@ func TestAuthHandlersTable_PreservesWiderProfileForClusterScopedRows(t *testing.
 		kvx.WithColumnHints(hints),
 	))
 	assert.Contains(t, wideOut.String(), "work / api.cluster-a.example.com (active)")
+}
+
+func isolateAuthStatusXDG(t *testing.T) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "cfg"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "data"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmpDir, "cache"))
+}
+
+func TestCommandStatus_MixedAuthenticatedAndUnauthenticatedHandlers(t *testing.T) {
+	newMixedCtx := func(t *testing.T) (context.Context, *bytes.Buffer) {
+		t.Helper()
+		isolateAuthStatusXDG(t)
+		ctx, buf := newTestContext(t)
+		ctx = config.WithConfig(ctx, &config.Config{
+			Settings: config.Settings{DisableThirdPartyAuthHandlers: true},
+		})
+
+		entra := auth.NewMockHandler("entra")
+		entra.DisplayNameValue = "Microsoft Entra ID"
+		entra.SetAuthenticated(&auth.Claims{Email: "user@example.com"})
+		entra.StatusResult.Flow = auth.FlowInteractive
+		entra.StatusResult.ExpiresAt = time.Now().Add(2 * time.Hour)
+
+		gcp := auth.NewMockHandler("gcp")
+		gcp.DisplayNameValue = "Google Cloud"
+		gcp.SetAuthenticated(&auth.Claims{Email: "adc@example.com"})
+		gcp.StatusResult.Flow = auth.FlowGcloudADC
+
+		gh := auth.NewMockHandler("github")
+		gh.DisplayNameValue = "GitHub"
+		gh.SetNotAuthenticated()
+
+		reg := auth.NewRegistry()
+		require.NoError(t, reg.Register(entra))
+		require.NoError(t, reg.Register(gcp))
+		require.NoError(t, reg.Register(gh))
+		return auth.WithRegistry(ctx, reg), buf
+	}
+
+	t.Run("table includes unauthenticated handler alongside authenticated handlers", func(t *testing.T) {
+		ctx, buf := newMixedCtx(t)
+		cliParams := &settings.Run{BinaryName: "mycli", NoColor: true}
+		ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+		cmd := CommandStatus(cliParams, ioStreams, "mycli/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{})
+
+		require.NoError(t, cmd.Execute())
+		out := buf.String()
+		assert.Contains(t, out, "Auth Handlers")
+		assert.Contains(t, out, "entra")
+		assert.Contains(t, out, "gcp")
+		assert.Contains(t, out, "github")
+		assert.Contains(t, out, "not authenticated")
+	})
+
+	t.Run("json includes unauthenticated handler with embedder login hint", func(t *testing.T) {
+		ctx, buf := newMixedCtx(t)
+		cliParams := &settings.Run{BinaryName: "mycli", NoColor: true}
+		ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+		cmd := CommandStatus(cliParams, ioStreams, "mycli/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"-o", "json"})
+
+		require.NoError(t, cmd.Execute())
+
+		var rows []map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
+		require.Len(t, rows, 3)
+
+		assert.Equal(t, "entra", rows[0]["handler"])
+		assert.Equal(t, true, rows[0]["authenticated"])
+		assert.Equal(t, "authenticated", rows[0]["status"])
+
+		assert.Equal(t, "gcp", rows[1]["handler"])
+		assert.Equal(t, true, rows[1]["authenticated"])
+		assert.Equal(t, "authenticated", rows[1]["status"])
+
+		assert.Equal(t, "github", rows[2]["handler"])
+		assert.Equal(t, false, rows[2]["authenticated"])
+		assert.Equal(t, "not authenticated", rows[2]["status"])
+		assert.Equal(t, "built-in (active)", rows[2]["profile"])
+		assert.Equal(t, "run 'mycli auth login github' to authenticate", rows[2]["hint"])
+	})
+
+	t.Run("yaml includes unauthenticated handler consistently with table and json", func(t *testing.T) {
+		ctx, buf := newMixedCtx(t)
+		cliParams := &settings.Run{BinaryName: "mycli", NoColor: true}
+		ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+		cmd := CommandStatus(cliParams, ioStreams, "mycli/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"-o", "yaml"})
+
+		require.NoError(t, cmd.Execute())
+
+		var rows []map[string]any
+		require.NoError(t, yaml.Unmarshal(buf.Bytes(), &rows))
+		require.Len(t, rows, 3)
+
+		assert.Equal(t, "entra", rows[0]["handler"])
+		assert.Equal(t, true, rows[0]["authenticated"])
+		assert.Equal(t, "gcp", rows[1]["handler"])
+		assert.Equal(t, true, rows[1]["authenticated"])
+		assert.Equal(t, "github", rows[2]["handler"])
+		assert.Equal(t, false, rows[2]["authenticated"])
+		assert.Equal(t, "not authenticated", rows[2]["status"])
+		assert.Equal(t, "run 'mycli auth login github' to authenticate", rows[2]["hint"])
+	})
+}
+
+func TestCommandStatus_MultiProfileFiltering(t *testing.T) {
+	appCfg := &config.Config{
+		Settings: config.Settings{DisableThirdPartyAuthHandlers: true},
+		Auth: config.GlobalAuthConfig{
+			Entra: &config.EntraAuthConfig{
+				ActiveProfile: "work",
+				ClientID:      "default-entra",
+				Profiles: map[string]*config.EntraProfileConfig{
+					"staging": {ClientID: "staging-entra"},
+					"work":    {ClientID: "work-entra"},
+				},
+			},
+			GitHub: &config.GitHubAuthConfig{
+				ActiveProfile: "work",
+				ClientID:      "default-gh",
+				Profiles: map[string]*config.GitHubProfileConfig{
+					"personal": {ClientID: "personal-gh"},
+					"work":     {ClientID: "work-gh"},
+				},
+			},
+		},
+	}
+
+	newMultiProfileCtx := func(t *testing.T) (context.Context, *bytes.Buffer) {
+		t.Helper()
+		isolateAuthStatusXDG(t)
+		ctx, buf := newTestContext(t)
+		ctx = config.WithConfig(ctx, appCfg)
+
+		entraWrapper, entraFake := newFakePluginHandler("entra", nil, []auth.Flow{auth.FlowInteractive})
+		// Only the "work" profile is authenticated on entra; built-in and staging are unauthenticated.
+		entraFake.authenticated["work"] = true
+
+		ghWrapper, _ := newFakePluginHandler("github", nil, []auth.Flow{auth.FlowDeviceCode})
+		// Zero profiles are authenticated on github; activeProfile is "work".
+
+		reg := auth.NewRegistry()
+		require.NoError(t, reg.Register(entraWrapper))
+		require.NoError(t, reg.Register(ghWrapper))
+		return auth.WithRegistry(ctx, reg), buf
+	}
+
+	t.Run("default view omits secondary unauthenticated profiles but keeps active unauthenticated handler row", func(t *testing.T) {
+		ctx, buf := newMultiProfileCtx(t)
+		cmd := CommandStatus(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"-o", "json"})
+
+		require.NoError(t, cmd.Execute())
+
+		var rows []map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
+		require.Len(t, rows, 2)
+
+		assert.Equal(t, "entra", rows[0]["handler"])
+		assert.Equal(t, "work (active)", rows[0]["profile"])
+		assert.Equal(t, true, rows[0]["authenticated"])
+
+		assert.Equal(t, "github", rows[1]["handler"])
+		assert.Equal(t, "work (active)", rows[1]["profile"])
+		assert.Equal(t, false, rows[1]["authenticated"])
+		assert.Equal(t, "not authenticated", rows[1]["status"])
+	})
+
+	t.Run("--all includes all configured profiles across handlers", func(t *testing.T) {
+		ctx, buf := newMultiProfileCtx(t)
+		cmd := CommandStatus(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"--all", "-o", "json"})
+
+		require.NoError(t, cmd.Execute())
+
+		var rows []map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
+		require.Len(t, rows, 6)
+
+		assert.Equal(t, "entra", rows[0]["handler"])
+		assert.Equal(t, "built-in", rows[0]["profile"])
+		assert.Equal(t, "entra", rows[1]["handler"])
+		assert.Equal(t, "staging", rows[1]["profile"])
+		assert.Equal(t, "entra", rows[2]["handler"])
+		assert.Equal(t, "work (active)", rows[2]["profile"])
+
+		assert.Equal(t, "github", rows[3]["handler"])
+		assert.Equal(t, "built-in", rows[3]["profile"])
+		assert.Equal(t, "github", rows[4]["handler"])
+		assert.Equal(t, "personal", rows[4]["profile"])
+		assert.Equal(t, "github", rows[5]["handler"])
+		assert.Equal(t, "work (active)", rows[5]["profile"])
+	})
+
+	t.Run("named handler argument shows all profiles for that handler without --all", func(t *testing.T) {
+		ctx, buf := newMultiProfileCtx(t)
+		cmd := CommandStatus(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"github", "-o", "json"})
+
+		require.NoError(t, cmd.Execute())
+
+		var rows []map[string]any
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &rows))
+		require.Len(t, rows, 3)
+		assert.Equal(t, "built-in", rows[0]["profile"])
+		assert.Equal(t, "personal", rows[1]["profile"])
+		assert.Equal(t, "work (active)", rows[2]["profile"])
+	})
+}
+
+func TestFilterDefaultHandlerRows(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty input returns empty slice", func(t *testing.T) {
+		t.Parallel()
+		got := filterDefaultHandlerRows(context.Background(), nil)
+		assert.Empty(t, got)
+	})
+
+	t.Run("preserves handler order when unauthenticated handler precedes authenticated handler", func(t *testing.T) {
+		t.Parallel()
+		rows := []map[string]any{
+			{"handler": "alpha", "profile": "built-in (active)", "authenticated": false},
+			{"handler": "zulu", "profile": "built-in", "authenticated": false},
+			{"handler": "zulu", "profile": "prod (active)", "authenticated": true},
+			{"handler": "zulu", "profile": "staging", "authenticated": true},
+		}
+
+		got := filterDefaultHandlerRows(context.Background(), rows)
+		require.Len(t, got, 3)
+		assert.Equal(t, "alpha", got[0]["handler"])
+		assert.Equal(t, false, got[0]["authenticated"])
+		assert.Equal(t, "zulu", got[1]["handler"])
+		assert.Equal(t, "prod (active)", got[1]["profile"])
+		assert.Equal(t, "zulu", got[2]["handler"])
+		assert.Equal(t, "staging", got[2]["profile"])
+	})
+
+	t.Run("falls back to ConfigActiveProfile when active suffix is absent", func(t *testing.T) {
+		t.Parallel()
+		ctx := config.WithConfig(context.Background(), &config.Config{
+			Auth: config.GlobalAuthConfig{
+				GitHub: &config.GitHubAuthConfig{ActiveProfile: "work"},
+			},
+		})
+		rows := []map[string]any{
+			{"handler": "github", "profile": "built-in", "authenticated": false},
+			{"handler": "github", "profile": "work", "authenticated": false},
+		}
+
+		got := filterDefaultHandlerRows(ctx, rows)
+		require.Len(t, got, 1)
+		assert.Equal(t, "work", got[0]["profile"])
+	})
+
+	t.Run("falls back to first row when neither active suffix nor ConfigActiveProfile matches", func(t *testing.T) {
+		t.Parallel()
+		ctx := config.WithConfig(context.Background(), &config.Config{
+			Auth: config.GlobalAuthConfig{
+				GitHub: &config.GitHubAuthConfig{ActiveProfile: "nonexistent"},
+			},
+		})
+		rows := []map[string]any{
+			{"handler": "github", "profile": "personal", "authenticated": false},
+			{"handler": "github", "profile": "secondary", "authenticated": false},
+		}
+
+		got := filterDefaultHandlerRows(ctx, rows)
+		require.Len(t, got, 1)
+		assert.Equal(t, "personal", got[0]["profile"])
+	})
+}
+
+func TestCommandStatus_ExitCode_MixedHandlers(t *testing.T) {
+	newMixedExitCtx := func(t *testing.T) (context.Context, *bytes.Buffer) {
+		t.Helper()
+		isolateAuthStatusXDG(t)
+		ctx, buf := newTestContext(t)
+		ctx = config.WithConfig(ctx, &config.Config{
+			Settings: config.Settings{DisableThirdPartyAuthHandlers: true},
+		})
+
+		entra := auth.NewMockHandler("entra")
+		entra.DisplayNameValue = "Microsoft Entra ID"
+		entra.SetAuthenticated(&auth.Claims{Email: "user@example.com"})
+		entra.StatusResult.ExpiresAt = time.Now().Add(time.Hour)
+
+		gh := auth.NewMockHandler("github")
+		gh.DisplayNameValue = "GitHub"
+		gh.SetNotAuthenticated()
+
+		reg := auth.NewRegistry()
+		require.NoError(t, reg.Register(entra))
+		require.NoError(t, reg.Register(gh))
+		return auth.WithRegistry(ctx, reg), buf
+	}
+
+	t.Run("unfiltered --exit-code fails when any registered handler is unauthenticated", func(t *testing.T) {
+		ctx, buf := newMixedExitCtx(t)
+		cmd := CommandStatus(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"--exit-code"})
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		var exitErr *exitcode.ExitError
+		require.ErrorAs(t, err, &exitErr)
+		assert.Equal(t, exitcode.GeneralError, exitErr.Code)
+	})
+
+	t.Run("named authenticated handler --exit-code succeeds despite unauthenticated sibling handler", func(t *testing.T) {
+		ctx, buf := newMixedExitCtx(t)
+		cmd := CommandStatus(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"entra", "--exit-code"})
+
+		require.NoError(t, cmd.Execute())
+	})
+
+	t.Run("named unauthenticated handler --exit-code fails", func(t *testing.T) {
+		ctx, buf := newMixedExitCtx(t)
+		cmd := CommandStatus(settings.NewCliParams(), terminal.NewIOStreams(nil, buf, buf, false), "scafctl/auth")
+		cmd.SetContext(ctx)
+		cmd.SetArgs([]string{"github", "--exit-code"})
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		var exitErr *exitcode.ExitError
+		require.ErrorAs(t, err, &exitErr)
+		assert.Equal(t, exitcode.GeneralError, exitErr.Code)
+	})
 }

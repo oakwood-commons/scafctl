@@ -133,7 +133,8 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			Show the current authentication status for auth handlers.
 
 			If no handler is specified, shows status for all registered handlers.
-			Use --all to also include catalog and registry credential rows.
+			Use --all to also include unauthenticated secondary profile, catalog, and
+			registry credential rows.
 
 			Interactive mode (-i) launches a TUI for exploring auth status and
 			automatically includes all sections (handlers, catalogs, registry
@@ -227,22 +228,10 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			// users filter/explore freely so there is no reason to hide data.
 			effectiveShowAll := showAll || outputFlags.Interactive
 
-			// Filter unauthenticated profiles unless --all / interactive is set.
+			// Filter secondary unauthenticated profile rows per handler unless --all / interactive is set.
 			handlerResults := results
-			if !effectiveShowAll {
-				var filtered []map[string]any
-				for _, r := range handlerResults {
-					if authenticated, _ := r["authenticated"].(bool); authenticated {
-						filtered = append(filtered, r)
-					} else if len(args) > 0 {
-						// Always show unauthenticated when querying a specific handler.
-						filtered = append(filtered, r)
-					}
-				}
-				if len(filtered) > 0 {
-					handlerResults = filtered
-				}
-				// Keep the full set if filtering would remove everything.
+			if !effectiveShowAll && len(args) == 0 {
+				handlerResults = filterDefaultHandlerRows(ctx, results)
 			}
 
 			// If --exit-code is set, return non-zero when any handler is not authenticated.
@@ -358,7 +347,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	cmd.Flags().BoolVar(&exitCodeFlag, "exit-code", false, "Exit non-zero if any handler is not authenticated (useful for scripting)")
 	cmd.Flags().DurationVar(&warnWithin, "warn-within", 0, "Exit non-zero if any authenticated handler's token expires within this duration (e.g. 10m, 1h)")
 	cmd.Flags().StringVar(&profile, "profile", "", "Show status for a specific named profile")
-	cmd.Flags().BoolVar(&showAll, "all", false, "Include catalog and registry credential rows")
+	cmd.Flags().BoolVar(&showAll, "all", false, "Include unauthenticated secondary profile, catalog, and registry credential rows")
 	return cmd
 }
 
@@ -389,6 +378,68 @@ func expandProfileStatuses(ctx context.Context, cliParams *settings.Run, handler
 	}
 
 	return allResults, allWarnings
+}
+
+// filterDefaultHandlerRows filters expanded handler status rows for the default
+// unfiltered view (no positional handler argument, without --all or -i).
+// Each handler is evaluated independently in its original order:
+//   - Handlers with at least one authenticated row keep all of their
+//     authenticated rows and omit extra unauthenticated secondary profile rows.
+//   - Handlers with zero authenticated rows keep a single representative
+//     unauthenticated row so every registered or installed handler remains visible.
+func filterDefaultHandlerRows(ctx context.Context, results []map[string]any) []map[string]any {
+	if len(results) == 0 {
+		return results
+	}
+
+	handlerOrder := make([]string, 0, len(results))
+	byHandler := make(map[string][]map[string]any, len(results))
+	for _, r := range results {
+		h, _ := r["handler"].(string)
+		if _, seen := byHandler[h]; !seen {
+			handlerOrder = append(handlerOrder, h)
+		}
+		byHandler[h] = append(byHandler[h], r)
+	}
+
+	filtered := make([]map[string]any, 0, len(results))
+	for _, h := range handlerOrder {
+		rows := byHandler[h]
+		var authRows []map[string]any
+		for _, r := range rows {
+			if authenticated, _ := r["authenticated"].(bool); authenticated {
+				authRows = append(authRows, r)
+			}
+		}
+		if len(authRows) > 0 {
+			filtered = append(filtered, authRows...)
+			continue
+		}
+		filtered = append(filtered, selectRepresentativeUnauthenticatedRow(ctx, h, rows))
+	}
+
+	return filtered
+}
+
+// selectRepresentativeUnauthenticatedRow chooses the single status row displayed
+// for an unauthenticated handler in the default view: preferring the row marked
+// "(active)", then the row matching ConfigActiveProfile, and falling back to the
+// handler's first row.
+func selectRepresentativeUnauthenticatedRow(ctx context.Context, handlerName string, rows []map[string]any) map[string]any {
+	for _, r := range rows {
+		if profileStr, _ := r["profile"].(string); strings.HasSuffix(profileStr, " (active)") {
+			return r
+		}
+	}
+
+	wantProfile := auth.DisplayProfileName(auth.ConfigActiveProfile(ctx, handlerName))
+	for _, r := range rows {
+		if profileStr, _ := r["profile"].(string); profileStr == wantProfile {
+			return r
+		}
+	}
+
+	return rows[0]
 }
 
 // queryHandlerStatuses queries all handlers for their authentication status
