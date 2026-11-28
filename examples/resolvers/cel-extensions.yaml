@@ -371,6 +371,51 @@ spec:
             inputs:
               expression: 'yaml.marshal({"app": "myservice", "port": 8080})'
 
+    json_unmarshal_jsonc:
+      description: "json.unmarshalJSONC - Parse JSONC with comments and trailing commas"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'json.unmarshalJSONC("{\n  // service port\n  \"port\": 8080,\n}")'
+
+    json_strip_comments:
+      description: "json.stripComments - Strip JSONC comments and trailing commas"
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'json.stripComments("{\"name\": \"app\", /* inline */ \"port\": 8080,}")'
+
+    frontmatter_roundtrip:
+      description: "frontmatter.parse + frontmatter.format - Parse and format YAML frontmatter"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                cel.bind(doc, frontmatter.parse("---\ntitle: Guide\n---\n# Welcome\n"), {
+                  "parsed": doc,
+                  "formatted": frontmatter.format(map.add(doc.meta, "published", true), doc.body)
+                })
+
+    math_sum_list:
+      description: "math.sum - Sum integer and floating-point lists"
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                {
+                  "ints": math.sum([10, 20, 12]),
+                  "doubles": math.sum([1.5, 2.5]),
+                  "empty": math.sum([])
+                }
+
     # ─────────────────────────────────────────────
     # BUILT-IN EXTENSIONS - google/cel-go
     # ─────────────────────────────────────────────

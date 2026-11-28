@@ -42,8 +42,9 @@ type reentrantInitChecker interface {
 // served from static metadata, so registry.List() and registry.Has() work
 // without any I/O.
 type LazyAuthHandlerWrapper struct {
-	name        string
-	displayName string
+	name         string
+	displayName  string
+	debugLogging bool
 
 	// initFn starts the plugin subprocess and returns the real wrapper.
 	// It is called at most once under initMu.
@@ -94,8 +95,9 @@ type LazyAuthHandlerConfig struct {
 // startup until a method requiring the plugin is called.
 func NewLazyAuthHandlerWrapper(cfg LazyAuthHandlerConfig) *LazyAuthHandlerWrapper {
 	return &LazyAuthHandlerWrapper{
-		name:        cfg.Name,
-		displayName: cfg.Name, // best we can do without starting the plugin
+		name:         cfg.Name,
+		displayName:  cfg.Name, // best we can do without starting the plugin
+		debugLogging: DebugLoggingEnabled(cfg.ClientOpts...),
 		initFn: func(ctx context.Context) (*AuthHandlerWrapper, error) {
 			lgr := logger.FromContext(ctx)
 			lgr.V(1).Info("lazy-starting auth handler plugin", "handler", cfg.Name, "path", cfg.BinPath)
@@ -320,6 +322,12 @@ func (l *LazyAuthHandlerWrapper) SetContext(ctx context.Context) {
 // IsInitialized reports whether the plugin subprocess has been started.
 func (l *LazyAuthHandlerWrapper) IsInitialized() bool {
 	return l.wrapper.Load() != nil
+}
+
+// DebugLoggingEnabled reports whether the lazy auth handler's plugin client
+// options enable debug logging when the subprocess starts.
+func (l *LazyAuthHandlerWrapper) DebugLoggingEnabled() bool {
+	return l.debugLogging
 }
 
 // --- auth.Handler (static, no plugin needed) ---

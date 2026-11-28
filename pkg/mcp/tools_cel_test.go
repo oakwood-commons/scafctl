@@ -88,6 +88,44 @@ func TestHandleListCELFunctions(t *testing.T) {
 		}
 	})
 
+	t.Run("lists jsonc frontmatter and math.sum custom functions", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "list_cel_functions"
+		request.Params.Arguments = map[string]any{
+			"custom_only": true,
+		}
+
+		result, err := srv.handleListCELFunctions(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := extractJSONContent(t, result)
+		var envelope struct {
+			Functions []celexp.ExtFunction `json:"functions"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+
+		byName := make(map[string]celexp.ExtFunction, len(envelope.Functions))
+		for _, f := range envelope.Functions {
+			byName[f.Name] = f
+		}
+
+		for _, want := range []string{
+			"json.unmarshalJSONC",
+			"json.stripComments",
+			"frontmatter.parse",
+			"frontmatter.format",
+			"math.sum",
+		} {
+			fn, ok := byName[want]
+			assert.True(t, ok, "expected list_cel_functions to include %q", want)
+			assert.True(t, fn.Custom, "expected %q to be marked custom", want)
+		}
+	})
+
 	t.Run("returns builtin only", func(t *testing.T) {
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)
@@ -366,6 +404,83 @@ func TestHandleEvaluateCEL(t *testing.T) {
 		var parsed map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
 		assert.Equal(t, "hello world", parsed["result"])
+	})
+
+	t.Run("evaluates jsonc frontmatter and math.sum expressions", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		tests := []struct {
+			name       string
+			expression string
+			check      func(t *testing.T, got any)
+		}{
+			{
+				name:       "json.unmarshalJSONC",
+				expression: `json.unmarshalJSONC('{\n  // service port\n  "port": 8080,\n}').port`,
+				check: func(t *testing.T, got any) {
+					t.Helper()
+					assert.Equal(t, float64(8080), got)
+				},
+			},
+			{
+				name:       "json.stripComments",
+				expression: `json.unmarshal(json.stripComments('{"name": "app", /* inline */ "ok": true,}')).ok`,
+				check: func(t *testing.T, got any) {
+					t.Helper()
+					assert.Equal(t, true, got)
+				},
+			},
+			{
+				name:       "frontmatter.parse",
+				expression: `frontmatter.parse("---\ntitle: Guide\n---\n# Welcome")`,
+				check: func(t *testing.T, got any) {
+					t.Helper()
+					gotMap, ok := got.(map[string]any)
+					require.True(t, ok, "expected map result, got %T", got)
+					assert.Equal(t, true, gotMap["hasFrontmatter"])
+					assert.Equal(t, "# Welcome", gotMap["body"])
+					meta, ok := gotMap["meta"].(map[string]any)
+					require.True(t, ok, "expected meta map, got %T", gotMap["meta"])
+					assert.Equal(t, "Guide", meta["title"])
+				},
+			},
+			{
+				name:       "frontmatter.format",
+				expression: `frontmatter.format({"title": "Guide"}, "# Welcome\n")`,
+				check: func(t *testing.T, got any) {
+					t.Helper()
+					assert.Equal(t, "---\ntitle: Guide\n---\n# Welcome\n", got)
+				},
+			},
+			{
+				name:       "math.sum",
+				expression: `math.sum([10, 20, 12])`,
+				check: func(t *testing.T, got any) {
+					t.Helper()
+					assert.Equal(t, float64(42), got)
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				request := mcp.CallToolRequest{}
+				request.Params.Name = "evaluate_cel"
+				request.Params.Arguments = map[string]any{
+					"expression": tc.expression,
+				}
+
+				result, evalErr := srv.handleEvaluateCEL(context.Background(), request)
+				require.NoError(t, evalErr)
+				require.False(t, result.IsError, "unexpected tool error: %v", result.Content)
+
+				text := result.Content[0].(mcp.TextContent).Text
+				var parsed map[string]any
+				require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+				tc.check(t, parsed["result"])
+			})
+		}
 	})
 }
 

@@ -361,6 +361,13 @@ func ResolvedHostDeps(opts ...ClientOption) *HostServiceDeps {
 	return resolveClientOptions(opts).hostDeps
 }
 
+// DebugLoggingEnabled reports whether a plugin client built with opts enables
+// hclog debug output via WithDebugLogging. It lets callers verify option
+// composition without starting a plugin subprocess.
+func DebugLoggingEnabled(opts ...ClientOption) bool {
+	return resolveClientOptions(opts).debugLog
+}
+
 // WithSanitizedEnv restricts the environment variables passed to the plugin
 // process. Only safe variables (PATH, HOME, TMPDIR, etc.) are inherited.
 // Use this in API server contexts to prevent leaking secrets to plugins.

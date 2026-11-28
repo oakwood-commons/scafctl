@@ -693,7 +693,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 					return auth.ResolveActiveProfile(cCmd.Context(), handlerName)
 				}
 			}
-			baseAuthClientOpts := []plugin.ClientOption{plugin.WithHostDeps(authHostDeps)}
+			baseAuthClientOpts := buildBaseAuthClientOpts(authHostDeps, resolvedLogLevel)
 
 			// Register auth handler plugins if directories are configured
 			if len(opts.AuthPluginDirs) > 0 {
@@ -1059,6 +1059,17 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 func withGroup(group string, cmd *cobra.Command) *cobra.Command {
 	cmd.GroupID = group
 	return cmd
+}
+
+// buildBaseAuthClientOpts constructs the shared client options applied to all
+// CLI-managed auth handler plugin clients, enabling plugin debug logging when
+// the resolved minimum log level includes debug output.
+func buildBaseAuthClientOpts(authHostDeps *plugin.HostServiceDeps, minLogLevel string) []plugin.ClientOption {
+	opts := []plugin.ClientOption{plugin.WithHostDeps(authHostDeps)}
+	if logger.IsDebugLevel(minLogLevel) {
+		opts = append(opts, plugin.WithDebugLogging())
+	}
+	return opts
 }
 
 // scopedAuthClientOpts appends WithSecretScope(name) to base so the auth

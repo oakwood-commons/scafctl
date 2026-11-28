@@ -289,3 +289,29 @@ func TestRemoveAuthHandler_PathTraversal(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthInstallClientOpts(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, plugin.DebugLoggingEnabled(authInstallClientOpts(nil)...))
+
+	tests := []struct {
+		level     string
+		wantDebug bool
+	}{
+		{level: "none", wantDebug: false},
+		{level: "info", wantDebug: false},
+		{level: "0", wantDebug: false},
+		{level: "debug", wantDebug: true},
+		{level: "trace", wantDebug: true},
+		{level: "1", wantDebug: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.level, func(t *testing.T) {
+			t.Parallel()
+			params := settings.NewCliParams()
+			params.MinLogLevel = tc.level
+			assert.Equal(t, tc.wantDebug, plugin.DebugLoggingEnabled(authInstallClientOpts(params)...))
+		})
+	}
+}

@@ -15,11 +15,14 @@ import (
 	"text/template"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/kube"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -874,5 +877,155 @@ func TestRoot_NoColorPrecedence(t *testing.T) {
 		noColor, colorEnabled := runCheck(t, cfgNoColor)
 		assert.True(t, noColor)
 		assert.False(t, colorEnabled)
+	})
+}
+
+func TestBuildBaseAuthClientOpts(t *testing.T) {
+	t.Parallel()
+
+	deps := &plugin.HostServiceDeps{PromptBroker: &plugin.AuthPromptBroker{}}
+	tests := []struct {
+		level     string
+		wantDebug bool
+	}{
+		{level: "none", wantDebug: false},
+		{level: "error", wantDebug: false},
+		{level: "warn", wantDebug: false},
+		{level: "info", wantDebug: false},
+		{level: "0", wantDebug: false},
+		{level: "invalid", wantDebug: false},
+		{level: "debug", wantDebug: true},
+		{level: "trace", wantDebug: true},
+		{level: "1", wantDebug: true},
+		{level: "2", wantDebug: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.level, func(t *testing.T) {
+			t.Parallel()
+			base := buildBaseAuthClientOpts(deps, tc.level)
+			assert.Equal(t, tc.wantDebug, plugin.DebugLoggingEnabled(base...))
+
+			scoped := scopedAuthClientOpts(base, "github")
+			assert.Equal(t, tc.wantDebug, plugin.DebugLoggingEnabled(scoped...))
+			resolved := plugin.ResolvedHostDeps(scoped...)
+			require.NotNil(t, resolved)
+			assert.Equal(t, "scafctl.auth.github.", resolved.AllowedSecretPrefix)
+
+			lazyCfg := cachedAuthHandlerConfig("entra", "/bin/fake", nil, base, nil)
+			assert.Equal(t, tc.wantDebug, plugin.DebugLoggingEnabled(lazyCfg.ClientOpts...))
+		})
+	}
+}
+
+func TestRoot_AuthPluginDebugLogging_EmbedderPrecedence(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	xdgCache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", xdgCache)
+
+	cacheName := plugin.PluginCacheKey("github", solution.PluginKindAuthHandler)
+	cache := plugin.NewCache(settings.PluginCacheDirFor("mycli"))
+	_, err := cache.Put(cacheName, "1.0.0", plugin.CurrentPlatform(), []byte("cached-plugin"))
+	require.NoError(t, err)
+
+	emptyCfg := filepath.Join(t.TempDir(), "empty-config.yaml")
+	require.NoError(t, os.WriteFile(emptyCfg, []byte("{}\n"), 0o600))
+
+	debugCfg := filepath.Join(t.TempDir(), "debug-config.yaml")
+	require.NoError(t, os.WriteFile(debugCfg, []byte("logging:\n  level: debug\n"), 0o600))
+
+	infoCfg := filepath.Join(t.TempDir(), "info-config.yaml")
+	require.NoError(t, os.WriteFile(infoCfg, []byte("logging:\n  level: info\n"), 0o600))
+
+	runCheck := func(t *testing.T, cfgPath string, extraArgs ...string) bool {
+		t.Helper()
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		officialReg := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
+			{Name: "github", CatalogRef: "github"},
+		})
+
+		var lazyHandler *plugin.LazyAuthHandlerWrapper
+		cmd, cleanup := Root(&RootOptions{
+			IOStreams:            ioStreams,
+			BinaryName:           "mycli",
+			ConfigPath:           cfgPath,
+			OfficialAuthHandlers: officialReg,
+			PreRunHook: func(c *cobra.Command, _ []string) error {
+				reg := auth.RegistryFromContext(c.Context())
+				require.NotNil(t, reg)
+				h, ok := reg.GetRegistered("github")
+				require.True(t, ok, "cached official handler must be registered")
+				var castOK bool
+				lazyHandler, castOK = h.(*plugin.LazyAuthHandlerWrapper)
+				require.True(t, castOK, "expected LazyAuthHandlerWrapper, got %T", h)
+				return nil
+			},
+		})
+		defer cleanup()
+
+		cmd.SetArgs(append([]string{"version", "-o", "json"}, extraArgs...))
+		require.NoError(t, cmd.Execute())
+		require.NotNil(t, lazyHandler)
+		return lazyHandler.DebugLoggingEnabled()
+	}
+
+	t.Run("default log level leaves plugin debug logging disabled", func(t *testing.T) {
+		t.Setenv("MYCLI_DEBUG", "")
+		t.Setenv("MYCLI_LOG_LEVEL", "")
+		assert.False(t, runCheck(t, emptyCfg))
+	})
+
+	t.Run("info log level leaves plugin debug logging disabled", func(t *testing.T) {
+		t.Setenv("MYCLI_DEBUG", "")
+		t.Setenv("MYCLI_LOG_LEVEL", "")
+		assert.False(t, runCheck(t, emptyCfg, "--log-level", "info"))
+	})
+
+	t.Run("--debug flag enables plugin debug logging", func(t *testing.T) {
+		t.Setenv("MYCLI_DEBUG", "")
+		t.Setenv("MYCLI_LOG_LEVEL", "")
+		assert.True(t, runCheck(t, emptyCfg, "--debug"))
+	})
+
+	t.Run("--log-level debug enables plugin debug logging", func(t *testing.T) {
+		t.Setenv("MYCLI_DEBUG", "")
+		t.Setenv("MYCLI_LOG_LEVEL", "")
+		assert.True(t, runCheck(t, emptyCfg, "--log-level", "debug"))
+	})
+
+	t.Run("--log-level trace enables plugin debug logging", func(t *testing.T) {
+		t.Setenv("MYCLI_DEBUG", "")
+		t.Setenv("MYCLI_LOG_LEVEL", "")
+		assert.True(t, runCheck(t, emptyCfg, "--log-level", "trace"))
+	})
+
+	t.Run("embedder MYCLI_DEBUG env var enables plugin debug logging", func(t *testing.T) {
+		t.Setenv("MYCLI_DEBUG", "1")
+		t.Setenv("MYCLI_LOG_LEVEL", "")
+		assert.True(t, runCheck(t, emptyCfg))
+	})
+
+	t.Run("embedder MYCLI_LOG_LEVEL=debug env var enables plugin debug logging", func(t *testing.T) {
+		t.Setenv("MYCLI_DEBUG", "")
+		t.Setenv("MYCLI_LOG_LEVEL", "debug")
+		assert.True(t, runCheck(t, emptyCfg))
+	})
+
+	t.Run("config logging.level debug enables plugin debug logging", func(t *testing.T) {
+		t.Setenv("MYCLI_DEBUG", "")
+		t.Setenv("MYCLI_LOG_LEVEL", "")
+		assert.True(t, runCheck(t, debugCfg))
+	})
+
+	t.Run("explicit --log-level info overrides config debug", func(t *testing.T) {
+		t.Setenv("MYCLI_DEBUG", "")
+		t.Setenv("MYCLI_LOG_LEVEL", "")
+		assert.False(t, runCheck(t, debugCfg, "--log-level", "info"))
+	})
+
+	t.Run("explicit --debug overrides config info", func(t *testing.T) {
+		t.Setenv("MYCLI_DEBUG", "")
+		t.Setenv("MYCLI_LOG_LEVEL", "")
+		assert.True(t, runCheck(t, infoCfg, "--debug"))
 	})
 }
